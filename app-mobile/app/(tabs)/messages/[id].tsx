@@ -5,6 +5,7 @@
  */
 
 import { useLocalSearchParams } from "expo-router";
+import { Feather } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
 import { TextInput, View } from "react-native";
 
@@ -121,14 +122,15 @@ export default function ThreadScreen() {
                 opacity: 0.4,
               }}
             >
-              <AppText variant="headline" tone="onAccent">
-                ➤
-              </AppText>
+              <Feather name="send" size={typography.headline.fontSize} color={palette.onAccent} />
             </View>
           </View>
-          <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
-            🔒 Sending unlocks with E2EE (milestone 4)
-          </AppText>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
+            <Feather name="lock" size={typography.caption.fontSize} color={palette.inkFaint} />
+            <AppText variant="caption" tone="tertiary">
+              Sending unlocks with E2EE (milestone 4)
+            </AppText>
+          </View>
         </View>
       </View>
     </Screen>

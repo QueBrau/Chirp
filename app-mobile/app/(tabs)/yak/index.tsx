@@ -1,21 +1,19 @@
 /**
  * Yak: anonymous campus board (DESIGN §6/§7) — rotating yakTint card backgrounds,
- * emoji mask avatar per post (never an author), VotePill with active vote states.
+ * NO mask/avatar of any kind (a small tinted dot is the only marker), VotePill
+ * with active vote states.
  */
 
 import { useEffect, useState } from "react";
-import { Text, View } from "react-native";
+import { View } from "react-native";
 
 import { listYaks, voteYak, type YakOut, type YakVoteValue } from "@/api/yaks";
 import { AppText, Card, EmptyState, Screen, VotePill } from "@/components";
 import { MOCK_CAMPUS, MOCK_MY_YAK_VOTES } from "@/mocks/data";
-import { spacing, typography, useTheme } from "@/theme";
+import { spacing, useTheme } from "@/theme";
 
-/** Anonymous emoji masks, rotated by post index (DESIGN §6). */
-const MASKS = ["🎭", "🦆", "🌮", "🛸", "🧃", "🪩"] as const;
-
-/** Canonical avatar footprint (§5 sizes 32/40/48) for the emoji mask well. */
-const MASK_SIZE = 40;
+/** Anonymity marker per DESIGN §6: 8px tinted dot, no mask/avatar of any kind. */
+const DOT_SIZE = 8;
 
 function age(iso: string): string {
   const hours = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 3_600_000));
@@ -49,7 +47,6 @@ export default function YakScreen() {
     <Screen title="Yak" subtitle={`${MOCK_CAMPUS.name} · anonymous`}>
       {yaks !== null && yaks.length === 0 ? (
         <EmptyState
-          emoji="🦆"
           title="Quiet campus"
           message="Be the first to say something (anonymously)."
         />
@@ -58,27 +55,22 @@ export default function YakScreen() {
           {(yaks ?? []).map((yak, index) => {
             const mine = myVotes[yak.id];
             const tint = palette.yakTints[index % palette.yakTints.length] ?? palette.surface;
-            const mask = MASKS[index % MASKS.length] ?? "🎭";
             return (
               <Card key={yak.id} style={{ backgroundColor: tint }}>
                 <View style={{ flexDirection: "row", gap: spacing.md }}>
-                  {/* Emoji mask stands in for an author — no identity, ever (SPEC §8.3). */}
-                  <View
-                    style={{
-                      width: MASK_SIZE,
-                      height: MASK_SIZE,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Text
+                  {/* No identity, ever (SPEC §8.3) — a small tinted dot is the only marker. */}
+                  <View style={{ paddingTop: spacing.xs }}>
+                    <View
                       style={{
-                        fontSize: typography.title.fontSize,
-                        lineHeight: typography.title.lineHeight,
+                        width: DOT_SIZE,
+                        height: DOT_SIZE,
+                        borderRadius: DOT_SIZE / 2,
+                        overflow: "hidden",
+                        backgroundColor: tint,
                       }}
                     >
-                      {mask}
-                    </Text>
+                      <View style={{ flex: 1, backgroundColor: palette.ink, opacity: 0.28 }} />
+                    </View>
                   </View>
                   <View style={{ flex: 1, gap: spacing.sm }}>
                     <AppText>{yak.body}</AppText>

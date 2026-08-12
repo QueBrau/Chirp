@@ -1,5 +1,6 @@
 /** Home: reverse-chron chapter posts — GradientAvatar author rows, like/comment action row (DESIGN §7). */
 
+import { Feather } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 
@@ -13,7 +14,7 @@ import {
 } from "@/api/feed";
 import { AppText, Card, EmptyState, GradientAvatar, Screen } from "@/components";
 import { MOCK_CHAPTER, MOCK_CURRENT_MEMBERSHIP, MOCK_CURRENT_USER, mockUserById } from "@/mocks/data";
-import { spacing } from "@/theme";
+import { spacing, typography, useTheme } from "@/theme";
 
 interface FeedItem {
   post: PostOut;
@@ -37,6 +38,7 @@ const SUBTITLE = MOCK_CHAPTER.chapter_name
   : MOCK_CHAPTER.org_name;
 
 export default function FeedScreen() {
+  const palette = useTheme();
   const [items, setItems] = useState<FeedItem[] | null>(null);
 
   useEffect(() => {
@@ -81,7 +83,6 @@ export default function FeedScreen() {
     <Screen title="Home" subtitle={SUBTITLE}>
       {items !== null && items.length === 0 ? (
         <EmptyState
-          emoji="🐦"
           title="Nothing yet"
           message="Posts from your chapter will show up here."
         />
@@ -108,7 +109,7 @@ export default function FeedScreen() {
 
                   <AppText>{post.body}</AppText>
 
-                  {/* Action row per §7: ♥ / 💬 counts in inkFaint, liked state accent. */}
+                  {/* Action row per §7: heart / message-circle counts in inkFaint, liked state accent. */}
                   <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xl }}>
                     <Pressable
                       accessibilityRole="button"
@@ -122,17 +123,17 @@ export default function FeedScreen() {
                         opacity: pressed ? 0.7 : 1,
                       })}
                     >
-                      <AppText variant="bodyBold" tone={likedByMe ? "accent" : "tertiary"}>
-                        ♥
-                      </AppText>
+                      <Feather
+                        name="heart"
+                        size={typography.bodyBold.fontSize}
+                        color={likedByMe ? palette.accent : palette.inkFaint}
+                      />
                       <AppText variant="caption" tone={likedByMe ? "accent" : "tertiary"}>
                         {likeCount}
                       </AppText>
                     </Pressable>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
-                      <AppText variant="caption" tone="tertiary">
-                        💬
-                      </AppText>
+                      <Feather name="message-circle" size={typography.caption.fontSize} color={palette.inkFaint} />
                       <AppText variant="caption" tone="tertiary">
                         {commentCount}
                       </AppText>

@@ -9,7 +9,8 @@ import { AppText } from "./AppText";
 
 export interface ListRowProps {
   title: string;
-  subtitle?: string;
+  /** String renders as caption text; a ReactNode renders as-is (e.g. icon + text). */
+  subtitle?: string | ReactNode;
   left?: ReactNode;
   right?: ReactNode;
   onPress?: () => void;
@@ -36,11 +37,13 @@ export function ListRow({ title, subtitle, left, right, onPress, divider = true 
         <AppText variant="headline" numberOfLines={1}>
           {title}
         </AppText>
-        {subtitle !== undefined ? (
+        {typeof subtitle === "string" ? (
           <AppText variant="caption" tone="secondary" numberOfLines={2}>
             {subtitle}
           </AppText>
-        ) : null}
+        ) : (
+          subtitle ?? null
+        )}
       </View>
       {right}
     </View>

@@ -630,3 +630,25 @@ export const MOCK_REPORTS: ContentReportOut[] = [
 ];
 
 export const MOCK_BLOCKS: UserBlockOut[] = [];
+
+// ---------- profile layout (UI-only: user-arrangeable Profile sections, DESIGN §7) ----------
+
+export type ProfileSectionKey = "about" | "orgs" | "activity" | "alumni" | "settings";
+
+export interface ProfileSectionLayout {
+  key: ProfileSectionKey;
+  visible: boolean;
+}
+
+/**
+ * Seed order + visibility for the Profile screen's "Edit layout" mode. The screen
+ * copies this into local state and reorders/toggles it there — mock persistence
+ * for now, real per-user prefs later.
+ */
+export const mockProfileLayout: ProfileSectionLayout[] = [
+  { key: "about", visible: true },
+  { key: "orgs", visible: true },
+  { key: "activity", visible: true },
+  { key: "alumni", visible: true },
+  { key: "settings", visible: true },
+];

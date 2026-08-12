@@ -1,12 +1,13 @@
 /**
  * VotePill per DESIGN.md §5: single vertical capsule on Yak cards —
- * ▲ / score (stat type) / ▼ in surfaceAlt; the active direction fills
- * accent (up) / danger (down) with a white glyph.
+ * chevron-up / score (stat type) / chevron-down in surfaceAlt; the active
+ * direction fills accent (up) / danger (down) with a white glyph.
  */
 
+import { Feather } from "@expo/vector-icons";
 import { Pressable, View, type ViewStyle } from "react-native";
 
-import { radii, spacing, typography, useTheme } from "@/theme";
+import { radii, spacing, useTheme } from "@/theme";
 
 import { AppText, type TextTone } from "./AppText";
 
@@ -22,12 +23,12 @@ export interface VotePillProps {
 }
 
 function VoteGlyph({
-  glyph,
+  icon,
   active,
   activeBg,
   onPress,
 }: {
-  glyph: string;
+  icon: "chevron-up" | "chevron-down";
   active: boolean;
   activeBg: string;
   onPress?: () => void;
@@ -46,15 +47,7 @@ function VoteGlyph({
         opacity: pressed ? 0.7 : 1,
       })}
     >
-      <AppText
-        variant="caption"
-        style={{
-          color: active ? palette.onAccent : palette.inkFaint,
-          fontWeight: typography.headline.fontWeight,
-        }}
-      >
-        {glyph}
-      </AppText>
+      <Feather name={icon} size={16} color={active ? palette.onAccent : palette.inkFaint} />
     </Pressable>
   );
 }
@@ -79,11 +72,11 @@ export function VotePill({ score, vote = null, onUpvote, onDownvote, style }: Vo
         style,
       ]}
     >
-      <VoteGlyph glyph="▲" active={vote === "up"} activeBg={palette.accent} onPress={onUpvote} />
+      <VoteGlyph icon="chevron-up" active={vote === "up"} activeBg={palette.accent} onPress={onUpvote} />
       <AppText variant="stat" tone={scoreTone}>
         {score}
       </AppText>
-      <VoteGlyph glyph="▼" active={vote === "down"} activeBg={palette.danger} onPress={onDownvote} />
+      <VoteGlyph icon="chevron-down" active={vote === "down"} activeBg={palette.danger} onPress={onDownvote} />
     </View>
   );
 }

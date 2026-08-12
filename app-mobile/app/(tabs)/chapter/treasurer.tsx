@@ -105,7 +105,7 @@ export default function TreasurerScreen() {
           />
           <Card>
             {ledger !== null && sorted.length === 0 ? (
-              <EmptyState emoji="🧾" title="No entries yet" message="Dues and expenses land here." />
+              <EmptyState title="No entries yet" message="Dues and expenses land here." />
             ) : (
               sorted.map((entry, index) => (
                 <ListRow

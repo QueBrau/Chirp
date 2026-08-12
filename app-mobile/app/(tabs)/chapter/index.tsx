@@ -6,6 +6,8 @@
  */
 
 import { useRouter, type Href } from "expo-router";
+import { Feather } from "@expo/vector-icons";
+import type { ComponentProps } from "react";
 import { useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
@@ -23,9 +25,11 @@ import {
 import { MOCK_CAMPUS, MOCK_CHAPTER, MOCK_CURRENT_MEMBERSHIP, mockIsOrgMember } from "@/mocks/data";
 import { radii, spacing, typography, useTheme } from "@/theme";
 
+type FeatherIconName = ComponentProps<typeof Feather>["name"];
+
 interface Tool {
   href: Href;
-  emoji: string;
+  icon: FeatherIconName;
   title: string;
   description: string;
   /** undefined = visible to every member. */
@@ -33,18 +37,18 @@ interface Tool {
 }
 
 const TOOLS: Tool[] = [
-  { href: "/chapter/tree", emoji: "🌳", title: "Family Tree", description: "Bigs, littles, and lineage" },
-  { href: "/chapter/members", emoji: "👥", title: "Members", description: "The full roster, by role" },
+  { href: "/chapter/tree", icon: "git-branch", title: "Family Tree", description: "Bigs, littles, and lineage" },
+  { href: "/chapter/members", icon: "users", title: "Members", description: "The full roster, by role" },
   {
     href: "/chapter/treasurer",
-    emoji: "💸",
+    icon: "dollar-sign",
     title: "Treasurer",
     description: "Dues and the ledger",
     roles: ["treasurer", "president"],
   },
   {
     href: "/chapter/secretary",
-    emoji: "📝",
+    icon: "file-text",
     title: "Secretary",
     description: "Minutes and attendance",
     roles: ["secretary", "president"],
@@ -68,6 +72,7 @@ type Category = (typeof CATEGORIES)[number];
 /** Member state: org identity hero + tool grid, gated by mock role. */
 function MemberOrgHub() {
   const router = useRouter();
+  const palette = useTheme();
   // Current role from mocks; real role comes from the memberships lookup (org-scope middleware).
   const role = MOCK_CURRENT_MEMBERSHIP.role;
   const visible = TOOLS.filter((tool) => tool.roles === undefined || tool.roles.includes(role));
@@ -99,7 +104,7 @@ function MemberOrgHub() {
             style={{ flexBasis: "47%", flexGrow: 1 }}
           >
             <View style={{ gap: spacing.sm }}>
-              <AppText variant="title">{tool.emoji}</AppText>
+              <Feather name={tool.icon} size={typography.title.fontSize} color={palette.accent} />
               <AppText variant="headline">{tool.title}</AppText>
               <AppText variant="caption" tone="secondary">
                 {tool.description}
@@ -163,7 +168,6 @@ function FindYourOrg() {
           ))}
         </View>
         <EmptyState
-          emoji="🔭"
           title="Org discovery is coming"
           message={`Browsing ${category.toLowerCase()} lands soon — join with an invite code for now.`}
         />

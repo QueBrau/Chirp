@@ -50,7 +50,6 @@ export default function SecretaryScreen() {
     <Screen title="Secretary" subtitle="Minutes and attendance">
       {items !== null && items.length === 0 ? (
         <EmptyState
-          emoji="🗓️"
           title="No meetings yet"
           message="Create a meeting to start taking minutes."
         />

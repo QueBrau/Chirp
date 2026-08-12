@@ -1,26 +1,30 @@
 /**
  * Tabs layout with the DESIGN.md §5 floating pill tab bar:
  * surface container radius 28, inset 12 horizontal / 8 bottom, border + card
- * shadow. Active tab = accentSoft pill behind accent glyph+label; inactive =
- * inkFaint glyph only. Tabs: Home, Yak, Messages, Orgs, Profile
+ * shadow. Active tab = accentSoft pill behind accent Feather icon+label;
+ * inactive = inkFaint Feather icon only. Tabs: Home, Yak, Messages, Orgs, Profile
  * (route dirs stay feed/yak/messages/chapter/profile for backend parity).
  */
 
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { Tabs } from "expo-router";
-import { Pressable, Text, View } from "react-native";
+import { Feather } from "@expo/vector-icons";
+import type { ComponentProps } from "react";
+import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText } from "@/components";
 import { cardShadow, metrics, radii, spacing, typography, useTheme } from "@/theme";
 
-/** Route name → tab label + glyph (no icon library in the scaffold). */
-const TAB_META: Record<string, { label: string; glyph: string }> = {
-  feed: { label: "Home", glyph: "⌂" },
-  yak: { label: "Yak", glyph: "◎" },
-  messages: { label: "Messages", glyph: "✉" },
-  chapter: { label: "Orgs", glyph: "⬡" },
-  profile: { label: "Profile", glyph: "◉" },
+type FeatherIconName = ComponentProps<typeof Feather>["name"];
+
+/** Route name → tab label + Feather icon (DESIGN §7: home/radio/message-circle/grid/user). */
+const TAB_META: Record<string, { label: string; icon: FeatherIconName }> = {
+  feed: { label: "Home", icon: "home" },
+  yak: { label: "Yak", icon: "radio" },
+  messages: { label: "Messages", icon: "message-circle" },
+  chapter: { label: "Orgs", icon: "grid" },
+  profile: { label: "Profile", icon: "user" },
 };
 
 function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
@@ -50,7 +54,7 @@ function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
         const { options } = descriptors[route.key];
         const meta = TAB_META[route.name] ?? {
           label: options.title ?? route.name,
-          glyph: "•",
+          icon: "circle" as FeatherIconName,
         };
 
         const onPress = () => {
@@ -85,18 +89,14 @@ function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
                   paddingVertical: spacing.sm,
                 }}
               >
-                <Text style={{ color: palette.accent, fontSize: typography.headline.fontSize }}>
-                  {meta.glyph}
-                </Text>
+                <Feather name={meta.icon} size={typography.headline.fontSize} color={palette.accent} />
                 <AppText variant="micro" tone="accent" numberOfLines={1}>
                   {meta.label}
                 </AppText>
               </View>
             ) : (
               <View style={{ paddingVertical: spacing.sm }}>
-                <Text style={{ color: palette.inkFaint, fontSize: typography.title.fontSize }}>
-                  {meta.glyph}
-                </Text>
+                <Feather name={meta.icon} size={typography.title.fontSize} color={palette.inkFaint} />
               </View>
             )}
           </Pressable>

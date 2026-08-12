@@ -1,6 +1,6 @@
 /**
  * Messages: conversation rows per DESIGN §7 — GradientAvatar 48, headline name,
- * "🔒 Message" encrypted preview caption, unread accent dot. Plaintext previews
+ * "Message" encrypted preview caption, unread accent dot. Plaintext previews
  * only exist after the on-device decrypted store lands (milestone 4).
  */
 
@@ -8,8 +8,10 @@ import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 
+import { Feather } from "@expo/vector-icons";
+
 import { listConversations, listMessages, type ConversationOut } from "@/api/messages";
-import { Card, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
+import { AppText, Card, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
 import { MOCK_CURRENT_USER, mockUserById, type MockMessage } from "@/mocks/data";
 import { spacing, useTheme } from "@/theme";
 
@@ -44,6 +46,7 @@ function UnreadDot() {
 
 export default function MessagesScreen() {
   const router = useRouter();
+  const palette = useTheme();
   const [items, setItems] = useState<ConversationItem[] | null>(null);
 
   useEffect(() => {
@@ -53,12 +56,12 @@ export default function MessagesScreen() {
         conversations.map(async (conversation) => {
           const messages = await listMessages(conversation.id);
           // Mock world only: rows are MockMessage. The UI still shows the encrypted
-          // preview ("🔒 Message") — real previews come from on-device decryption.
+          // preview ("Message") — real previews come from on-device decryption.
           const last = messages[messages.length - 1] as MockMessage | undefined;
           return {
             conversation,
             title: conversationTitle(conversation),
-            preview: last ? "🔒 Message" : "No messages yet",
+            preview: last ? "Message" : "No messages yet",
             unread: last !== undefined && last.sender_user_id !== MOCK_CURRENT_USER.id,
           };
         }),
@@ -72,7 +75,6 @@ export default function MessagesScreen() {
     <Screen title="Messages" subtitle="End-to-end encrypted">
       {items !== null && items.length === 0 ? (
         <EmptyState
-          emoji="💬"
           title="No conversations"
           message="Start a DM or group with your chapter."
         />
@@ -82,7 +84,11 @@ export default function MessagesScreen() {
             <ListRow
               key={item.conversation.id}
               title={item.title}
-              subtitle={item.preview}
+              subtitle={
+                <AppText variant="caption" tone="secondary" numberOfLines={1}>
+                  <Feather name="lock" size={12} color={palette.inkFaint} /> {item.preview}
+                </AppText>
+              }
               left={<GradientAvatar name={item.title} size={48} />}
               right={item.unread ? <UnreadDot /> : undefined}
               divider={index < (items ?? []).length - 1}
