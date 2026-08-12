@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chirp-backend"
+version = "0.1.0"
+description = "Chirp backend API: FastAPI + async SQLAlchemy + Redis fan-out"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy>=2.0",
+    "asyncpg",
+    "alembic",
+    "pydantic>=2",
+    "pydantic-settings",
+    "redis>=5",
+    "greenlet",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
+    "aiosqlite",
+]
+firebase = [
+    "firebase-admin",
+]
+payments = [
+    "stripe",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

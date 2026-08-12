@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: chirp
+      POSTGRES_PASSWORD: chirp
+      POSTGRES_DB: chirp
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chirp -d chirp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - chirp_pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+volumes:
+  chirp_pgdata:

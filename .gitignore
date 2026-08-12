@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Node / Expo
+node_modules/
+.expo/
+.expo-shared/
+expo-env.d.ts
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Native build output (dev builds are generated, not committed)
+app-mobile/ios/build/
+app-mobile/ios/Pods/
+app-mobile/android/build/
+app-mobile/android/app/build/
+app-mobile/android/.gradle/
+
+# OS
+.DS_Store
