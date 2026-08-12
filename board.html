@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chirp Board</title>
+<style>
+  :root {
+    --bg:#F6F7FB; --surface:#FFFFFF; --surface-alt:#EFF1F7; --ink:#101223;
+    --ink-2:#575B75; --ink-3:#9BA0B8; --border:rgba(16,18,35,.08);
+    --accent:#5B5BF6; --accent-soft:#ECECFE; --success:#17A673; --success-soft:#E3F6EE;
+    --danger:#E5484D; --danger-soft:#FDECEC; --warn:#F5A623;
+    --shadow:0 2px 16px rgba(16,18,35,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0C0D14; --surface:#15161F; --surface-alt:#1D1E2A; --ink:#F2F3FA;
+      --ink-2:#A6AAC4; --ink-3:#666B85; --border:rgba(242,243,250,.09);
+      --accent:#7C7CFF; --accent-soft:rgba(124,124,255,.16); --success:#2BD597;
+      --success-soft:rgba(43,213,151,.16); --danger:#FF6369; --danger-soft:rgba(255,99,105,.16);
+      --shadow:none;
+    }
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; padding:20px; }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
+  h1 { font-size:26px; font-weight:800; letter-spacing:-.5px; }
+  h1 span { color:var(--accent); }
+  #status { font-size:12.5px; font-weight:500; color:var(--ink-3); flex:1; }
+  #status.dirty { color:var(--warn); }
+  button { font:inherit; border:0; cursor:pointer; border-radius:999px; padding:8px 16px; font-size:13px; font-weight:600; }
+  .btn-primary { background:var(--accent); color:#fff; }
+  .btn-ghost { background:var(--surface-alt); color:var(--ink-2); }
+  #board { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; align-items:start; }
+  @media (max-width:900px){ #board { grid-template-columns:repeat(2,1fr);} }
+  @media (max-width:560px){ #board { grid-template-columns:1fr;} }
+  .col { background:var(--surface-alt); border-radius:20px; padding:12px; min-height:120px; }
+  .col.drag-over { outline:2px dashed var(--accent); outline-offset:-4px; }
+  .col h2 { font-size:11px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--ink-2); padding:4px 8px 10px; display:flex; justify-content:space-between; }
+  .col h2 .count { color:var(--ink-3); }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow); padding:10px 12px; margin-bottom:8px; cursor:grab; }
+  .card.dragging { opacity:.4; }
+  .card .title { font-weight:600; font-size:14px; }
+  .card .meta { display:flex; gap:6px; margin-top:8px; align-items:center; }
+  .chip { font-size:11px; font-weight:600; letter-spacing:.3px; border-radius:999px; padding:3px 10px; background:var(--surface-alt); color:var(--ink-2); border:0; cursor:pointer; }
+  .chip.owner-J { background:var(--accent-soft); color:var(--accent); }
+  .chip.owner-Q { background:var(--success-soft); color:var(--success); }
+  .chip.tag { cursor:default; }
+  .card .del { margin-left:auto; background:none; border:0; color:var(--ink-3); font-size:14px; padding:2px 6px; cursor:pointer; }
+  .card .del:hover { color:var(--danger); }
+  .adder { width:100%; background:transparent; border:1px dashed var(--border); border-radius:12px; padding:9px 12px; font:inherit; font-size:13px; color:var(--ink); outline:none; }
+  .adder::placeholder { color:var(--ink-3); }
+  .adder:focus { border-color:var(--accent); background:var(--surface); }
+  #decisions { margin-top:28px; background:var(--surface); border:1px solid var(--border); border-radius:20px; box-shadow:var(--shadow); padding:16px 20px; }
+  #decisions h2 { font-size:16px; font-weight:700; margin-bottom:10px; }
+  #decisions li { margin:6px 0 6px 18px; color:var(--ink-2); font-size:13.5px; }
+  #decisions li b { color:var(--ink); }
+  #decisions input { width:100%; margin-top:10px; }
+  footer { margin-top:16px; font-size:12px; color:var(--ink-3); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Chirp <span>Board</span></h1>
+  <div id="status">committed state</div>
+  <button class="btn-ghost" id="reset">Reset to committed</button>
+  <button class="btn-primary" id="export">Export board.html</button>
+</header>
+<main id="board"></main>
+<section id="decisions">
+  <h2>Decisions log</h2>
+  <ul id="decision-list"></ul>
+  <input class="adder" id="decision-add" placeholder="+ record a decision (date — what we decided)">
+</section>
+<footer>
+  How it works: drag cards between columns · click the owner chip to cycle – / J / Q · double-click a title to edit ·
+  changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
+</footer>
+
+<script id="board-data" type="application/json">
+{
+  "updated": 0,
+  "columns": [
+    { "id": "backlog", "title": "Backlog" },
+    { "id": "next", "title": "Next" },
+    { "id": "progress", "title": "In Progress" },
+    { "id": "done", "title": "Done" }
+  ],
+  "cards": [
+    { "id": "c1", "col": "progress", "title": "Frontend redesign (dribbble pass, Orgs reframe) — frontend-redesign branch", "owner": "J", "tag": "design" },
+    { "id": "c18", "col": "progress", "title": "No-emoji sweep (vector icons only) + user-arrangeable profile sections", "owner": "J", "tag": "design" },
+    { "id": "c2", "col": "next", "title": "Verify DB on a Docker machine: compose up, alembic upgrade, pytest (10 tests skip w/o PG)", "owner": "", "tag": "backend" },
+    { "id": "c3", "col": "next", "title": "libsignal RN spike on two physical devices (riskiest unknown — needs EAS dev build)", "owner": "", "tag": "m3" },
+    { "id": "c4", "col": "next", "title": "Real Firebase auth: mobile sign-in + backend firebase mode + bootstrap wiring", "owner": "", "tag": "m1" },
+    { "id": "c5", "col": "backlog", "title": "Invite deep links end-to-end (chirp://join-chapter)", "owner": "", "tag": "m1" },
+    { "id": "c6", "col": "backlog", "title": "Orgs tab wired to real memberships API (role gating live)", "owner": "", "tag": "m2" },
+    { "id": "c7", "col": "backlog", "title": "E2EE DMs + groups + sender-key rotation + offline queue + push", "owner": "", "tag": "m4" },
+    { "id": "c8", "col": "backlog", "title": "Feed + Yak on real API, moderation flows (report/block/remove)", "owner": "", "tag": "m5" },
+    { "id": "c9", "col": "backlog", "title": "Lineage tree Skia canvas (pan/pinch, family colors, ghost nodes)", "owner": "", "tag": "m6" },
+    { "id": "c10", "col": "backlog", "title": "TestFlight with a real chapter", "owner": "", "tag": "m7" },
+    { "id": "c11", "col": "backlog", "title": "Stripe Connect onboarding + dues PaymentSheet", "owner": "", "tag": "m8" },
+    { "id": "c12", "col": "backlog", "title": "Treasurer + Secretary dashboards on real data + export", "owner": "", "tag": "m9" },
+    { "id": "c13", "col": "backlog", "title": "Alumni network + job board", "owner": "", "tag": "m10" },
+    { "id": "c14", "col": "backlog", "title": "Encrypted backups / new-phone history recovery", "owner": "", "tag": "m11" },
+    { "id": "c15", "col": "done", "title": "Full monorepo scaffold pushed to main (backend 43 routes + Expo app on mocks)", "owner": "J", "tag": "aug11" },
+    { "id": "c16", "col": "done", "title": "Backend verified: 401 gating, append-only ledger routes, author-free yak API, tsc clean", "owner": "J", "tag": "aug11" },
+    { "id": "c17", "col": "done", "title": "In-repo task board", "owner": "J", "tag": "aug11" }
+  ],
+  "decisions": [
+    "Aug 11 — Product: Chirp is for ALL students; greek chapters are orgs you join under the Orgs tab. Same auth for everyone.",
+    "Aug 11 — Design: default scaffold theme rejected. Dribbble-modern direction is binding, spec in app-mobile/DESIGN.md (violet accent, soft neutral canvas, pill everything, floating tab bar).",
+    "Aug 11 — Process: this board is the source of truth for who's doing what. Not on the board = not claimed."
+  ]
+}
+</script>
+<script>
+(function () {
+  var DATA = document.getElementById('board-data');
+  var LS_KEY = 'chirp-board-draft';
+  var committed = JSON.parse(DATA.textContent);
+  var state = committed;
+  try {
+    var draft = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+    if (draft && draft.updated > committed.updated) { state = draft; setStatus('local draft — export & commit to share', true); }
+  } catch (e) {}
+
+  var boardEl = document.getElementById('board');
+
+  function setStatus(text, dirty) {
+    var s = document.getElementById('status');
+    s.textContent = text; s.className = dirty ? 'dirty' : '';
+  }
+  function persist() {
+    state.updated = Date.now();
+    try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
+    setStatus('unsaved changes — export & commit to share', true);
+    render();
+  }
+  function cardById(id) { return state.cards.filter(function (c) { return c.id === id; })[0]; }
+
+  function render() {
+    boardEl.innerHTML = '';
+    state.columns.forEach(function (col) {
+      var colEl = document.createElement('div');
+      colEl.className = 'col'; colEl.dataset.col = col.id;
+      var cards = state.cards.filter(function (c) { return c.col === col.id; });
+      var h = document.createElement('h2');
+      h.innerHTML = col.title + ' <span class="count">' + cards.length + '</span>';
+      colEl.appendChild(h);
+      cards.forEach(function (c) {
+        var el = document.createElement('div');
+        el.className = 'card'; el.draggable = true; el.dataset.id = c.id;
+        var t = document.createElement('div'); t.className = 'title'; t.textContent = c.title;
+        var meta = document.createElement('div'); meta.className = 'meta';
+        var owner = document.createElement('button');
+        owner.className = 'chip owner-' + (c.owner || 'none');
+        owner.textContent = c.owner ? '@' + c.owner : 'unclaimed';
+        owner.onclick = function () { c.owner = c.owner === '' ? 'J' : c.owner === 'J' ? 'Q' : ''; persist(); };
+        meta.appendChild(owner);
+        if (c.tag) { var tag = document.createElement('span'); tag.className = 'chip tag'; tag.textContent = c.tag; meta.appendChild(tag); }
+        var del = document.createElement('button'); del.className = 'del'; del.textContent = '✕';
+        del.onclick = function () { if (confirm('Delete card?')) { state.cards = state.cards.filter(function (x) { return x.id !== c.id; }); persist(); } };
+        meta.appendChild(del);
+        t.ondblclick = function () { var v = prompt('Edit card', c.title); if (v) { c.title = v; persist(); } };
+        el.appendChild(t); el.appendChild(meta);
+        el.addEventListener('dragstart', function (ev) { ev.dataTransfer.setData('text/plain', c.id); el.classList.add('dragging'); });
+        el.addEventListener('dragend', function () { el.classList.remove('dragging'); });
+        colEl.appendChild(el);
+      });
+      var adder = document.createElement('input');
+      adder.className = 'adder'; adder.placeholder = '+ add card';
+      adder.onkeydown = function (ev) {
+        if (ev.key === 'Enter' && adder.value.trim()) {
+          state.cards.push({ id: 'c' + Date.now(), col: col.id, title: adder.value.trim(), owner: '', tag: '' });
+          persist();
+        }
+      };
+      colEl.appendChild(adder);
+      colEl.addEventListener('dragover', function (ev) { ev.preventDefault(); colEl.classList.add('drag-over'); });
+      colEl.addEventListener('dragleave', function () { colEl.classList.remove('drag-over'); });
+      colEl.addEventListener('drop', function (ev) {
+        ev.preventDefault(); colEl.classList.remove('drag-over');
+        var id = ev.dataTransfer.getData('text/plain');
+        var c = cardById(id); if (c && c.col !== col.id) { c.col = col.id; persist(); }
+      });
+      boardEl.appendChild(colEl);
+    });
+    var dl = document.getElementById('decision-list');
+    dl.innerHTML = '';
+    state.decisions.forEach(function (d) { var li = document.createElement('li'); li.textContent = d; dl.appendChild(li); });
+  }
+
+  document.getElementById('decision-add').onkeydown = function (ev) {
+    var inp = ev.target;
+    if (ev.key === 'Enter' && inp.value.trim()) { state.decisions.push(inp.value.trim()); inp.value = ''; persist(); }
+  };
+  document.getElementById('reset').onclick = function () {
+    if (confirm('Discard local draft and reload the committed board?')) {
+      localStorage.removeItem(LS_KEY); state = committed; setStatus('committed state', false); render();
+    }
+  };
+  document.getElementById('export').onclick = function () {
+    var clone = document.documentElement.cloneNode(true);
+    clone.querySelector('#board').innerHTML = '';
+    clone.querySelector('#decision-list').innerHTML = '';
+    clone.querySelector('#status').textContent = 'committed state';
+    clone.querySelector('#status').className = '';
+    clone.querySelector('#board-data').textContent = '\n' + JSON.stringify(state, null, 2) + '\n';
+    var blob = new Blob(['<!doctype html>\n' + clone.outerHTML], { type: 'text/html' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'board.html'; a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus('exported — replace board.html in the repo and commit', false);
+    try { localStorage.removeItem(LS_KEY); } catch (e) {}
+  };
+
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,4 +1,8 @@
-/** Treasurer: dues cycle summary + append-only ledger list, corrections displayed explicitly. */
+/**
+ * Treasurer per DESIGN §7: HeroCard balance (big tabular stat on the gradient),
+ * dues cycle progress caption, then the append-only ledger — +/- tabular
+ * amounts in success/danger with Correction/Corrected chips.
+ */
 
 import { useEffect, useState } from "react";
 import { View } from "react-native";
@@ -9,9 +13,18 @@ import {
   type DuesCycleOut,
   type LedgerEntryOut,
 } from "@/api/finance";
-import { AppText, Badge, Card, EmptyState, ListRow, Screen } from "@/components";
+import {
+  AppText,
+  Card,
+  Chip,
+  EmptyState,
+  HeroCard,
+  ListRow,
+  Screen,
+  SectionHeader,
+} from "@/components";
 import { MOCK_CURRENT_MEMBERSHIP } from "@/mocks/data";
-import { spacing } from "@/theme";
+import { spacing, typography } from "@/theme";
 
 function dollars(cents: number): string {
   return (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
@@ -19,6 +32,13 @@ function dollars(cents: number): string {
 
 function entryDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function dueDate(isoDay: string): string {
+  return new Date(`${isoDay}T00:00:00`).toLocaleDateString(undefined, {
+    month: "long",
+    day: "numeric",
+  });
 }
 
 export default function TreasurerScreen() {
@@ -44,70 +64,76 @@ export default function TreasurerScreen() {
   const correctedIds = new Set(
     entries.map((entry) => entry.corrects_entry_id).filter((id): id is string => id !== null),
   );
+  // Newest first for the ledger list (balance still sums everything).
+  const sorted = [...entries].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const cycle = cycles[0];
+  const paidCount =
+    cycle !== undefined
+      ? entries.filter(
+          (entry) => entry.entry_type === "dues_payment" && entry.dues_cycle_id === cycle.id,
+        ).length
+      : 0;
 
   return (
-    <Screen title="Treasurer" subtitle="Money lives in the dashboard, talk lives in chat">
-      <View style={{ gap: spacing.md }}>
-        {cycles.map((cycle) => {
-          const paidCount = entries.filter(
-            (entry) => entry.entry_type === "dues_payment" && entry.dues_cycle_id === cycle.id,
-          ).length;
-          return (
-            <Card key={cycle.id}>
-              <View style={{ gap: spacing.sm }}>
-                <AppText variant="title">{cycle.name}</AppText>
-                <AppText tone="secondary">
-                  {dollars(cycle.amount_cents)} per member · due{" "}
-                  {new Date(`${cycle.due_date}T00:00:00`).toLocaleDateString(undefined, {
-                    month: "long",
-                    day: "numeric",
-                  })}
-                </AppText>
-                <AppText variant="caption" tone="success">
-                  {paidCount} {paidCount === 1 ? "payment" : "payments"} collected
-                </AppText>
-              </View>
-            </Card>
-          );
-        })}
-
-        <Card>
+    <Screen title="Treasurer" subtitle="Money in the dashboard, talk in the chat">
+      <View style={{ gap: spacing.xl }}>
+        <HeroCard>
           <View style={{ gap: spacing.sm }}>
-            <AppText variant="title">Ledger</AppText>
-            <AppText variant="caption" tone="secondary">
-              Balance {dollars(balance)} · append-only — corrections are new offsetting entries
+            <AppText variant="micro" tone="onAccent">
+              Chapter balance
             </AppText>
+            <AppText
+              variant="display"
+              tone="onAccent"
+              style={{ fontVariant: typography.stat.fontVariant }}
+            >
+              {dollars(balance)}
+            </AppText>
+            {cycle !== undefined ? (
+              <AppText variant="caption" tone="onAccent">
+                {cycle.name} · {dollars(cycle.amount_cents)} per member · {paidCount}{" "}
+                {paidCount === 1 ? "payment" : "payments"} in · due {dueDate(cycle.due_date)}
+              </AppText>
+            ) : null}
+          </View>
+        </HeroCard>
 
-            {ledger !== null && entries.length === 0 ? (
-              <EmptyState title="No entries yet" />
+        <View>
+          <SectionHeader
+            title="Ledger"
+            caption="Append-only — corrections are new offsetting entries"
+          />
+          <Card>
+            {ledger !== null && sorted.length === 0 ? (
+              <EmptyState emoji="🧾" title="No entries yet" message="Dues and expenses land here." />
             ) : (
-              entries.map((entry, index) => (
+              sorted.map((entry, index) => (
                 <ListRow
                   key={entry.id}
                   title={entry.description ?? entry.entry_type}
                   subtitle={`${entry.category ?? "uncategorized"} · ${entryDate(entry.created_at)}`}
-                  divider={index < entries.length - 1}
+                  divider={index < sorted.length - 1}
                   right={
                     <View style={{ alignItems: "flex-end", gap: spacing.xs }}>
                       <AppText
-                        tone={entry.amount_cents >= 0 ? "success" : "primary"}
-                        style={{ fontWeight: "600" }}
+                        variant="stat"
+                        tone={entry.amount_cents >= 0 ? "success" : "danger"}
                       >
                         {entry.amount_cents >= 0 ? "+" : ""}
                         {dollars(entry.amount_cents)}
                       </AppText>
                       {entry.entry_type === "correction" ? (
-                        <Badge label="Correction" tone="accent" />
+                        <Chip label="Correction" variant="accent" />
                       ) : correctedIds.has(entry.id) ? (
-                        <Badge label="Corrected" tone="danger" />
+                        <Chip label="Corrected" variant="danger" />
                       ) : null}
                     </View>
                   }
                 />
               ))
             )}
-          </View>
-        </Card>
+          </Card>
+        </View>
       </View>
     </Screen>
   );

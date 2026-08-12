@@ -1,12 +1,21 @@
-/** Yak: anonymous campus board — vote arrows + score, NO author shown anywhere (SPEC §8.3). */
+/**
+ * Yak: anonymous campus board (DESIGN §6/§7) — rotating yakTint card backgrounds,
+ * emoji mask avatar per post (never an author), VotePill with active vote states.
+ */
 
 import { useEffect, useState } from "react";
-import { Pressable, View } from "react-native";
+import { Text, View } from "react-native";
 
 import { listYaks, voteYak, type YakOut, type YakVoteValue } from "@/api/yaks";
-import { AppText, Card, EmptyState, Screen } from "@/components";
+import { AppText, Card, EmptyState, Screen, VotePill } from "@/components";
 import { MOCK_CAMPUS, MOCK_MY_YAK_VOTES } from "@/mocks/data";
-import { spacing, useTheme } from "@/theme";
+import { spacing, typography, useTheme } from "@/theme";
+
+/** Anonymous emoji masks, rotated by post index (DESIGN §6). */
+const MASKS = ["🎭", "🦆", "🌮", "🛸", "🧃", "🪩"] as const;
+
+/** Canonical avatar footprint (§5 sizes 32/40/48) for the emoji mask well. */
+const MASK_SIZE = 40;
 
 function age(iso: string): string {
   const hours = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 3_600_000));
@@ -37,41 +46,52 @@ export default function YakScreen() {
   };
 
   return (
-    <Screen title="Yak" subtitle={`${MOCK_CAMPUS.name} — anonymous`}>
+    <Screen title="Yak" subtitle={`${MOCK_CAMPUS.name} · anonymous`}>
       {yaks !== null && yaks.length === 0 ? (
-        <EmptyState title="Quiet campus" message="Be the first to say something (anonymously)." />
+        <EmptyState
+          emoji="🦆"
+          title="Quiet campus"
+          message="Be the first to say something (anonymously)."
+        />
       ) : (
         <View style={{ gap: spacing.md }}>
-          {(yaks ?? []).map((yak) => {
+          {(yaks ?? []).map((yak, index) => {
             const mine = myVotes[yak.id];
+            const tint = palette.yakTints[index % palette.yakTints.length] ?? palette.surface;
+            const mask = MASKS[index % MASKS.length] ?? "🎭";
             return (
-              <Card key={yak.id}>
-                <View style={{ flexDirection: "row", gap: spacing.lg }}>
+              <Card key={yak.id} style={{ backgroundColor: tint }}>
+                <View style={{ flexDirection: "row", gap: spacing.md }}>
+                  {/* Emoji mask stands in for an author — no identity, ever (SPEC §8.3). */}
+                  <View
+                    style={{
+                      width: MASK_SIZE,
+                      height: MASK_SIZE,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: typography.title.fontSize,
+                        lineHeight: typography.title.lineHeight,
+                      }}
+                    >
+                      {mask}
+                    </Text>
+                  </View>
                   <View style={{ flex: 1, gap: spacing.sm }}>
                     <AppText>{yak.body}</AppText>
                     <AppText variant="caption" tone="tertiary">
-                      {age(yak.created_at)}
+                      {age(yak.created_at)} · anonymous
                     </AppText>
                   </View>
-                  <View style={{ alignItems: "center", gap: spacing.xs }}>
-                    <Pressable accessibilityRole="button" onPress={() => void vote(yak, 1)}>
-                      <AppText
-                        variant="title"
-                        style={{ color: mine === 1 ? palette.accent : palette.textTertiary }}
-                      >
-                        ▲
-                      </AppText>
-                    </Pressable>
-                    <AppText style={{ fontWeight: "600" }}>{yak.score}</AppText>
-                    <Pressable accessibilityRole="button" onPress={() => void vote(yak, -1)}>
-                      <AppText
-                        variant="title"
-                        style={{ color: mine === -1 ? palette.danger : palette.textTertiary }}
-                      >
-                        ▼
-                      </AppText>
-                    </Pressable>
-                  </View>
+                  <VotePill
+                    score={yak.score}
+                    vote={mine === 1 ? "up" : mine === -1 ? "down" : null}
+                    onUpvote={() => void vote(yak, 1)}
+                    onDownvote={() => void vote(yak, -1)}
+                  />
                 </View>
               </Card>
             );

@@ -1,7 +1,14 @@
-/** Feed tab stack. */
+/** Feed (Home) tab stack — headerless, canvas bg behind transitions. */
 
 import { Stack } from "expo-router";
 
+import { useTheme } from "@/theme";
+
 export default function FeedLayout() {
-  return <Stack screenOptions={{ headerShown: false }} />;
+  const palette = useTheme();
+  return (
+    <Stack
+      screenOptions={{ headerShown: false, contentStyle: { backgroundColor: palette.bg } }}
+    />
+  );
 }

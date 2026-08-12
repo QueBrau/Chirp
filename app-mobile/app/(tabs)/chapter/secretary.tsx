@@ -1,4 +1,4 @@
-/** Secretary: meetings with minutes preview + attendance tallies from mocks. */
+/** Secretary per DESIGN §7: meetings as cards — title, date caption, minutes preview, attendance Chips. */
 
 import { useEffect, useState } from "react";
 import { View } from "react-native";
@@ -9,7 +9,7 @@ import {
   type MeetingAttendanceOut,
   type MeetingOut,
 } from "@/api/meetings";
-import { AppText, Badge, Card, EmptyState, Screen } from "@/components";
+import { AppText, Card, Chip, EmptyState, Screen } from "@/components";
 import { MOCK_CURRENT_MEMBERSHIP } from "@/mocks/data";
 import { spacing } from "@/theme";
 
@@ -49,7 +49,11 @@ export default function SecretaryScreen() {
   return (
     <Screen title="Secretary" subtitle="Minutes and attendance">
       {items !== null && items.length === 0 ? (
-        <EmptyState title="No meetings yet" message="Create a meeting to start taking minutes." />
+        <EmptyState
+          emoji="🗓️"
+          title="No meetings yet"
+          message="Create a meeting to start taking minutes."
+        />
       ) : (
         <View style={{ gap: spacing.md }}>
           {(items ?? []).map(({ meeting, attendance }) => {
@@ -59,7 +63,7 @@ export default function SecretaryScreen() {
               <Card key={meeting.id}>
                 <View style={{ gap: spacing.sm }}>
                   <AppText variant="title">{meeting.title}</AppText>
-                  <AppText variant="caption" tone="secondary">
+                  <AppText variant="caption" tone="tertiary">
                     {meetingDate(meeting.meeting_date)}
                   </AppText>
                   {meeting.minutes_md !== null ? (
@@ -71,10 +75,17 @@ export default function SecretaryScreen() {
                       No minutes recorded yet.
                     </AppText>
                   )}
-                  <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" }}>
-                    <Badge label={`${count("present")} present`} tone="success" />
-                    <Badge label={`${count("absent")} absent`} tone="danger" />
-                    <Badge label={`${count("excused")} excused`} tone="neutral" />
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      gap: spacing.sm,
+                      flexWrap: "wrap",
+                      marginTop: spacing.xs,
+                    }}
+                  >
+                    <Chip label={`${count("present")} present`} variant="success" />
+                    <Chip label={`${count("absent")} absent`} variant="danger" />
+                    <Chip label={`${count("excused")} excused`} variant="neutral" />
                   </View>
                 </View>
               </Card>

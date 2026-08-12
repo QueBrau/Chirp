@@ -1,4 +1,4 @@
-/** Root layout: navigation theme wired to Chirp palette, (auth) vs (tabs) stack split. */
+/** Root layout: navigation theme wired to the Chirp palette (light/dark via system), canvas bg token applied. */
 
 import {
   DarkTheme,
@@ -30,7 +30,7 @@ export default function RootLayout() {
       primary: palette.accent,
       background: palette.bg,
       card: palette.surface,
-      text: palette.textPrimary,
+      text: palette.ink,
       border: palette.border,
       notification: palette.danger,
     },
@@ -39,7 +39,12 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={navTheme}>
       <StatusBar style="auto" />
-      <Stack screenOptions={{ headerShown: false }}>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: palette.bg },
+        }}
+      >
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(tabs)" />
       </Stack>

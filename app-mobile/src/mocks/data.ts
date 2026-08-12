@@ -135,6 +135,13 @@ export const MOCK_MEMBERSHIPS: MembershipOut[] = [
 
 export const MOCK_CURRENT_MEMBERSHIP: MembershipOut = MOCK_MEMBERSHIPS[0];
 
+/**
+ * UI-only mock flag for the Orgs tab: true renders the member org hub, false
+ * renders the "Find your org" discovery state (DESIGN §6). Typed as plain
+ * boolean (not the literal) so both branches stay type-live in screens.
+ */
+export const mockIsOrgMember: boolean = true;
+
 export const MOCK_INVITES: ChapterInviteOut[] = [
   {
     id: "inv-1",

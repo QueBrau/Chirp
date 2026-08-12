@@ -1,12 +1,17 @@
-/** Pill button primitive: primary / secondary / ghost / danger variants from theme tokens. */
+/**
+ * Pill button per DESIGN.md §5 — 52 tall. Variants:
+ * primary (accent bg / white), secondary (accentSoft / accent),
+ * ghost (transparent / inkSecondary), destructive (dangerSoft / danger).
+ * "danger" is a legacy alias for destructive.
+ */
 
-import { Pressable, StyleSheet, type ViewStyle } from "react-native";
+import { Pressable, type ViewStyle } from "react-native";
 
-import { radii, spacing, useTheme } from "@/theme";
+import { metrics, radii, spacing, useTheme } from "@/theme";
 
 import { AppText, type TextTone } from "./AppText";
 
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+export type ButtonVariant = "primary" | "secondary" | "ghost" | "destructive" | "danger";
 
 export interface ButtonProps {
   label: string;
@@ -20,6 +25,7 @@ export function Button({ label, onPress, variant = "primary", disabled = false, 
   const palette = useTheme();
 
   const container: ViewStyle = {
+    minHeight: metrics.buttonHeight,
     borderRadius: radii.pill,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.xl,
@@ -34,18 +40,17 @@ export function Button({ label, onPress, variant = "primary", disabled = false, 
       tone = "onAccent";
       break;
     case "secondary":
-      container.backgroundColor = palette.surface;
-      container.borderWidth = StyleSheet.hairlineWidth;
-      container.borderColor = palette.border;
-      tone = "primary";
+      container.backgroundColor = palette.accentSoft;
+      tone = "accent";
       break;
     case "ghost":
       container.backgroundColor = "transparent";
-      tone = "accent";
+      tone = "secondary";
       break;
+    case "destructive":
     case "danger":
-      container.backgroundColor = palette.danger;
-      tone = "onAccent";
+      container.backgroundColor = palette.dangerSoft;
+      tone = "danger";
       break;
   }
 
@@ -56,7 +61,7 @@ export function Button({ label, onPress, variant = "primary", disabled = false, 
       onPress={onPress}
       style={({ pressed }) => [container, { opacity: disabled ? 0.5 : pressed ? 0.8 : 1 }, style]}
     >
-      <AppText tone={tone} style={{ fontWeight: "600" }}>
+      <AppText variant="bodyBold" tone={tone}>
         {label}
       </AppText>
     </Pressable>
