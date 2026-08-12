@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "chirp",
+    "slug": "chirp",
+    "version": "1.0.0",
+    "scheme": "chirp",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.chirp.app",
+      "supportsTablet": false,
+      "associatedDomains": ["applinks:chirp.example.com"]
+    },
+    "android": {
+      "package": "com.chirp.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "chirp.example.com",
+              "pathPrefix": "/join-chapter"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-sqlite",
+      "expo-notifications"
+    ]
+  }
+}

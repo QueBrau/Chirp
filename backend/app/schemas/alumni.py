@@ -1,0 +1,67 @@
+"""Alumni schemas: alumni profiles, directory entries, job posts."""
+
+import uuid
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class _Schema(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+# ---- alumni profile (GET/PUT /alumni/profile, GET /alumni/directory) ----
+
+
+class AlumniProfileUpdate(_Schema):
+    """Body for PUT /alumni/profile — upserts the caller's profile."""
+
+    grad_year: int | None = None
+    company: str | None = None
+    title: str | None = None
+    industry: str | None = None
+    linkedin_url: str | None = None
+    open_to_mentoring: bool = False
+
+
+class AlumniProfileOut(_Schema):
+    user_id: uuid.UUID
+    grad_year: int | None = None
+    company: str | None = None
+    title: str | None = None
+    industry: str | None = None
+    linkedin_url: str | None = None
+    open_to_mentoring: bool = False
+    display_name: str | None = None  # joined from users for directory views
+
+
+# ---- job posts (/jobs CRUD) ----
+
+
+class JobPostCreate(_Schema):
+    chapter_id: uuid.UUID | None = None  # NULL = network-wide
+    title: str = Field(min_length=1)
+    company: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    apply_url: str | None = None
+    expires_at: datetime | None = None
+
+
+class JobPostUpdate(_Schema):
+    title: str | None = None
+    company: str | None = None
+    description: str | None = None
+    apply_url: str | None = None
+    expires_at: datetime | None = None
+
+
+class JobPostOut(_Schema):
+    id: uuid.UUID
+    posted_by: uuid.UUID
+    chapter_id: uuid.UUID | None = None
+    title: str
+    company: str
+    description: str
+    apply_url: str | None = None
+    created_at: datetime
+    expires_at: datetime | None = None
