@@ -37,3 +37,4 @@ app-mobile/android/.gradle/
 
 # OS
 .DS_Store
+.gstack/

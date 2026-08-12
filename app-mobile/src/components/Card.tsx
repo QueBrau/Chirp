@@ -1,9 +1,9 @@
-/** Surface card: radius lg, inside padding lg, hairline border + low elevation, optional press. */
+/** Surface card per DESIGN.md §4: radius 20, 1px border token, soft shadow (light mode only). */
 
 import type { ReactNode } from "react";
-import { Pressable, StyleSheet, View, type ViewStyle } from "react-native";
+import { Pressable, View, type ViewStyle } from "react-native";
 
-import { elevation, radii, spacing, useTheme } from "@/theme";
+import { cardShadow, radii, spacing, useTheme } from "@/theme";
 
 export interface CardProps {
   children: ReactNode;
@@ -16,11 +16,11 @@ export function Card({ children, onPress, style }: CardProps) {
 
   const base: ViewStyle = {
     backgroundColor: palette.surface,
-    borderRadius: radii.lg,
+    borderRadius: radii.card,
     padding: spacing.lg,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 1,
     borderColor: palette.border,
-    ...elevation.low,
+    ...cardShadow(palette),
   };
 
   if (onPress) {

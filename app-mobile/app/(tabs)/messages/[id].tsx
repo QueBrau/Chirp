@@ -1,13 +1,18 @@
-/** Thread view: mock message bubbles; composer disabled until E2EE (milestone 4). */
+/**
+ * Thread view per DESIGN §7: bubbles — mine = accent bg / white text, radius 20
+ * with a 6 tail corner; theirs = surfaceAlt / ink. Pill composer + accent circular
+ * send, both disabled until the libsignal pipeline lands (milestone 4).
+ */
 
 import { useLocalSearchParams } from "expo-router";
+import { Feather } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { TextInput, View } from "react-native";
 
 import { listConversations, listMessages, type ConversationOut } from "@/api/messages";
 import { AppText, Screen } from "@/components";
 import { MOCK_CURRENT_USER, mockUserById, type MockMessage } from "@/mocks/data";
-import { radii, spacing, useTheme } from "@/theme";
+import { metrics, radii, spacing, typography, useTheme } from "@/theme";
 
 function bubbleTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
@@ -40,7 +45,10 @@ export default function ThreadScreen() {
         )?.display_name ?? "Conversation");
 
   return (
-    <Screen title={title} subtitle={conversation?.kind === "group" ? "Group" : "Direct message"}>
+    <Screen
+      title={title}
+      subtitle={conversation?.kind === "group" ? "Group · encrypted" : "Direct message · encrypted"}
+    >
       <View style={{ gap: spacing.sm }}>
         {messages.map((message) => {
           const mine = message.sender_user_id === MOCK_CURRENT_USER.id;
@@ -55,16 +63,17 @@ export default function ThreadScreen() {
               }}
             >
               {!mine && conversation?.kind === "group" ? (
-                <AppText variant="caption" tone="tertiary" style={{ marginLeft: spacing.sm }}>
+                <AppText variant="caption" tone="tertiary" style={{ marginLeft: spacing.md }}>
                   {sender?.display_name ?? "Unknown"}
                 </AppText>
               ) : null}
               <View
                 style={{
-                  backgroundColor: mine ? palette.accent : palette.surface,
-                  borderWidth: mine ? 0 : StyleSheet.hairlineWidth,
-                  borderColor: palette.border,
-                  borderRadius: radii.lg,
+                  backgroundColor: mine ? palette.accent : palette.surfaceAlt,
+                  borderRadius: radii.card,
+                  // §7 tail corner: 6 (radii.sm) on the sender's side.
+                  borderBottomRightRadius: mine ? radii.sm : radii.card,
+                  borderBottomLeftRadius: mine ? radii.card : radii.sm,
                   paddingHorizontal: spacing.lg,
                   paddingVertical: spacing.sm,
                 }}
@@ -82,20 +91,46 @@ export default function ThreadScreen() {
           );
         })}
 
-        {/* Composer placeholder — sending requires the libsignal pipeline. TODO(milestone-4). */}
-        <View
-          style={{
-            marginTop: spacing.lg,
-            backgroundColor: palette.surface,
-            borderWidth: StyleSheet.hairlineWidth,
-            borderColor: palette.border,
-            borderRadius: radii.pill,
-            paddingHorizontal: spacing.lg,
-            paddingVertical: spacing.md,
-            opacity: 0.6,
-          }}
-        >
-          <AppText tone="tertiary">Message composer unlocks with E2EE (milestone 4)</AppText>
+        {/* Composer per §7: pill input + accent circular send — visually present,
+            disabled until the libsignal pipeline lands. TODO(milestone-4). */}
+        <View style={{ marginTop: spacing.lg, gap: spacing.sm }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+            <TextInput
+              editable={false}
+              placeholder="Message"
+              placeholderTextColor={palette.inkFaint}
+              style={{
+                flex: 1,
+                height: metrics.buttonHeight,
+                borderRadius: radii.pill,
+                backgroundColor: palette.surfaceAlt,
+                paddingHorizontal: spacing.lg,
+                fontSize: typography.body.fontSize,
+                color: palette.ink,
+              }}
+            />
+            <View
+              accessibilityRole="button"
+              accessibilityState={{ disabled: true }}
+              style={{
+                width: metrics.buttonHeight,
+                height: metrics.buttonHeight,
+                borderRadius: radii.pill,
+                backgroundColor: palette.accent,
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: 0.4,
+              }}
+            >
+              <Feather name="send" size={typography.headline.fontSize} color={palette.onAccent} />
+            </View>
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
+            <Feather name="lock" size={typography.caption.fontSize} color={palette.inkFaint} />
+            <AppText variant="caption" tone="tertiary">
+              Sending unlocks with E2EE (milestone 4)
+            </AppText>
+          </View>
         </View>
       </View>
     </Screen>

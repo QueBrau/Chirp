@@ -1,4 +1,4 @@
-/** List row primitive: left accessory + title/subtitle + right accessory, hairline divider. */
+/** List row primitive: left accessory + headline title / caption subtitle + right accessory, hairline divider. */
 
 import type { ReactNode } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
@@ -9,7 +9,8 @@ import { AppText } from "./AppText";
 
 export interface ListRowProps {
   title: string;
-  subtitle?: string;
+  /** String renders as caption text; a ReactNode renders as-is (e.g. icon + text). */
+  subtitle?: string | ReactNode;
   left?: ReactNode;
   right?: ReactNode;
   onPress?: () => void;
@@ -33,12 +34,16 @@ export function ListRow({ title, subtitle, left, right, onPress, divider = true 
     >
       {left}
       <View style={{ flex: 1, gap: spacing.xs }}>
-        <AppText numberOfLines={1}>{title}</AppText>
-        {subtitle !== undefined ? (
+        <AppText variant="headline" numberOfLines={1}>
+          {title}
+        </AppText>
+        {typeof subtitle === "string" ? (
           <AppText variant="caption" tone="secondary" numberOfLines={2}>
             {subtitle}
           </AppText>
-        ) : null}
+        ) : (
+          subtitle ?? null
+        )}
       </View>
       {right}
     </View>

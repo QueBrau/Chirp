@@ -5,6 +5,14 @@ export { Avatar, type AvatarProps } from "./Avatar";
 export { Badge, type BadgeProps, type BadgeTone } from "./Badge";
 export { Button, type ButtonProps, type ButtonVariant } from "./Button";
 export { Card, type CardProps } from "./Card";
+export { Chip, type ChipProps, type ChipVariant } from "./Chip";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
+export { GradientAvatar, type GradientAvatarProps } from "./GradientAvatar";
+export { HeroCard, type HeroCardProps } from "./HeroCard";
 export { ListRow, type ListRowProps } from "./ListRow";
 export { Screen, type ScreenProps } from "./Screen";
+export { SectionHeader, type SectionHeaderProps } from "./SectionHeader";
+export { VotePill, type VoteDirection, type VotePillProps } from "./VotePill";
+
+/** Bottom padding scroll content needs to clear the floating tab bar. */
+export { TAB_BAR_CLEARANCE } from "@/theme";

@@ -135,6 +135,13 @@ export const MOCK_MEMBERSHIPS: MembershipOut[] = [
 
 export const MOCK_CURRENT_MEMBERSHIP: MembershipOut = MOCK_MEMBERSHIPS[0];
 
+/**
+ * UI-only mock flag for the Orgs tab: true renders the member org hub, false
+ * renders the "Find your org" discovery state (DESIGN §6). Typed as plain
+ * boolean (not the literal) so both branches stay type-live in screens.
+ */
+export const mockIsOrgMember: boolean = true;
+
 export const MOCK_INVITES: ChapterInviteOut[] = [
   {
     id: "inv-1",
@@ -623,3 +630,25 @@ export const MOCK_REPORTS: ContentReportOut[] = [
 ];
 
 export const MOCK_BLOCKS: UserBlockOut[] = [];
+
+// ---------- profile layout (UI-only: user-arrangeable Profile sections, DESIGN §7) ----------
+
+export type ProfileSectionKey = "about" | "orgs" | "activity" | "alumni" | "settings";
+
+export interface ProfileSectionLayout {
+  key: ProfileSectionKey;
+  visible: boolean;
+}
+
+/**
+ * Seed order + visibility for the Profile screen's "Edit layout" mode. The screen
+ * copies this into local state and reorders/toggles it there — mock persistence
+ * for now, real per-user prefs later.
+ */
+export const mockProfileLayout: ProfileSectionLayout[] = [
+  { key: "about", visible: true },
+  { key: "orgs", visible: true },
+  { key: "activity", visible: true },
+  { key: "alumni", visible: true },
+  { key: "settings", visible: true },
+];

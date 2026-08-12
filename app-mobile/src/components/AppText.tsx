@@ -8,18 +8,25 @@ export type TextTone =
   | "primary"
   | "secondary"
   | "tertiary"
+  | "faint"
   | "accent"
   | "danger"
   | "success"
+  | "warning"
   | "onAccent";
 
-const TONE_TO_PALETTE_KEY: Record<TextTone, keyof Palette> = {
-  primary: "textPrimary",
-  secondary: "textSecondary",
-  tertiary: "textTertiary",
+const TONE_TO_PALETTE_KEY: Record<TextTone, keyof Pick<
+  Palette,
+  "ink" | "inkSecondary" | "inkFaint" | "accent" | "danger" | "success" | "warning" | "onAccent"
+>> = {
+  primary: "ink",
+  secondary: "inkSecondary",
+  tertiary: "inkFaint",
+  faint: "inkFaint",
   accent: "accent",
   danger: "danger",
   success: "success",
+  warning: "warning",
   onAccent: "onAccent",
 };
 
