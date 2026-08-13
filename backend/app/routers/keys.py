@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.core.errors import forbidden, not_found
+from app.core.errors import forbidden, not_found, too_many_requests
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.schemas.e2ee import (
@@ -27,8 +27,17 @@ from app.services.prekey_service import (
     consume_one_time_prekey,
     get_last_resort_kyber_prekey,
 )
+from app.services.rate_limit import allow as rate_limit_allow
 
 router = APIRouter(tags=["keys"])
+
+# SECURITY-REVIEW finding 9: prekey-bundle fetch consumes a one-time prekey per call, so an
+# unthrottled caller can drain a victim's OTK pool without ever starting a session. Cap it per
+# (caller, target) pair. See app.services.rate_limit for the per-instance caveat — this is a
+# first-layer mitigation, not a hard guarantee (production should move to a Redis-backed
+# counter using the client already in app.ws.pubsub.get_redis()).
+_PREKEY_BUNDLE_RATE_LIMIT_MAX_CALLS = 10
+_PREKEY_BUNDLE_RATE_LIMIT_WINDOW_SECONDS = 600.0  # 10 minutes
 
 
 def _b64_to_bytes(value: str) -> bytes:
@@ -242,7 +251,19 @@ async def fetch_prekey_bundle(
 
     The one-time prekey is null for a device whose pool is exhausted — the bundle is
     still returned (X3DH degrades gracefully without an OTK).
+
+    Rate-limited per (caller, target) pair — see the module-level constants above — as a
+    first-layer mitigation against pool-draining (SECURITY-REVIEW finding 9). Does not change
+    OTK consumption semantics below; it only gates whether this call is allowed to happen.
     """
+    rate_limit_key = f"prekey_bundle:{user.id}:{user_id}"
+    if not rate_limit_allow(
+        rate_limit_key,
+        max_calls=_PREKEY_BUNDLE_RATE_LIMIT_MAX_CALLS,
+        window_seconds=_PREKEY_BUNDLE_RATE_LIMIT_WINDOW_SECONDS,
+    ):
+        raise too_many_requests("prekey_bundle_rate_limited")
+
     target = await session.get(models.User, user_id)
     if target is None:
         raise not_found("user_not_found")

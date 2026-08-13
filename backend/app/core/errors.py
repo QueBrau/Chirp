@@ -15,3 +15,8 @@ def forbidden(detail: str) -> HTTPException:
 def conflict(detail: str) -> HTTPException:
     """409 with a machine-readable detail string."""
     return HTTPException(status_code=409, detail=detail)
+
+
+def too_many_requests(detail: str = "rate_limited") -> HTTPException:
+    """429 with a machine-readable detail string."""
+    return HTTPException(status_code=429, detail=detail)

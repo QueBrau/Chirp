@@ -5,6 +5,7 @@ export { getFirebaseAuth } from "./firebase";
 export {
   getIdToken,
   onAuthChanged,
+  onIdTokenChanged,
   signInWithEmail,
   signOutUser,
   signUpWithEmail,

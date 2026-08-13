@@ -1,5 +1,7 @@
 /** Typed fetch wrapper for the Chirp backend: base URL, auth header injection, USE_MOCKS switch. */
 
+import { getIdToken, hasFirebaseConfig } from "@/auth";
+
 /** Backend origin. Point at the FastAPI dev server when flipping USE_MOCKS off. */
 export const API_BASE_URL = "http://localhost:8000";
 
@@ -64,18 +66,21 @@ function buildUrl(path: string, query?: RequestOptions["query"]): string {
   return parts.length > 0 ? `${url}?${parts.join("&")}` : url;
 }
 
-/** Perform an authenticated JSON request against the backend. Throws ApiError on non-2xx. */
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/** Fire the actual network request with whatever bearer/debug headers are currently set. */
+function doFetch(path: string, options: RequestOptions): Promise<Response> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
   if (debugFirebaseUid) headers["X-Debug-Firebase-Uid"] = debugFirebaseUid;
 
-  const response = await fetch(buildUrl(path, options.query), {
+  return fetch(buildUrl(path, options.query), {
     method: options.method ?? "GET",
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
+}
 
+/** Turn a fetch Response into the resolved payload, or throw ApiError on non-2xx. */
+async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let detail = response.statusText;
     try {
@@ -88,6 +93,29 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+/**
+ * Perform an authenticated JSON request against the backend. Throws ApiError on non-2xx.
+ *
+ * On a 401, retries ONCE after forcing a fresh Firebase ID token — the ~1hr token can
+ * go stale between onIdTokenChanged refreshes (e.g. app resumed from background), and
+ * without this the client would be stranded until the next natural refresh. Gated on
+ * hasFirebaseConfig(): a total no-op in mock/demo mode, where a 401 throws immediately
+ * exactly as before.
+ */
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  let response = await doFetch(path, options);
+
+  if (response.status === 401 && hasFirebaseConfig()) {
+    const freshToken = await getIdToken(true);
+    if (freshToken) {
+      setAuthToken(freshToken);
+      response = await doFetch(path, options);
+    }
+  }
+
+  return parseResponse<T>(response);
 }
 
 /**
