@@ -110,7 +110,15 @@ export default function AccountTypeScreen() {
         <Button
           label={selected === "greek" ? "Next: join your chapter" : "Continue"}
           style={{ marginTop: spacing.lg }}
-          onPress={() => router.push("/join-chapter")}
+          onPress={() => {
+            // Finding 13: onPress used to always route to join-chapter regardless of
+            // selection — only greek should land there; everyone else goes to Home.
+            if (selected === "greek") {
+              router.push("/join-chapter");
+            } else {
+              router.replace("/(tabs)/feed");
+            }
+          }}
         />
       </View>
     </Screen>

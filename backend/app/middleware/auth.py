@@ -8,21 +8,21 @@ from app.config import get_settings
 from app.db import get_session
 
 
-async def get_verified_uid(
-    x_debug_firebase_uid: str | None = Header(default=None, alias="X-Debug-Firebase-Uid"),
-    authorization: str | None = Header(default=None),
-) -> str:
-    """Return the caller's verified Firebase uid, or raise 401.
+async def _verify_identity(
+    x_debug_firebase_uid: str | None,
+    authorization: str | None,
+) -> tuple[str, str | None]:
+    """Shared verification logic: returns (uid, verified_email).
 
-    Emulated mode trusts the X-Debug-Firebase-Uid header; firebase mode verifies the
-    Authorization: Bearer <id-token> via firebase_admin (imported lazily so the
-    dependency stays optional for local dev).
+    verified_email is the Firebase token's 'email' claim in firebase mode (None if the
+    token carries no such claim), or always None in emulated mode (there is no token to
+    verify an email against, so the caller-supplied email must be trusted as-is there).
     """
     settings = get_settings()
     if settings.auth_mode == "emulated":
         if not x_debug_firebase_uid:
             raise HTTPException(status_code=401, detail="missing_debug_uid")
-        return x_debug_firebase_uid
+        return x_debug_firebase_uid, None
 
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing_bearer_token")
@@ -41,7 +41,32 @@ async def get_verified_uid(
     uid = decoded.get("uid")
     if not uid:
         raise HTTPException(status_code=401, detail="invalid_token")
+    return uid, decoded.get("email")
+
+
+async def get_verified_uid(
+    x_debug_firebase_uid: str | None = Header(default=None, alias="X-Debug-Firebase-Uid"),
+    authorization: str | None = Header(default=None),
+) -> str:
+    """Return the caller's verified Firebase uid, or raise 401.
+
+    Emulated mode trusts the X-Debug-Firebase-Uid header; firebase mode verifies the
+    Authorization: Bearer <id-token> via firebase_admin (imported lazily so the
+    dependency stays optional for local dev). See get_verified_identity for uid+email.
+    """
+    uid, _email = await _verify_identity(x_debug_firebase_uid, authorization)
     return uid
+
+
+async def get_verified_identity(
+    x_debug_firebase_uid: str | None = Header(default=None, alias="X-Debug-Firebase-Uid"),
+    authorization: str | None = Header(default=None),
+) -> tuple[str, str | None]:
+    """Return (uid, verified_email) — used by POST /auth/bootstrap to stop email squatting
+    (SECURITY-REVIEW finding 3): the verified token email, not the client body, is
+    authoritative in firebase mode.
+    """
+    return await _verify_identity(x_debug_firebase_uid, authorization)
 
 
 async def get_current_user(

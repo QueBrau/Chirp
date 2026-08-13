@@ -1,43 +1,50 @@
 # HANDOFF — current state
 
-_Last updated: Aug 12 2026 (late). `next-steps` branch is complete + gated, awaiting
-Jose's review to merge. Since the redesign merge, `next-steps` added: media FYP +
-school-color theming w/ Appearance screen (browser-verified) · libsignal spike PASSED
-vs live backend (spikes/libsignal-node/FINDINGS.md) · Kyber/PQXDH key directory
-(migration 0002, spike re-verified) · Firebase auth wired w/ demo fallback +
-SETUP-FIREBASE.md · DB layer verified on real local PG14 (22/22 tests). Board
-(board.html) is current._
+_Last updated: Aug 13 2026. Everything below is on `main` (single source of truth).
+Stale feature branches deleted. `board.html` = live task board._
 
-## State of the world
+## What's on main
 
-- **`main`** has everything: verified backend scaffold (43 routes; keys/messages
-  functional, Stripe stubbed), the redesigned Expo app (DESIGN.md v2 "Campus Modern" —
-  emoji-free Feather-icon UI, floating tab bar, Orgs tab with member + find-your-org
-  states, user-arrangeable profile, all-students copy), and `board.html` (the task
-  board — open in a browser, drag cards, Export & commit to sync).
-- Verified on merge: `tsc --noEmit` clean, zero emoji anywhere, every screen
-  screenshot-QA'd in light mode at 390px, Edit-layout interaction tested live.
-  Dark palette is token-complete but visually unverified (headless browser can't
-  emulate prefers-color-scheme; check by flipping OS dark mode on localhost:8081).
-- `frontend-redesign` branch is merged — safe to delete.
+Full Chirp app + today's work, all verified:
+- **Backend**: 28-table schema + PQXDH kyber prekeys (migrations 0001–0003),
+  12 routers, WS gateway, append-only ledger. **Security-hardened** per
+  `SECURITY-REVIEW.md` (see below). 33 tests pass against real Postgres.
+- **Mobile**: UNC Greensboro identity (navy/gold, campus-tint default), per-org
+  greek colors via OrgAccentScope, media FYP (photo/video/text, story tiles,
+  filter pills), navy campus-night Yak board, media-first craft pass (DESIGN §10),
+  **Orgs space** = Feed / Events (Partiful-style RSVP) / Tools segments in org
+  colors, org posts private to the org (never on FYP), user-arrangeable profile,
+  Appearance screen, Firebase auth wired w/ demo fallback. tsc clean, zero emoji.
 
-## Contracts (read before coding)
+## Security review (SECURITY-REVIEW.md)
 
-`SPEC.md` (product/schema/API), `CONVENTIONS.md` (naming, frozen signatures),
-`app-mobile/DESIGN.md` (design system — binding; no emojis, tokens only).
+15 confirmed findings from the multi-agent review. **Fixed + tested this session:**
+moderation campus-scoping (was: platform-wide E2EE-report plaintext leak),
+invite-role escalation, bootstrap email-squatting, CORS/emulated dangerous
+defaults, WS token log-redaction, 4× check-then-insert TOCTOU races
+(join/vote/like/block/receipt), message pagination tie-break, + new tests
+(moderation-scope, yaks, pagination, extended cross-chapter 403).
 
-## Top of the board (unclaimed — see board.html)
+**Deferred to board (not quick fixes — need a decision or infra):**
+- Prekey-drain rate limiting (needs a throttling layer)
+- Firebase token auto-refresh (pairs with creating the Firebase project)
+- **Fully gating chapter/president creation** — campus-scoping contains the
+  moderation leak, but self-serve presidency is a PRODUCT decision (how do orgs
+  legitimately get created + moderators anointed?). Jose/Q to design.
+- Message index optimization: pagination query is correct but idx_messages_convo_time
+  should become (conversation_id, created_at DESC, id DESC) via a 0004 migration.
 
-1. **Verify DB on a Docker machine**: `docker compose up -d && cd backend &&
-   alembic upgrade head && pytest`. The migration + 10 skipped tests have NEVER
-   run against real Postgres 16.
-2. **libsignal RN spike** on two physical devices (milestone 3, riskiest unknown;
-   needs EAS dev build).
-3. **Real Firebase auth** (milestone 1): mobile sign-in + backend `auth_mode=firebase`.
+## Environment notes (this Mac)
 
-## Working agreements
+No Docker. Local Postgres 14 runs via `pg_ctl -D /usr/local/var/postgresql@14`
+(brew services is broken here) — role chirp/chirp, dbs chirp + chirp_test.
+Backend venv: `backend/.venv` (has firebase-admin, compiled once). Expo web:
+`cd app-mobile && npx expo start --web` → localhost:8081 (Metro gets OOM-killed
+when many agents run; just restart). Tests target real PG (verified on PG14;
+prod is PG16 — re-run on a Docker/CI machine, carded).
 
-- All students, not just greek — greek = orgs you join (Orgs tab).
-- board.html = who's doing what (J = Jose, Q = QueBrau).
-- Claude sessions: subagents run Sonnet 5; resume context lives in Claude's
-  project memory.
+## Top of the board for Q
+
+Create the Firebase project (SETUP-FIREBASE.md), then real auth goes live;
+libsignal on two physical devices (needs phones + Expo account); WS/Redis
+real-time fan-out verify; PG16 test run. All carded in board.html.

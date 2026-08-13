@@ -85,6 +85,11 @@ class ContentReport(Base):
     reporter_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
+    # Resolved server-side from the target (finding 1: moderation scoping); NULL only when
+    # the target's campus could not be determined (best-effort fallback exhausted).
+    campus_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("campuses.id")
+    )
     target_type: Mapped[str] = mapped_column(Text, nullable=False)
     target_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     # For E2EE message reports: client forwards plaintext.

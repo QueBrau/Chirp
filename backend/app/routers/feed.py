@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -140,8 +141,17 @@ async def like_post(
     if like is None:
         like = models.PostLike(post_id=post_id, user_id=user.id)
         session.add(like)
-        await session.commit()
-        await session.refresh(like)
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Concurrent double-tap raced us to insert the same (post_id, user_id)
+            # like — rollback and treat as already-liked instead of a 500.
+            await session.rollback()
+            like = await session.get(models.PostLike, (post_id, user.id))
+            if like is None:
+                raise
+        else:
+            await session.refresh(like)
     return PostLikeOut.model_validate(like)
 
 

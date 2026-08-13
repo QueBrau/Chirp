@@ -58,6 +58,8 @@ class ContentReportCreate(_Schema):
 class ContentReportOut(_Schema):
     id: uuid.UUID
     reporter_id: uuid.UUID
+    # Resolved server-side (finding 1: moderation scoping); never client-supplied.
+    campus_id: uuid.UUID | None = None
     target_type: ReportTargetType
     target_id: uuid.UUID | None = None
     forwarded_plaintext: str | None = None

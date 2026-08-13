@@ -2,6 +2,7 @@
 
 export { AppText, type AppTextProps, type TextTone } from "./AppText";
 export { Avatar, type AvatarProps } from "./Avatar";
+export { AvatarStack, type AvatarStackPerson, type AvatarStackProps } from "./AvatarStack";
 export { Badge, type BadgeProps, type BadgeTone } from "./Badge";
 export { Button, type ButtonProps, type ButtonVariant } from "./Button";
 export { Card, type CardProps } from "./Card";

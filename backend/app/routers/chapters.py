@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -24,6 +25,8 @@ from app.schemas.identity import (
 )
 
 router = APIRouter(tags=["chapters"])
+
+_EBOARD_ROLE_VALUES: frozenset[str] = frozenset(role.value for role in EBOARD)
 
 
 @router.post("/chapters", status_code=201)
@@ -114,7 +117,14 @@ async def create_invite(
     actor: models.Membership = Depends(require_role(*EBOARD)),
     session: AsyncSession = Depends(get_session),
 ) -> ChapterInviteOut:
-    """Create a deep-link invite code; e-board only. Optional expiry."""
+    """Create a deep-link invite code; e-board only. Optional expiry.
+
+    SECURITY-REVIEW finding 2: minting an EBOARD-role invite (e.g. a historian
+    inviting a future president) requires the creator to already be president —
+    any e-board role may still mint non-eboard invites (member/pledge/alumni).
+    """
+    if body.role in _EBOARD_ROLE_VALUES and actor.role != Role.president.value:
+        raise forbidden("insufficient_role")
     invite = models.ChapterInvite(
         chapter_id=chapter_id,
         code=secrets.token_urlsafe(9),
@@ -157,6 +167,12 @@ async def join_chapter(
         role=invite.role,
     )
     session.add(membership)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Concurrent double-tap/retry race on the (user_id, chapter_id) unique
+        # constraint — surface the same graceful 409 (SECURITY-REVIEW finding 6).
+        await session.rollback()
+        raise conflict("already_member") from None
     await session.refresh(membership)
     return MembershipOut.model_validate(membership)

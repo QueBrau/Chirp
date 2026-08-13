@@ -1,6 +1,8 @@
 """WebSocket gateway: authenticated per-user event stream bridged from Redis pub/sub."""
 import asyncio
 import contextlib
+import logging
+import re
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
@@ -12,6 +14,41 @@ from app.db import get_session
 from app.ws.pubsub import get_redis
 
 router = APIRouter(tags=["ws"])
+
+_TOKEN_QS_RE = re.compile(r"([?&]token=)[^&\s]+")
+
+
+class _RedactWsTokenFilter(logging.Filter):
+    """Redacts `token=<...>` from uvicorn's access log (SECURITY-REVIEW finding 4).
+
+    The WS handshake authenticates via `?token=<firebase-id-token>` in the URL (RN
+    WebSocket clients can't always set headers), so uvicorn's default access log would
+    otherwise write real bearer tokens to stdout/Cloud Run logs verbatim. This filter
+    scrubs any log record whose args or message contain a `token=` query param, without
+    touching the auth mechanism itself.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _TOKEN_QS_RE.sub(r"\1[REDACTED]", value)
+                if isinstance(value, str) and "token=" in value
+                else value
+                for value in record.args
+            )
+        elif isinstance(record.msg, str) and "token=" in record.msg:
+            record.msg = _TOKEN_QS_RE.sub(r"\1[REDACTED]", record.msg)
+        return True
+
+
+def _install_ws_token_log_filter() -> None:
+    """Idempotently attach the redaction filter to uvicorn's access logger."""
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _RedactWsTokenFilter) for f in access_logger.filters):
+        access_logger.addFilter(_RedactWsTokenFilter())
+
+
+_install_ws_token_log_filter()
 
 
 def _resolve_uid(websocket: WebSocket) -> str | None:

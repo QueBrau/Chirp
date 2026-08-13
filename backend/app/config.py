@@ -12,6 +12,9 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://chirp:chirp@localhost:5432/chirp"
     redis_url: str = "redis://localhost:6379/0"
+    # Deployment tier; non-"local" values enforce safer defaults at startup (SECURITY-REVIEW
+    # finding 5) — see app.main.create_app.
+    env: Literal["local", "staging", "production"] = "local"
     auth_mode: Literal["emulated", "firebase"] = "emulated"
     firebase_project_id: str | None = None
     stripe_secret_key: str | None = None
