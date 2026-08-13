@@ -17,6 +17,7 @@ htmlcov/
 .env
 .env.*
 !.env.example
+INFRA-PRIVATE.md
 
 # Node / Expo
 node_modules/
