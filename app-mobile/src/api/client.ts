@@ -2,14 +2,20 @@
 
 import { getIdToken, hasFirebaseConfig } from "@/auth";
 
-/** Backend origin. Point at the FastAPI dev server when flipping USE_MOCKS off. */
-export const API_BASE_URL = "http://localhost:8000";
+/**
+ * Backend origin. Defaults to the live Cloud Run backend; override with
+ * EXPO_PUBLIC_API_URL (e.g. "http://localhost:8000") to point at a local
+ * FastAPI dev server instead.
+ */
+export const API_BASE_URL: string =
+  process.env.EXPO_PUBLIC_API_URL ?? "https://chirp-api-593616178468.us-central1.run.app";
 
 /**
  * While true, every src/api function resolves from src/mocks/data.ts instead of
- * the network. Wiring the real backend later = flip this to false.
+ * the network. Defaults to false (live backend); set EXPO_PUBLIC_USE_MOCKS=true
+ * to bring back the mock/local-dev flow.
  */
-export const USE_MOCKS: boolean = true;
+export const USE_MOCKS: boolean = process.env.EXPO_PUBLIC_USE_MOCKS === "true";
 
 let authToken: string | null = null;
 let debugFirebaseUid: string | null = null;
