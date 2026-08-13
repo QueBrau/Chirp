@@ -214,7 +214,7 @@
     {
       "id": "c37",
       "col": "done",
-      "title": "CI LIVE (c37): pytest vs PG16 container + mobile tsc on every push/PR — first run GREEN on the PR #4 merge (both jobs). Open: branch protection (require CI green to merge) awaiting Jose yes/no.",
+      "title": "CI LIVE (c37): pytest vs PG16 container + mobile tsc on every push/PR — first run GREEN on the PR #4 merge (both jobs). Advisory only: NO branch protection (Jose, Aug 13).",
       "owner": "J",
       "tag": "infra"
     },
@@ -401,7 +401,8 @@
     "Aug 13 — Payments: Stripe Connect EXPRESS accounts + DIRECT charges. The chapter is merchant of record, funds land in the chapter's balance, the chapter carries chargeback liability — Chirp never takes custody of the money. Platform fee 1% card / 2% ACH as application_fee_amount (ACH still lands cheaper for the chapter all-in, ~2.8% vs ~3.9%). The member picks the rail BEFORE the intent is created, because application_fee_amount is immutable once a PaymentIntent exists and PaymentSheet would otherwise pick the rail afterwards. Saved cards use a Stripe Customer per (member, chapter): under direct charges the Customer lives on the connected account, so a users.stripe_customer_id column works for the first chapter and silently breaks the second.",
     "Aug 13 — Payments: dropped the ephemeral-key approach in HANDOFF for CustomerSession — Stripe's current mobile docs use it, the installed RN SDK 0.50.3 accepts either, and CustomerSession needs no pinned API version (one less thing to re-check on every SDK upgrade).",
     "Aug 13 — Process: migration numbers are a SHARED resource. Claim the next number on this board BEFORE writing the file. Taken so far: 0006 events (J, on prod), 0007 is_platform_admin (J, in flight), 0008 Stripe dues (Q, pending renumber from 0006 — see c41).",
-    "Aug 13 — Process: Q's vertical branch is q/social-msg, cut from the family-tree tip. family-tree retires once PR #2 merges; PR #3 stacks on PR #2."
+    "Aug 13 — Process: Q's vertical branch is q/social-msg, cut from the family-tree tip. family-tree retires once PR #2 merges; PR #3 stacks on PR #2.",
+    "Aug 13 — Process: NO branch protection on main for now (Jose's call) — CI runs on every push/PR but is advisory, merges stay unblocked. Revisit before TestFlight. Apple Developer enrollment also parked until launch prep."
   ]
 }
 </script>

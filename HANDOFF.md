@@ -1,24 +1,22 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 13 2026, evening._
+_Last updated: Aug 13 2026, late night (post PR #4 merge)._
 
 **board.html is the source of truth for tasks.** This file only answers the question the
-board can't: which of the three copies of Chirp you are looking at, and why prod does
-not match main.
+board can't: which copy of Chirp you are looking at.
 
-## The one thing to internalize: work is split three ways, and prod is ahead of main
+## Current state: main, prod, and CI all agree
 
 | Where | What's there | State |
 | --- | --- | --- |
-| `main` | Redesign, Firebase auth scaffolding, lineage tree + alumni (PR #1), migrations **0001-0005** | Behind both dev branches |
-| `jose/auth-orgs` | Firebase live config, app off mocks, events backend (**0006**), platform-admin chapter gating (**0007**) | Not merged; **0006/0007 already applied to PROD** |
-| `family-tree` | Yak on real API, treasurer/secretary dashboards + CSV export | **PR #2**, ready to merge |
-| `q/social-msg` | Everything in PR #2, plus Stripe Connect dues | **PR #3**, DRAFT — blocked, see below |
-| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` | `alembic_version` at **0006**, 0007 landing |
+| `main` | Everything through **PR #4**: Firebase live, app off mocks + auth guard, events backend, platform-admin chapter gating, review fixes, CI workflow, migrations **0001-0007** | Canonical; prod matches it |
+| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` (rev 00004) | `alembic_version` at **0007** = main's head; firebase-init-at-boot hardening deployed |
+| `jose/auth-orgs` | Synced to main, kept for Jose's future work | Merged via PR #4 |
+| `q/social-msg` | Stripe Connect dues on top of merged main | **PR #3**, DRAFT — one blocker left, see below |
+| CI | `.github/workflows/ci.yml`: backend pytest vs PG16 + mobile tsc on every push/PR | First run green. No branch protection (deliberate, Aug 13) — CI is advisory |
 
-So prod's database schema is ahead of `main`'s migration folder. That is not a mistake —
-Jose applies migrations from his branch and redeploys before the PR merges. It does mean
-you cannot reason about prod by reading `main`.
+Creds, runbooks, QA account, and live fixture ids: `INFRA-PRIVATE.html` at the repo root
+(gitignored — get a copy from Jose, never commit it).
 
 ## Blocked right now: the Stripe migration number (board c41)
 
