@@ -34,7 +34,15 @@ async def _verify_identity(
         try:
             firebase_admin.get_app()
         except ValueError:
-            firebase_admin.initialize_app()
+            # Pin the token audience to the configured Firebase project; without
+            # this the SDK infers the ambient GCP project, which rejects tokens
+            # whenever the Firebase project differs from where the code runs.
+            options = (
+                {"projectId": settings.firebase_project_id}
+                if settings.firebase_project_id
+                else None
+            )
+            firebase_admin.initialize_app(options=options)
         decoded = firebase_auth.verify_id_token(token)
     except Exception:  # invalid/expired token, missing SDK, or init failure
         raise HTTPException(status_code=401, detail="invalid_token")
