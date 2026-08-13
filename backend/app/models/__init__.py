@@ -2,7 +2,13 @@
 
 from app.models.alumni import AlumniProfile, JobPost
 from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
-from app.models.finance import DuesCycle, LedgerEntry, SpendApproval
+from app.models.finance import (
+    ChapterStripeCustomer,
+    DuesCycle,
+    LedgerEntry,
+    ProcessedStripeEvent,
+    SpendApproval,
+)
 from app.models.identity import Campus, Chapter, ChapterInvite, Membership, User
 from app.models.lineage import Family, LineageEdge
 from app.models.meetings import Meeting, MeetingAttendance
@@ -20,6 +26,7 @@ __all__ = [
     "Campus",
     "Chapter",
     "ChapterInvite",
+    "ChapterStripeCustomer",
     "ContentReport",
     "Conversation",
     "ConversationMember",
@@ -39,6 +46,7 @@ __all__ = [
     "Post",
     "PostComment",
     "PostLike",
+    "ProcessedStripeEvent",
     "SignedPrekey",
     "SpendApproval",
     "User",

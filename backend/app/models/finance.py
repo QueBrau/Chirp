@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    PrimaryKeyConstraint,
     Text,
     text,
 )
@@ -50,6 +51,16 @@ class LedgerEntry(Base):
             "idx_ledger_chapter_time",
             "chapter_id",
             text("created_at DESC"),
+        ),
+        # Stripe delivers webhooks at-least-once and retries for days. The ledger is
+        # append-only, so a replayed payment_intent.succeeded would append a SECOND
+        # permanent dues payment. This constraint — not a check-then-insert, which
+        # races — is what makes replay handling correct.
+        Index(
+            "uq_ledger_stripe_payment_intent",
+            "stripe_payment_intent_id",
+            unique=True,
+            postgresql_where=text("stripe_payment_intent_id IS NOT NULL"),
         ),
     )
 
@@ -112,5 +123,41 @@ class SpendApproval(Base):
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class ChapterStripeCustomer(Base):
+    """Maps (member, chapter) to a Stripe Customer on that chapter's connected account.
+
+    Under direct charges the Customer lives on the connected account, not the
+    platform — so a member in two chapters legitimately has two Customers. A
+    users.stripe_customer_id column would work for the first chapter and silently
+    charge the wrong account for the second.
+    """
+
+    __tablename__ = "chapter_stripe_customers"
+    __table_args__ = (PrimaryKeyConstraint("user_id", "chapter_id"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    chapter_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False
+    )
+    stripe_customer_id: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class ProcessedStripeEvent(Base):
+    """Event-level webhook dedup: the PK insert fails on a replayed event id."""
+
+    __tablename__ = "processed_stripe_events"
+
+    event_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

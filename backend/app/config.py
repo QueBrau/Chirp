@@ -18,7 +18,11 @@ class Settings(BaseSettings):
     auth_mode: Literal["emulated", "firebase"] = "emulated"
     firebase_project_id: str | None = None
     stripe_secret_key: str | None = None
+    stripe_publishable_key: str | None = None
     stripe_webhook_secret: str | None = None
+    # Public https origin Stripe redirects back to after Connect onboarding. Stripe
+    # rejects custom schemes, so a chirp:// deep link cannot be used directly.
+    app_public_base_url: str | None = None
     cors_origins: list[str] = ["*"]
 
 
