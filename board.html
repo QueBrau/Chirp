@@ -95,7 +95,15 @@
     { "id": "c19", "col": "done", "title": "Kyber/PQXDH prekeys shipped — migration 0002, bundle API, spike re-verified with server-supplied post-quantum keys", "owner": "J", "tag": "m4" },
     { "id": "c25", "col": "done", "title": "Org space: private org-only feed + Partiful events (Feed/Events/Tools segments, RSVP) — merged", "owner": "J", "tag": "design" },
     { "id": "c27", "col": "done", "title": "Security review (15 findings) + fixes: moderation campus-scope, invite/email escalation, CORS guard, WS log-redaction, TOCTOU races, pagination — 33 tests pass. See SECURITY-REVIEW.md", "owner": "J", "tag": "security" },
-    { "id": "c28", "col": "next", "title": "Gate chapter/president creation (product decision) — self-serve presidency lets a user become EBOARD; campus-scoping contains the moderation leak but doesn't close it", "owner": "", "tag": "security" },
+    { "id": "c30", "col": "next", "title": "SPRINT 0 (shared, do first): stand up ONE reachable backend (Cloud Run+Cloud SQL or local+tunnel) + flip app mock toggle to it. Nothing integrates until this exists.", "owner": "", "tag": "go-live" },
+    { "id": "c31", "col": "next", "title": "[A/Jose] GO-LIVE: real Firebase auth end-to-end (project per SETUP-FIREBASE.md + sign-in + bootstrap + token auto-refresh)", "owner": "J", "tag": "vert:auth-orgs" },
+    { "id": "c32", "col": "next", "title": "[A/Jose] GO-LIVE: Orgs on real API (chapters/members/invites/join + org space feed/events/tools)", "owner": "J", "tag": "vert:auth-orgs" },
+    { "id": "c33", "col": "backlog", "title": "[A/Jose] Events backend: events + event_rsvps tables + endpoints (UI done on mocks)", "owner": "J", "tag": "vert:auth-orgs" },
+    { "id": "c34", "col": "next", "title": "[B/Q] GO-LIVE: FYP feed + Yak + moments on real API (posts/likes/comments, votes, campus scope)", "owner": "Q", "tag": "vert:social-msg" },
+    { "id": "c35", "col": "backlog", "title": "[B/Q] Moderation UI: report/block/remove (App Store gate before submit)", "owner": "Q", "tag": "vert:social-msg" },
+    { "id": "c36", "col": "backlog", "title": "[B/Q] m4: real in-app E2EE messaging (crypto stubs -> real, spike-proven path) + prekey rate-limit + msg index 0004", "owner": "Q", "tag": "vert:social-msg" },
+    { "id": "c37", "col": "backlog", "title": "[shared] CI: run pytest + tsc on every push; PG16 test run", "owner": "", "tag": "infra" },
+    { "id": "c28", "col": "next", "title": "[A/Jose] Gate chapter/president creation (product decision) — self-serve presidency lets a user become EBOARD; campus-scoping contains the moderation leak but doesn't close it", "owner": "J", "tag": "security" },
     { "id": "c29", "col": "backlog", "title": "Prekey-drain rate limiting + Firebase token auto-refresh + msg index 0004 (deferred security items)", "owner": "", "tag": "security" },
     { "id": "c26", "col": "backlog", "title": "Events backend: events + event_rsvps tables, RSVP endpoints; org feed maps to existing /chapters/{id}/posts", "owner": "", "tag": "m5" },
     { "id": "c20", "col": "next", "title": "Create the Firebase project per SETUP-FIREBASE.md (console steps) — unblocks live auth", "owner": "", "tag": "m1" },
@@ -124,7 +132,8 @@
     "Aug 12 — Design: Home = media FYP (Twitter/Insta/Snap mix — anything postable), themed to SCHOOL COLORS with user-controlled accent/background (DESIGN.md §7 + §8.5). Two dribbble refs codified.",
     "Aug 12 — Crypto: libsignal requires PQXDH (post-quantum Kyber prekeys) — key directory being extended (kyber_prekeys, migration 0002). 1:1 wire-format rule documented in SPEC §6.",
     "Aug 12 — E2EE spike verdict: @signalapp/libsignal-client works on macOS x64 Node; RN path recommendation in spikes/libsignal-node/FINDINGS.md; physical-device test still owed.",
-    "Aug 12 — Product: org posts are PRIVATE to the org (never on the FYP). Orgs tab = Feed / Events / Tools segments in org colors; Events = Partiful-style planning (DESIGN §8.7). App rebranded to UNC Greensboro; every frat/sorority wears its own colors (§8.6)."
+    "Aug 12 — Product: org posts are PRIVATE to the org (never on the FYP). Orgs tab = Feed / Events / Tools segments in org colors; Events = Partiful-style planning (DESIGN §8.7). App rebranded to UNC Greensboro; every frat/sorority wears its own colors (§8.6).",
+    "Aug 13 — Process: work split BY FEATURE VERTICAL. Vertical A (Auth & Orgs) = Jose; Vertical B (Social & Messaging) = Q. First milestone = GO-LIVE INTEGRATION. Sprint 0 (shared): one reachable backend + Firebase project before either vertical starts. Shared files (api/client, theme, components, mocks): touch sparingly, ping each other."
   ]
 }
 </script>
