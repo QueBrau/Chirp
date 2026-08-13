@@ -1,19 +1,22 @@
 /** One coherent mock world for the Chirp app — served by src/api/* while USE_MOCKS is true.
  *
- * Lakeview State University → Sigma Chi, Epsilon Mu chapter. Current user is the
- * president (Jake Miller). Everything here is MOCK DATA: message "plaintext" is
- * included only so screens can render — real messages are E2EE and their
- * plaintext only ever exists in the on-device SQLite store (SPEC §2.1, §6).
+ * UNC Greensboro → Sigma Chi, Epsilon Mu chapter. Current user is the president
+ * (Jake Miller). A second org, Alpha Delta Pi (Zeta Rho), exists purely to prove
+ * the org theming system is org-agnostic (DESIGN §8.6) — it isn't the signed-in
+ * user's chapter. Everything here is MOCK DATA: message "plaintext" is included
+ * only so screens can render — real messages are E2EE and their plaintext only
+ * ever exists in the on-device SQLite store (SPEC §2.1, §6).
  *
  * Type-only imports from ../api/* keep this module cycle-free at runtime.
  */
 
 import type { CampusOut, UserOut } from "../api/auth";
-import type { AppearancePrefs, CampusColors } from "@/theme";
+import { DEFAULT_APPEARANCE_PREFS, type AppearancePrefs, type CampusColors } from "@/theme";
 import type { ChapterInviteOut, ChapterOut, MembershipOut } from "../api/chapters";
 import type { DeviceOut, PrekeyBundleOut } from "../api/keys";
 import type { ConversationOut, MessageOut } from "../api/messages";
 import type { PostCommentOut, PostLikeOut, PostOut } from "../api/feed";
+import type { EventOut, EventRsvpOut, RsvpStatus } from "../api/events";
 import type { YakOut } from "../api/yaks";
 import type { ContentReportOut, UserBlockOut } from "../api/moderation";
 import type { LineageTreeOut } from "../api/lineage";
@@ -44,36 +47,72 @@ export const MOCK_CIPHERTEXT_B64 = "TU9DS19DSVBIRVJURVhUX05PVF9SRUFMX0UyRUU=";
 // ---------- campus / chapter ----------
 
 export const MOCK_CAMPUS: CampusOut = {
-  id: "campus-lakeview",
-  name: "Lakeview State University",
-  slug: "lakeview-state",
+  id: "campus-uncg",
+  name: "UNC Greensboro",
+  slug: "uncg",
 };
 
-export const MOCK_CHAPTER: ChapterOut = {
+/** A chapter/org plus its brand colors (DESIGN §8.6). ChapterOut itself (api/chapters.ts)
+ * has no `colors` field — this mock-only extension keeps that contract untouched
+ * while still being assignable anywhere a ChapterOut is expected. */
+export interface MockChapter extends ChapterOut {
+  colors: CampusColors;
+}
+
+export const MOCK_CHAPTER: MockChapter = {
   id: "chapter-sigchi-em",
   campus_id: MOCK_CAMPUS.id,
   org_name: "Sigma Chi",
   chapter_name: "Epsilon Mu",
   stripe_account_id: null,
   created_at: "2024-08-20T15:00:00Z",
+  colors: { primary: "#1F4396", secondary: "#D6A756" }, // blue + old gold
+};
+
+/**
+ * A second, unrelated org (DESIGN §8.6: "add at least one sorority... so both are
+ * proven"). Jake isn't a member — this exists only so OrgAccentScope's colors can
+ * be shown against a chapter that ISN'T the signed-in user's, proving the system
+ * is org-agnostic rather than secretly Sigma-Chi-shaped.
+ */
+export const MOCK_CHAPTER_ADPI: MockChapter = {
+  id: "chapter-adpi-zr",
+  campus_id: MOCK_CAMPUS.id,
+  org_name: "Alpha Delta Pi",
+  chapter_name: "Zeta Rho",
+  stripe_account_id: null,
+  created_at: "2023-01-15T15:00:00Z",
+  colors: { primary: "#2E9BD6", secondary: "#0B2340" }, // azure + navy
 };
 
 // ---------- campus theming (DESIGN §8.5) ----------
 
-/** Lakeview State's brand colors — the default accent/tint source before a user overrides it. */
+/** UNCG's brand colors — Spartan navy + gold (approx. brand values; swap for the
+ * official hex once we get the brand guide). Default accent/tint source before a
+ * user overrides it in Appearance settings. */
 export const MOCK_CAMPUS_COLORS: CampusColors = {
-  primary: "#0F6B3E", // forest
-  secondary: "#E8A812", // gold
+  primary: "#0B2340", // Spartan navy
+  secondary: "#FFB71B", // Spartan gold
 };
 
-/** Seed prefs for AppearanceProvider (app/_layout.tsx) — mock persistence (local state) for now. */
-export const mockAppearancePrefs: AppearancePrefs = {
-  accentSource: "campusPrimary",
-  backgroundStyle: "system",
-};
+/**
+ * Seed prefs for AppearanceProvider (app/_layout.tsx) — mock persistence (local
+ * state) for now. Sourced from DEFAULT_APPEARANCE_PREFS (theme/appearance.tsx)
+ * rather than repeated literally, so this can't drift from the §8.5 default
+ * (campus primary accent + campus tint background — the app feels like the
+ * school out of the box).
+ */
+export const mockAppearancePrefs: AppearancePrefs = DEFAULT_APPEARANCE_PREFS;
 
 // ---------- users (current user = president) ----------
 
+/**
+ * `avatar_url` doubles as the mock "photo_url" (DESIGN §10.2): every real user
+ * gets a stable `https://i.pravatar.cc/150?u=<id>` face, seeded off their own id
+ * so it's stable across reloads. Ghost users are the one exception — is_ghost
+ * means they never signed up, so there's no photo to have; Avatar.tsx already
+ * renders ghosts as a dashed placeholder regardless of this field.
+ */
 function user(
   id: string,
   displayName: string,
@@ -86,7 +125,7 @@ function user(
     firebase_uid: `fb-${id}`,
     email,
     display_name: displayName,
-    avatar_url: null,
+    avatar_url: isGhost ? null : `https://i.pravatar.cc/150?u=${id}`,
     account_type: accountType,
     campus_id: MOCK_CAMPUS.id,
     is_ghost: isGhost,
@@ -95,19 +134,23 @@ function user(
 }
 
 export const MOCK_USERS: UserOut[] = [
-  user("usr-jake", "Jake Miller", "jake.miller@lakeview.edu"),
-  user("usr-tyler", "Tyler Brooks", "tyler.brooks@lakeview.edu"),
-  user("usr-maria", "Maria Gonzalez", "maria.gonzalez@lakeview.edu"),
-  user("usr-devon", "Devon Carter", "devon.carter@lakeview.edu"),
-  user("usr-priya", "Priya Shah", "priya.shah@lakeview.edu"),
-  user("usr-chris", "Chris Nakamura", "chris.nakamura@lakeview.edu"),
-  user("usr-sam", "Sam Osei", "sam.osei@lakeview.edu"),
-  user("usr-ethan", "Ethan Walsh", "ethan.walsh@lakeview.edu"),
-  user("usr-noah", "Noah Kim", "noah.kim@lakeview.edu"),
-  user("usr-alexis", "Alexis Turner", "alexis.turner@alumni.lakeview.edu", "alumni"),
-  user("usr-jordan", "Jordan Reyes", "jordan.reyes@alumni.lakeview.edu", "alumni"),
+  user("usr-jake", "Jake Miller", "jake.miller@uncg.edu"),
+  user("usr-tyler", "Tyler Brooks", "tyler.brooks@uncg.edu"),
+  user("usr-maria", "Maria Gonzalez", "maria.gonzalez@uncg.edu"),
+  user("usr-devon", "Devon Carter", "devon.carter@uncg.edu"),
+  user("usr-priya", "Priya Shah", "priya.shah@uncg.edu"),
+  user("usr-chris", "Chris Nakamura", "chris.nakamura@uncg.edu"),
+  user("usr-sam", "Sam Osei", "sam.osei@uncg.edu"),
+  user("usr-ethan", "Ethan Walsh", "ethan.walsh@uncg.edu"),
+  user("usr-noah", "Noah Kim", "noah.kim@uncg.edu"),
+  user("usr-alexis", "Alexis Turner", "alexis.turner@alumni.uncg.edu", "alumni"),
+  user("usr-jordan", "Jordan Reyes", "jordan.reyes@alumni.uncg.edu", "alumni"),
   // Ghost node: placeholder for a historical member who never signed up (SPEC users.is_ghost).
   user("usr-ghost-hammer", 'Robert "Hammer" Hayes', "ghost-hammer@placeholder.invalid", "alumni", true),
+  // Alpha Delta Pi (Zeta Rho) members — a second, unrelated org (§8.6 org-agnosticism proof).
+  user("usr-grace", "Grace Whitfield", "grace.whitfield@uncg.edu"),
+  user("usr-sofia", "Sofia Martinez", "sofia.martinez@uncg.edu"),
+  user("usr-naomi", "Naomi Patel", "naomi.patel@uncg.edu"),
 ];
 
 export const MOCK_CURRENT_USER: UserOut = MOCK_USERS[0]; // Jake Miller — president
@@ -122,11 +165,12 @@ function membership(
   userId: string,
   role: MembershipOut["role"],
   pledgeClass: string | null,
+  chapterId: string = MOCK_CHAPTER.id,
 ): MembershipOut {
   return {
     id: `mem-${userId}`,
     user_id: userId,
-    chapter_id: MOCK_CHAPTER.id,
+    chapter_id: chapterId,
     role,
     status: "active",
     pledge_class: pledgeClass,
@@ -149,6 +193,16 @@ export const MOCK_MEMBERSHIPS: MembershipOut[] = [
 ];
 
 export const MOCK_CURRENT_MEMBERSHIP: MembershipOut = MOCK_MEMBERSHIPS[0];
+
+/** Alpha Delta Pi (Zeta Rho) roster — kept as its own array (not merged into
+ * MOCK_MEMBERSHIPS) since the mocked listMembers()/listChapters() (api/chapters.ts)
+ * return MOCK_CHAPTER/MOCK_MEMBERSHIPS unconditionally; a separate export proves
+ * org-agnosticism in data without changing Jake's Sigma Chi member experience. */
+export const MOCK_MEMBERSHIPS_ADPI: MembershipOut[] = [
+  membership("usr-grace", "president", "Fall 2022", MOCK_CHAPTER_ADPI.id),
+  membership("usr-sofia", "member", "Fall 2024", MOCK_CHAPTER_ADPI.id),
+  membership("usr-naomi", "member", "Fall 2025", MOCK_CHAPTER_ADPI.id),
+];
 
 /**
  * UI-only mock flag for the Orgs tab: true renders the member org hub, false
@@ -197,7 +251,7 @@ export const MOCK_POSTS: PostOut[] = [
     id: "post-3",
     chapter_id: MOCK_CHAPTER.id,
     author_id: "usr-jake",
-    body: "Huge shoutout to everyone who showed up for the lake cleanup this morning. 42 bags of trash. Philanthropy chair says we beat the Delts' number by double.",
+    body: "Huge shoutout to everyone who showed up for the Peabody Park cleanup this morning. 42 bags of trash. Philanthropy chair says we beat the Delts' number by double.",
     media_urls: null,
     created_at: "2026-08-11T13:05:00Z",
     deleted_at: null,
@@ -208,7 +262,7 @@ export const MOCK_POSTS: PostOut[] = [
     id: "post-4",
     chapter_id: MOCK_CHAPTER.id,
     author_id: "usr-jordan",
-    body: "First week back on campus and the quad already looks unreal. Miss this place.",
+    body: "First week back on campus and College Ave already looks unreal. Miss this place.",
     media_urls: ["https://picsum.photos/seed/241/700/500"],
     created_at: "2026-08-11T15:40:00Z",
     deleted_at: null,
@@ -219,7 +273,7 @@ export const MOCK_POSTS: PostOut[] = [
     id: "post-5",
     chapter_id: MOCK_CHAPTER.id,
     author_id: "usr-noah",
-    body: "Campus radio's live set from the quad tonight — swing by after dinner.",
+    body: "Campus radio's live set on the EUC lawn tonight — swing by after dinner.",
     media_urls: ["https://picsum.photos/seed/242/700/500"],
     created_at: "2026-08-11T18:05:00Z",
     deleted_at: null,
@@ -253,7 +307,7 @@ export const MOCK_POSTS: PostOut[] = [
     id: "post-8",
     chapter_id: MOCK_CHAPTER.id,
     author_id: "usr-devon",
-    body: "Timelapse of the lake cleanup crew this morning — 42 bags in under two hours.",
+    body: "Timelapse of the Peabody Park cleanup crew this morning — 42 bags in under two hours.",
     media_urls: ["https://picsum.photos/seed/244/700/500"],
     created_at: "2026-08-12T09:00:00Z",
     deleted_at: null,
@@ -265,7 +319,7 @@ export const MOCK_POSTS: PostOut[] = [
     id: "post-9",
     chapter_id: MOCK_CHAPTER.id,
     author_id: "usr-ethan",
-    body: "Anyone know if the rec center pool is open this weekend? Website says maintenance but that's been up since June.",
+    body: "Anyone know if the Kaplan Center pool is open this weekend? Website says maintenance but that's been up since June.",
     media_urls: null,
     created_at: "2026-08-12T10:15:00Z",
     deleted_at: null,
@@ -287,6 +341,12 @@ export const MOCK_POST_LIKES: PostLikeOut[] = [
   { post_id: "post-5", user_id: "usr-chris", created_at: "2026-08-11T18:22:00Z" },
   { post_id: "post-7", user_id: "usr-maria", created_at: "2026-08-11T20:25:00Z" },
   { post_id: "post-8", user_id: "usr-priya", created_at: "2026-08-12T09:10:00Z" },
+  { post_id: "post-org-1", user_id: "usr-ethan", created_at: "2026-08-11T22:10:00Z" },
+  { post_id: "post-org-1", user_id: "usr-noah", created_at: "2026-08-11T22:12:00Z" },
+  { post_id: "post-org-2", user_id: "usr-jake", created_at: "2026-08-12T14:35:00Z" },
+  { post_id: "post-org-2", user_id: "usr-tyler", created_at: "2026-08-12T14:40:00Z" },
+  { post_id: "post-org-2", user_id: "usr-chris", created_at: "2026-08-12T14:50:00Z" },
+  { post_id: "post-org-4", user_id: "usr-maria", created_at: "2026-08-12T18:50:00Z" },
 ];
 
 export const MOCK_POST_COMMENTS: PostCommentOut[] = [
@@ -330,6 +390,65 @@ export const MOCK_POST_COMMENTS: PostCommentOut[] = [
     created_at: "2026-08-12T10:20:00Z",
     deleted_at: null,
   },
+  {
+    id: "cmt-org-1",
+    post_id: "post-org-2",
+    author_id: "usr-chris",
+    body: "not a word out of me, promise",
+    created_at: "2026-08-12T14:55:00Z",
+    deleted_at: null,
+  },
+];
+
+// ---------- org-only feed posts (DESIGN §8.7 — chapter-only, never on the FYP) ----------
+// Rendered inside OrgAccentScope by the Orgs tab's Feed segment (app/(tabs)/chapter/index.tsx).
+// Kept as a separate array (not merged into MOCK_POSTS) since MOCK_POSTS already carries a few
+// `source: "org"` posts for the pre-§8.7 scaffold — the Feed segment reads both.
+export const MOCK_ORG_POSTS: PostOut[] = [
+  {
+    id: "post-org-1",
+    chapter_id: MOCK_CHAPTER.id,
+    author_id: "usr-tyler",
+    body: "Ritual practice runs right after chapter meeting tonight — new members, chapter room by 7:45, jacket and tie. Actives who haven't been through in a while, come brush up too.",
+    media_urls: null,
+    created_at: "2026-08-11T22:00:00Z",
+    deleted_at: null,
+    post_type: "text",
+    source: "org",
+  },
+  {
+    id: "post-org-2",
+    chapter_id: MOCK_CHAPTER.id,
+    author_id: "usr-priya",
+    body: "Big/Little reveal is locked in for next Thursday at the house. Actives — I will know if you leak the theme, don't test me.",
+    media_urls: ["https://picsum.photos/seed/sigchi-reveal/700/500"],
+    created_at: "2026-08-12T14:30:00Z",
+    deleted_at: null,
+    post_type: "photo",
+    source: "org",
+  },
+  {
+    id: "post-org-3",
+    chapter_id: MOCK_CHAPTER.id,
+    author_id: "usr-devon",
+    body: "House kitchen deep clean Saturday morning before Monday's inspection — sign-up sheet's on the fridge, need at least eight of you. Pledges get priority credit.",
+    media_urls: null,
+    created_at: "2026-08-12T16:10:00Z",
+    deleted_at: null,
+    post_type: "text",
+    source: "org",
+  },
+  {
+    id: "post-org-4",
+    chapter_id: MOCK_CHAPTER.id,
+    author_id: "usr-jake",
+    body: "Founders Day formal photographer is booked for the Blandwood Mansion lawn. Dress code and call times drop in Chapter Chat this week — don't be the guy asking me in the group chat.",
+    media_urls: ["https://picsum.photos/seed/sigchi-founders/700/500"],
+    created_at: "2026-08-12T18:45:00Z",
+    deleted_at: null,
+    post_type: "photo",
+    source: "org",
+  },
 ];
 
 // ---------- moments (DESIGN §7 MomentsRow — Snapchat-style story strip; mock taps only) ----------
@@ -355,28 +474,28 @@ export const MOCK_YAKS: YakOut[] = [
   {
     id: "yak-1",
     campus_id: MOCK_CAMPUS.id,
-    body: "the dining hall put out 'street tacos' today. brother, that was a fold of sadness",
+    body: "the EUC put out 'street tacos' today. brother, that was a fold of sadness",
     score: 41,
     created_at: "2026-08-11T12:20:00Z",
   },
   {
     id: "yak-2",
     campus_id: MOCK_CAMPUS.id,
-    body: "whoever keeps playing saxophone in the quad at 8am: you're getting better and I hate that I know that",
+    body: "whoever keeps playing saxophone on Tate Street at 8am: you're getting better and I hate that I know that",
     score: 87,
     created_at: "2026-08-11T09:02:00Z",
   },
   {
     id: "yak-3",
     campus_id: MOCK_CAMPUS.id,
-    body: "library 4th floor AC is broken again. finals week speedrun any% sweat category",
+    body: "Jackson Library 4th floor AC is broken again. finals week speedrun any% sweat category",
     score: 12,
     created_at: "2026-08-10T22:47:00Z",
   },
   {
     id: "yak-4",
     campus_id: MOCK_CAMPUS.id,
-    body: "hot take: the lakeview geese run this campus and we just live here",
+    body: "hot take: the Spartan Village geese run this campus and we just live here",
     score: -3,
     created_at: "2026-08-10T18:11:00Z",
   },
@@ -778,4 +897,83 @@ export const mockProfileLayout: ProfileSectionLayout[] = [
   { key: "activity", visible: true },
   { key: "alumni", visible: true },
   { key: "settings", visible: true },
+];
+
+// ---------- org events (DESIGN §8.7 — "the Partiful corner") ----------
+
+export const MOCK_ORG_EVENTS: EventOut[] = [
+  {
+    id: "evt-rush-cookout",
+    chapter_id: MOCK_CHAPTER.id,
+    title: "Rush Week Cookout at Peabody Park",
+    cover_url: "https://picsum.photos/seed/sigchi-cookout/900/600",
+    date_label: "Sat, Aug 15 · 12:00 PM",
+    location: "Peabody Park, UNCG",
+    host_id: "usr-tyler",
+    created_at: "2026-08-05T12:00:00Z",
+  },
+  {
+    id: "evt-founders-formal",
+    chapter_id: MOCK_CHAPTER.id,
+    title: "Founders Day Formal",
+    cover_url: "https://picsum.photos/seed/sigchi-formal/900/600",
+    date_label: "Sun, Sep 27 · 7:00 PM",
+    location: "Blandwood Mansion, Greensboro",
+    host_id: "usr-jake",
+    created_at: "2026-08-06T12:00:00Z",
+  },
+  {
+    id: "evt-homecoming-tailgate",
+    chapter_id: MOCK_CHAPTER.id,
+    title: "Homecoming Tailgate",
+    cover_url: "https://picsum.photos/seed/sigchi-tailgate/900/600",
+    date_label: "Sat, Oct 24 · 10:00 AM",
+    location: "Sigma Chi House, College Ave",
+    host_id: "usr-priya",
+    created_at: "2026-08-07T12:00:00Z",
+  },
+];
+
+function eventRsvp(
+  eventId: string,
+  userId: string,
+  status: RsvpStatus,
+  createdAt: string,
+): EventRsvpOut {
+  return { event_id: eventId, user_id: userId, status, created_at: createdAt };
+}
+
+/**
+ * Jake (current user) is deliberately left un-RSVP'd for Founders Day Formal so
+ * the event detail screen demos both the "picked" and "pick one" RSVP states.
+ */
+export const MOCK_ORG_EVENT_RSVPS: EventRsvpOut[] = [
+  // Rush Week Cookout at Peabody Park
+  eventRsvp("evt-rush-cookout", "usr-jake", "going", "2026-08-05T13:00:00Z"),
+  eventRsvp("evt-rush-cookout", "usr-tyler", "going", "2026-08-05T13:05:00Z"),
+  eventRsvp("evt-rush-cookout", "usr-maria", "going", "2026-08-05T14:00:00Z"),
+  eventRsvp("evt-rush-cookout", "usr-devon", "going", "2026-08-05T15:00:00Z"),
+  eventRsvp("evt-rush-cookout", "usr-priya", "going", "2026-08-06T09:00:00Z"),
+  eventRsvp("evt-rush-cookout", "usr-chris", "going", "2026-08-06T10:00:00Z"),
+  eventRsvp("evt-rush-cookout", "usr-sam", "maybe", "2026-08-06T11:00:00Z"),
+  eventRsvp("evt-rush-cookout", "usr-ethan", "maybe", "2026-08-06T12:00:00Z"),
+  eventRsvp("evt-rush-cookout", "usr-noah", "cant", "2026-08-06T13:00:00Z"),
+  // Founders Day Formal
+  eventRsvp("evt-founders-formal", "usr-tyler", "going", "2026-08-06T13:00:00Z"),
+  eventRsvp("evt-founders-formal", "usr-maria", "going", "2026-08-06T14:00:00Z"),
+  eventRsvp("evt-founders-formal", "usr-priya", "going", "2026-08-06T15:00:00Z"),
+  eventRsvp("evt-founders-formal", "usr-alexis", "going", "2026-08-07T09:00:00Z"),
+  eventRsvp("evt-founders-formal", "usr-jordan", "going", "2026-08-07T10:00:00Z"),
+  eventRsvp("evt-founders-formal", "usr-devon", "maybe", "2026-08-07T11:00:00Z"),
+  eventRsvp("evt-founders-formal", "usr-chris", "maybe", "2026-08-07T12:00:00Z"),
+  eventRsvp("evt-founders-formal", "usr-ethan", "cant", "2026-08-07T13:00:00Z"),
+  // Homecoming Tailgate
+  eventRsvp("evt-homecoming-tailgate", "usr-jake", "going", "2026-08-07T13:00:00Z"),
+  eventRsvp("evt-homecoming-tailgate", "usr-tyler", "going", "2026-08-07T14:00:00Z"),
+  eventRsvp("evt-homecoming-tailgate", "usr-devon", "going", "2026-08-07T15:00:00Z"),
+  eventRsvp("evt-homecoming-tailgate", "usr-chris", "going", "2026-08-08T09:00:00Z"),
+  eventRsvp("evt-homecoming-tailgate", "usr-sam", "going", "2026-08-08T10:00:00Z"),
+  eventRsvp("evt-homecoming-tailgate", "usr-ethan", "going", "2026-08-08T11:00:00Z"),
+  eventRsvp("evt-homecoming-tailgate", "usr-noah", "going", "2026-08-08T12:00:00Z"),
+  eventRsvp("evt-homecoming-tailgate", "usr-priya", "maybe", "2026-08-08T13:00:00Z"),
 ];

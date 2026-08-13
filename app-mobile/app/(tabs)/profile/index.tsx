@@ -186,7 +186,7 @@ export default function ProfileScreen() {
       </View>
 
       <View style={{ alignItems: "center", gap: spacing.sm, marginBottom: spacing.xl }}>
-        <GradientAvatar name={user.display_name} size={64} />
+        <GradientAvatar name={user.display_name} size={64} photoUrl={user.avatar_url} />
         <AppText variant="title">{user.display_name}</AppText>
         <View style={{ flexDirection: "row", gap: spacing.sm }}>
           <Chip label={ROLE_LABELS[MOCK_CURRENT_MEMBERSHIP.role]} variant="accent" />
@@ -253,7 +253,7 @@ export default function ProfileScreen() {
 
               {section.key === "activity" ? (
                 <View style={{ flexDirection: "row", alignItems: "baseline", gap: spacing.sm }}>
-                  <AppText variant="display">{postCount}</AppText>
+                  <AppText variant="stat">{postCount}</AppText>
                   <AppText variant="caption" tone="secondary">
                     {postCount === 1 ? "post" : "posts"} to the chapter feed
                   </AppText>

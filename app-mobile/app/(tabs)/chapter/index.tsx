@@ -23,7 +23,7 @@ import {
   SectionHeader,
 } from "@/components";
 import { MOCK_CAMPUS, MOCK_CHAPTER, MOCK_CURRENT_MEMBERSHIP, mockIsOrgMember } from "@/mocks/data";
-import { radii, spacing, typography, useTheme } from "@/theme";
+import { radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
 
@@ -96,22 +96,41 @@ function MemberOrgHub() {
         </View>
       </HeroCard>
 
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.md }}>
-        {visible.map((tool) => (
-          <Card
-            key={tool.title}
-            onPress={() => router.push(tool.href)}
-            style={{ flexBasis: "47%", flexGrow: 1 }}
-          >
-            <View style={{ gap: spacing.sm }}>
-              <Feather name={tool.icon} size={typography.title.fontSize} color={palette.accent} />
-              <AppText variant="headline">{tool.title}</AppText>
-              <AppText variant="caption" tone="secondary">
-                {tool.description}
-              </AppText>
+      <View style={{ gap: spacing.md }}>
+        {/* First tool gets a featured full-width row (§10 rule 1 — vary card sizes,
+            not an unbroken grid of identical tiles); the rest share a 2-col grid. */}
+        {visible[0] !== undefined ? (
+          <Card onPress={() => router.push(visible[0].href)}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.lg }}>
+              <Feather name={visible[0].icon} size={typography.display.fontSize} color={palette.accent} />
+              <View style={{ flex: 1, gap: spacing.xs }}>
+                <AppText variant="headline">{visible[0].title}</AppText>
+                <AppText variant="caption" tone="secondary">
+                  {visible[0].description}
+                </AppText>
+              </View>
+              <Feather name="chevron-right" size={typography.title.fontSize} color={palette.inkFaint} />
             </View>
           </Card>
-        ))}
+        ) : null}
+
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.md }}>
+          {visible.slice(1).map((tool) => (
+            <Card
+              key={tool.title}
+              onPress={() => router.push(tool.href)}
+              style={{ flexBasis: "47%", flexGrow: 1 }}
+            >
+              <View style={{ gap: spacing.sm }}>
+                <Feather name={tool.icon} size={typography.title.fontSize} color={palette.accent} />
+                <AppText variant="headline">{tool.title}</AppText>
+                <AppText variant="caption" tone="secondary">
+                  {tool.description}
+                </AppText>
+              </View>
+            </Card>
+          ))}
+        </View>
       </View>
     </View>
   );
@@ -177,10 +196,13 @@ function FindYourOrg() {
 }
 
 export default function OrgsScreen() {
+  const { campusColors } = useAppearance();
   return (
     <Screen
       title="Orgs"
-      subtitle={mockIsOrgMember ? MOCK_CAMPUS.name : `Find your org at ${MOCK_CAMPUS.name}`}
+      eyebrow={`${MOCK_CAMPUS.name.toUpperCase()} · SPARTANS`}
+      accentBarColor={campusColors.secondary}
+      subtitle={mockIsOrgMember ? "Your chapter, your tools." : `Find your org at ${MOCK_CAMPUS.name}`}
     >
       {mockIsOrgMember ? <MemberOrgHub /> : <FindYourOrg />}
     </Screen>

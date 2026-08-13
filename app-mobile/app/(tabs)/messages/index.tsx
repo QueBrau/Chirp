@@ -19,6 +19,8 @@ interface ConversationItem {
   conversation: ConversationOut;
   title: string;
   preview: string;
+  /** DM only (§10.2) — group chats have no single face, so they keep the initials gradient. */
+  photoUrl?: string | null;
   /** Mock heuristic: last message exists and was sent by someone else. */
   unread: boolean;
 }
@@ -27,6 +29,13 @@ function conversationTitle(conversation: ConversationOut): string {
   if (conversation.kind === "group") return conversation.title ?? "Group";
   const other = (conversation.members ?? []).find((m) => m.user_id !== MOCK_CURRENT_USER.id);
   return other ? (mockUserById(other.user_id)?.display_name ?? "Direct message") : "Direct message";
+}
+
+/** The other participant's mock photo for a DM row; undefined for group chats. */
+function conversationPhoto(conversation: ConversationOut): string | null | undefined {
+  if (conversation.kind === "group") return undefined;
+  const other = (conversation.members ?? []).find((m) => m.user_id !== MOCK_CURRENT_USER.id);
+  return other ? mockUserById(other.user_id)?.avatar_url : undefined;
 }
 
 /** Unread indicator per §7: small accent dot on the row's trailing edge. */
@@ -62,6 +71,7 @@ export default function MessagesScreen() {
             conversation,
             title: conversationTitle(conversation),
             preview: last ? "Message" : "No messages yet",
+            photoUrl: conversationPhoto(conversation),
             unread: last !== undefined && last.sender_user_id !== MOCK_CURRENT_USER.id,
           };
         }),
@@ -89,7 +99,7 @@ export default function MessagesScreen() {
                   <Feather name="lock" size={12} color={palette.inkFaint} /> {item.preview}
                 </AppText>
               }
-              left={<GradientAvatar name={item.title} size={48} />}
+              left={<GradientAvatar name={item.title} size={48} photoUrl={item.photoUrl} />}
               right={item.unread ? <UnreadDot /> : undefined}
               divider={index < (items ?? []).length - 1}
               onPress={() => router.push(`/messages/${item.conversation.id}`)}

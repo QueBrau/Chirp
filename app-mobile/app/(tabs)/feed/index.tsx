@@ -1,7 +1,13 @@
 /**
- * Home = the FYP (DESIGN §7): Moments row → filter pills ("For You" / "Campus"
- * / "My Orgs", filters mock posts by `source`) → mixed-media feed
- * (MediaPostCard renders text/photo/video variants) → floating create FAB.
+ * Home = the FYP (DESIGN §7): header zone (§10.1) → Moments row → filter
+ * pills → mixed-media feed (MediaPostCard renders text/photo/video variants)
+ * → floating create FAB.
+ *
+ * Filter pills are "For You" / "Campus" only (§8.6 — NOT "My Orgs": org posts
+ * never surface on the public FYP, they live inside the org's own space,
+ * §8.7). Since MOCK_POSTS tagged `source: "org"` simply have no matching
+ * filter here, they're excluded from Home by construction — no separate
+ * filtering step needed, and no org stripe/Chip belongs on this screen either.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -18,7 +24,7 @@ import {
 } from "@/api/feed";
 import { AppText, EmptyState, Fab, MediaPostCard, MomentsRow, Screen } from "@/components";
 import { MOCK_CAMPUS, MOCK_CURRENT_MEMBERSHIP, MOCK_CURRENT_USER, MOCK_MOMENTS, mockUserById } from "@/mocks/data";
-import { radii, spacing, useTheme } from "@/theme";
+import { radii, spacing, useAppearance, useTheme } from "@/theme";
 
 interface FeedItem {
   post: PostOut;
@@ -40,11 +46,11 @@ function age(iso: string): string {
 const FILTERS: { key: PostSource; label: string }[] = [
   { key: "forYou", label: "For You" },
   { key: "campus", label: "Campus" },
-  { key: "org", label: "My Orgs" },
 ];
 
 export default function FeedScreen() {
   const palette = useTheme();
+  const { campusColors } = useAppearance();
   const [items, setItems] = useState<FeedItem[] | null>(null);
   const [filter, setFilter] = useState<PostSource>("forYou");
 
@@ -88,18 +94,27 @@ export default function FeedScreen() {
 
   const moments = useMemo(
     () =>
-      MOCK_MOMENTS.map((moment) => ({
-        id: moment.id,
-        name: mockUserById(moment.userId)?.display_name.split(" ")[0] ?? "Friend",
-      })),
+      MOCK_MOMENTS.map((moment) => {
+        const user = mockUserById(moment.userId);
+        return {
+          id: moment.id,
+          name: user?.display_name.split(" ")[0] ?? "Friend",
+          photoUrl: user?.avatar_url,
+        };
+      }),
     [],
   );
 
-  const visibleItems = (items ?? []).filter((item) => (item.post.source ?? "org") === filter);
+  const visibleItems = (items ?? []).filter((item) => item.post.source === filter);
 
   return (
     <View style={{ flex: 1 }}>
-      <Screen title="Home" subtitle={MOCK_CAMPUS.name}>
+      <Screen
+        title="Home"
+        eyebrow={`${MOCK_CAMPUS.name.toUpperCase()} · SPARTANS`}
+        accentBarColor={campusColors.secondary}
+        subtitle="Your campus, right now."
+      >
         <View style={{ marginBottom: spacing.lg }}>
           <MomentsRow moments={moments} />
         </View>
@@ -140,6 +155,7 @@ export default function FeedScreen() {
                   key={item.post.id}
                   post={item.post}
                   authorName={author?.display_name ?? "Unknown"}
+                  authorPhotoUrl={author?.avatar_url}
                   timeLabel={age(item.post.created_at)}
                   likeCount={item.likeCount}
                   commentCount={item.commentCount}

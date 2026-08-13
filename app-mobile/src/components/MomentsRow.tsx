@@ -21,11 +21,12 @@ const FILL_SIZE = TILE - (RING_WIDTH + RING_GAP) * 2;
 
 interface MomentTileProps {
   name: string;
+  photoUrl?: string | null;
   isAdd?: boolean;
   onPress?: () => void;
 }
 
-function MomentTile({ name, isAdd = false, onPress }: MomentTileProps) {
+function MomentTile({ name, photoUrl, isAdd = false, onPress }: MomentTileProps) {
   const palette = useTheme();
 
   return (
@@ -61,7 +62,7 @@ function MomentTile({ name, isAdd = false, onPress }: MomentTileProps) {
             <Feather name="plus" size={typography.title.fontSize} color={palette.accent} />
           </View>
         ) : (
-          <GradientAvatar name={name} size={FILL_SIZE} />
+          <GradientAvatar name={name} size={FILL_SIZE} photoUrl={photoUrl} />
         )}
       </View>
       <AppText variant="caption" tone="secondary" numberOfLines={1} style={{ width: TILE, textAlign: "center" }}>
@@ -74,6 +75,8 @@ function MomentTile({ name, isAdd = false, onPress }: MomentTileProps) {
 export interface MomentsRowMoment {
   id: string;
   name: string;
+  /** Optional mock photo, e.g. `https://i.pravatar.cc/150?u=<id>` (§10.2) — the tile falls back to the initials gradient when omitted. */
+  photoUrl?: string | null;
 }
 
 export interface MomentsRowProps {
@@ -91,7 +94,12 @@ export function MomentsRow({ moments, onPressYourStory, onPressMoment }: Moments
     >
       <MomentTile isAdd name="Your story" onPress={onPressYourStory} />
       {moments.map((moment) => (
-        <MomentTile key={moment.id} name={moment.name} onPress={() => onPressMoment?.(moment.id)} />
+        <MomentTile
+          key={moment.id}
+          name={moment.name}
+          photoUrl={moment.photoUrl}
+          onPress={() => onPressMoment?.(moment.id)}
+        />
       ))}
     </ScrollView>
   );

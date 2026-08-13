@@ -9,7 +9,7 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 
 import { brand, dark, light, type GradientPair, type Palette } from "./colors";
-import { ensureAccentContrast, lighten, mix, withAlpha } from "./colorUtils";
+import { darken, ensureAccentContrast, lighten, mix, withAlpha } from "./colorUtils";
 
 /** User's accent choice — which color becomes the `accent` token app-wide. */
 export type AccentSource = "campusPrimary" | "campusSecondary" | "chirp";
@@ -28,10 +28,13 @@ export interface CampusColors {
   secondary: string;
 }
 
-/** Default prefs per §8.5: campus primary accent, system background. */
+/**
+ * Default prefs per §8.5: campus primary accent + campus tint background — the
+ * app should FEEL like the user's school out of the box, not neutral-by-default.
+ */
 export const DEFAULT_APPEARANCE_PREFS: AppearancePrefs = {
   accentSource: "campusPrimary",
-  backgroundStyle: "system",
+  backgroundStyle: "campusTint",
 };
 
 /** Used only when no campus data is available (e.g. a component rendered outside the provider). */
@@ -122,4 +125,18 @@ export function resolvePalette(
     accentMuted: accentSoft, // legacy alias stays in sync with the derived accentSoft
     bg,
   };
+}
+
+/**
+ * Yak's "campus at night" canvas (DESIGN §10.5). The Yak board renders on a deep
+ * dark wash of the user's campus PRIMARY color as its full-bleed background, the
+ * SAME value in both light and dark mode — Yak deliberately ignores system scheme
+ * so it always feels like the campus at night, instantly distinct from Home.
+ * Darkens toward black (rather than mixing toward a neutral bg like the §8.5
+ * background-tint does) so the campus's own hue survives — UNCG's navy primary
+ * stays navy, just deeper; a lighter campus primary still lands on a legible
+ * dark canvas. Light tinted cards (palette.yakTints) float on top of this.
+ */
+export function campusNightWash(campusColors: CampusColors): string {
+  return darken(campusColors.primary, 0.55);
 }

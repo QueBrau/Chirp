@@ -2,6 +2,10 @@
  * VotePill per DESIGN.md §5: single vertical capsule on Yak cards —
  * chevron-up / score (stat type) / chevron-down in surfaceAlt; the active
  * direction fills accent (up) / danger (down) with a white glyph.
+ *
+ * §10 rule 6 ("numbers have personality"): Yak overrides the up-vote fill and
+ * the score color to campus gold via `upColor`/`scoreColor` — optional, so
+ * every other call site keeps the default accent/danger behavior untouched.
  */
 
 import { Feather } from "@expo/vector-icons";
@@ -19,6 +23,10 @@ export interface VotePillProps {
   vote?: VoteDirection | null;
   onUpvote?: () => void;
   onDownvote?: () => void;
+  /** Overrides the active "up" fill + score color (default `palette.accent`) — Yak's gold moment. */
+  upColor?: string;
+  /** Overrides the score color when the viewer hasn't voted (default "primary") — e.g. Yak's top score. */
+  scoreColor?: string;
   style?: ViewStyle;
 }
 
@@ -52,10 +60,22 @@ function VoteGlyph({
   );
 }
 
-export function VotePill({ score, vote = null, onUpvote, onDownvote, style }: VotePillProps) {
+export function VotePill({
+  score,
+  vote = null,
+  onUpvote,
+  onDownvote,
+  upColor,
+  scoreColor,
+  style,
+}: VotePillProps) {
   const palette = useTheme();
+  const upFill = upColor ?? palette.accent;
 
-  const scoreTone: TextTone = vote === "up" ? "accent" : vote === "down" ? "danger" : "primary";
+  const scoreTone: TextTone = vote === "down" ? "danger" : "primary";
+  // vote "up" always follows upFill (accent by default, gold on Yak); otherwise
+  // an unvoted notable score (e.g. Yak's top yak) can still be called out gold.
+  const scoreOverride = vote === "up" ? upFill : vote === null ? scoreColor : undefined;
 
   return (
     <View
@@ -72,8 +92,12 @@ export function VotePill({ score, vote = null, onUpvote, onDownvote, style }: Vo
         style,
       ]}
     >
-      <VoteGlyph icon="chevron-up" active={vote === "up"} activeBg={palette.accent} onPress={onUpvote} />
-      <AppText variant="stat" tone={scoreTone}>
+      <VoteGlyph icon="chevron-up" active={vote === "up"} activeBg={upFill} onPress={onUpvote} />
+      <AppText
+        variant="stat"
+        tone={scoreOverride !== undefined ? "primary" : scoreTone}
+        style={scoreOverride !== undefined ? { color: scoreOverride } : undefined}
+      >
         {score}
       </AppText>
       <VoteGlyph icon="chevron-down" active={vote === "down"} activeBg={palette.danger} onPress={onDownvote} />

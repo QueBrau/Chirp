@@ -10,7 +10,7 @@ import { View } from "react-native";
 
 import { getLineage, type LineageEdgeOut, type LineageTreeOut } from "@/api/lineage";
 import { AppText, Card, Chip, EmptyState, GradientAvatar, ListRow, Screen, SectionHeader } from "@/components";
-import { MOCK_CURRENT_MEMBERSHIP } from "@/mocks/data";
+import { MOCK_CURRENT_MEMBERSHIP, mockUserById } from "@/mocks/data";
 import { radii, spacing } from "@/theme";
 
 /** Indent step per generation (big → little). */
@@ -182,7 +182,13 @@ export default function TreeScreen() {
                     key={node.user_id}
                     title={node.display_name}
                     subtitle={node.pledge_class ?? undefined}
-                    left={<GradientAvatar name={node.display_name} size={40} />}
+                    left={
+                      <GradientAvatar
+                        name={node.display_name}
+                        size={40}
+                        photoUrl={mockUserById(node.user_id)?.avatar_url}
+                      />
+                    }
                     divider={index < unplaced.length - 1}
                   />
                 ))}

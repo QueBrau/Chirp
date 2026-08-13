@@ -6,6 +6,7 @@ export { Badge, type BadgeProps, type BadgeTone } from "./Badge";
 export { Button, type ButtonProps, type ButtonVariant } from "./Button";
 export { Card, type CardProps } from "./Card";
 export { Chip, type ChipProps, type ChipVariant } from "./Chip";
+export { CreateEventSheet, type CreateEventInput, type CreateEventSheetProps } from "./CreateEventSheet";
 export { CreateSheet, type CreateSheetProps } from "./CreateSheet";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Fab } from "./Fab";
