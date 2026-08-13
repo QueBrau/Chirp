@@ -1,6 +1,12 @@
 # HANDOFF — current state
 
-_Last updated: Aug 12 2026. Redesign merged; `main` is the only branch that matters._
+_Last updated: Aug 12 2026 (late). `next-steps` branch is complete + gated, awaiting
+Jose's review to merge. Since the redesign merge, `next-steps` added: media FYP +
+school-color theming w/ Appearance screen (browser-verified) · libsignal spike PASSED
+vs live backend (spikes/libsignal-node/FINDINGS.md) · Kyber/PQXDH key directory
+(migration 0002, spike re-verified) · Firebase auth wired w/ demo fallback +
+SETUP-FIREBASE.md · DB layer verified on real local PG14 (22/22 tests). Board
+(board.html) is current._
 
 ## State of the world
 
