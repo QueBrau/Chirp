@@ -30,21 +30,29 @@ async def _verify_identity(
     try:
         import firebase_admin
         from firebase_admin import auth as firebase_auth
+    except Exception:  # missing SDK
+        raise HTTPException(status_code=401, detail="invalid_token")
 
-        try:
-            firebase_admin.get_app()
-        except ValueError:
-            # Pin the token audience to the configured Firebase project; without
-            # this the SDK infers the ambient GCP project, which rejects tokens
-            # whenever the Firebase project differs from where the code runs.
-            options = (
-                {"projectId": settings.firebase_project_id}
-                if settings.firebase_project_id
-                else None
-            )
-            firebase_admin.initialize_app(options=options)
+    # Lazy-init fallback for safety (e.g. test import order) — the app.main lifespan
+    # now does this at boot in firebase mode, so a misconfigured deploy fails
+    # visibly at startup instead of surfacing here. Left unwrapped below on purpose:
+    # a real init failure should propagate, not get masked as an invalid_token 401.
+    try:
+        firebase_admin.get_app()
+    except ValueError:
+        # Pin the token audience to the configured Firebase project; without
+        # this the SDK infers the ambient GCP project, which rejects tokens
+        # whenever the Firebase project differs from where the code runs.
+        options = (
+            {"projectId": settings.firebase_project_id}
+            if settings.firebase_project_id
+            else None
+        )
+        firebase_admin.initialize_app(options=options)
+
+    try:
         decoded = firebase_auth.verify_id_token(token)
-    except Exception:  # invalid/expired token, missing SDK, or init failure
+    except Exception:  # invalid/expired token
         raise HTTPException(status_code=401, detail="invalid_token")
     uid = decoded.get("uid")
     if not uid:

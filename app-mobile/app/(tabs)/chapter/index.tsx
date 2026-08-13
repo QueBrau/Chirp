@@ -188,7 +188,8 @@ function OrgFeedSegment() {
       );
       setItems(withCounts);
     };
-    void load();
+    // Fail soft: mock ids 422 against the live API until wiring lands.
+    load().catch(() => setItems([]));
   }, []);
 
   const toggleLike = async (item: OrgFeedItem) => {

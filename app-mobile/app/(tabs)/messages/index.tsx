@@ -78,7 +78,8 @@ export default function MessagesScreen() {
       );
       setItems(withPreviews);
     };
-    void load();
+    // Fail soft: mock ids 422 against the live API until wiring lands.
+    load().catch(() => setItems([]));
   }, []);
 
   return (

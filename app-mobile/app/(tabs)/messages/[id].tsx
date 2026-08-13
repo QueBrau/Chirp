@@ -33,7 +33,8 @@ export default function ThreadScreen() {
       const history = (await listMessages(id)) as MockMessage[];
       setMessages(history);
     };
-    void load();
+    // Fail soft: mock ids 422 against the live API until wiring lands.
+    load().catch(() => setMessages([]));
   }, [id]);
 
   const title =
