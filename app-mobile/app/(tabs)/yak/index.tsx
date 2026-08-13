@@ -37,7 +37,10 @@ export default function YakScreen() {
   const [myVotes, setMyVotes] = useState<Record<string, YakVoteValue>>({ ...MOCK_MY_YAK_VOTES });
 
   useEffect(() => {
-    void listYaks(MOCK_CAMPUS.id).then(setYaks);
+    // Fail soft: mock ids 422 against the live API until wiring lands.
+    listYaks(MOCK_CAMPUS.id)
+      .then(setYaks)
+      .catch(() => setYaks([]));
   }, []);
 
   const vote = async (yak: YakOut, value: YakVoteValue) => {

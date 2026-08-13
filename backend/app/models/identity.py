@@ -43,6 +43,11 @@ class User(Base):
     is_ghost: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    # Platform-admin gate for chapter creation (SECURITY-REVIEW.md, board card c28).
+    # No API sets this — flipped directly in the DB.
+    is_platform_admin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

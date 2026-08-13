@@ -43,7 +43,8 @@ export default function SecretaryScreen() {
       withAttendance.sort((a, b) => b.meeting.meeting_date.localeCompare(a.meeting.meeting_date));
       setItems(withAttendance);
     };
-    void load();
+    // Fail soft: mock ids 422 against the live API until wiring lands.
+    load().catch(() => setItems([]));
   }, []);
 
   return (

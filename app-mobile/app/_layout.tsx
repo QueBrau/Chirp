@@ -19,12 +19,6 @@ import { hasFirebaseConfig, onIdTokenChanged } from "@/auth";
 import { AppearanceProvider, useTheme } from "@/theme";
 import { MOCK_CAMPUS_COLORS, mockAppearancePrefs } from "@/mocks/data";
 
-/**
- * Mock auth state — flips which route group app/index.tsx lands on.
- * TODO(milestone-1): replace with real Firebase Auth session state.
- */
-export const IS_SIGNED_IN = true;
-
 /** Consumes useTheme() — must render inside AppearanceProvider. */
 function RootLayoutNav() {
   const scheme = useColorScheme();

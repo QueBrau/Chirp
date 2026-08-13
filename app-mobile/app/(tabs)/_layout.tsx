@@ -7,12 +7,14 @@
  */
 
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
-import { Tabs } from "expo-router";
+import { Redirect, Tabs } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { hasFirebaseConfig, onAuthChanged } from "@/auth";
 import { AppText } from "@/components";
 import { cardShadow, metrics, radii, spacing, typography, useTheme } from "@/theme";
 
@@ -107,6 +109,20 @@ function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
 }
 
 export default function TabsLayout() {
+  // Auth guard: with real Firebase config, the tabs are members-only — an
+  // unauthenticated visitor is redirected to sign-in instead of letting screens
+  // fire authenticated API calls with no token. Demo/mock mode never gates.
+  const [authState, setAuthState] = useState<"loading" | "signedIn" | "signedOut">(
+    hasFirebaseConfig() ? "loading" : "signedIn",
+  );
+  useEffect(() => {
+    if (!hasFirebaseConfig()) return;
+    return onAuthChanged((user) => setAuthState(user ? "signedIn" : "signedOut"));
+  }, []);
+
+  if (authState === "loading") return null;
+  if (authState === "signedOut") return <Redirect href="/sign-in" />;
+
   return (
     <Tabs
       tabBar={(props) => <FloatingTabBar {...props} />}

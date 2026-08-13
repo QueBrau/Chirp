@@ -55,7 +55,8 @@ export default function TreasurerScreen() {
       setCycles(duesCycles);
       setLedger(entries);
     };
-    void load();
+    // Fail soft: mock ids 422 against the live API until wiring lands.
+    load().catch(() => setLedger([]));
   }, []);
 
   const entries = ledger ?? [];

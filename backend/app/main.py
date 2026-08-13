@@ -1,4 +1,7 @@
 """FastAPI application factory: CORS, all domain routers, WS gateway, health check."""
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,6 +10,7 @@ from app.routers import (
     alumni,
     auth,
     chapters,
+    events,
     feed,
     finance,
     keys,
@@ -20,10 +24,34 @@ from app.routers import (
 from app.ws import gateway
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Initialize firebase_admin at boot, not lazily per-request, so a misconfigured
+    deploy fails visibly at startup instead of masking init failures as request-time 401s.
+    """
+    settings = get_settings()
+    if settings.auth_mode == "firebase":
+        import firebase_admin
+
+        try:
+            firebase_admin.get_app()
+        except ValueError:
+            # Pin the token audience to the configured Firebase project; without
+            # this the SDK infers the ambient GCP project, which rejects tokens
+            # whenever the Firebase project differs from where the code runs.
+            options = (
+                {"projectId": settings.firebase_project_id}
+                if settings.firebase_project_id
+                else None
+            )
+            firebase_admin.initialize_app(options=options)
+    yield
+
+
 def create_app() -> FastAPI:
     """Build the Chirp API app; run with `uvicorn app.main:create_app --factory`."""
     settings = get_settings()
-    app = FastAPI(title="Chirp API", version="0.1.0")
+    app = FastAPI(title="Chirp API", version="0.1.0", lifespan=lifespan)
 
     # SECURITY-REVIEW finding 5: never pair a wildcard origin with credentialed CORS —
     # Starlette reflects any origin, so "*" + credentials lets any website's JS send
@@ -59,6 +87,7 @@ def create_app() -> FastAPI:
         meetings,
         alumni,
         payments,
+        events,
     ):
         app.include_router(module.router)
     app.include_router(gateway.router)

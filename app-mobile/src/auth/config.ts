@@ -1,11 +1,9 @@
 /**
- * Firebase project config — PLACEHOLDER VALUES ONLY. No Firebase project exists yet
- * (see /SETUP-FIREBASE.md at the repo root for the console steps that create one).
- *
- * Replace every field below with the real values from Firebase console → Project
- * settings → General → "Your apps" (web app) once the project + apps are
- * registered. Until every field is replaced, hasFirebaseConfig() returns false and
- * the app runs in mock/demo auth mode (see sign-in.tsx).
+ * Firebase project config — LIVE values for the chirps-prod project (web app
+ * "chirp-web"). This is public client config, not a secret (Firebase web config
+ * is designed to ship in the client; access is guarded by Firebase Auth rules) —
+ * see SETUP-FIREBASE.md §4. Email/Password is the enabled provider; Google/Apple
+ * are console follow-ups.
  */
 
 export interface FirebaseConfig {
@@ -17,15 +15,13 @@ export interface FirebaseConfig {
   appId: string;
 }
 
-// TODO(milestone-1, real Firebase project): replace every "REPLACE_ME_*" value
-// below with the real config from the Firebase console (see SETUP-FIREBASE.md).
 export const firebaseConfig: FirebaseConfig = {
-  apiKey: "REPLACE_ME_FIREBASE_API_KEY",
-  authDomain: "REPLACE_ME.firebaseapp.com",
-  projectId: "REPLACE_ME_PROJECT_ID",
-  storageBucket: "REPLACE_ME.appspot.com",
-  messagingSenderId: "REPLACE_ME_SENDER_ID",
-  appId: "REPLACE_ME_APP_ID",
+  apiKey: "AIzaSyC41tPPMCQjpbUbjJSufxp4GW-rTg_LTNk",
+  authDomain: "chirps-prod.firebaseapp.com",
+  projectId: "chirps-prod",
+  storageBucket: "chirps-prod.firebasestorage.app",
+  messagingSenderId: "593616178468",
+  appId: "1:593616178468:web:a3ef5fbbbe161d0fbf37b1",
 };
 
 const PLACEHOLDER_PREFIX = "REPLACE_ME";
