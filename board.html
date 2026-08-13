@@ -319,14 +319,14 @@
     {
       "id": "c11",
       "col": "progress",
-      "title": "[B/Q] Stripe Connect dues — CODE COMPLETE in PR #3 (q/social-msg 1a87e4f), NOT merged, NOT yet proven against real Stripe. Express accounts + direct charges (chapter is merchant of record, Chirp never holds the money); rail chosen before the intent because application_fee_amount is immutable at creation; webhook replay guarded by a UNIQUE partial index on ledger_entries.stripe_payment_intent_id plus processed_stripe_events; Stripe Customer per (member, chapter). Mobile: rail picker + PaymentSheet, /chapter/dues screen, treasurer onboarding entry. 107 backend tests, tsc clean, web bundle builds. LEFT: renumber the migration (c41 — BLOCKER), Stripe keys + APP_PUBLIC_BASE_URL (c40), EAS dev build (c39), then a test-mode payment on both rails.",
+      "title": "[B/Q] Stripe Connect dues — CODE COMPLETE in PR #3 (q/social-msg 1a87e4f) but the PR is now DRAFT, blocked on c41; NOT yet proven against real Stripe. Express accounts + direct charges (chapter is merchant of record, Chirp never holds the money); rail chosen before the intent because application_fee_amount is immutable at creation; webhook replay guarded by a UNIQUE partial index on ledger_entries.stripe_payment_intent_id plus processed_stripe_events; Stripe Customer per (member, chapter). Mobile: rail picker + PaymentSheet, /chapter/dues screen, treasurer onboarding entry. 107 backend tests, tsc clean, web bundle builds. LEFT: renumber the migration (c41 — BLOCKER), Stripe keys + APP_PUBLIC_BASE_URL (c40), EAS dev build (c39), then a test-mode payment on both rails.",
       "owner": "Q",
       "tag": "m8"
     },
     {
       "id": "c41",
       "col": "progress",
-      "title": "[shared] MIGRATION COLLISION — RESOLVED PLAN: 0006 (events) + 0007 (platform_admin) are Jose's, BOTH APPLIED TO PROD, merging first via jose/auth-orgs PR. PR #3 renumbers Stripe migration to 0008 (down_revision 0007) before merge. Next free number after that: 0009 — claim here before writing the file (CLAUDE.md rule).",
+      "title": "[shared] MIGRATION COLLISION — RESOLVED PLAN: 0006 (events) + 0007 (platform_admin) are Jose's, BOTH APPLIED TO PROD, merging first via jose/auth-orgs PR. PR #3 renumbers Stripe migration to 0008 (down_revision 0007) before merge. Next free number after that: 0009 — claim here before writing the file (CLAUDE.md rule). CONTAINED meanwhile: PR #3 flipped to DRAFT Aug 13 with the reason on the PR, so it cannot be merged as 0006 by accident. Q renames the file and re-runs the suite the moment jose/auth-orgs is on main.",
       "owner": "",
       "tag": "backend"
     },
