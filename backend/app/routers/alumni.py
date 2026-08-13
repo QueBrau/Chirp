@@ -43,6 +43,7 @@ async def get_own_profile(
         raise not_found("alumni_profile_not_found")
     out = AlumniProfileOut.model_validate(profile)
     out.display_name = user.display_name
+    out.email = user.email
     return out
 
 
@@ -61,12 +62,14 @@ async def upsert_own_profile(
     profile.company = body.company
     profile.title = body.title
     profile.industry = body.industry
+    profile.location = body.location
     profile.linkedin_url = body.linkedin_url
     profile.open_to_mentoring = body.open_to_mentoring
     await session.commit()
     await session.refresh(profile)
     out = AlumniProfileOut.model_validate(profile)
     out.display_name = user.display_name
+    out.email = user.email
     return out
 
 
@@ -99,6 +102,7 @@ async def list_directory(
     for profile, profile_user in result.all():
         out = AlumniProfileOut.model_validate(profile)
         out.display_name = profile_user.display_name
+        out.email = profile_user.email
         entries.append(out)
     return entries
 
@@ -148,6 +152,7 @@ async def create_job_post(
         chapter_id=body.chapter_id,
         title=body.title,
         company=body.company,
+        location=body.location,
         description=body.description,
         apply_url=body.apply_url,
         expires_at=body.expires_at,

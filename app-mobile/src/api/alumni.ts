@@ -15,6 +15,7 @@ export interface AlumniProfileUpdate {
   company?: string | null;
   title?: string | null;
   industry?: string | null;
+  location?: string | null;
   linkedin_url?: string | null;
   open_to_mentoring?: boolean;
 }
@@ -25,16 +26,20 @@ export interface AlumniProfileOut {
   company: string | null;
   title: string | null;
   industry: string | null;
+  location: string | null;
   linkedin_url: string | null;
   open_to_mentoring: boolean;
   /** Joined from users for directory views. */
   display_name: string | null;
+  /** Joined from users — contact email for the directory. */
+  email: string | null;
 }
 
 export interface JobPostCreate {
   chapter_id?: string | null; // null = network-wide
   title: string;
   company: string;
+  location: string;
   description: string;
   apply_url?: string | null;
   expires_at?: string | null;
@@ -46,6 +51,7 @@ export interface JobPostOut {
   chapter_id: string | null;
   title: string;
   company: string;
+  location: string | null;
   description: string;
   apply_url: string | null;
   created_at: string;
@@ -62,9 +68,11 @@ export async function getMyAlumniProfile(): Promise<AlumniProfileOut> {
         company: null,
         title: null,
         industry: null,
+        location: null,
         linkedin_url: null,
         open_to_mentoring: false,
         display_name: MOCK_CURRENT_USER.display_name,
+        email: MOCK_CURRENT_USER.email,
       },
     );
   }
@@ -81,9 +89,11 @@ export async function updateAlumniProfile(body: AlumniProfileUpdate): Promise<Al
         company: null,
         title: null,
         industry: null,
+        location: null,
         linkedin_url: null,
         open_to_mentoring: false,
         display_name: MOCK_CURRENT_USER.display_name,
+        email: MOCK_CURRENT_USER.email,
       };
       MOCK_ALUMNI_PROFILES.push(profile);
     }
@@ -94,12 +104,16 @@ export async function updateAlumniProfile(body: AlumniProfileUpdate): Promise<Al
 }
 
 export async function getAlumniDirectory(): Promise<AlumniProfileOut[]> {
-  if (USE_MOCKS) return mocked(MOCK_ALUMNI_PROFILES);
+  if (USE_MOCKS) return mocked([...MOCK_ALUMNI_PROFILES]);
   return request<AlumniProfileOut[]>("/alumni/directory");
 }
 
 export async function listJobs(): Promise<JobPostOut[]> {
-  if (USE_MOCKS) return mocked(MOCK_JOB_POSTS);
+  if (USE_MOCKS) {
+    return mocked(
+      [...MOCK_JOB_POSTS].sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    );
+  }
   return request<JobPostOut[]>("/jobs");
 }
 
@@ -111,12 +125,13 @@ export async function createJob(body: JobPostCreate): Promise<JobPostOut> {
       chapter_id: body.chapter_id ?? null,
       title: body.title,
       company: body.company,
+      location: body.location,
       description: body.description,
       apply_url: body.apply_url ?? null,
       created_at: nowIso(),
       expires_at: body.expires_at ?? null,
     };
-    MOCK_JOB_POSTS.push(job);
+    MOCK_JOB_POSTS.unshift(job);
     return mocked(job);
   }
   return request<JobPostOut>("/jobs", { method: "POST", body });
