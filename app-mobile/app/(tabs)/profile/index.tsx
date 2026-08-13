@@ -14,6 +14,7 @@ import { Pressable, View } from "react-native";
 import { getMyAlumniProfile, type AlumniProfileOut } from "@/api/alumni";
 import type { AccountType } from "@/api/auth";
 import type { RoleName } from "@/api/chapters";
+import { hasFirebaseConfig, signOutUser } from "@/auth";
 import { AppText, Card, Chip, GradientAvatar, ListRow, Screen } from "@/components";
 import {
   MOCK_CAMPUS,
@@ -156,6 +157,16 @@ export default function ProfileScreen() {
     }
   }, [user.account_type]);
 
+  /** Finding 12: Sign out was unreachable (no onPress). Firebase isn't configured yet
+   * (see src/auth/config.ts), so mock mode just returns to sign-in without a real
+   * signOutUser() call — hasFirebaseConfig() gates which path runs. */
+  const handleSignOut = async () => {
+    if (hasFirebaseConfig()) {
+      await signOutUser();
+    }
+    router.replace("/sign-in");
+  };
+
   const moveSection = (index: number, direction: -1 | 1) => {
     setLayout((current) => {
       const target = index + direction;
@@ -186,7 +197,7 @@ export default function ProfileScreen() {
       </View>
 
       <View style={{ alignItems: "center", gap: spacing.sm, marginBottom: spacing.xl }}>
-        <GradientAvatar name={user.display_name} size={64} />
+        <GradientAvatar name={user.display_name} size={64} photoUrl={user.avatar_url} />
         <AppText variant="title">{user.display_name}</AppText>
         <View style={{ flexDirection: "row", gap: spacing.sm }}>
           <Chip label={ROLE_LABELS[MOCK_CURRENT_MEMBERSHIP.role]} variant="accent" />
@@ -253,7 +264,7 @@ export default function ProfileScreen() {
 
               {section.key === "activity" ? (
                 <View style={{ flexDirection: "row", alignItems: "baseline", gap: spacing.sm }}>
-                  <AppText variant="display">{postCount}</AppText>
+                  <AppText variant="stat">{postCount}</AppText>
                   <AppText variant="caption" tone="secondary">
                     {postCount === 1 ? "post" : "posts"} to the chapter feed
                   </AppText>
@@ -293,8 +304,9 @@ export default function ProfileScreen() {
                   />
                   <ListRow
                     title="Sign out"
-                    subtitle="TODO(milestone-1): Firebase Auth"
+                    subtitle="You'll return to the sign-in screen"
                     left={<SettingsIconWell name="log-out" />}
+                    onPress={() => void handleSignOut()}
                     divider={false}
                   />
                 </View>

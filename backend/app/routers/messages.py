@@ -6,7 +6,8 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -199,18 +200,31 @@ async def send_message(
 async def list_messages(
     conversation_id: uuid.UUID,
     before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[MessageOut]:
-    """Ciphertext history, newest first, cursor-paginated on created_at. Members only."""
+    """Ciphertext history, newest first, cursor-paginated on (created_at, id). Members only.
+
+    Pass both `before` and `before_id` (the last row's values from the previous
+    page) for an exact tie-break so rows sharing a timestamp at a page boundary
+    are never skipped. `before` alone still works (legacy clients) but does not
+    guarantee tied-timestamp rows won't be dropped at the boundary.
+    """
     await _require_active_member(session, conversation_id, user.id)
     stmt = select(models.Message).where(
         models.Message.conversation_id == conversation_id
     )
-    if before is not None:
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.Message.created_at, models.Message.id) < (before, before_id)
+        )
+    elif before is not None:
         stmt = stmt.where(models.Message.created_at < before)
-    stmt = stmt.order_by(models.Message.created_at.desc()).limit(limit)
+    stmt = stmt.order_by(
+        models.Message.created_at.desc(), models.Message.id.desc()
+    ).limit(limit)
     result = await session.execute(stmt)
     return [MessageOut.model_validate(m) for m in result.scalars().all()]
 
@@ -260,7 +274,18 @@ async def upsert_receipt(
             message_id=message_id, device_id=body.device_id, delivered_at=delivered_at
         )
         session.add(receipt)
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Concurrent receipt insert for the same (message_id, device_id) —
+            # rollback and treat as already-recorded instead of a 500.
+            await session.rollback()
+            receipt = await session.get(
+                models.MessageReceipt, (message_id, body.device_id)
+            )
+            if receipt is None:
+                raise
     else:
         receipt.delivered_at = delivered_at
-    await session.commit()
+        await session.commit()
     return MessageReceiptOut.model_validate(receipt)

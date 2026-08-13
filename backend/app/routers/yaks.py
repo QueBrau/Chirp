@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Path
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -81,7 +82,7 @@ async def vote_yak(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> YakVoteOut:
-    """Upsert the caller's -1/+1 vote and recompute the yak's score."""
+    """Upsert the caller's -1/+1 vote and recompute the yak's score (idempotent, 200)."""
     yak = await session.get(models.Yak, yak_id)
     if yak is None or yak.removed_at is not None:
         raise not_found("yak_not_found")
@@ -90,9 +91,20 @@ async def vote_yak(
     vote = await session.get(models.YakVote, (yak_id, user.id))
     if vote is None:
         session.add(models.YakVote(yak_id=yak_id, user_id=user.id, value=body.value))
+        try:
+            await session.flush()
+        except IntegrityError:
+            # A concurrent double-tap raced us to insert the same (yak_id, user_id)
+            # vote — rollback and fall through to an UPDATE instead of a 500.
+            await session.rollback()
+            vote = await session.get(models.YakVote, (yak_id, user.id))
+            if vote is None:
+                raise
+            vote.value = body.value
+            await session.flush()
     else:
         vote.value = body.value
-    await session.flush()
+        await session.flush()
     await session.execute(
         update(models.Yak)
         .where(models.Yak.id == yak_id)

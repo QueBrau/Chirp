@@ -98,7 +98,7 @@ export default function MembersScreen() {
                       key={membership.id}
                       title={name}
                       subtitle={membership.pledge_class ?? undefined}
-                      left={<GradientAvatar name={name} size={40} />}
+                      left={<GradientAvatar name={name} size={40} photoUrl={user?.avatar_url} />}
                       right={
                         <Chip label={ROLE_CHIP_LABELS[role]} variant={ROLE_CHIP_VARIANT[role]} />
                       }

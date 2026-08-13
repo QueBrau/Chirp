@@ -178,8 +178,12 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
 
 The app themes itself around THE USER'S SCHOOL COLORS, and the user controls it.
 
-- Each campus carries `colors: { primary, secondary }` (mock: Lakeview State =
-  forest `#0F6B3E` + gold `#E8A812`). Add to src/mocks campus data.
+- Each campus carries `colors: { primary, secondary }`. **Mock campus is now
+  UNC GREENSBORO** (replaces Lakeview State everywhere in mocks/copy): Spartan
+  navy `#0B2340` primary + Spartan gold `#FFB71B` secondary (approx brand values
+  — swap for official hex when we get the guide). Default appearance prefs:
+  accentSource `campusPrimary`, backgroundStyle `campusTint` — the app should
+  FEEL like the school out of the box (Jose, Aug 12).
 - **Accent source** (user choice): Campus primary (DEFAULT) / Campus secondary /
   Chirp violet. The chosen color becomes the `accent` token app-wide;
   `accentSoft` is derived (14-16% alpha). Gradient pairs shift to
@@ -195,6 +199,72 @@ The app themes itself around THE USER'S SCHOOL COLORS, and the user controls it.
 - Contrast rule: campus colors are used for accent/tint only — body text stays
   ink on neutral surfaces. If a campus primary is too light for white button
   text, darken it for the accent role (document the adjustment in code).
+
+## 8.6 Greek org colors (Aug 12 — Jose)
+
+Every fraternity and sorority has ITS OWN colors, and org-scoped UI wears them.
+
+- Chapters in mocks carry `colors: { primary, secondary }` — Sigma Chi = blue
+  `#1F4396` + old gold `#D6A756`; add at least one sorority with hers (e.g.
+  Alpha Delta Pi azure `#2E9BD6` + navy) so both are proven.
+- **OrgAccentScope**: a theme-scope component that overrides accent/accentSoft/
+  gradient tokens for its subtree. The ENTIRE Orgs stack (chapter/* screens)
+  renders inside the current org's scope — hero, tool tiles, chips, active
+  states all in org colors. Campus colors everywhere else.
+- **Org posts NEVER appear on the FYP** (Jose, Aug 12): org content lives only
+  inside the org's own space (§8.7). The FYP filter pills become "For You" /
+  "Campus" only — no "My Orgs" pill, no org stripes on public feed cards.
+- Contrast guard applies to org colors exactly like campus colors.
+
+## 8.7 Org space: private feed + events (Aug 12 — Jose)
+
+The Orgs tab becomes the org's own world, in the org's colors (§8.6), with three
+segments under the org hero — a pill segmented control: **Feed · Events · Tools**.
+
+- **Org feed**: chapter-only posts ("stuff they share only with themselves") —
+  same MediaPostCard system as the FYP but rendered inside OrgAccentScope, backed
+  by the org's posts in mocks (backend already scopes posts per chapter, so this
+  maps 1:1 to /chapters/{id}/posts later). Composer FAB here too (org-colored).
+- **Events — the Partiful corner**: playful event planning inside the org.
+  - Event card: full-bleed cover (picsum seeded), oversized event title, date
+    Chip (org accent) + location caption, host row (avatar + "Hosted by ..."),
+    RSVP summary = overlapping avatar stack + "23 going".
+  - Event detail screen: cover hero, title/when/where block, RSVP pill row —
+    Going / Maybe / Can't — selected state in org accent (gold moment allowed
+    for the Going count), guest list grouped by RSVP, mock "Invite" button.
+  - Create-event sheet (mock): title, date, location, cover choice — matches
+    CreateSheet pattern.
+  - Backed by mocks now; backend events/event_rsvps tables are a board card.
+- **Tools**: the existing role-gated grid (Tree, Members, Treasurer, Secretary)
+  moves under this segment unchanged.
+
+## 10. Craft rules — the anti-slop pass (Aug 12 — Jose: "looks super lazy / AI slop")
+
+Generic-clean is not enough. Every screen must pass these:
+
+1. **Zones, not card soup.** Each screen has a distinct header zone and content
+   zone. Home/Yak/Orgs headers get an oversized title with a short gold accent
+   bar (4x28, radius 2) under it, plus a micro eyebrow above ("UNC GREENSBORO ·
+   SPARTANS" style). Never an unbroken stack of identical white rectangles —
+   vary card sizes, insets, and groupings.
+2. **Real imagery.** People get photo avatars: `https://i.pravatar.cc/150?u=<id>`
+   seeded per user (GradientAvatar gains an optional photo uri, initials become
+   the fallback only). Story tiles show the photo. Media posts use picsum photos.
+   Placeholder-letter UI reads as lazy — kill it wherever a photo can live.
+3. **Density contrast.** Text posts are COMPACT (Twitter density: tight header
+   row, body, inline counts). Media posts breathe (Insta density). Identical
+   spacing everywhere is the slop tell.
+4. **One gold moment per screen.** Spartan gold is the delight color: the accent
+   bar, an active vote, the balance figure, an unread ring. Never gold-wash
+   whole surfaces; never zero gold either.
+5. **Yak is a PLACE, not a list.** The Yak board renders on a deep-navy campus
+   canvas (campus primary dark wash over bg in BOTH light and dark modes) with
+   light tinted cards floating on it and gold vote states. It should feel like
+   the campus at night — instantly distinct from Home.
+6. **Numbers have personality.** All counts/scores/money in the stat type,
+   tabular; notable numbers (top yak score, balance) get gold.
+7. **Copy is specific.** Mock content and microcopy name real things (UNCG,
+   Spartans, College Ave, EUC) — never lorem-ipsum-flavored filler.
 
 **No emojis. Anywhere.** Not in UI, not in copy, not in placeholder content, not
 in icons — vector icons (Feather) or geometric Views only. Emoji reads as AI slop

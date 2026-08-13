@@ -25,10 +25,23 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="Chirp API", version="0.1.0")
 
+    # SECURITY-REVIEW finding 5: never pair a wildcard origin with credentialed CORS —
+    # Starlette reflects any origin, so "*" + credentials lets any website's JS send
+    # the debug-uid header (emulated mode) or a stolen cookie and impersonate a user.
+    allow_credentials = "*" not in settings.cors_origins
+    if settings.env != "local":
+        # Refuse to start a non-local deployment with dev-only defaults still in place.
+        assert settings.auth_mode == "firebase", (
+            f"env={settings.env!r} requires auth_mode='firebase', not 'emulated'"
+        )
+        assert "*" not in settings.cors_origins, (
+            f"env={settings.env!r} forbids wildcard cors_origins"
+        )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_credentials=True,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )

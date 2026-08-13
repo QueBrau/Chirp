@@ -5,7 +5,15 @@ from httpx import AsyncClient
 
 from tests.conftest import MakeChapterWith
 
-SCOPED_GET_SUFFIXES = ("posts", "members", "ledger", "lineage", "meetings")
+SCOPED_GET_SUFFIXES = (
+    "posts",
+    "members",
+    "ledger",
+    "lineage",
+    "meetings",
+    "dues-cycles",
+    "spend-approvals",
+)
 
 
 async def test_cross_chapter_access_is_403_not_a_member(
@@ -32,7 +40,7 @@ async def test_member_can_read_own_chapter(
     """A plain member gets 200 on their own chapter's non-role-gated reads."""
     setup = await make_chapter_with("member")
 
-    for suffix in ("posts", "members", "lineage", "meetings"):
+    for suffix in ("posts", "members", "lineage", "meetings", "dues-cycles", "spend-approvals"):
         response = await client.get(
             f"/chapters/{setup.chapter_id}/{suffix}", headers=setup.member.headers
         )
@@ -64,3 +72,24 @@ async def test_treasurer_can_read_own_ledger(
         f"/chapters/{setup.chapter_id}/ledger", headers=setup.member.headers
     )
     assert response.status_code == 200, response.text
+
+
+async def test_cross_chapter_invite_create_is_403_not_a_member(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """An e-board member of chapter A cannot mint an invite for chapter B (§8.4).
+
+    create_invite is gated by require_role(*EBOARD), which is layered on
+    get_current_membership — org scoping must reject the cross-chapter call
+    before the role check ever runs.
+    """
+    chapter_a = await make_chapter_with("president")
+    chapter_b = await make_chapter_with("president")
+
+    response = await client.post(
+        f"/chapters/{chapter_b.chapter_id}/invites",
+        json={"role": "member"},
+        headers=chapter_a.president.headers,
+    )
+    assert response.status_code == 403, response.text
+    assert response.json() == {"detail": "not_a_member"}

@@ -6,6 +6,7 @@ export * as chapters from "./chapters";
 export * as keys from "./keys";
 export * as messages from "./messages";
 export * as feed from "./feed";
+export * as events from "./events";
 export * as yaks from "./yaks";
 export * as moderation from "./moderation";
 export * as lineage from "./lineage";

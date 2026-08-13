@@ -1,13 +1,14 @@
 """Auth router: POST /auth/bootstrap creates the users row for a verified Firebase uid."""
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.config import get_settings
 from app.core.errors import conflict
 from app.db import get_session
-from app.middleware.auth import get_verified_uid
+from app.middleware.auth import get_verified_identity
 from app.schemas.identity import UserCreate, UserOut
 
 router = APIRouter(tags=["auth"])
@@ -20,10 +21,22 @@ router = APIRouter(tags=["auth"])
 )
 async def bootstrap_account(
     body: UserCreate,
-    uid: str = Depends(get_verified_uid),
+    identity: tuple[str, str | None] = Depends(get_verified_identity),
     session: AsyncSession = Depends(get_session),
 ) -> UserOut:
-    """Register the authenticated-but-unregistered identity; 409 if the uid already has a row."""
+    """Register the authenticated-but-unregistered identity; 409 if the uid already has a row.
+
+    SECURITY-REVIEW finding 3: in firebase mode, the verified token's email claim is
+    authoritative — a body.email that disagrees is rejected (400) rather than trusted,
+    closing the email-squatting path where an attacker bootstraps first with a victim's
+    email and permanently blocks the victim's own signup. Emulated mode has no verified
+    token to check against, so body.email is still trusted there (dev/test only).
+    """
+    uid, verified_email = identity
+    if get_settings().auth_mode == "firebase" and verified_email is not None:
+        if body.email != verified_email:
+            raise HTTPException(status_code=400, detail="email_mismatch")
+
     existing = await session.execute(
         select(models.User.id).where(models.User.firebase_uid == uid)
     )

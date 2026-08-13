@@ -9,6 +9,7 @@ import { useMemo } from "react";
 
 import type { Palette } from "./colors";
 import { resolvePalette, useAppearance } from "./appearance";
+import { applyOrgAccent, useOrgAccentColors } from "./orgScope";
 
 export { brand, dark, light } from "./colors";
 export type { GradientPair, Palette } from "./colors";
@@ -20,6 +21,7 @@ export { radii } from "./radii";
 export type { RadiusToken } from "./radii";
 export {
   AppearanceProvider,
+  campusNightWash,
   DEFAULT_APPEARANCE_PREFS,
   resolvePalette,
   useAppearance,
@@ -41,6 +43,8 @@ export {
   relativeLuminance,
   withAlpha,
 } from "./colorUtils";
+export { applyOrgAccent, OrgAccentScope, useOrgAccentColors } from "./orgScope";
+export type { OrgAccentScopeProps, OrgColors } from "./orgScope";
 
 /**
  * Elevation presets. `card` is the DESIGN.md §4 spec (0 2px 16px rgba(16,18,35,0.06));
@@ -92,6 +96,16 @@ export const metrics = {
   tabBarInsetX: 12,
   /** Floating tab bar bottom inset (§5). */
   tabBarInsetBottom: 8,
+  /**
+   * Header accent bar under an oversized screen title (§10.1: "zones, not card
+   * soup" — Home/Yak/Orgs headers get a short accent bar under the title).
+   * Dimensions only — color is the screen's own accent (campus primary by
+   * default, or campusColors.secondary for the gold moment on Home/Yak per
+   * §10.4), never a fixed hex, so it moves with campus/org theming.
+   */
+  accentBarWidth: 4,
+  accentBarHeight: 28,
+  accentBarRadius: 2,
 } as const;
 
 /**
@@ -102,11 +116,18 @@ export const TAB_BAR_CLEARANCE = 96;
 
 /**
  * Returns the active color palette: system light/dark scheme, resolved through
- * the user's campus appearance prefs (accent source + background style, §8.5).
- * Same return shape as before — every existing screen keeps working unchanged.
+ * the user's campus appearance prefs (accent source + background style, §8.5),
+ * then through the nearest OrgAccentScope if the call site is inside one (§8.6—
+ * e.g. anywhere under the Orgs/chapter stack). Same return shape as before —
+ * every existing screen keeps working unchanged; org colors only apply where a
+ * screen explicitly opts a subtree in via <OrgAccentScope>.
  */
 export function useTheme(): Palette {
   const mode = useColorScheme() === "dark" ? "dark" : "light";
   const { prefs, campusColors } = useAppearance();
-  return useMemo(() => resolvePalette(mode, prefs, campusColors), [mode, prefs, campusColors]);
+  const orgColors = useOrgAccentColors();
+  return useMemo(() => {
+    const palette = resolvePalette(mode, prefs, campusColors);
+    return orgColors ? applyOrgAccent(palette, orgColors) : palette;
+  }, [mode, prefs, campusColors, orgColors]);
 }
