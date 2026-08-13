@@ -52,6 +52,7 @@ class UserOut(_Schema):
     account_type: AccountType
     campus_id: uuid.UUID | None = None
     is_ghost: bool
+    is_platform_admin: bool
     created_at: datetime
 
 

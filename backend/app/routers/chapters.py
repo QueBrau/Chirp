@@ -35,7 +35,15 @@ async def create_chapter(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ChapterOut:
-    """Create a chapter; the creator becomes its president via a new membership."""
+    """Create a chapter; the creator becomes its president via a new membership.
+
+    Platform-admin only (SECURITY-REVIEW finding 1 / board card c28): self-serve
+    chapter creation was the last privilege-escalation vector, since the
+    creator auto-becomes president (full EBOARD powers). There is no API to
+    grant is_platform_admin — it is flipped directly in the DB.
+    """
+    if not user.is_platform_admin:
+        raise forbidden("platform_admin_required")
     chapter = models.Chapter(
         campus_id=body.campus_id,
         org_name=body.org_name,
