@@ -64,15 +64,21 @@ function buildUrl(path: string, query?: RequestOptions["query"]): string {
   return parts.length > 0 ? `${url}?${parts.join("&")}` : url;
 }
 
-/** Perform an authenticated JSON request against the backend. Throws ApiError on non-2xx. */
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
   if (debugFirebaseUid) headers["X-Debug-Firebase-Uid"] = debugFirebaseUid;
+  return headers;
+}
 
+/**
+ * Shared fetch + auth headers + ApiError handling for both `request` and
+ * `requestText` below. Callers decide how to read the (already-ok) body.
+ */
+async function fetchOk(path: string, options: RequestOptions): Promise<Response> {
   const response = await fetch(buildUrl(path, options.query), {
     method: options.method ?? "GET",
-    headers,
+    headers: authHeaders(),
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
 
@@ -86,8 +92,24 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     }
     throw new ApiError(response.status, detail);
   }
+  return response;
+}
+
+/** Perform an authenticated JSON request against the backend. Throws ApiError on non-2xx. */
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const response = await fetchOk(path, options);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+/**
+ * Same auth/URL/error handling as `request`, but resolves the raw response body as
+ * text instead of JSON-parsing it. For endpoints that don't return JSON — e.g. the
+ * treasurer/secretary CSV exports (`/ledger/export.csv`, `/meetings/export.csv`).
+ */
+export async function requestText(path: string, options: RequestOptions = {}): Promise<string> {
+  const response = await fetchOk(path, options);
+  return response.text();
 }
 
 /**

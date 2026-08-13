@@ -4,7 +4,7 @@
  * corrections are new entries with entry_type="correction" + corrects_entry_id.
  */
 
-import { mocked, request, USE_MOCKS } from "./client";
+import { mocked, request, requestText, USE_MOCKS } from "./client";
 import {
   MOCK_CURRENT_USER,
   MOCK_DUES_CYCLES,
@@ -120,6 +120,44 @@ export async function listLedger(
     );
   }
   return request<LedgerEntryOut[]>(`/chapters/${chapterId}/ledger`, { query: filters });
+}
+
+/** Quote a CSV field if it contains a comma, quote, or newline; escape embedded quotes. */
+function csvField(value: string | number | null): string {
+  if (value === null) return "";
+  const str = String(value);
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+/**
+ * Export the ledger as CSV — GET /chapters/{id}/ledger/export.csv. Same optional
+ * filters as listLedger. Returns the raw CSV text; hand it to src/lib/export.ts's
+ * shareCsv() to write + open the native share sheet.
+ */
+export async function exportLedgerCsv(
+  chapterId: string,
+  filters: { category?: string; from?: string; to?: string } = {},
+): Promise<string> {
+  if (USE_MOCKS) {
+    const rows = MOCK_LEDGER_ENTRIES.filter(
+      (e) =>
+        e.chapter_id === chapterId &&
+        (filters.category === undefined || e.category === filters.category),
+    );
+    const header = "id,entry_type,amount_cents,category,description,created_at";
+    const lines = rows.map((e) =>
+      [
+        csvField(e.id),
+        csvField(e.entry_type),
+        csvField(e.amount_cents),
+        csvField(e.category),
+        csvField(e.description),
+        csvField(e.created_at),
+      ].join(","),
+    );
+    return mocked([header, ...lines].join("\n") + "\n");
+  }
+  return requestText(`/chapters/${chapterId}/ledger/export.csv`, { query: filters });
 }
 
 /** Append a ledger entry. Corrections: entry_type="correction" + corrects_entry_id. */

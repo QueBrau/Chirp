@@ -177,6 +177,9 @@ function membership(
     status: "active",
     pledge_class: pledgeClass,
     joined_at: "2024-09-05T18:00:00Z",
+    // Mirrors the backend's join on GET /chapters/{id}/members so roster screens
+    // render the same way under mocks and real data.
+    display_name: mockUserById(userId)?.display_name ?? null,
   };
 }
 

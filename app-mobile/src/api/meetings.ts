@@ -1,6 +1,6 @@
 /** Meetings API: minutes CRUD + attendance sheet — routers/meetings.py. */
 
-import { mocked, request, USE_MOCKS } from "./client";
+import { mocked, request, requestText, USE_MOCKS } from "./client";
 import {
   MOCK_ATTENDANCE,
   MOCK_CURRENT_USER,
@@ -52,6 +52,35 @@ export interface MeetingAttendanceOut {
 export async function listMeetings(chapterId: string): Promise<MeetingOut[]> {
   if (USE_MOCKS) return mocked(MOCK_MEETINGS.filter((m) => m.chapter_id === chapterId));
   return request<MeetingOut[]>(`/chapters/${chapterId}/meetings`);
+}
+
+/** Quote a CSV field if it contains a comma, quote, or newline; escape embedded quotes. */
+function csvField(value: string | null): string {
+  if (value === null) return "";
+  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+/**
+ * Export meeting minutes as CSV — GET /chapters/{id}/meetings/export.csv. Returns
+ * the raw CSV text; hand it to src/lib/export.ts's shareCsv() to write + open the
+ * native share sheet.
+ */
+export async function exportMeetingsCsv(chapterId: string): Promise<string> {
+  if (USE_MOCKS) {
+    const rows = MOCK_MEETINGS.filter((m) => m.chapter_id === chapterId);
+    const header = "id,title,meeting_date,minutes_md,created_at";
+    const lines = rows.map((m) =>
+      [
+        csvField(m.id),
+        csvField(m.title),
+        csvField(m.meeting_date),
+        csvField(m.minutes_md),
+        csvField(m.created_at),
+      ].join(","),
+    );
+    return mocked([header, ...lines].join("\n") + "\n");
+  }
+  return requestText(`/chapters/${chapterId}/meetings/export.csv`);
 }
 
 export async function createMeeting(chapterId: string, body: MeetingCreate): Promise<MeetingOut> {

@@ -1,11 +1,12 @@
 """Secretary: meetings CRUD (minutes) and bulk attendance upsert."""
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.errors import not_found
 from app.core.permissions import Role, require_role
 from app.db import get_session
@@ -44,6 +45,45 @@ async def list_meetings(
         .order_by(models.Meeting.meeting_date.desc())
     )
     return [MeetingOut.model_validate(m) for m in result.scalars().all()]
+
+
+@router.get("/chapters/{chapter_id}/meetings/export.csv")
+async def export_meetings_csv(
+    chapter_id: uuid.UUID,
+    _membership: models.Membership = Depends(require_role(Role.secretary, Role.president)),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Export chapter attendance as CSV, one row per (meeting, member); secretary/president only.
+
+    Long format, not a wide meeting-by-member matrix: it pivots cleanly in a
+    spreadsheet and keeps working as members are added later.
+    """
+    result = await session.execute(
+        select(
+            models.Meeting.meeting_date,
+            models.Meeting.title,
+            models.User.display_name,
+            models.MeetingAttendance.status,
+        )
+        .join(
+            models.MeetingAttendance,
+            models.MeetingAttendance.meeting_id == models.Meeting.id,
+        )
+        .join(models.User, models.User.id == models.MeetingAttendance.user_id)
+        .where(models.Meeting.chapter_id == chapter_id)
+        .order_by(models.Meeting.meeting_date, models.User.display_name)
+    )
+    header = ["meeting_date", "meeting_title", "member", "status"]
+    rows = [
+        [
+            meeting_date.isoformat(),
+            sanitize_csv_text(title),
+            sanitize_csv_text(display_name),
+            status,
+        ]
+        for meeting_date, title, display_name, status in result.all()
+    ]
+    return csv_response(f"meetings_{chapter_id}.csv", header, rows)
 
 
 @router.post("/chapters/{chapter_id}/meetings", status_code=201)

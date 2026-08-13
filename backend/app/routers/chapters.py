@@ -74,13 +74,24 @@ async def list_members(
     _membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
 ) -> list[MembershipOut]:
-    """List the chapter's memberships; org-scoped to active members (§8.4)."""
+    """List the chapter's memberships with each member's display name; §8.4 org-scoped.
+
+    The name is joined in because MembershipOut otherwise carries only user_id, and
+    there is no GET /users/{id} to resolve it — a roster of bare UUIDs is unusable for
+    the secretary's attendance view and the treasurer's spend-approval requesters.
+    """
     result = await session.execute(
-        select(models.Membership)
+        select(models.Membership, models.User.display_name)
+        .join(models.User, models.User.id == models.Membership.user_id)
         .where(models.Membership.chapter_id == chapter_id)
         .order_by(models.Membership.joined_at)
     )
-    return [MembershipOut.model_validate(m) for m in result.scalars().all()]
+    members: list[MembershipOut] = []
+    for membership, display_name in result.all():
+        item = MembershipOut.model_validate(membership)
+        item.display_name = display_name
+        members.append(item)
+    return members
 
 
 @router.patch("/chapters/{chapter_id}/members")
@@ -176,3 +187,32 @@ async def join_chapter(
         raise conflict("already_member") from None
     await session.refresh(membership)
     return MembershipOut.model_validate(membership)
+
+
+@router.get("/me/memberships")
+async def list_my_memberships(
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[MembershipOut]:
+    """List the caller's ACTIVE memberships, each with its chapter's name joined in.
+
+    Uses get_current_user, not get_current_membership — get_current_membership needs
+    a chapter_id already in the path, which is exactly the chicken-and-egg this route
+    solves: it's how the client first learns its own chapter_id/role.
+    """
+    result = await session.execute(
+        select(models.Membership, models.Chapter.org_name, models.Chapter.chapter_name)
+        .join(models.Chapter, models.Chapter.id == models.Membership.chapter_id)
+        .where(
+            models.Membership.user_id == user.id,
+            models.Membership.status == "active",
+        )
+        .order_by(models.Membership.joined_at)
+    )
+    memberships: list[MembershipOut] = []
+    for membership, org_name, chapter_name in result.all():
+        out = MembershipOut.model_validate(membership)
+        out.org_name = org_name
+        out.chapter_name = chapter_name
+        memberships.append(out)
+    return memberships

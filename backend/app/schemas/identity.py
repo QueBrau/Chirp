@@ -107,6 +107,12 @@ class MembershipOut(_Schema):
     status: MembershipStatus
     pledge_class: str | None = None
     joined_at: datetime
+    org_name: str | None = None  # joined from chapters for GET /me/memberships
+    chapter_name: str | None = None  # joined from chapters for GET /me/memberships
+    # Joined from users for GET /chapters/{id}/members: without it a roster is a list
+    # of bare UUIDs, which makes secretary attendance and treasurer approval views
+    # unusable on real data. Members already see each other by name (§8.4 org scope).
+    display_name: str | None = None
 
 
 # ---- invites ----

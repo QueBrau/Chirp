@@ -56,6 +56,12 @@ export interface MembershipOut {
   status: MembershipStatus;
   pledge_class: string | null;
   joined_at: string;
+  /**
+   * Joined from users by GET /chapters/{id}/members. There is no GET /users/{id},
+   * so this is the ONLY way to render a member's name on real data — without it a
+   * roster is a list of bare UUIDs. Null on endpoints that don't join it in.
+   */
+  display_name: string | null;
 }
 
 export interface ChapterInviteCreate {
@@ -72,9 +78,28 @@ export interface ChapterInviteOut {
   created_by: string;
 }
 
+/** MembershipOut plus the chapter's display name, so role-gated screens (treasurer/
+ * secretary dashboards) can resolve their real chapter_id from `GET /me/memberships`
+ * instead of importing MOCK_CURRENT_MEMBERSHIP directly. */
+export interface MyMembershipOut extends MembershipOut {
+  chapter_name: string | null;
+}
+
 export async function listChapters(): Promise<ChapterOut[]> {
   if (USE_MOCKS) return mocked([MOCK_CHAPTER]);
   return request<ChapterOut[]>("/chapters");
+}
+
+/**
+ * Caller's own active memberships — GET /me/memberships. This is how role-gated
+ * screens learn their real chapter_id (and role) instead of importing
+ * MOCK_CURRENT_MEMBERSHIP directly.
+ */
+export async function myMemberships(): Promise<MyMembershipOut[]> {
+  if (USE_MOCKS) {
+    return mocked([{ ...MOCK_CURRENT_MEMBERSHIP, chapter_name: MOCK_CHAPTER.chapter_name }]);
+  }
+  return request<MyMembershipOut[]>("/me/memberships");
 }
 
 export async function createChapter(body: ChapterCreate): Promise<ChapterOut> {
