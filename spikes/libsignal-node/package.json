@@ -1,0 +1,14 @@
+{
+  "name": "libsignal-node-spike",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Milestone-3 de-risking spike: Signal protocol E2EE flow against the real Chirp backend key directory.",
+  "scripts": {
+    "dm": "node src/dm-flow.mjs",
+    "group": "node src/group-flow.mjs"
+  },
+  "dependencies": {
+    "@signalapp/libsignal-client": "^0.100.0"
+  }
+}

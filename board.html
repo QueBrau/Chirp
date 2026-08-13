@@ -89,9 +89,15 @@
   "cards": [
     { "id": "c1", "col": "done", "title": "Frontend redesign (dribbble pass, Orgs reframe) — merged to main", "owner": "J", "tag": "design" },
     { "id": "c18", "col": "done", "title": "No-emoji sweep (Feather icons) + user-arrangeable profile sections — merged", "owner": "J", "tag": "design" },
-    { "id": "c2", "col": "next", "title": "Verify DB on a Docker machine: compose up, alembic upgrade, pytest (10 tests skip w/o PG)", "owner": "", "tag": "backend" },
-    { "id": "c3", "col": "next", "title": "libsignal RN spike on two physical devices (riskiest unknown — needs EAS dev build)", "owner": "", "tag": "m3" },
-    { "id": "c4", "col": "next", "title": "Real Firebase auth: mobile sign-in + backend firebase mode + bootstrap wiring", "owner": "", "tag": "m1" },
+    { "id": "c2", "col": "done", "title": "DB verified on real Postgres: migration 0001 executed, all 11 tests green (local PG14; PG16 re-check below)", "owner": "J", "tag": "backend" },
+    { "id": "c3", "col": "done", "title": "libsignal spike PASSED — real X3DH/Double Ratchet vs live backend + sender-key groups (spikes/libsignal-node/FINDINGS.md)", "owner": "J", "tag": "m3" },
+    { "id": "c4", "col": "done", "title": "Firebase auth wired: email sign-in + demo fallback, token->API client, 5 backend tests, SETUP-FIREBASE.md (LIVE once project created)", "owner": "J", "tag": "m1" },
+    { "id": "c19", "col": "done", "title": "Kyber/PQXDH prekeys shipped — migration 0002, bundle API, spike re-verified with server-supplied post-quantum keys", "owner": "J", "tag": "m4" },
+    { "id": "c20", "col": "next", "title": "Create the Firebase project per SETUP-FIREBASE.md (console steps) — unblocks live auth", "owner": "", "tag": "m1" },
+    { "id": "c21", "col": "next", "title": "Verify WS/Redis real-time fan-out end-to-end (spike Finding 3: HTTP path proven, WS path not)", "owner": "", "tag": "m4" },
+    { "id": "c22", "col": "next", "title": "Re-run backend suite on Postgres 16 (Docker machine or CI) — local verify was PG14", "owner": "", "tag": "backend" },
+    { "id": "c23", "col": "backlog", "title": "libsignal on two PHYSICAL devices via EAS dev build (needs 2 phones + Expo account)", "owner": "", "tag": "m3" },
+    { "id": "c24", "col": "done", "title": "FYP feed (story tiles, filter pills, photo/video/text posts, FAB) + school-color theming w/ Appearance screen — browser-verified", "owner": "J", "tag": "design" },
     { "id": "c5", "col": "backlog", "title": "Invite deep links end-to-end (chirp://join-chapter)", "owner": "", "tag": "m1" },
     { "id": "c6", "col": "backlog", "title": "Orgs tab wired to real memberships API (role gating live)", "owner": "", "tag": "m2" },
     { "id": "c7", "col": "backlog", "title": "E2EE DMs + groups + sender-key rotation + offline queue + push", "owner": "", "tag": "m4" },
@@ -109,7 +115,10 @@
   "decisions": [
     "Aug 11 — Product: Chirp is for ALL students; greek chapters are orgs you join under the Orgs tab. Same auth for everyone.",
     "Aug 11 — Design: default scaffold theme rejected. Dribbble-modern direction is binding, spec in app-mobile/DESIGN.md (violet accent, soft neutral canvas, pill everything, floating tab bar).",
-    "Aug 11 — Process: this board is the source of truth for who's doing what. Not on the board = not claimed."
+    "Aug 11 — Process: this board is the source of truth for who's doing what. Not on the board = not claimed.",
+    "Aug 12 — Design: Home = media FYP (Twitter/Insta/Snap mix — anything postable), themed to SCHOOL COLORS with user-controlled accent/background (DESIGN.md §7 + §8.5). Two dribbble refs codified.",
+    "Aug 12 — Crypto: libsignal requires PQXDH (post-quantum Kyber prekeys) — key directory being extended (kyber_prekeys, migration 0002). 1:1 wire-format rule documented in SPEC §6.",
+    "Aug 12 — E2EE spike verdict: @signalapp/libsignal-client works on macOS x64 Node; RN path recommendation in spikes/libsignal-node/FINDINGS.md; physical-device test still owed."
   ]
 }
 </script>

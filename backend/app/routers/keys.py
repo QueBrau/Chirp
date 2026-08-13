@@ -15,13 +15,18 @@ from app.schemas.e2ee import (
     DeviceCreate,
     DeviceOut,
     DevicePrekeyBundleOut,
+    KyberPrekeyOut,
     OneTimePrekeyOut,
     PrekeyBundleOut,
     PrekeyCountOut,
     PrekeyUpload,
     SignedPrekeyOut,
 )
-from app.services.prekey_service import consume_one_time_prekey
+from app.services.prekey_service import (
+    consume_one_time_kyber_prekey,
+    consume_one_time_prekey,
+    get_last_resort_kyber_prekey,
+)
 
 router = APIRouter(tags=["keys"])
 
@@ -59,6 +64,43 @@ async def _available_otk_count(session: AsyncSession, device_id: uuid.UUID) -> i
     return int(result.scalar_one())
 
 
+async def _available_kyber_otk_count(session: AsyncSession, device_id: uuid.UUID) -> int:
+    """Count one-time Kyber prekeys with consumed_at IS NULL for a device."""
+    result = await session.execute(
+        select(func.count())
+        .select_from(models.KyberPrekey)
+        .where(
+            models.KyberPrekey.device_id == device_id,
+            models.KyberPrekey.consumed_at.is_(None),
+            models.KyberPrekey.is_last_resort.is_(False),
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def _has_last_resort_kyber(session: AsyncSession, device_id: uuid.UUID) -> bool:
+    """Whether the device has a last-resort Kyber prekey registered."""
+    result = await session.execute(
+        select(func.count())
+        .select_from(models.KyberPrekey)
+        .where(
+            models.KyberPrekey.device_id == device_id,
+            models.KyberPrekey.is_last_resort.is_(True),
+        )
+    )
+    return int(result.scalar_one()) > 0
+
+
+async def _prekey_count_out(session: AsyncSession, device_id: uuid.UUID) -> PrekeyCountOut:
+    """Assemble the full PrekeyCountOut (EC + Kyber) for a device."""
+    return PrekeyCountOut(
+        device_id=device_id,
+        one_time_prekeys_available=await _available_otk_count(session, device_id),
+        kyber_one_time_prekeys_available=await _available_kyber_otk_count(session, device_id),
+        kyber_last_resort_registered=await _has_last_resort_kyber(session, device_id),
+    )
+
+
 @router.post("/devices", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
 async def register_device(
     body: DeviceCreate,
@@ -71,6 +113,10 @@ async def register_device(
     signed_signature = _b64_to_bytes(body.signed_prekey.signature_b64)
     otk_rows = [
         (otk.key_id, _b64_to_bytes(otk.public_key_b64)) for otk in body.one_time_prekeys
+    ]
+    kyber_otk_rows = [
+        (kyber.key_id, _b64_to_bytes(kyber.public_key_b64), _b64_to_bytes(kyber.signature_b64))
+        for kyber in body.kyber_one_time
     ]
 
     device = models.Device(
@@ -94,6 +140,26 @@ async def register_device(
     session.add_all(
         models.OneTimePrekey(device_id=device.id, key_id=key_id, public_key=public_key)
         for key_id, public_key in otk_rows
+    )
+    if body.kyber_last_resort is not None:
+        session.add(
+            models.KyberPrekey(
+                device_id=device.id,
+                key_id=body.kyber_last_resort.key_id,
+                public_key=_b64_to_bytes(body.kyber_last_resort.public_key_b64),
+                signature=_b64_to_bytes(body.kyber_last_resort.signature_b64),
+                is_last_resort=True,
+            )
+        )
+    session.add_all(
+        models.KyberPrekey(
+            device_id=device.id,
+            key_id=key_id,
+            public_key=public_key,
+            signature=signature,
+            is_last_resort=False,
+        )
+        for key_id, public_key, signature in kyber_otk_rows
     )
     await session.commit()
     return DeviceOut.model_validate(device)
@@ -128,10 +194,31 @@ async def replenish_prekeys(
         )
         for otk in body.one_time_prekeys
     )
+    if body.kyber_last_resort is not None:
+        # Rotation: insert a fresh row. The previous last-resort row is superseded (never
+        # consumed, never deleted) — the bundle endpoint always selects the newest one.
+        session.add(
+            models.KyberPrekey(
+                device_id=device.id,
+                key_id=body.kyber_last_resort.key_id,
+                public_key=_b64_to_bytes(body.kyber_last_resort.public_key_b64),
+                signature=_b64_to_bytes(body.kyber_last_resort.signature_b64),
+                is_last_resort=True,
+            )
+        )
+    session.add_all(
+        models.KyberPrekey(
+            device_id=device.id,
+            key_id=kyber.key_id,
+            public_key=_b64_to_bytes(kyber.public_key_b64),
+            signature=_b64_to_bytes(kyber.signature_b64),
+            is_last_resort=False,
+        )
+        for kyber in body.kyber_one_time
+    )
     await session.commit()
 
-    count = await _available_otk_count(session, device.id)
-    return PrekeyCountOut(device_id=device.id, one_time_prekeys_available=count)
+    return await _prekey_count_out(session, device.id)
 
 
 @router.get("/devices/{device_id}/prekeys/count", response_model=PrekeyCountOut)
@@ -140,10 +227,9 @@ async def prekey_count(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> PrekeyCountOut:
-    """Report how many unconsumed one-time prekeys remain for a device. Owner only."""
+    """Report how many unconsumed prekeys (EC + Kyber) remain for a device. Owner only."""
     device = await _get_owned_device(session, device_id, user)
-    count = await _available_otk_count(session, device.id)
-    return PrekeyCountOut(device_id=device.id, one_time_prekeys_available=count)
+    return await _prekey_count_out(session, device.id)
 
 
 @router.get("/users/{user_id}/prekey-bundle", response_model=PrekeyBundleOut)
@@ -179,6 +265,15 @@ async def fetch_prekey_bundle(
             # Device has no usable bundle yet; skip it.
             continue
         otk = await consume_one_time_prekey(session, device.id)
+
+        # Kyber: prefer a one-time Kyber prekey (consumed atomically, same as the EC OTK
+        # above); fall back to the device's last-resort Kyber prekey WITHOUT consuming it
+        # when the one-time pool is empty. Null when the device never registered any Kyber
+        # prekey at all (nullable path — backward compatible with pre-PQXDH registrations).
+        kyber = await consume_one_time_kyber_prekey(session, device.id)
+        if kyber is None:
+            kyber = await get_last_resort_kyber_prekey(session, device.id)
+
         bundles.append(
             DevicePrekeyBundleOut(
                 device_id=device.id,
@@ -187,6 +282,9 @@ async def fetch_prekey_bundle(
                 signed_prekey=SignedPrekeyOut.model_validate(signed_prekey),
                 one_time_prekey=(
                     OneTimePrekeyOut.model_validate(otk) if otk is not None else None
+                ),
+                kyber_prekey=(
+                    KyberPrekeyOut.model_validate(kyber) if kyber is not None else None
                 ),
             )
         )

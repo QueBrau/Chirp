@@ -1,8 +1,14 @@
-/** Theme barrel: all design tokens plus useTheme(), which resolves the active palette from the system color scheme. */
+/**
+ * Theme barrel: all design tokens plus useTheme(), which resolves the active
+ * palette from the system color scheme AND the user's campus appearance prefs
+ * (DESIGN §8.5 — see ./appearance.tsx).
+ */
 
 import { useColorScheme, type ViewStyle } from "react-native";
+import { useMemo } from "react";
 
-import { dark, light, type Palette } from "./colors";
+import type { Palette } from "./colors";
+import { resolvePalette, useAppearance } from "./appearance";
 
 export { brand, dark, light } from "./colors";
 export type { GradientPair, Palette } from "./colors";
@@ -12,6 +18,29 @@ export { typography } from "./typography";
 export type { TypeStyle, TypographyVariant } from "./typography";
 export { radii } from "./radii";
 export type { RadiusToken } from "./radii";
+export {
+  AppearanceProvider,
+  DEFAULT_APPEARANCE_PREFS,
+  resolvePalette,
+  useAppearance,
+} from "./appearance";
+export type {
+  AccentSource,
+  AppearancePrefs,
+  AppearanceProviderProps,
+  BackgroundStyle,
+  CampusColors,
+} from "./appearance";
+export {
+  contrastWithWhite,
+  darken,
+  ensureAccentContrast,
+  hexToRgb,
+  lighten,
+  mix,
+  relativeLuminance,
+  withAlpha,
+} from "./colorUtils";
 
 /**
  * Elevation presets. `card` is the DESIGN.md §4 spec (0 2px 16px rgba(16,18,35,0.06));
@@ -71,7 +100,13 @@ export const metrics = {
  */
 export const TAB_BAR_CLEARANCE = 96;
 
-/** Returns the active color palette, following the system scheme (CONVENTIONS: system default). */
+/**
+ * Returns the active color palette: system light/dark scheme, resolved through
+ * the user's campus appearance prefs (accent source + background style, §8.5).
+ * Same return shape as before — every existing screen keeps working unchanged.
+ */
 export function useTheme(): Palette {
-  return useColorScheme() === "dark" ? dark : light;
+  const mode = useColorScheme() === "dark" ? "dark" : "light";
+  const { prefs, campusColors } = useAppearance();
+  return useMemo(() => resolvePalette(mode, prefs, campusColors), [mode, prefs, campusColors]);
 }

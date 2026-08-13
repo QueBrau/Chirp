@@ -121,9 +121,34 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
 
 ## 7. Screen notes
 
-- **Home**: post cards — GradientAvatar + headline author + caption time, body,
-  action row (heart + count, message-circle + count as VECTOR icons from
-  @expo/vector-icons Feather set) in inkFaint→accent when active.
+- **Home = the FYP** (mix of Twitter / Instagram / Snapchat — reference: NexUX
+  dribbble shot, Aug 12): anything is postable — text, photo, video. Structure top
+  to bottom: Moments row (Snapchat DNA) → mixed-media feed (Insta/Twitter DNA) →
+  floating create FAB.
+  - **MomentsRow** (second reference: Mostafizur Rahaman dribbble shot — rounded
+    story TILES, not circles): horizontal strip of 64x64 rounded-square tiles
+    (radius 20) — GradientAvatar fill, 2px accent ring inset, name caption under;
+    first tile = "Your story" (Feather plus in accentSoft). Mock-only taps.
+  - **Feed filter pills** directly under the Moments row: horizontal pill
+    segmented row — "For You" (active default) · "Campus" · "My Orgs". Active =
+    accent bg white text; inactive = surfaceAlt inkSecondary. Mock: filters the
+    post list by source.
+  - **MediaPostCard** variants by post type:
+    - *text*: current card style (avatar header, body, action row).
+    - *photo*: full-bleed image (radius 20, height ~260), bottom scrim overlay
+      (layered translucent ink Views, NOT a heavy black gradient) carrying author
+      GradientAvatar + name + time in white, body caption below the media inside
+      the card, action row.
+    - *video*: same as photo + centered play button (Feather play in a
+      surface-translucent 48 circle) + duration Chip top-right. Mock: static
+      thumbnail, no playback.
+  - Action row on ALL variants (ref-2 style): each action is a 36 circular
+    surfaceAlt chip holding the Feather icon (heart / message-circle / send),
+    with the count in a small attached Badge; active state = accentSoft chip +
+    accent icon. Simple, tappable, modern — no bare icon rows.
+  - **FAB**: 56 accent circle, Feather plus, bottom-right, floats 12 above the
+    tab bar; opens a mock "Create" sheet (Photo / Video / Text options as
+    ListRows with Feather icons). One FAB, Home only.
 - **Icons everywhere**: @expo/vector-icons Feather set only (ships with Expo).
   Tab bar: home / radio / message-circle / grid / user. Never emoji, never
   mixed icon families.
@@ -148,6 +173,28 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
   buttons full-width pill, caption legal line.
 
 ## 8. Don'ts
+
+## 8.5 Campus theming & user appearance (Aug 12 — Jose)
+
+The app themes itself around THE USER'S SCHOOL COLORS, and the user controls it.
+
+- Each campus carries `colors: { primary, secondary }` (mock: Lakeview State =
+  forest `#0F6B3E` + gold `#E8A812`). Add to src/mocks campus data.
+- **Accent source** (user choice): Campus primary (DEFAULT) / Campus secondary /
+  Chirp violet. The chosen color becomes the `accent` token app-wide;
+  `accentSoft` is derived (14-16% alpha). Gradient pairs shift to
+  [accent, accent-lightened] when a campus color is active.
+- **Background style** (user choice): System (default light/dark) / Campus tint —
+  bg becomes a subtle wash of campus primary (light: ~6% tint over #F6F7FB;
+  dark: ~10% tint over #0C0D14). Cards/surfaces stay neutral so content wins.
+- Appearance screen: Profile → Settings → Appearance (`profile/appearance.tsx`) —
+  section cards with swatch rows (tappable color circles w/ check icon) for
+  accent source + background style, live preview card at top. Prefs in a theme
+  context with mock persistence; every existing screen must react instantly
+  (all styling already flows through useTheme()).
+- Contrast rule: campus colors are used for accent/tint only — body text stays
+  ink on neutral surfaces. If a campus primary is too light for white button
+  text, darken it for the accent role (document the adjustment in code).
 
 **No emojis. Anywhere.** Not in UI, not in copy, not in placeholder content, not
 in icons — vector icons (Feather) or geometric Views only. Emoji reads as AI slop

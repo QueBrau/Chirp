@@ -121,6 +121,21 @@ CREATE TABLE one_time_prekeys (
 );
 CREATE INDEX idx_otk_available ON one_time_prekeys(device_id) WHERE consumed_at IS NULL;
 
+-- PQXDH: one signed last-resort Kyber prekey per device (is_last_resort = TRUE, never
+-- consumed) plus an optional one-time Kyber pool (consumed like one_time_prekeys above).
+CREATE TABLE kyber_prekeys (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    device_id       UUID NOT NULL REFERENCES devices(id),
+    key_id          INTEGER NOT NULL,
+    public_key      BYTEA NOT NULL,
+    signature       BYTEA NOT NULL,        -- signed by the device identity key
+    is_last_resort  BOOLEAN NOT NULL DEFAULT FALSE,
+    consumed_at     TIMESTAMPTZ,           -- one-time kybers only; last-resort never consumed
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_kyber_otk_available ON kyber_prekeys(device_id)
+    WHERE consumed_at IS NULL AND NOT is_last_resort;
+
 -- ============ MESSAGING (ciphertext only) ============
 
 CREATE TABLE conversations (
@@ -446,6 +461,12 @@ app-mobile/
 3. **Groups:** creator generates sender key → distributes via pairwise encrypted `sender_key_distribution` messages to each member device → group messages encrypted once with sender key.
 4. **Member leaves/kicked:** server sets `left_at` → remaining clients rotate sender key and redistribute. **This is the most security-critical client behavior — test it first.**
 5. **Receive:** ciphertext via WS (or history fetch) → decrypt on device → store plaintext in local SQLite only.
+   **Client wire-format contract (spike-verified, Aug 2026):** the server stores both
+   1:1 wire formats as `message_type='signal'` and does NOT distinguish
+   PreKeySignalMessage (first message of a session) from SignalMessage. Receivers
+   MUST try the PreKeySignalMessage parse first and fall back to SignalMessage —
+   the two protobufs fail loudly when cross-parsed, so the fallback is safe.
+   See `spikes/libsignal-node/FINDINGS.md` Finding 2.
 6. **New phone (v1 policy):** fresh history, like Signal classic. Encrypted backups = post-launch fast-follow.
 7. **Abuse reports on messages:** reporter's client forwards plaintext of reported messages into `content_reports.forwarded_plaintext` (standard E2EE-compatible pattern).
 

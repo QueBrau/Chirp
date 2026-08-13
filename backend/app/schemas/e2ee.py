@@ -36,17 +36,32 @@ class OneTimePrekeyCreate(_Schema):
     public_key_b64: str = Field(min_length=1)
 
 
+class KyberPrekeyCreate(_Schema):
+    """A single Kyber (PQXDH) prekey — used for both the last-resort slot and one-time batch."""
+
+    key_id: int
+    public_key_b64: str = Field(min_length=1)
+    signature_b64: str = Field(min_length=1)
+
+
 # ---- device registration ----
 
 
 class DeviceCreate(_Schema):
-    """Body for POST /devices — identity key + signed prekey + one-time prekey batch."""
+    """Body for POST /devices — identity key + signed prekey + one-time prekey batch.
+
+    Kyber fields are optional (nullable path): a device may register without them and
+    the prekey bundle will simply return `kyber_prekey: null` for that device — existing
+    clients/tests that predate PQXDH support keep working unchanged.
+    """
 
     device_label: str | None = None
     registration_id: int
     identity_key_b64: str = Field(min_length=1)
     signed_prekey: SignedPrekeyCreate
     one_time_prekeys: list[OneTimePrekeyCreate] = Field(default_factory=list)
+    kyber_last_resort: KyberPrekeyCreate | None = None
+    kyber_one_time: list[KyberPrekeyCreate] = Field(default_factory=list)
 
 
 class DeviceOut(_Schema):
@@ -65,20 +80,29 @@ class DeviceOut(_Schema):
 
 
 class PrekeyUpload(_Schema):
-    """Replenish one-time prekeys and/or rotate the signed prekey."""
+    """Replenish one-time prekeys and/or rotate the signed prekey.
+
+    Kyber fields are optional: `kyber_last_resort` rotates the last-resort Kyber prekey
+    (a new row is inserted; the previous last-resort row is simply superseded, never
+    consumed), `kyber_one_time` tops up the one-time Kyber pool.
+    """
 
     signed_prekey: SignedPrekeyCreate | None = None
     one_time_prekeys: list[OneTimePrekeyCreate] = Field(default_factory=list)
+    kyber_last_resort: KyberPrekeyCreate | None = None
+    kyber_one_time: list[KyberPrekeyCreate] = Field(default_factory=list)
 
 
 PrekeyUploadRequest = PrekeyUpload
 
 
 class PrekeyCountOut(_Schema):
-    """Response for GET /devices/{device_id}/prekeys/count."""
+    """Response for GET /devices/{device_id}/prekeys/count (and the replenish endpoint)."""
 
     device_id: uuid.UUID
     one_time_prekeys_available: int
+    kyber_one_time_prekeys_available: int
+    kyber_last_resort_registered: bool
 
 
 # ---- prekey bundle fetch (GET /users/{user_id}/prekey-bundle) ----
@@ -101,8 +125,25 @@ class OneTimePrekeyOut(_Schema):
     )
 
 
+class KyberPrekeyOut(_Schema):
+    key_id: int
+    public_key_b64: Base64Str = Field(
+        validation_alias=AliasChoices("public_key_b64", "public_key")
+    )
+    signature_b64: Base64Str = Field(
+        validation_alias=AliasChoices("signature_b64", "signature")
+    )
+    is_last_resort: bool
+
+
 class DevicePrekeyBundleOut(_Schema):
-    """One recipient device's bundle; one-time prekey is omitted when the pool is empty."""
+    """One recipient device's bundle; one-time prekey is omitted when the pool is empty.
+
+    `kyber_prekey` prefers a one-time Kyber prekey (consumed atomically like the EC OTK)
+    and falls back to the device's last-resort Kyber prekey WITHOUT consuming it when the
+    one-time pool is empty. It is null when the device never registered any Kyber prekey
+    (pre-PQXDH registration) — nullable path for backward compatibility.
+    """
 
     device_id: uuid.UUID
     registration_id: int
@@ -111,6 +152,7 @@ class DevicePrekeyBundleOut(_Schema):
     )
     signed_prekey: SignedPrekeyOut
     one_time_prekey: OneTimePrekeyOut | None = None
+    kyber_prekey: KyberPrekeyOut | None = None
 
 
 class PrekeyBundleOut(_Schema):
