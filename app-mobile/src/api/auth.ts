@@ -37,3 +37,13 @@ export async function bootstrap(body: UserCreate): Promise<UserOut> {
   if (USE_MOCKS) return mocked(MOCK_CURRENT_USER);
   return request<UserOut>("/auth/bootstrap", { method: "POST", body });
 }
+
+/**
+ * The caller's own user row — how screens learn the real campus_id instead of
+ * importing MOCK_CAMPUS directly. Backend route is being added alongside this
+ * client change.
+ */
+export async function me(): Promise<UserOut> {
+  if (USE_MOCKS) return mocked(MOCK_CURRENT_USER);
+  return request<UserOut>("/auth/me");
+}

@@ -27,15 +27,24 @@ export interface YakVoteOut {
   value: number;
 }
 
-export async function listYaks(campusId: string): Promise<YakOut[]> {
+/**
+ * GET /campuses/{campus_id}/yaks response shape: YakOut plus the caller's OWN
+ * vote only (backend routers/yaks.py `YakFeedOut`) — still no author field of
+ * any kind (SPEC §8.3).
+ */
+export interface YakFeedOut extends YakOut {
+  my_vote: number | null;
+}
+
+export async function listYaks(campusId: string): Promise<YakFeedOut[]> {
   if (USE_MOCKS) {
     return mocked(
-      MOCK_YAKS.filter((y) => y.campus_id === campusId).sort((a, b) =>
-        b.created_at.localeCompare(a.created_at),
-      ),
+      MOCK_YAKS.filter((y) => y.campus_id === campusId)
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        .map((y) => ({ ...y, my_vote: MOCK_MY_YAK_VOTES[y.id] ?? null })),
     );
   }
-  return request<YakOut[]>(`/campuses/${campusId}/yaks`);
+  return request<YakFeedOut[]>(`/campuses/${campusId}/yaks`);
 }
 
 export async function createYak(campusId: string, body: YakCreate): Promise<YakOut> {

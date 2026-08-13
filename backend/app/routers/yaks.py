@@ -38,7 +38,12 @@ async def list_yaks(
     user: models.User = Depends(_require_campus_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[YakFeedOut]:
-    """List the campus's yaks newest first (not removed), with score and the caller's own vote."""
+    """List the campus's yaks newest first (not removed), with score and the caller's own vote.
+
+    Yaks whose (anonymous) author the caller has blocked are silently absent — no
+    tombstone, no count — matching every other blocked yak simply not existing for
+    this caller (§8.3: nothing in the response may reveal that anything was hidden).
+    """
     result = await session.execute(
         select(models.Yak, models.YakVote.value)
         .outerjoin(
@@ -46,9 +51,15 @@ async def list_yaks(
             (models.YakVote.yak_id == models.Yak.id)
             & (models.YakVote.user_id == user.id),
         )
+        .outerjoin(
+            models.UserBlock,
+            (models.UserBlock.blocked_id == models.Yak.author_id)
+            & (models.UserBlock.blocker_id == user.id),
+        )
         .where(
             models.Yak.campus_id == campus_id,
             models.Yak.removed_at.is_(None),
+            models.UserBlock.blocker_id.is_(None),
         )
         .order_by(models.Yak.created_at.desc())
     )

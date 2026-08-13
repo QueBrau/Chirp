@@ -1,4 +1,4 @@
-"""Auth router: POST /auth/bootstrap creates the users row for a verified Firebase uid."""
+"""Auth router: POST /auth/bootstrap creates the users row; GET /auth/me returns it."""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -8,7 +8,7 @@ from app import models
 from app.config import get_settings
 from app.core.errors import conflict
 from app.db import get_session
-from app.middleware.auth import get_verified_identity
+from app.middleware.auth import get_current_user, get_verified_identity
 from app.schemas.identity import UserCreate, UserOut
 
 router = APIRouter(tags=["auth"])
@@ -59,4 +59,10 @@ async def bootstrap_account(
         raise conflict("email_already_registered") from None
     await session.refresh(user)
     await session.commit()
+    return UserOut.model_validate(user)
+
+
+@router.get("/auth/me", response_model=UserOut)
+async def get_me(user: models.User = Depends(get_current_user)) -> UserOut:
+    """Return the authenticated caller's own user row (so the client can learn its campus_id)."""
     return UserOut.model_validate(user)
