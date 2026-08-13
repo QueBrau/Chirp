@@ -10,7 +10,9 @@
     "ios": {
       "bundleIdentifier": "com.chirp.app",
       "supportsTablet": false,
-      "associatedDomains": ["applinks:chirp.example.com"]
+      "associatedDomains": [
+        "applinks:chirp.example.com"
+      ]
     },
     "android": {
       "package": "com.chirp.app",
@@ -25,7 +27,10 @@
               "pathPrefix": "/join-chapter"
             }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
@@ -33,7 +38,8 @@
       "expo-router",
       "expo-secure-store",
       "expo-sqlite",
-      "expo-notifications"
+      "expo-notifications",
+      "expo-font"
     ]
   }
 }

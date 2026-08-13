@@ -59,6 +59,8 @@ class LineageNodeOut(_Schema):
     is_ghost: bool = False
     family_id: uuid.UUID | None = None
     pledge_class: str | None = None
+    # Generation depth from a root (0 = no big / family head).
+    depth: int = 0
 
 
 class LineageTreeOut(_Schema):

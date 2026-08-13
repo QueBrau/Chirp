@@ -20,6 +20,7 @@ class AlumniProfile(Base):
     company: Mapped[str | None] = mapped_column(Text)
     title: Mapped[str | None] = mapped_column(Text)
     industry: Mapped[str | None] = mapped_column(Text)
+    location: Mapped[str | None] = mapped_column(Text)  # city / metro where they work
     linkedin_url: Mapped[str | None] = mapped_column(Text)
     open_to_mentoring: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
@@ -41,6 +42,7 @@ class JobPost(Base):
     )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     company: Mapped[str] = mapped_column(Text, nullable=False)
+    location: Mapped[str | None] = mapped_column(Text)  # city / remote / office
     description: Mapped[str] = mapped_column(Text, nullable=False)
     apply_url: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
