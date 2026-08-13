@@ -2,6 +2,7 @@
 
 from app.models.alumni import AlumniProfile, JobPost
 from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
+from app.models.events import Event, EventRsvp
 from app.models.finance import DuesCycle, LedgerEntry, SpendApproval
 from app.models.identity import Campus, Chapter, ChapterInvite, Membership, User
 from app.models.lineage import Family, LineageEdge
@@ -25,6 +26,8 @@ __all__ = [
     "ConversationMember",
     "Device",
     "DuesCycle",
+    "Event",
+    "EventRsvp",
     "Family",
     "JobPost",
     "KyberPrekey",
