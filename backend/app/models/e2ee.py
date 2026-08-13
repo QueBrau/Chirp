@@ -1,9 +1,9 @@
-"""E2EE key directory models: devices, signed prekeys, one-time prekeys (SPEC §3)."""
+"""E2EE key directory models: devices, signed/one-time prekeys, Kyber (PQXDH) prekeys (SPEC §3)."""
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, LargeBinary, Text, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, LargeBinary, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -67,3 +67,37 @@ class OneTimePrekey(Base):
     public_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     # Server hands out once, marks consumed.
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class KyberPrekey(Base):
+    """PQXDH Kyber prekey: one signed last-resort per device (never consumed) plus an
+    optional pool of one-time Kyber prekeys (consumed like `OneTimePrekey`)."""
+
+    __tablename__ = "kyber_prekeys"
+    __table_args__ = (
+        Index(
+            "idx_kyber_otk_available",
+            "device_id",
+            postgresql_where=text("consumed_at IS NULL AND NOT is_last_resort"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("devices.id"), nullable=False
+    )
+    key_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    public_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Signed by the device identity key (client-side, not verified server-side —
+    # same trust boundary as SignedPrekey.signature).
+    signature: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    is_last_resort: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    # One-time kybers: server hands out once, marks consumed. Last-resort rows are never consumed.
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )

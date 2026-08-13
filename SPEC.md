@@ -121,6 +121,21 @@ CREATE TABLE one_time_prekeys (
 );
 CREATE INDEX idx_otk_available ON one_time_prekeys(device_id) WHERE consumed_at IS NULL;
 
+-- PQXDH: one signed last-resort Kyber prekey per device (is_last_resort = TRUE, never
+-- consumed) plus an optional one-time Kyber pool (consumed like one_time_prekeys above).
+CREATE TABLE kyber_prekeys (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    device_id       UUID NOT NULL REFERENCES devices(id),
+    key_id          INTEGER NOT NULL,
+    public_key      BYTEA NOT NULL,
+    signature       BYTEA NOT NULL,        -- signed by the device identity key
+    is_last_resort  BOOLEAN NOT NULL DEFAULT FALSE,
+    consumed_at     TIMESTAMPTZ,           -- one-time kybers only; last-resort never consumed
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_kyber_otk_available ON kyber_prekeys(device_id)
+    WHERE consumed_at IS NULL AND NOT is_last_resort;
+
 -- ============ MESSAGING (ciphertext only) ============
 
 CREATE TABLE conversations (

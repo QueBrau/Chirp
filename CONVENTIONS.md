@@ -54,7 +54,7 @@ This file pins the naming/dependency contract so independently-built modules fit
 
 `app/models/` split by domain, mirroring SPEC §3 exactly (types, checks, defaults, indexes):
 `identity.py` (User, Campus, Chapter, Membership, ChapterInvite), `e2ee.py` (Device, SignedPrekey,
-OneTimePrekey), `messaging.py` (Conversation, ConversationMember, Message, MessageReceipt),
+OneTimePrekey, KyberPrekey), `messaging.py` (Conversation, ConversationMember, Message, MessageReceipt),
 `social.py` (Post, PostLike, PostComment), `yak.py` (Yak, YakVote, ContentReport, UserBlock),
 `lineage.py` (Family, LineageEdge), `finance.py` (DuesCycle, LedgerEntry, SpendApproval),
 `meetings.py` (Meeting, MeetingAttendance), `alumni.py` (AlumniProfile, JobPost).

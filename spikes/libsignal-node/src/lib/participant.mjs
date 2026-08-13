@@ -1,24 +1,21 @@
 // A single simulated user+device: real backend registration + local libsignal state.
 //
-// WORKAROUND (see FINDINGS.md #1): @signalapp/libsignal-client's PreKeyBundle.new()
-// requires a Kyber (PQXDH) prekey — kyber_prekey_id / kyber_prekey / kyber_prekey_signature
-// are NOT nullable in this SDK version. The Chirp `signed_prekeys` / `one_time_prekeys`
-// tables have no Kyber column at all, so the backend cannot round-trip a Kyber prekey.
-// This spike generates one Kyber prekey per device locally and exchanges it out-of-band
-// via `KYBER_DIRECTORY` below (in-process only, standing in for a backend column/endpoint
-// that does not exist) so the X3DH exercise can proceed. Every other key (identity key,
-// EC signed prekey + signature, EC one-time prekeys) is the real thing, registered with
-// and fetched from the real backend over HTTP.
+// FINDINGS.md #1 RESOLVED: the backend now has a `kyber_prekeys` table and accepts
+// `kyber_last_resort` / `kyber_one_time` on POST /devices and POST /devices/{id}/prekeys,
+// returning `kyber_prekey` on GET /users/{id}/prekey-bundle (a one-time Kyber prekey is
+// consumed atomically when the pool has one; once exhausted, the signed last-resort Kyber
+// prekey is returned WITHOUT being consumed). This spike now generates real Kyber
+// keypairs (`Signal.KEMKeyPair.generate()`), uploads them to the real backend exactly
+// like every other key, and builds `PreKeyBundle` entirely from server-returned values —
+// no local Kyber directory, no workaround.
 
 import * as Signal from '@signalapp/libsignal-client';
 import { backend } from './backend.mjs';
 import { makeStoreBundle } from './signal-stores.mjs';
 import { toB64 } from './util.mjs';
 
-/** device_row_id -> { record, publicKeyB64 } — stands in for a missing backend kyber directory. */
-export const KYBER_DIRECTORY = new Map();
-
-const KYBER_PREKEY_ID = 1;
+const KYBER_LAST_RESORT_ID = 1;
+const KYBER_OTK_BATCH_SIZE = 5;
 const SIGNED_PREKEY_ID = 1;
 const OTK_BATCH_SIZE = 10;
 
@@ -50,7 +47,12 @@ export class Participant {
     return user;
   }
 
-  /** Generate a signed prekey + OTK batch + a local-only Kyber prekey, register the real ones with backend. */
+  /**
+   * Generate a signed prekey + EC OTK batch + a signed last-resort Kyber prekey + a
+   * one-time Kyber batch, and register ALL of them with the real backend. Every private
+   * half (EC and Kyber alike) is kept locally in this participant's stores, keyed by the
+   * same key_id the server will later hand back in a prekey bundle.
+   */
   async registerDevice() {
     const signedPriv = Signal.PrivateKey.generate();
     const signedPub = signedPriv.getPublicKey();
@@ -68,6 +70,33 @@ export class Participant {
       otkPayload.push({ key_id: keyId, public_key_b64: toB64(pub.serialize()) });
     }
 
+    // Signed last-resort Kyber prekey (real KEM keypair, never rotated away in this spike).
+    const kyberLastResortPair = Signal.KEMKeyPair.generate();
+    const kyberLastResortSignature = this.identityKeyPair.privateKey.sign(
+      kyberLastResortPair.getPublicKey().serialize(),
+    );
+    await this.stores.kyberPreKey.saveKyberPreKey(
+      KYBER_LAST_RESORT_ID,
+      Signal.KyberPreKeyRecord.new(KYBER_LAST_RESORT_ID, Date.now(), kyberLastResortPair, kyberLastResortSignature),
+    );
+
+    // One-time Kyber batch — distinct key ids from the last-resort slot.
+    const kyberOtkPayload = [];
+    for (let i = 0; i < KYBER_OTK_BATCH_SIZE; i += 1) {
+      const keyId = KYBER_LAST_RESORT_ID + 1 + i;
+      const keyPair = Signal.KEMKeyPair.generate();
+      const signature = this.identityKeyPair.privateKey.sign(keyPair.getPublicKey().serialize());
+      await this.stores.kyberPreKey.saveKyberPreKey(
+        keyId,
+        Signal.KyberPreKeyRecord.new(keyId, Date.now(), keyPair, signature),
+      );
+      kyberOtkPayload.push({
+        key_id: keyId,
+        public_key_b64: toB64(keyPair.getPublicKey().serialize()),
+        signature_b64: toB64(signature),
+      });
+    }
+
     const device = await backend.registerDevice(this.uid, {
       device_label: `${this.label}-spike-device`,
       registration_id: this.registrationId,
@@ -78,28 +107,24 @@ export class Participant {
         signature_b64: toB64(signedSignature),
       },
       one_time_prekeys: otkPayload,
+      kyber_last_resort: {
+        key_id: KYBER_LAST_RESORT_ID,
+        public_key_b64: toB64(kyberLastResortPair.getPublicKey().serialize()),
+        signature_b64: toB64(kyberLastResortSignature),
+      },
+      kyber_one_time: kyberOtkPayload,
     });
     this.device = device;
     this.deviceId = device.id;
-
-    // Local-only Kyber prekey (see module docstring) — never sent to the backend.
-    const kyberKeyPair = Signal.KEMKeyPair.generate();
-    const kyberSignature = this.identityKeyPair.privateKey.sign(kyberKeyPair.getPublicKey().serialize());
-    const kyberRecord = Signal.KyberPreKeyRecord.new(KYBER_PREKEY_ID, Date.now(), kyberKeyPair, kyberSignature);
-    await this.stores.kyberPreKey.saveKyberPreKey(KYBER_PREKEY_ID, kyberRecord);
-    KYBER_DIRECTORY.set(device.id, {
-      keyId: KYBER_PREKEY_ID,
-      publicKey: kyberKeyPair.getPublicKey(),
-      signature: kyberSignature,
-    });
 
     return device;
   }
 
   /**
    * Fetch this participant's prekey bundle from the REAL backend (GET /users/{id}/prekey-bundle,
-   * consumes one server-side OTK) and turn the first device entry into a libsignal PreKeyBundle,
-   * patched with the local-only Kyber prekey (see module docstring).
+   * consumes one server-side EC OTK and one server-side one-time Kyber prekey — or the
+   * last-resort Kyber prekey once the one-time pool is exhausted) and turn the response
+   * into a libsignal PreKeyBundle, built entirely from server-returned values.
    */
   static async fetchPreKeyBundleFor(fetcherUid, targetUserId) {
     const bundle = await backend.prekeyBundle(fetcherUid, targetUserId);
@@ -107,9 +132,9 @@ export class Participant {
       throw new Error(`prekey-bundle: user ${targetUserId} has no usable devices`);
     }
     const deviceBundle = bundle.devices[0];
-    const kyber = KYBER_DIRECTORY.get(deviceBundle.device_id);
+    const kyber = deviceBundle.kyber_prekey;
     if (!kyber) {
-      throw new Error(`no local Kyber prekey registered for device ${deviceBundle.device_id}`);
+      throw new Error(`prekey-bundle: device ${deviceBundle.device_id} has no kyber_prekey (server should always return one for a device registered with kyber_last_resort)`);
     }
 
     const identityKey = Signal.PublicKey.deserialize(Buffer.from(deviceBundle.identity_key_b64, 'base64'));
@@ -120,6 +145,8 @@ export class Participant {
     const otk = deviceBundle.one_time_prekey;
     const otkId = otk ? otk.key_id : null;
     const otkPub = otk ? Signal.PublicKey.deserialize(Buffer.from(otk.public_key_b64, 'base64')) : null;
+    const kyberPub = Signal.KEMPublicKey.deserialize(Buffer.from(kyber.public_key_b64, 'base64'));
+    const kyberSig = Buffer.from(kyber.signature_b64, 'base64');
 
     const preKeyBundle = Signal.PreKeyBundle.new(
       deviceBundle.registration_id,
@@ -130,9 +157,9 @@ export class Participant {
       signedPub,
       signedSig,
       identityKey,
-      kyber.keyId,
-      kyber.publicKey,
-      kyber.signature,
+      kyber.key_id,
+      kyberPub,
+      kyberSig,
     );
     return { preKeyBundle, deviceBundle, raw: bundle };
   }

@@ -2,8 +2,9 @@
 //
 // Alice and Bob are simulated as two Node-side "devices". Every key-directory and
 // messaging call goes over real HTTP to the FastAPI backend on localhost:8000 —
-// nothing is mocked except the Kyber prekey directory (see participant.mjs docstring
-// and FINDINGS.md #1, since the backend schema has no column for it).
+// including the Kyber (PQXDH) prekeys (last-resort + one-time batch), now that the
+// backend has a kyber_prekeys table and returns them on the bundle endpoint
+// (see participant.mjs docstring and FINDINGS.md #1, RESOLVED). Nothing is mocked.
 
 import assert from 'node:assert/strict';
 import * as Signal from '@signalapp/libsignal-client';

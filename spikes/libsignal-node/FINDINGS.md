@@ -131,7 +131,7 @@ So the backend's `MessageType` schema already anticipates the group flow's distr
 
 ## Findings (backend code NOT modified — filed here per instructions)
 
-### Finding 1 — CRITICAL (workaround applied): current `@signalapp/libsignal-client` requires a Kyber (PQXDH) prekey; the backend schema has no column for one
+### Finding 1 — RESOLVED (2026-08-12, see addendum at end of file): current `@signalapp/libsignal-client` requires a Kyber (PQXDH) prekey; the backend schema has no column for one
 
 `@signalapp/libsignal-client@0.100.0`'s `PreKeyBundle.new(...)` signature takes `kyber_prekey_id: number`, `kyber_prekey: KEMPublicKey`, `kyber_prekey_signature: Uint8Array` as **non-nullable** arguments (`node_modules/@signalapp/libsignal-client/dist/ProtocolTypes.d.ts:58`). Empirically confirmed — passing `null` for those three throws at the native layer, not just a TypeScript complaint:
 
@@ -208,3 +208,134 @@ Bootstrap accepted `campus_id: null` with no pre-existing campus row (matches th
 ## Cleanup
 
 `uvicorn` (started for this spike) was killed at the end of the session; port 8000 confirmed free afterward. Port 8081 (Expo dev server) was never touched.
+
+---
+
+## Addendum (2026-08-12): Finding 1 RESOLVED
+
+The backend now has a real Kyber (PQXDH) prekey directory. Landed:
+
+- `backend/app/models/e2ee.py`: new `KyberPrekey` model — `kyber_prekeys` table (`id, device_id,
+  key_id, public_key, signature, is_last_resort, consumed_at, created_at`), partial index
+  `idx_kyber_otk_available` on `(device_id) WHERE consumed_at IS NULL AND NOT is_last_resort`.
+  Exported from `app/models/__init__.py`.
+- `backend/alembic/versions/0002_kyber_prekeys.py` — applied to the local `chirp` Postgres DB
+  (`alembic upgrade head` → `0001 -> 0002`, confirmed via `\d kyber_prekeys`).
+- `backend/app/schemas/e2ee.py`: `KyberPrekeyCreate` / `KyberPrekeyOut`; `DeviceCreate` and
+  `PrekeyUpload` gain optional `kyber_last_resort` (single) + `kyber_one_time` (list, default
+  `[]`) — both nullable/omittable, so pre-PQXDH registrations still validate. `PrekeyCountOut`
+  gains `kyber_one_time_prekeys_available: int` and `kyber_last_resort_registered: bool`.
+  `DevicePrekeyBundleOut` gains `kyber_prekey: KyberPrekeyOut | None`.
+- `backend/app/services/prekey_service.py`: `consume_one_time_kyber_prekey` (same
+  `UPDATE ... FOR UPDATE SKIP LOCKED` atomic-claim pattern as `consume_one_time_prekey`, scoped
+  to `is_last_resort IS FALSE`) and `get_last_resort_kyber_prekey` (latest `is_last_resort=TRUE`
+  row, never marks it consumed).
+- `backend/app/routers/keys.py`: `POST /devices` and `POST /devices/{id}/prekeys` store the
+  kyber fields when present; `GET /users/{id}/prekey-bundle` tries the one-time Kyber pool
+  first, falls back to the last-resort key (returned, not consumed) when the pool is empty,
+  and returns `kyber_prekey: null` for devices that never registered one (nullable/backward-
+  compatible path — verified with the existing `register_device` test fixture, which sends
+  no kyber fields at all, and still gets a `201` + a bundle with `kyber_prekey: null`).
+- `backend/tests/test_kyber_prekeys.py` (new, 6 tests) + the full existing suite: **17 passed**
+  (`test_auth_firebase_mode.py` excluded — it was mid-edit by another agent in this session and
+  fails only at *collection* with `ModuleNotFoundError: No module named 'firebase_admin'`,
+  identical to its pre-existing-work state; not something this change touched or broke).
+
+```
+$ .venv/bin/alembic upgrade head
+INFO  [alembic.runtime.migration] Running upgrade 0001 -> 0002, Kyber (PQXDH) prekey directory...
+
+$ .venv/bin/python -m pytest tests/ -v --ignore=tests/test_auth_firebase_mode.py
+...
+tests/test_kyber_prekeys.py::test_registration_with_kyber_fields_succeeds PASSED
+tests/test_kyber_prekeys.py::test_registration_without_kyber_fields_still_works PASSED
+tests/test_kyber_prekeys.py::test_bundle_returns_one_time_kyber_then_falls_back_to_last_resort PASSED
+tests/test_kyber_prekeys.py::test_device_with_no_kyber_prekeys_returns_null_kyber_bundle PASSED
+tests/test_kyber_prekeys.py::test_concurrent_bundle_fetches_dont_double_consume_kyber PASSED
+tests/test_kyber_prekeys.py::test_replenish_rotates_last_resort_and_tops_up_one_time_kyber PASSED
+...
+======================== 17 passed, 1 warning in 16.56s ========================
+```
+
+**Spike updated to prove it for real** (`src/lib/participant.mjs`, `src/lib/backend.mjs`,
+`src/dm-flow.mjs`): the local `KYBER_DIRECTORY` workaround is deleted. `Participant.registerDevice()`
+now generates a real `Signal.KEMKeyPair` for a signed last-resort Kyber prekey plus a 5-key
+one-time Kyber batch, uploads both to the real backend via `kyber_last_resort` / `kyber_one_time`
+on `POST /devices` (exactly like every other key), and keeps the private halves in its local
+`kyberPreKey` store keyed by the same `key_id` the server will hand back later.
+`Participant.fetchPreKeyBundleFor()` now builds `Signal.PreKeyBundle.new(...)`'s Kyber arguments
+(`kyber_prekey_id`, `Signal.KEMPublicKey.deserialize(...)`, `kyber_prekey_signature`) entirely
+from `deviceBundle.kyber_prekey` as returned by the live server — no local directory, no fallback,
+no fake data anywhere in the flow.
+
+Extra direct-backend check (before the full DM rerun) confirming the one-time → last-resort
+fallback and non-consumption of the last-resort key, against the live server on port 8000:
+
+```
+fetch 1 -> key_id= 2 is_last_resort= false
+fetch 2 -> key_id= 3 is_last_resort= false
+fetch 3 -> key_id= 1 is_last_resort= true
+final count: {"device_id":"3511d3d0-c565-4ccd-be22-f5303fed277b","one_time_prekeys_available":0,"kyber_one_time_prekeys_available":0,"kyber_last_resort_registered":true}
+```
+
+Full `npm run dm` rerun against `.venv/bin/uvicorn 'app.main:create_app' --factory --port 8000`
+on the same local Postgres (`chirp` db, now at migration `0002`) — unedited output:
+
+```
+=== 0. backend health check ===
+GET /healthz -> { status: 'ok' }
+
+=== 1. bootstrap two real users via POST /auth/bootstrap ===
+alice user_id = ccad37a7-28aa-42b7-b115-f07cbfa0c399
+bob   user_id = 57fd575d-dea5-4ce9-8277-10d2f98ffca0
+
+=== 2. register devices via POST /devices (real identity key + signed prekey + 10 OTKs) ===
+alice device_id = 560d2fc3-527a-4222-9448-ace6f46b51f2 registration_id = 11167
+bob   device_id = 122fe76a-839c-4374-b5db-73e13dacb38f registration_id = 9853
+
+=== 3. create a dm conversation via POST /conversations ===
+conversation_id = 193c1974-7403-46ad-84dd-3296ddba836b members = [ '57fd575d-...', 'ccad37a7-...' ]
+
+=== 4. OTK count before bundle fetch (GET /devices/{id}/prekeys/count, as Bob) ===
+bob one_time_prekeys_available (before) = 10
+
+=== 5. Alice fetches Bob's prekey bundle via GET /users/{id}/prekey-bundle (real backend call) ===
+bundle device_id = 122fe76a-839c-4374-b5db-73e13dacb38f otk key_id consumed = 1
+
+=== 6. OTK count after bundle fetch — must have dropped by exactly 1 ===
+bob one_time_prekeys_available (after) = 9
+
+=== 7. X3DH: Alice processes the bundle -> session installed in her local SessionStore ===
+X3DH session established on Alice side for 57fd575d-dea5-4ce9-8277-10d2f98ffca0.1
+
+=== 8. Alice encrypts message #1 (Double Ratchet, first message -> PreKeySignalMessage) ===
+ciphertext1 wire type = 3 (3 = PreKeySignalMessage)
+
+=== 9. POST ciphertext #1 to /conversations/{id}/messages (server never parses it) ===
+stored message_id = b97e6ec2-7a96-4bbc-89d0-5890fd211ab4 message_type = signal
+
+=== 10. Bob GETs message history and decrypts message #1 ===
+decrypted via PreKeySignalMessage -> "Hey Bob, it's Alice (msqwb06w) — first message over real X3DH!"
+ROUND TRIP #1 OK (Alice -> Bob, X3DH + Double Ratchet)
+
+=== 11. Bob replies — message #2, opposite direction, ratchet advances (-> plain SignalMessage) ===
+ciphertext2 wire type = 2 (2 = SignalMessage/Whisper)
+stored message_id = dee977e0-7ca4-487c-80ca-46b868fdb93b
+decrypted via SignalMessage -> "Got it Alice (msqwb06w) — replying, ratchet advances!"
+ROUND TRIP #2 OK (Bob -> Alice, ratchet advanced)
+
+=== 12. history sanity: GET /conversations/{id}/messages returns both, newest first ===
+
+=== ALL DM-FLOW ASSERTIONS PASSED ===
+```
+
+This is the same X3DH + Double Ratchet round trip as the original run, now built end-to-end from
+real server-issued Kyber material (last-resort + one-time) instead of the in-process
+`KYBER_DIRECTORY` stand-in. `uvicorn` was killed and port 8000 confirmed free again afterward
+(same as the original spike's cleanup discipline).
+
+**Recommendation from the original finding is DONE — no further action needed on Finding 1.**
+Remaining open item, unchanged from the original recommendation: whichever React Native
+libsignal binding gets adopted (see "React Native path" above) still needs its own PQXDH/Kyber
+parity check against its vendored libsignal-client core version before relying on it against
+this now-PQXDH-complete backend.

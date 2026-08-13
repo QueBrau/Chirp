@@ -39,10 +39,29 @@ export const backend = {
       body: { email, display_name, account_type },
     }),
 
-  registerDevice: (uid, { device_label, registration_id, identity_key_b64, signed_prekey, one_time_prekeys }) =>
+  registerDevice: (
+    uid,
+    {
+      device_label,
+      registration_id,
+      identity_key_b64,
+      signed_prekey,
+      one_time_prekeys,
+      kyber_last_resort,
+      kyber_one_time,
+    },
+  ) =>
     request('POST', '/devices', {
       uid,
-      body: { device_label, registration_id, identity_key_b64, signed_prekey, one_time_prekeys },
+      body: {
+        device_label,
+        registration_id,
+        identity_key_b64,
+        signed_prekey,
+        one_time_prekeys,
+        kyber_last_resort,
+        kyber_one_time,
+      },
     }),
 
   replenishPrekeys: (uid, deviceId, body) =>
