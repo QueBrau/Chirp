@@ -1,7 +1,10 @@
-/** Home: reverse-chron chapter posts — GradientAvatar author rows, like/comment action row (DESIGN §7). */
+/**
+ * Home = the FYP (DESIGN §7): Moments row → filter pills ("For You" / "Campus"
+ * / "My Orgs", filters mock posts by `source`) → mixed-media feed
+ * (MediaPostCard renders text/photo/video variants) → floating create FAB.
+ */
 
-import { Feather } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import {
@@ -11,10 +14,11 @@ import {
   listPosts,
   unlikePost,
   type PostOut,
+  type PostSource,
 } from "@/api/feed";
-import { AppText, Card, EmptyState, GradientAvatar, Screen } from "@/components";
-import { MOCK_CHAPTER, MOCK_CURRENT_MEMBERSHIP, MOCK_CURRENT_USER, mockUserById } from "@/mocks/data";
-import { spacing, typography, useTheme } from "@/theme";
+import { AppText, EmptyState, Fab, MediaPostCard, MomentsRow, Screen } from "@/components";
+import { MOCK_CAMPUS, MOCK_CURRENT_MEMBERSHIP, MOCK_CURRENT_USER, MOCK_MOMENTS, mockUserById } from "@/mocks/data";
+import { radii, spacing, useTheme } from "@/theme";
 
 interface FeedItem {
   post: PostOut;
@@ -33,13 +37,16 @@ function age(iso: string): string {
   return `${Math.round(hours / 24)}d`;
 }
 
-const SUBTITLE = MOCK_CHAPTER.chapter_name
-  ? `${MOCK_CHAPTER.org_name} · ${MOCK_CHAPTER.chapter_name}`
-  : MOCK_CHAPTER.org_name;
+const FILTERS: { key: PostSource; label: string }[] = [
+  { key: "forYou", label: "For You" },
+  { key: "campus", label: "Campus" },
+  { key: "org", label: "My Orgs" },
+];
 
 export default function FeedScreen() {
   const palette = useTheme();
   const [items, setItems] = useState<FeedItem[] | null>(null);
+  const [filter, setFilter] = useState<PostSource>("forYou");
 
   useEffect(() => {
     const load = async () => {
@@ -79,72 +86,72 @@ export default function FeedScreen() {
     );
   };
 
+  const moments = useMemo(
+    () =>
+      MOCK_MOMENTS.map((moment) => ({
+        id: moment.id,
+        name: mockUserById(moment.userId)?.display_name.split(" ")[0] ?? "Friend",
+      })),
+    [],
+  );
+
+  const visibleItems = (items ?? []).filter((item) => (item.post.source ?? "org") === filter);
+
   return (
-    <Screen title="Home" subtitle={SUBTITLE}>
-      {items !== null && items.length === 0 ? (
-        <EmptyState
-          title="Nothing yet"
-          message="Posts from your chapter will show up here."
-        />
-      ) : (
-        <View style={{ gap: spacing.md }}>
-          {(items ?? []).map((item) => {
-            const { post, likeCount, commentCount, likedByMe } = item;
-            const author = mockUserById(post.author_id);
-            const authorName = author?.display_name ?? "Unknown";
+    <View style={{ flex: 1 }}>
+      <Screen title="Home" subtitle={MOCK_CAMPUS.name}>
+        <View style={{ marginBottom: spacing.lg }}>
+          <MomentsRow moments={moments} />
+        </View>
+
+        <View style={{ flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg }}>
+          {FILTERS.map((option) => {
+            const active = option.key === filter;
             return (
-              <Card key={post.id}>
-                <View style={{ gap: spacing.md }}>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
-                    <GradientAvatar name={authorName} size={40} />
-                    <View style={{ flex: 1, gap: spacing.xs }}>
-                      <AppText variant="headline" numberOfLines={1}>
-                        {authorName}
-                      </AppText>
-                      <AppText variant="caption" tone="tertiary">
-                        {age(post.created_at)}
-                      </AppText>
-                    </View>
-                  </View>
-
-                  <AppText>{post.body}</AppText>
-
-                  {/* Action row per §7: heart / message-circle counts in inkFaint, liked state accent. */}
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xl }}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={likedByMe ? "Unlike" : "Like"}
-                      onPress={() => void toggleLike(item)}
-                      hitSlop={spacing.sm}
-                      style={({ pressed }) => ({
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: spacing.xs,
-                        opacity: pressed ? 0.7 : 1,
-                      })}
-                    >
-                      <Feather
-                        name="heart"
-                        size={typography.bodyBold.fontSize}
-                        color={likedByMe ? palette.accent : palette.inkFaint}
-                      />
-                      <AppText variant="caption" tone={likedByMe ? "accent" : "tertiary"}>
-                        {likeCount}
-                      </AppText>
-                    </Pressable>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
-                      <Feather name="message-circle" size={typography.caption.fontSize} color={palette.inkFaint} />
-                      <AppText variant="caption" tone="tertiary">
-                        {commentCount}
-                      </AppText>
-                    </View>
-                  </View>
-                </View>
-              </Card>
+              <Pressable
+                key={option.key}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                onPress={() => setFilter(option.key)}
+                style={({ pressed }) => ({
+                  paddingHorizontal: spacing.lg,
+                  paddingVertical: spacing.sm,
+                  borderRadius: radii.pill,
+                  backgroundColor: active ? palette.accent : palette.surfaceAlt,
+                  opacity: pressed ? 0.85 : 1,
+                })}
+              >
+                <AppText variant="bodyBold" tone={active ? "onAccent" : "secondary"}>
+                  {option.label}
+                </AppText>
+              </Pressable>
             );
           })}
         </View>
-      )}
-    </Screen>
+
+        {items !== null && visibleItems.length === 0 ? (
+          <EmptyState title="Nothing here yet" message="Posts matching this filter will show up here." />
+        ) : (
+          <View style={{ gap: spacing.md }}>
+            {visibleItems.map((item) => {
+              const author = mockUserById(item.post.author_id);
+              return (
+                <MediaPostCard
+                  key={item.post.id}
+                  post={item.post}
+                  authorName={author?.display_name ?? "Unknown"}
+                  timeLabel={age(item.post.created_at)}
+                  likeCount={item.likeCount}
+                  commentCount={item.commentCount}
+                  likedByMe={item.likedByMe}
+                  onToggleLike={() => void toggleLike(item)}
+                />
+              );
+            })}
+          </View>
+        )}
+      </Screen>
+      <Fab />
+    </View>
   );
 }

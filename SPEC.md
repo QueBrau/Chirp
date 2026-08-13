@@ -446,6 +446,12 @@ app-mobile/
 3. **Groups:** creator generates sender key → distributes via pairwise encrypted `sender_key_distribution` messages to each member device → group messages encrypted once with sender key.
 4. **Member leaves/kicked:** server sets `left_at` → remaining clients rotate sender key and redistribute. **This is the most security-critical client behavior — test it first.**
 5. **Receive:** ciphertext via WS (or history fetch) → decrypt on device → store plaintext in local SQLite only.
+   **Client wire-format contract (spike-verified, Aug 2026):** the server stores both
+   1:1 wire formats as `message_type='signal'` and does NOT distinguish
+   PreKeySignalMessage (first message of a session) from SignalMessage. Receivers
+   MUST try the PreKeySignalMessage parse first and fall back to SignalMessage —
+   the two protobufs fail loudly when cross-parsed, so the fallback is safe.
+   See `spikes/libsignal-node/FINDINGS.md` Finding 2.
 6. **New phone (v1 policy):** fresh history, like Signal classic. Encrypted backups = post-launch fast-follow.
 7. **Abuse reports on messages:** reporter's client forwards plaintext of reported messages into `content_reports.forwarded_plaintext` (standard E2EE-compatible pattern).
 

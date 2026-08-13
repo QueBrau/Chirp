@@ -7,6 +7,7 @@
  */
 
 import { Feather } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useEffect, useState, type ComponentProps } from "react";
 import { Pressable, View } from "react-native";
 
@@ -139,6 +140,7 @@ function SettingsIconWell({ name }: { name: FeatherName }) {
 }
 
 export default function ProfileScreen() {
+  const router = useRouter();
   const user = MOCK_CURRENT_USER;
   const [alumniProfile, setAlumniProfile] = useState<AlumniProfileOut | null>(null);
   const [editing, setEditing] = useState(false);
@@ -285,8 +287,9 @@ export default function ProfileScreen() {
                   />
                   <ListRow
                     title="Appearance"
-                    subtitle="Follows system light/dark"
+                    subtitle="Accent color & background"
                     left={<SettingsIconWell name="moon" />}
+                    onPress={() => router.push("/profile/appearance")}
                   />
                   <ListRow
                     title="Sign out"

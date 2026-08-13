@@ -20,6 +20,12 @@ export interface PostUpdate {
   media_urls?: string[] | null;
 }
 
+/** DESIGN §7 FYP: drives which MediaPostCard layout a post renders as. */
+export type PostType = "text" | "photo" | "video";
+
+/** DESIGN §7 filter pills: which feed tab a post surfaces under. */
+export type PostSource = "forYou" | "campus" | "org";
+
 export interface PostOut {
   id: string;
   chapter_id: string;
@@ -28,6 +34,12 @@ export interface PostOut {
   media_urls: string[] | null;
   created_at: string;
   deleted_at: string | null;
+  /** Optional so pre-FYP call sites (e.g. createPost) still typecheck. Absent = "text". */
+  post_type?: PostType;
+  /** Video posts only. */
+  duration_sec?: number | null;
+  /** Optional; absent = "org" (chapter-scoped, the pre-FYP default). */
+  source?: PostSource;
 }
 
 export interface PostLikeOut {

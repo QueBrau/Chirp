@@ -9,6 +9,7 @@
  */
 
 import type { CampusOut, UserOut } from "../api/auth";
+import type { AppearancePrefs, CampusColors } from "@/theme";
 import type { ChapterInviteOut, ChapterOut, MembershipOut } from "../api/chapters";
 import type { DeviceOut, PrekeyBundleOut } from "../api/keys";
 import type { ConversationOut, MessageOut } from "../api/messages";
@@ -55,6 +56,20 @@ export const MOCK_CHAPTER: ChapterOut = {
   chapter_name: "Epsilon Mu",
   stripe_account_id: null,
   created_at: "2024-08-20T15:00:00Z",
+};
+
+// ---------- campus theming (DESIGN §8.5) ----------
+
+/** Lakeview State's brand colors — the default accent/tint source before a user overrides it. */
+export const MOCK_CAMPUS_COLORS: CampusColors = {
+  primary: "#0F6B3E", // forest
+  secondary: "#E8A812", // gold
+};
+
+/** Seed prefs for AppearanceProvider (app/_layout.tsx) — mock persistence (local state) for now. */
+export const mockAppearancePrefs: AppearancePrefs = {
+  accentSource: "campusPrimary",
+  backgroundStyle: "system",
 };
 
 // ---------- users (current user = president) ----------
@@ -153,7 +168,7 @@ export const MOCK_INVITES: ChapterInviteOut[] = [
   },
 ];
 
-// ---------- feed ----------
+// ---------- feed (DESIGN §7 FYP: text / photo / video, tagged by source for the filter pills) ----------
 
 export const MOCK_POSTS: PostOut[] = [
   {
@@ -164,6 +179,8 @@ export const MOCK_POSTS: PostOut[] = [
     media_urls: null,
     created_at: "2026-08-09T21:14:00Z",
     deleted_at: null,
+    post_type: "text",
+    source: "org",
   },
   {
     id: "post-2",
@@ -173,6 +190,8 @@ export const MOCK_POSTS: PostOut[] = [
     media_urls: null,
     created_at: "2026-08-10T16:30:00Z",
     deleted_at: null,
+    post_type: "text",
+    source: "org",
   },
   {
     id: "post-3",
@@ -182,6 +201,76 @@ export const MOCK_POSTS: PostOut[] = [
     media_urls: null,
     created_at: "2026-08-11T13:05:00Z",
     deleted_at: null,
+    post_type: "text",
+    source: "org",
+  },
+  {
+    id: "post-4",
+    chapter_id: MOCK_CHAPTER.id,
+    author_id: "usr-jordan",
+    body: "First week back on campus and the quad already looks unreal. Miss this place.",
+    media_urls: ["https://picsum.photos/seed/241/700/500"],
+    created_at: "2026-08-11T15:40:00Z",
+    deleted_at: null,
+    post_type: "photo",
+    source: "forYou",
+  },
+  {
+    id: "post-5",
+    chapter_id: MOCK_CHAPTER.id,
+    author_id: "usr-noah",
+    body: "Campus radio's live set from the quad tonight — swing by after dinner.",
+    media_urls: ["https://picsum.photos/seed/242/700/500"],
+    created_at: "2026-08-11T18:05:00Z",
+    deleted_at: null,
+    post_type: "video",
+    duration_sec: 47,
+    source: "campus",
+  },
+  {
+    id: "post-6",
+    chapter_id: MOCK_CHAPTER.id,
+    author_id: "usr-alexis",
+    body: "Recruiting a few sophomores/juniors for a summer analyst class — DM if interested, doesn't have to be finance majors.",
+    media_urls: null,
+    created_at: "2026-08-11T19:20:00Z",
+    deleted_at: null,
+    post_type: "text",
+    source: "forYou",
+  },
+  {
+    id: "post-7",
+    chapter_id: MOCK_CHAPTER.id,
+    author_id: "usr-tyler",
+    body: "New composite frame is up in the chapter room. Looks sharp.",
+    media_urls: ["https://picsum.photos/seed/243/700/500"],
+    created_at: "2026-08-11T20:10:00Z",
+    deleted_at: null,
+    post_type: "photo",
+    source: "org",
+  },
+  {
+    id: "post-8",
+    chapter_id: MOCK_CHAPTER.id,
+    author_id: "usr-devon",
+    body: "Timelapse of the lake cleanup crew this morning — 42 bags in under two hours.",
+    media_urls: ["https://picsum.photos/seed/244/700/500"],
+    created_at: "2026-08-12T09:00:00Z",
+    deleted_at: null,
+    post_type: "video",
+    duration_sec: 22,
+    source: "forYou",
+  },
+  {
+    id: "post-9",
+    chapter_id: MOCK_CHAPTER.id,
+    author_id: "usr-ethan",
+    body: "Anyone know if the rec center pool is open this weekend? Website says maintenance but that's been up since June.",
+    media_urls: null,
+    created_at: "2026-08-12T10:15:00Z",
+    deleted_at: null,
+    post_type: "text",
+    source: "campus",
   },
 ];
 
@@ -193,6 +282,11 @@ export const MOCK_POST_LIKES: PostLikeOut[] = [
   { post_id: "post-1", user_id: "usr-jake", created_at: "2026-08-09T21:30:00Z" },
   { post_id: "post-1", user_id: "usr-tyler", created_at: "2026-08-09T22:02:00Z" },
   { post_id: "post-2", user_id: "usr-jake", created_at: "2026-08-10T16:45:00Z" },
+  { post_id: "post-4", user_id: "usr-jake", created_at: "2026-08-11T15:55:00Z" },
+  { post_id: "post-5", user_id: "usr-priya", created_at: "2026-08-11T18:20:00Z" },
+  { post_id: "post-5", user_id: "usr-chris", created_at: "2026-08-11T18:22:00Z" },
+  { post_id: "post-7", user_id: "usr-maria", created_at: "2026-08-11T20:25:00Z" },
+  { post_id: "post-8", user_id: "usr-priya", created_at: "2026-08-12T09:10:00Z" },
 ];
 
 export const MOCK_POST_COMMENTS: PostCommentOut[] = [
@@ -220,6 +314,39 @@ export const MOCK_POST_COMMENTS: PostCommentOut[] = [
     created_at: "2026-08-11T14:00:00Z",
     deleted_at: null,
   },
+  {
+    id: "cmt-4",
+    post_id: "post-6",
+    author_id: "usr-sam",
+    body: "Applying tonight, thank you!",
+    created_at: "2026-08-11T19:30:00Z",
+    deleted_at: null,
+  },
+  {
+    id: "cmt-5",
+    post_id: "post-9",
+    author_id: "usr-noah",
+    body: "Yeah still closed, saw the sign this morning.",
+    created_at: "2026-08-12T10:20:00Z",
+    deleted_at: null,
+  },
+];
+
+// ---------- moments (DESIGN §7 MomentsRow — Snapchat-style story strip; mock taps only) ----------
+
+export interface MockMoment {
+  id: string;
+  userId: string;
+}
+
+export const MOCK_MOMENTS: MockMoment[] = [
+  { id: "mom-1", userId: "usr-tyler" },
+  { id: "mom-2", userId: "usr-maria" },
+  { id: "mom-3", userId: "usr-priya" },
+  { id: "mom-4", userId: "usr-devon" },
+  { id: "mom-5", userId: "usr-sam" },
+  { id: "mom-6", userId: "usr-ethan" },
+  { id: "mom-7", userId: "usr-noah" },
 ];
 
 // ---------- yaks (anonymous — NO author fields, SPEC §8.3) ----------

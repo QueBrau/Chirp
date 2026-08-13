@@ -1,4 +1,8 @@
-/** Root layout: navigation theme wired to the Chirp palette (light/dark via system), canvas bg token applied. */
+/**
+ * Root layout: navigation theme wired to the Chirp palette, which now resolves
+ * through AppearanceProvider (DESIGN §8.5 campus theming) — light/dark still
+ * follows system, accent + canvas bg follow the user's appearance prefs.
+ */
 
 import {
   DarkTheme,
@@ -10,7 +14,8 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useColorScheme } from "react-native";
 
-import { dark, light } from "@/theme";
+import { AppearanceProvider, useTheme } from "@/theme";
+import { MOCK_CAMPUS_COLORS, mockAppearancePrefs } from "@/mocks/data";
 
 /**
  * Mock auth state — flips which route group app/index.tsx lands on.
@@ -18,9 +23,10 @@ import { dark, light } from "@/theme";
  */
 export const IS_SIGNED_IN = true;
 
-export default function RootLayout() {
+/** Consumes useTheme() — must render inside AppearanceProvider. */
+function RootLayoutNav() {
   const scheme = useColorScheme();
-  const palette = scheme === "dark" ? dark : light;
+  const palette = useTheme();
   const base = scheme === "dark" ? DarkTheme : DefaultTheme;
 
   const navTheme: Theme = {
@@ -49,5 +55,13 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" />
       </Stack>
     </ThemeProvider>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <AppearanceProvider campusColors={MOCK_CAMPUS_COLORS} initialPrefs={mockAppearancePrefs}>
+      <RootLayoutNav />
+    </AppearanceProvider>
   );
 }
