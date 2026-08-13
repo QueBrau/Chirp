@@ -62,6 +62,12 @@ const TOOLS: Tool[] = [
   { href: "/chapter/tree", icon: "git-branch", title: "Family Tree", description: "Bigs, littles, and lineage" },
   { href: "/chapter/members", icon: "users", title: "Members", description: "The full roster, by role" },
   {
+    href: "/chapter/alumni",
+    icon: "briefcase",
+    title: "Alumni",
+    description: "Directory, contacts, and job board",
+  },
+  {
     href: "/chapter/treasurer",
     icon: "dollar-sign",
     title: "Treasurer",

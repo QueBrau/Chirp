@@ -145,6 +145,8 @@ export const MOCK_USERS: UserOut[] = [
   user("usr-noah", "Noah Kim", "noah.kim@uncg.edu"),
   user("usr-alexis", "Alexis Turner", "alexis.turner@alumni.uncg.edu", "alumni"),
   user("usr-jordan", "Jordan Reyes", "jordan.reyes@alumni.uncg.edu", "alumni"),
+  user("usr-alumni-priya", "Priya Desai", "priya.desai@alumni.uncg.edu", "alumni"),
+  user("usr-alumni-marcus", "Marcus Cole", "marcus.cole@alumni.uncg.edu", "alumni"),
   // Ghost node: placeholder for a historical member who never signed up (SPEC users.is_ghost).
   user("usr-ghost-hammer", 'Robert "Hammer" Hayes', "ghost-hammer@placeholder.invalid", "alumni", true),
   // Alpha Delta Pi (Zeta Rho) members — a second, unrelated org (§8.6 org-agnosticism proof).
@@ -607,35 +609,42 @@ export const MOCK_PREKEY_BUNDLE: PrekeyBundleOut = {
 
 // ---------- lineage (families + edges, incl. a ghost node) ----------
 
+/**
+ * Branching family trees. Each little has exactly one big (SPEC unique constraint);
+ * a big may have multiple littles — that's what creates the tree shape.
+ */
 export const MOCK_LINEAGE_TREE: LineageTreeOut = {
   families: [
     { id: "fam-hammer", chapter_id: MOCK_CHAPTER.id, name: "Hammer Family", color: "#6366F1" },
     { id: "fam-anchor", chapter_id: MOCK_CHAPTER.id, name: "Anchor Family", color: "#F59E0B" },
   ],
   nodes: [
-    { user_id: "usr-ghost-hammer", display_name: 'Robert "Hammer" Hayes', avatar_url: null, is_ghost: true, family_id: "fam-hammer", pledge_class: "Fall 1998" },
-    { user_id: "usr-alexis", display_name: "Alexis Turner", avatar_url: null, is_ghost: false, family_id: "fam-hammer", pledge_class: "Fall 2018" },
-    { user_id: "usr-jake", display_name: "Jake Miller", avatar_url: null, is_ghost: false, family_id: "fam-hammer", pledge_class: "Fall 2023" },
-    { user_id: "usr-tyler", display_name: "Tyler Brooks", avatar_url: null, is_ghost: false, family_id: "fam-hammer", pledge_class: "Fall 2023" },
-    { user_id: "usr-chris", display_name: "Chris Nakamura", avatar_url: null, is_ghost: false, family_id: "fam-hammer", pledge_class: "Fall 2024" },
-    { user_id: "usr-ethan", display_name: "Ethan Walsh", avatar_url: null, is_ghost: false, family_id: "fam-hammer", pledge_class: "Fall 2026" },
-    { user_id: "usr-jordan", display_name: "Jordan Reyes", avatar_url: null, is_ghost: false, family_id: "fam-anchor", pledge_class: "Fall 2015" },
-    { user_id: "usr-maria", display_name: "Maria Gonzalez", avatar_url: null, is_ghost: false, family_id: "fam-anchor", pledge_class: "Fall 2022" },
-    { user_id: "usr-sam", display_name: "Sam Osei", avatar_url: null, is_ghost: false, family_id: "fam-anchor", pledge_class: "Fall 2024" },
-    { user_id: "usr-noah", display_name: "Noah Kim", avatar_url: null, is_ghost: false, family_id: "fam-anchor", pledge_class: "Fall 2026" },
-    { user_id: "usr-devon", display_name: "Devon Carter", avatar_url: null, is_ghost: false, family_id: null, pledge_class: "Fall 2024" },
-    { user_id: "usr-priya", display_name: "Priya Shah", avatar_url: null, is_ghost: false, family_id: null, pledge_class: "Fall 2024" },
+    { user_id: "usr-ghost-hammer", display_name: 'Robert "Hammer" Hayes', avatar_url: null, is_ghost: true, family_id: "fam-hammer", pledge_class: "Fall 1998", depth: 0 },
+    { user_id: "usr-alexis", display_name: "Alexis Turner", avatar_url: null, is_ghost: false, family_id: "fam-hammer", pledge_class: "Fall 2018", depth: 1 },
+    { user_id: "usr-jake", display_name: "Jake Miller", avatar_url: null, is_ghost: false, family_id: "fam-hammer", pledge_class: "Fall 2023", depth: 2 },
+    { user_id: "usr-tyler", display_name: "Tyler Brooks", avatar_url: null, is_ghost: false, family_id: "fam-hammer", pledge_class: "Fall 2023", depth: 2 },
+    { user_id: "usr-chris", display_name: "Chris Nakamura", avatar_url: null, is_ghost: false, family_id: "fam-hammer", pledge_class: "Fall 2024", depth: 3 },
+    { user_id: "usr-ethan", display_name: "Ethan Walsh", avatar_url: null, is_ghost: false, family_id: "fam-hammer", pledge_class: "Fall 2026", depth: 3 },
+    { user_id: "usr-jordan", display_name: "Jordan Reyes", avatar_url: null, is_ghost: false, family_id: "fam-anchor", pledge_class: "Fall 2015", depth: 0 },
+    { user_id: "usr-maria", display_name: "Maria Gonzalez", avatar_url: null, is_ghost: false, family_id: "fam-anchor", pledge_class: "Fall 2022", depth: 1 },
+    { user_id: "usr-sam", display_name: "Sam Osei", avatar_url: null, is_ghost: false, family_id: "fam-anchor", pledge_class: "Fall 2024", depth: 2 },
+    { user_id: "usr-noah", display_name: "Noah Kim", avatar_url: null, is_ghost: false, family_id: "fam-anchor", pledge_class: "Fall 2026", depth: 2 },
+    // Unplaced — omitted from the graph canvas until they get a big.
+    { user_id: "usr-devon", display_name: "Devon Carter", avatar_url: null, is_ghost: false, family_id: null, pledge_class: "Fall 2024", depth: 0 },
+    { user_id: "usr-priya", display_name: "Priya Shah", avatar_url: null, is_ghost: false, family_id: null, pledge_class: "Fall 2024", depth: 0 },
   ],
   edges: [
     { id: "edge-1", chapter_id: MOCK_CHAPTER.id, big_user_id: "usr-ghost-hammer", little_user_id: "usr-alexis", family_id: "fam-hammer", pledge_class: "Fall 2018", confirmed_by_little: true, created_by: "usr-priya", created_at: "2025-02-01T12:00:00Z" },
+    // Alexis has two littles → the Hammer tree branches.
     { id: "edge-2", chapter_id: MOCK_CHAPTER.id, big_user_id: "usr-alexis", little_user_id: "usr-jake", family_id: "fam-hammer", pledge_class: "Fall 2023", confirmed_by_little: true, created_by: "usr-priya", created_at: "2025-02-01T12:05:00Z" },
     { id: "edge-3", chapter_id: MOCK_CHAPTER.id, big_user_id: "usr-alexis", little_user_id: "usr-tyler", family_id: "fam-hammer", pledge_class: "Fall 2023", confirmed_by_little: true, created_by: "usr-priya", created_at: "2025-02-01T12:06:00Z" },
     { id: "edge-4", chapter_id: MOCK_CHAPTER.id, big_user_id: "usr-tyler", little_user_id: "usr-chris", family_id: "fam-hammer", pledge_class: "Fall 2024", confirmed_by_little: true, created_by: "usr-priya", created_at: "2025-09-20T12:00:00Z" },
     // Pending confirmation: Jake claimed Ethan as his little; Ethan hasn't confirmed yet.
     { id: "edge-5", chapter_id: MOCK_CHAPTER.id, big_user_id: "usr-jake", little_user_id: "usr-ethan", family_id: "fam-hammer", pledge_class: "Fall 2026", confirmed_by_little: false, created_by: "usr-jake", created_at: "2026-08-08T12:00:00Z" },
     { id: "edge-6", chapter_id: MOCK_CHAPTER.id, big_user_id: "usr-jordan", little_user_id: "usr-maria", family_id: "fam-anchor", pledge_class: "Fall 2022", confirmed_by_little: true, created_by: "usr-priya", created_at: "2025-02-01T12:10:00Z" },
+    // Maria has two littles → the Anchor tree branches.
     { id: "edge-7", chapter_id: MOCK_CHAPTER.id, big_user_id: "usr-maria", little_user_id: "usr-sam", family_id: "fam-anchor", pledge_class: "Fall 2024", confirmed_by_little: true, created_by: "usr-priya", created_at: "2025-09-20T12:10:00Z" },
-    { id: "edge-8", chapter_id: MOCK_CHAPTER.id, big_user_id: "usr-sam", little_user_id: "usr-noah", family_id: "fam-anchor", pledge_class: "Fall 2026", confirmed_by_little: true, created_by: "usr-priya", created_at: "2026-08-08T12:10:00Z" },
+    { id: "edge-8", chapter_id: MOCK_CHAPTER.id, big_user_id: "usr-maria", little_user_id: "usr-noah", family_id: "fam-anchor", pledge_class: "Fall 2026", confirmed_by_little: true, created_by: "usr-priya", created_at: "2026-08-08T12:10:00Z" },
   ],
 };
 
@@ -817,9 +826,11 @@ export const MOCK_ALUMNI_PROFILES: AlumniProfileOut[] = [
     company: "Northgate Capital",
     title: "Analyst",
     industry: "Finance",
+    location: "Chicago, IL",
     linkedin_url: "https://www.linkedin.com/in/alexis-turner-mock",
     open_to_mentoring: true,
     display_name: "Alexis Turner",
+    email: "alexis.turner@alumni.uncg.edu",
   },
   {
     user_id: "usr-jordan",
@@ -827,9 +838,35 @@ export const MOCK_ALUMNI_PROFILES: AlumniProfileOut[] = [
     company: "Harbor Health",
     title: "Product Manager",
     industry: "Healthcare Tech",
+    location: "Austin, TX",
     linkedin_url: "https://www.linkedin.com/in/jordan-reyes-mock",
-    open_to_mentoring: false,
+    open_to_mentoring: true,
     display_name: "Jordan Reyes",
+    email: "jordan.reyes@alumni.uncg.edu",
+  },
+  {
+    user_id: "usr-alumni-priya",
+    grad_year: 2017,
+    company: "Stripe",
+    title: "Software Engineer",
+    industry: "Fintech",
+    location: "San Francisco, CA",
+    linkedin_url: "https://www.linkedin.com/in/priya-shah-alumni-mock",
+    open_to_mentoring: true,
+    display_name: "Priya Desai",
+    email: "priya.desai@alumni.uncg.edu",
+  },
+  {
+    user_id: "usr-alumni-marcus",
+    grad_year: 2014,
+    company: "Deloitte",
+    title: "Senior Consultant",
+    industry: "Consulting",
+    location: "New York, NY",
+    linkedin_url: "https://www.linkedin.com/in/marcus-cole-mock",
+    open_to_mentoring: false,
+    display_name: "Marcus Cole",
+    email: "marcus.cole@alumni.uncg.edu",
   },
 ];
 
@@ -840,6 +877,7 @@ export const MOCK_JOB_POSTS: JobPostOut[] = [
     chapter_id: MOCK_CHAPTER.id,
     title: "Summer Analyst Intern",
     company: "Northgate Capital",
+    location: "Chicago, IL",
     description:
       "Paid summer internship on the private credit team. Sophomores/juniors preferred; finance major not required. Brothers get a guaranteed first-round interview.",
     apply_url: "https://careers.northgate.example/summer-analyst",
@@ -852,11 +890,25 @@ export const MOCK_JOB_POSTS: JobPostOut[] = [
     chapter_id: null, // network-wide
     title: "Associate Product Manager (New Grad)",
     company: "Harbor Health",
+    location: "Austin, TX (hybrid)",
     description:
       "Rotational APM program for 2027 grads. Ping me on here if you apply and I'll flag your resume.",
     apply_url: "https://harborhealth.example/careers/apm",
     created_at: "2026-08-08T18:00:00Z",
     expires_at: null,
+  },
+  {
+    id: "job-3",
+    posted_by: "usr-alumni-priya",
+    chapter_id: MOCK_CHAPTER.id,
+    title: "Backend Engineer (New Grad)",
+    company: "Stripe",
+    location: "San Francisco, CA / Remote US",
+    description:
+      "Building payments infrastructure. Looking for strong systems instincts — CS major preferred but not required. Happy to refer chapter brothers.",
+    apply_url: "https://stripe.com/jobs/listing/backend-engineer-new-grad",
+    created_at: "2026-08-10T12:00:00Z",
+    expires_at: "2026-10-15T00:00:00Z",
   },
 ];
 

@@ -1,6 +1,6 @@
 /** Lineage API: families, big/little edges, full tree fetch — routers/lineage.py. */
 
-import { mocked, request, USE_MOCKS } from "./client";
+import { ApiError, mocked, request, USE_MOCKS } from "./client";
 import { MOCK_CURRENT_USER, MOCK_LINEAGE_TREE, newMockId, nowIso } from "../mocks/data";
 
 export interface FamilyCreate {
@@ -42,6 +42,8 @@ export interface LineageNodeOut {
   is_ghost: boolean;
   family_id: string | null;
   pledge_class: string | null;
+  /** Generation depth from a root (0 = no big / family head). */
+  depth?: number;
 }
 
 /** Full adjacency for a chapter: nodes + edges + families (SPEC §4). */
@@ -75,6 +77,13 @@ export async function createEdge(
   body: LineageEdgeCreate,
 ): Promise<LineageEdgeOut> {
   if (USE_MOCKS) {
+    if (body.big_user_id === body.little_user_id) {
+      throw new ApiError(422, "big_and_little_identical");
+    }
+    // One big per little — mirrors UNIQUE (little_user_id, chapter_id).
+    const existing = MOCK_LINEAGE_TREE.edges.find((e) => e.little_user_id === body.little_user_id);
+    if (existing) throw new ApiError(409, "little_already_has_big");
+
     const edge: LineageEdgeOut = {
       id: newMockId("edge"),
       chapter_id: chapterId,
@@ -87,6 +96,13 @@ export async function createEdge(
       created_at: nowIso(),
     };
     MOCK_LINEAGE_TREE.edges.push(edge);
+    const little = MOCK_LINEAGE_TREE.nodes.find((n) => n.user_id === body.little_user_id);
+    const big = MOCK_LINEAGE_TREE.nodes.find((n) => n.user_id === body.big_user_id);
+    if (little) {
+      little.family_id = body.family_id ?? little.family_id;
+      little.depth = (big?.depth ?? 0) + 1;
+    }
+    if (big && body.family_id) big.family_id = body.family_id;
     return mocked(edge);
   }
   return request<LineageEdgeOut>(`/chapters/${chapterId}/lineage/edges`, { method: "POST", body });
