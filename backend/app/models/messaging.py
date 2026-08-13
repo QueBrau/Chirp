@@ -67,6 +67,7 @@ class Message(Base):
             "idx_messages_convo_time",
             "conversation_id",
             text("created_at DESC"),
+            text("id DESC"),
         ),
     )
 

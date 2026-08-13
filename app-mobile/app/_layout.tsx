@@ -12,8 +12,10 @@ import {
 } from "@react-navigation/native";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { useEffect } from "react";
 import { useColorScheme } from "react-native";
 
+import { hasFirebaseConfig, onIdTokenChanged } from "@/auth";
 import { AppearanceProvider, useTheme } from "@/theme";
 import { MOCK_CAMPUS_COLORS, mockAppearancePrefs } from "@/mocks/data";
 
@@ -59,6 +61,14 @@ function RootLayoutNav() {
 }
 
 export default function RootLayout() {
+  // Keep src/api/client's bearer token fresh across the ~1hr Firebase ID token
+  // expiry. No-op in mock/demo mode (hasFirebaseConfig() false) — see SECURITY-REVIEW
+  // finding 11.
+  useEffect(() => {
+    if (!hasFirebaseConfig()) return;
+    return onIdTokenChanged();
+  }, []);
+
   return (
     <AppearanceProvider campusColors={MOCK_CAMPUS_COLORS} initialPrefs={mockAppearancePrefs}>
       <RootLayoutNav />

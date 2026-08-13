@@ -79,7 +79,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 0,
+  "updated": 1786656818000,
   "columns": [
     { "id": "backlog", "title": "Backlog" },
     { "id": "next", "title": "Next" },
@@ -95,8 +95,8 @@
     { "id": "c19", "col": "done", "title": "Kyber/PQXDH prekeys shipped — migration 0002, bundle API, spike re-verified with server-supplied post-quantum keys", "owner": "J", "tag": "m4" },
     { "id": "c25", "col": "done", "title": "Org space: private org-only feed + Partiful events (Feed/Events/Tools segments, RSVP) — merged", "owner": "J", "tag": "design" },
     { "id": "c27", "col": "done", "title": "Security review (15 findings) + fixes: moderation campus-scope, invite/email escalation, CORS guard, WS log-redaction, TOCTOU races, pagination — 33 tests pass. See SECURITY-REVIEW.md", "owner": "J", "tag": "security" },
-    { "id": "c30", "col": "next", "title": "[A/Jose] START HERE (shared blocker): stand up ONE reachable backend — deploy Cloud Run+Cloud SQL OR run local behind ngrok — both devs point the app here. Nothing integrates until this exists.", "owner": "J", "tag": "go-live" },
-    { "id": "c31", "col": "next", "title": "[A/Jose] Create Firebase project + fill src/auth/config.ts (follow SETUP-FIREBASE.md); enable Email+Google+Apple. Unblocks real auth.", "owner": "J", "tag": "vert:auth-orgs" },
+    { "id": "c30", "col": "progress", "title": "[A/Jose] Shared backend — DB layer + Firebase LIVE; ONE STEP LEFT: Jose runs the staged Cloud Run deploy (command in INFRA-PRIVATE.html, from repo root ON jose/auth-orgs — Dockerfile fix lives there). Claude's harness won't run it (spend + public URL). Then Claude verifies /healthz + 401 gating and posts the URL here.", "owner": "J", "tag": "go-live" },
+    { "id": "c31", "col": "done", "title": "Firebase LIVE on chirps-prod (same GCP project as backend): auth initialized, Email/Password enabled, web app chirp-web registered, real config in src/auth/config.ts (app off demo mode) + firebase_admin audience pinned — on jose/auth-orgs (ad57dde), tsc + 5 auth tests green. LEFT (console, later): Google + Apple provider toggles.", "owner": "J", "tag": "vert:auth-orgs" },
     { "id": "c32", "col": "next", "title": "[A/Jose] Flip app off mocks: add config toggle + point api client base URL at the shared backend; verify real sign-in -> /auth/bootstrap -> membership works end to end", "owner": "J", "tag": "vert:auth-orgs" },
     { "id": "c33", "col": "backlog", "title": "[A/Jose] Events backend: events + event_rsvps tables + endpoints, then wire the Orgs Events UI (built on mocks) to it", "owner": "J", "tag": "vert:auth-orgs" },
     { "id": "c34", "col": "next", "title": "[B/Q] Wire FYP feed to real API: replace mock calls in src/api/feed with live fetch (posts/likes/comments) against the shared backend", "owner": "Q", "tag": "vert:social-msg" },
@@ -105,7 +105,7 @@
     { "id": "c36", "col": "backlog", "title": "[B/Q] m4: real in-app E2EE messaging (crypto stubs -> real, spike-proven path) + prekey rate-limit + msg index 0004", "owner": "Q", "tag": "vert:social-msg" },
     { "id": "c37", "col": "backlog", "title": "[shared] CI: run pytest + tsc on every push; PG16 test run", "owner": "", "tag": "infra" },
     { "id": "c28", "col": "next", "title": "[A/Jose] Gate chapter/president creation (product decision) — self-serve presidency lets a user become EBOARD; campus-scoping contains the moderation leak but doesn't close it", "owner": "J", "tag": "security" },
-    { "id": "c29", "col": "backlog", "title": "Prekey-drain rate limiting + Firebase token auto-refresh + msg index 0004 (deferred security items)", "owner": "", "tag": "security" },
+    { "id": "c29", "col": "done", "title": "Deferred security items shipped: prekey-bundle rate limiting + Firebase token auto-refresh + msg compound index (migration 0005) — on main (6a41341), 40 tests green", "owner": "J", "tag": "security" },
     { "id": "c26", "col": "backlog", "title": "Events backend: events + event_rsvps tables, RSVP endpoints; org feed maps to existing /chapters/{id}/posts", "owner": "", "tag": "m5" },
     { "id": "c20", "col": "next", "title": "Create the Firebase project per SETUP-FIREBASE.md (console steps) — unblocks live auth", "owner": "", "tag": "m1" },
     { "id": "c21", "col": "next", "title": "Verify WS/Redis real-time fan-out end-to-end (spike Finding 3: HTTP path proven, WS path not)", "owner": "", "tag": "m4" },
@@ -134,7 +134,9 @@
     "Aug 12 — Crypto: libsignal requires PQXDH (post-quantum Kyber prekeys) — key directory being extended (kyber_prekeys, migration 0002). 1:1 wire-format rule documented in SPEC §6.",
     "Aug 12 — E2EE spike verdict: @signalapp/libsignal-client works on macOS x64 Node; RN path recommendation in spikes/libsignal-node/FINDINGS.md; physical-device test still owed.",
     "Aug 12 — Product: org posts are PRIVATE to the org (never on the FYP). Orgs tab = Feed / Events / Tools segments in org colors; Events = Partiful-style planning (DESIGN §8.7). App rebranded to UNC Greensboro; every frat/sorority wears its own colors (§8.6).",
-    "Aug 13 — Process: work split BY FEATURE VERTICAL. Vertical A (Auth & Orgs) = Jose; Vertical B (Social & Messaging) = Q. First milestone = GO-LIVE INTEGRATION. Sprint 0 (shared): one reachable backend + Firebase project before either vertical starts. Shared files (api/client, theme, components, mocks): touch sparingly, ping each other."
+    "Aug 13 — Process: work split BY FEATURE VERTICAL. Vertical A (Auth & Orgs) = Jose; Vertical B (Social & Messaging) = Q. First milestone = GO-LIVE INTEGRATION. Sprint 0 (shared): one reachable backend + Firebase project before either vertical starts. Shared files (api/client, theme, components, mocks): touch sparingly, ping each other.",
+    "Aug 13 — Process: feature work happens on per-dev branches (jose/auth-orgs, q/social-msg) merged to main via PR — no more direct-to-main feature commits, avoids merge collisions. EXCEPTION: board.html updates commit straight to main so both devs always see the live board.",
+    "Aug 13 — Infra: shared backend = GCP project chirps-prod (us-central1), billing linked, account chirp.shared@gmail.com. Order: Cloud SQL + secrets + migrations first; Cloud Run public deploy only after Firebase exists (ENV guard requires AUTH_MODE=firebase + real CORS)."
   ]
 }
 </script>

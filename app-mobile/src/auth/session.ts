@@ -12,6 +12,7 @@
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  onIdTokenChanged as onFirebaseIdTokenChanged,
   signInWithEmailAndPassword,
   signOut,
   type User,
@@ -44,6 +45,21 @@ export async function signOutUser(): Promise<void> {
 /** Subscribe to Firebase auth state changes; returns the unsubscribe function. */
 export function onAuthChanged(callback: (user: User | null) => void): () => void {
   return onAuthStateChanged(getFirebaseAuth(), callback);
+}
+
+/**
+ * Subscribe to Firebase ID token changes — fires on sign-in, sign-out, AND the
+ * silent background refresh Firebase performs roughly every hour (unlike
+ * onAuthChanged above, which only fires on sign-in/out and misses the refresh).
+ * Each change pushes the fresh token into src/api/client's setAuthToken(), or
+ * clears it on sign-out, so requests never carry a stale ~1hr-expired token.
+ * Returns the unsubscribe function. Call only when hasFirebaseConfig() is true.
+ */
+export function onIdTokenChanged(callback?: (user: User | null) => void): () => void {
+  return onFirebaseIdTokenChanged(getFirebaseAuth(), async (user) => {
+    setAuthToken(user ? await user.getIdToken() : null);
+    callback?.(user);
+  });
 }
 
 /** Current user's Firebase ID token, or null if signed out. Pass true to force a refresh. */
