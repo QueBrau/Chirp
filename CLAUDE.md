@@ -1,0 +1,68 @@
+# Chirp — instructions for agent sessions (both devs)
+
+Applies to any coding agent, not just Claude Code — Cursor reads AGENTS.md, which
+points here. One file, both tools.
+
+Read first: SPEC.md, CONVENTIONS.md, app-mobile/DESIGN.md (binding), HANDOFF.md,
+SECURITY-REVIEW.md, DEPLOY.md. The live task board is board.html (open in a browser).
+
+## Board discipline — ALWAYS ON
+
+board.html is the source of truth for who is doing what, and BOTH devs watch it to
+see what is going on. Update it at EVERY step, not just at the end of a task:
+
+- **Claiming**: the moment you start a card, move it to "In Progress" with a one-line
+  status appended to its title, commit, push.
+- **Progress**: whenever a card's real-world state changes (built, tests green, blocked
+  on a human step, deployed, verified), update the title to say so and push again.
+  A card title should always answer "what is true right now and what is left".
+- **Done**: move to Done only with evidence in the title (commit hash, test count,
+  verified-live note).
+- Board commits go STRAIGHT TO MAIN (the one exception to branch workflow), so the
+  other dev always sees the live board. Feature code goes on per-dev branches
+  (jose/*, q/*) and merges via PR.
+- After every board change on main, merge main back into your working branch so the
+  branches never diverge on board.html.
+- Record product/process decisions in the board's Decisions log the day they happen.
+- Surface blockers as their own card, including ones you created. A problem only you
+  know about is the same as no board at all.
+
+## Shared resources — claim on the board BEFORE you use them
+
+- **Alembic migration numbers.** Two branches writing `0006` produce duplicate
+  revision ids, and if one is already applied to prod the other is skipped SILENTLY —
+  the tables never get created and nothing errors. Claim the next number on the board
+  before writing the file. (This already happened once: c41.)
+- Shared files — api/client, theme, components, mocks: touch sparingly, and say on the
+  board when you do.
+
+## Environment quirks (Jose's Intel Mac, macOS 12)
+
+- NO Docker. Local Postgres 14: `pg_ctl -D /usr/local/var/postgresql@14 start`
+  (brew services is broken). Roles chirp/chirp, dbs chirp + chirp_test.
+- Backend venv: backend/.venv. Expo web: `npx expo start --web` on :8081 (Metro can
+  get OOM-killed; just restart). gcloud lives at ~/google-cloud-sdk/bin/gcloud.
+- Prod runbook + credentials: INFRA-PRIVATE.html at the repo root (gitignored —
+  never commit it; Jose shares it dev-to-dev).
+
+## Environment quirks (Q's Apple Silicon Mac)
+
+- Docker IS available here, and there is NO native Postgres on 5432. Backend tests run
+  against a disposable container, `chirp-test-pg` (postgres:16) on host port **5434**:
+  `docker run -d --name chirp-test-pg -e POSTGRES_USER=chirp -e POSTGRES_PASSWORD=chirp -e POSTGRES_DB=chirp_test -p 5434:5432 postgres:16`
+  Ports 5433 and 6379 belong to unrelated `leadgen-*` containers — do not take them.
+- conftest defaults to 5432, so tests need the URL passed explicitly:
+  `TEST_DATABASE_URL=postgresql+asyncpg://chirp:chirp@localhost:5434/chirp_test backend/.venv/bin/python -m pytest -q`
+- backend/.venv is Python **3.12** (it was 3.9, which pyproject's `requires-python
+  >=3.11` rejects; rebuilt Aug 13 on Homebrew python3.12).
+- Because that container is postgres:16, test runs here match prod's PG16.
+- The EAS dev build is STALE: expo-file-system, expo-sharing and
+  @stripe/stripe-react-native were all added after it was cut (board c39).
+
+## Conventions that keep biting
+
+- No emojis anywhere in code, UI, docs, or commits.
+- DESIGN.md is law — no default-looking UI.
+- Subagents/workflows run on Sonnet (cost).
+- Every backend change that should go live needs a Cloud Run redeploy (human step,
+  command in INFRA-PRIVATE.html) — say "redeploy now" plainly when it's time.
