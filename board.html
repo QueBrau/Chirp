@@ -46,7 +46,11 @@
   .chip.owner-J { background:var(--accent-soft); color:var(--accent); }
   .chip.owner-Q { background:var(--success-soft); color:var(--success); }
   .chip.tag { cursor:default; }
-  .card .del { margin-left:auto; background:none; border:0; color:var(--ink-3); font-size:14px; padding:2px 6px; cursor:pointer; }
+  .card .copy { margin-left:auto; background:none; border:0; color:var(--ink-3); font-size:11px; font-weight:600; letter-spacing:.3px; border-radius:999px; padding:3px 9px; cursor:pointer; }
+  .card .copy:hover { color:var(--accent); background:var(--accent-soft); }
+  .card .copy.ok { color:var(--success); background:var(--success-soft); }
+  .card .copy.fail { color:var(--danger); background:var(--danger-soft); }
+  .card .del { background:none; border:0; color:var(--ink-3); font-size:14px; padding:2px 6px; cursor:pointer; }
   .card .del:hover { color:var(--danger); }
   .adder { width:100%; background:transparent; border:1px dashed var(--border); border-radius:12px; padding:9px 12px; font:inherit; font-size:13px; color:var(--ink); outline:none; }
   .adder::placeholder { color:var(--ink-3); }
@@ -463,6 +467,39 @@
   }
   function cardById(id) { return state.cards.filter(function (c) { return c.id === id; })[0]; }
 
+  /**
+   * Copy `text`, then flash the result on the button itself.
+   * navigator.clipboard needs a secure context and this board is normally opened
+   * straight off disk (file://), where it's commonly unavailable or rejects — so
+   * fall back to a throwaway textarea + execCommand rather than silently no-op.
+   */
+  function copyText(text, btn) {
+    var label = btn.dataset.label;
+    function flash(ok) {
+      btn.textContent = ok ? 'copied' : 'copy failed';
+      btn.className = 'copy ' + (ok ? 'ok' : 'fail');
+      setTimeout(function () { btn.textContent = label; btn.className = 'copy'; }, 1200);
+    }
+    function legacy() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      flash(ok);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { flash(true); }, legacy);
+    } else {
+      legacy();
+    }
+  }
+
   function render() {
     boardEl.innerHTML = '';
     state.columns.forEach(function (col) {
@@ -483,6 +520,11 @@
         owner.onclick = function () { c.owner = c.owner === '' ? 'J' : c.owner === 'J' ? 'Q' : ''; persist(); };
         meta.appendChild(owner);
         if (c.tag) { var tag = document.createElement('span'); tag.className = 'chip tag'; tag.textContent = c.tag; meta.appendChild(tag); }
+        var copy = document.createElement('button');
+        copy.className = 'copy'; copy.textContent = 'copy'; copy.dataset.label = 'copy';
+        copy.title = 'Copy this card’s text';
+        copy.onclick = function (ev) { ev.stopPropagation(); copyText(c.title, copy); };
+        meta.appendChild(copy);
         var del = document.createElement('button'); del.className = 'del'; del.textContent = '✕';
         del.onclick = function () { if (confirm('Delete card?')) { state.cards = state.cards.filter(function (x) { return x.id !== c.id; }); persist(); } };
         meta.appendChild(del);
