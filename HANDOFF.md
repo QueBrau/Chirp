@@ -1,6 +1,10 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 13 2026, late night (post PR #4 merge)._
+_Last updated: Aug 14 2026, evening. Since the table below: PR #5 (session provider +
+/auth/me) MERGED and live-verified; PR #6 (Orgs on real memberships + invite UI +
+roster names) is review-absorbed with CI green, awaiting Jose's merge + one redeploy.
+Follow-up cards c43-c45 filed. PR #2 still needs Q's rebase (8 conflicting files,
+list on the board); PR #3 still needs the Stripe migration renumbered to 0008._
 
 **board.html is the source of truth for tasks.** This file only answers the question the
 board can't: which copy of Chirp you are looking at.
