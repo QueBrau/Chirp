@@ -400,21 +400,21 @@
     {
       "id": "c43",
       "col": "next",
-      "title": "[shared] Batch endpoints to kill the N+1s — SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's, riding with the c44 branch. Neither needs a migration (counts are queries, not schema) — 0009 stays free.",
+      "title": "[shared] Batch endpoints to kill the N+1s — SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's — DONE in PR #7 (GET /chapters/{id}/events-with-rsvps, 1+N -> one round trip, Events segment wired). Q's posts-with-counts half still rides with c34. No migration — 0009 stays free.",
       "owner": "",
       "tag": "backend"
     },
     {
       "id": "c44",
       "col": "progress",
-      "title": "[A/Jose] Role metadata from backend: invite-role options + eboard set served by the API instead of hand-typed frontend mirrors of permissions.py (drift risk flagged in PR #6 review). BUILT Aug 14 night: GET /chapters/{id}/role-meta (roles/eboard/invitable from permissions.py, invite rule applied server-side), 4 backend tests green; mobile consumes it via OwnChapterProvider — invite card + members grouping + chips all server-fed, mirrors deleted. tsc clean. LEFT: c43-J events endpoint + c45 on this branch, then PR.",
+      "title": "[A/Jose] Role metadata from backend: invite-role options + eboard set served by the API instead of hand-typed frontend mirrors of permissions.py (drift risk flagged in PR #6 review). DONE-PENDING-MERGE, PR #7 OPEN (Aug 14 night): GET /chapters/{id}/role-meta (roles/eboard/invitable from permissions.py, invite rule applied server-side), mobile fully server-fed via OwnChapterProvider — mirrors deleted. Full suite 122 tests + tsc green. LEFT: Jose merges PR #7 (rides the pending redeploy).",
       "owner": "J",
       "tag": "vert:auth-orgs"
     },
     {
       "id": "c45",
-      "col": "backlog",
-      "title": "[A/Jose] Returning-user sign-in UX: skip account-type when session resolves ready+registered (today every sign-in re-runs the who-are-you screen). Found during c6 browser QA.",
+      "col": "progress",
+      "title": "[A/Jose] Returning-user sign-in UX — DONE-PENDING-MERGE in PR #7 (Aug 14 night): plain sign-in lands on tabs and the auth guard decides (registered -> feed, unregistered -> account-type); invite-code, sign-up, and demo walks unchanged. Was: every sign-in re-ran the who-are-you screen (found in c6 browser QA).",
       "owner": "J",
       "tag": "vert:auth-orgs"
     }
