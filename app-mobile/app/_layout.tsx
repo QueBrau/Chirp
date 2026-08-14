@@ -15,7 +15,7 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { useColorScheme } from "react-native";
 
-import { hasFirebaseConfig, onIdTokenChanged } from "@/auth";
+import { hasFirebaseConfig, onIdTokenChanged, SessionProvider } from "@/auth";
 import { AppearanceProvider, useTheme } from "@/theme";
 import { MOCK_CAMPUS_COLORS, mockAppearancePrefs } from "@/mocks/data";
 
@@ -64,8 +64,10 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <AppearanceProvider campusColors={MOCK_CAMPUS_COLORS} initialPrefs={mockAppearancePrefs}>
-      <RootLayoutNav />
-    </AppearanceProvider>
+    <SessionProvider>
+      <AppearanceProvider campusColors={MOCK_CAMPUS_COLORS} initialPrefs={mockAppearancePrefs}>
+        <RootLayoutNav />
+      </AppearanceProvider>
+    </SessionProvider>
   );
 }

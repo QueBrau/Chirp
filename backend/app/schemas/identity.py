@@ -110,6 +110,13 @@ class MembershipOut(_Schema):
     joined_at: datetime
 
 
+class MeOut(_Schema):
+    """Body for GET /auth/me: the caller's user row plus their active memberships."""
+
+    user: UserOut
+    memberships: list[MembershipOut]
+
+
 # ---- invites ----
 
 
