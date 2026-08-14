@@ -1,4 +1,4 @@
-/** Auth barrel: Firebase config guard, app/auth instance, and session helpers. */
+/** Auth barrel: Firebase config guard, app/auth instance, session helpers, session context. */
 
 export { firebaseConfig, hasFirebaseConfig, type FirebaseConfig } from "./config";
 export { getFirebaseAuth } from "./firebase";
@@ -10,3 +10,12 @@ export {
   signOutUser,
   signUpWithEmail,
 } from "./session";
+export {
+  SessionProvider,
+  useSession,
+} from "./SessionProvider";
+export { withInviteCode } from "./inviteLink";
+export {
+  type SessionContextValue,
+  type SessionStatus,
+} from "./SessionProvider";

@@ -48,7 +48,8 @@ export default function EventDetailScreen() {
   }, [id]);
 
   useEffect(() => {
-    void load();
+    // Fail soft: mock ids 422 against the live API until wiring lands.
+    load().catch(() => setEvent(null));
   }, [load]);
 
   const handleRsvp = async (status: RsvpStatus) => {

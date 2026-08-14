@@ -30,13 +30,29 @@ async def _verify_identity(
     try:
         import firebase_admin
         from firebase_admin import auth as firebase_auth
+    except Exception:  # missing SDK
+        raise HTTPException(status_code=401, detail="invalid_token")
 
-        try:
-            firebase_admin.get_app()
-        except ValueError:
-            firebase_admin.initialize_app()
+    # Lazy-init fallback for safety (e.g. test import order) — the app.main lifespan
+    # now does this at boot in firebase mode, so a misconfigured deploy fails
+    # visibly at startup instead of surfacing here. Left unwrapped below on purpose:
+    # a real init failure should propagate, not get masked as an invalid_token 401.
+    try:
+        firebase_admin.get_app()
+    except ValueError:
+        # Pin the token audience to the configured Firebase project; without
+        # this the SDK infers the ambient GCP project, which rejects tokens
+        # whenever the Firebase project differs from where the code runs.
+        options = (
+            {"projectId": settings.firebase_project_id}
+            if settings.firebase_project_id
+            else None
+        )
+        firebase_admin.initialize_app(options=options)
+
+    try:
         decoded = firebase_auth.verify_id_token(token)
-    except Exception:  # invalid/expired token, missing SDK, or init failure
+    except Exception:  # invalid/expired token
         raise HTTPException(status_code=401, detail="invalid_token")
     uid = decoded.get("uid")
     if not uid:
@@ -69,6 +85,13 @@ async def get_verified_identity(
     return await _verify_identity(x_debug_firebase_uid, authorization)
 
 
+async def get_user_by_uid(session: AsyncSession, uid: str) -> models.User | None:
+    """Single home for the uid -> users-row lookup; callers pick their own miss
+    semantics (401 here, 404 on /auth/me, 4401 close on the WS gateway)."""
+    result = await session.execute(select(models.User).where(models.User.firebase_uid == uid))
+    return result.scalar_one_or_none()
+
+
 async def get_current_user(
     uid: str = Depends(get_verified_uid),
     session: AsyncSession = Depends(get_session),
@@ -77,8 +100,7 @@ async def get_current_user(
 
     Only POST /auth/bootstrap uses get_verified_uid directly (it creates the row).
     """
-    result = await session.execute(select(models.User).where(models.User.firebase_uid == uid))
-    user = result.scalar_one_or_none()
+    user = await get_user_by_uid(session, uid)
     if user is None:
         raise HTTPException(status_code=401, detail="user_not_registered")
     return user

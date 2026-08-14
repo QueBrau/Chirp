@@ -100,6 +100,13 @@
   ],
   "cards": [
     {
+      "id": "c42",
+      "col": "progress",
+      "title": "[A/Jose] c42 MERGED to main (PR #5) — review absorbed, CI green. LAST STEP: Jose redeploys -> Claude runs live join E2E vs prod -> Done.",
+      "owner": "J",
+      "tag": "vert:auth-orgs"
+    },
+    {
       "id": "c1",
       "col": "done",
       "title": "Frontend redesign (dribbble pass, Orgs reframe) — merged to main",
@@ -193,7 +200,7 @@
     {
       "id": "c38",
       "col": "done",
-      "title": "Yak on real API DONE (q/social-msg, PR #2 OPEN — not on main yet): campus-scoped list/create/vote, server-owned my_vote, composer, report + block. YakOut stays author-free structurally (no author field, no extra=allow, nothing publishes yaks to Redis). 49 backend tests. Two things NOT to 'simplify': block-by-yak returns 204 ALWAYS (a 409/204 split is a one-bit oracle for 'do these two yaks share an author'), and the feed filter is an anti-join on author_id scoped to blocker_id (keying it on yak_id passes every other test).",
+      "title": "Yak on real API DONE (q/social-msg, PR #2 OPEN — not on main yet): campus-scoped list/create/vote, server-owned my_vote, composer, report + block. YakOut stays author-free structurally (no author field, no extra=allow, nothing publishes yaks to Redis). 49 backend tests. Two things NOT to 'simplify': block-by-yak returns 204 ALWAYS (a 409/204 split is a one-bit oracle for 'do these two yaks share an author'), and the feed filter is an anti-join on author_id scoped to blocker_id (keying it on yak_id passes every other test). NOTE Aug 14: PR #2 is NOT merged — CONFLICTING with main after PRs #4/#5 (8 files: yak/index, secretary, treasurer, api/auth+chapters, routers/auth, test_auth_me, HANDOFF). Needs Q rebase (~10 min); Claude can do it on request if Q agrees.",
       "owner": "Q",
       "tag": "vert:social-msg"
     },
@@ -213,9 +220,9 @@
     },
     {
       "id": "c37",
-      "col": "backlog",
-      "title": "[shared] CI: run pytest + tsc on every push; PG16 test run",
-      "owner": "",
+      "col": "done",
+      "title": "CI LIVE (c37): pytest vs PG16 container + mobile tsc on every push/PR — first run GREEN on the PR #4 merge (both jobs). Advisory only: NO branch protection (Jose, Aug 13).",
+      "owner": "J",
       "tag": "infra"
     },
     {
@@ -401,7 +408,8 @@
     "Aug 13 — Payments: Stripe Connect EXPRESS accounts + DIRECT charges. The chapter is merchant of record, funds land in the chapter's balance, the chapter carries chargeback liability — Chirp never takes custody of the money. Platform fee 1% card / 2% ACH as application_fee_amount (ACH still lands cheaper for the chapter all-in, ~2.8% vs ~3.9%). The member picks the rail BEFORE the intent is created, because application_fee_amount is immutable once a PaymentIntent exists and PaymentSheet would otherwise pick the rail afterwards. Saved cards use a Stripe Customer per (member, chapter): under direct charges the Customer lives on the connected account, so a users.stripe_customer_id column works for the first chapter and silently breaks the second.",
     "Aug 13 — Payments: dropped the ephemeral-key approach in HANDOFF for CustomerSession — Stripe's current mobile docs use it, the installed RN SDK 0.50.3 accepts either, and CustomerSession needs no pinned API version (one less thing to re-check on every SDK upgrade).",
     "Aug 13 — Process: migration numbers are a SHARED resource. Claim the next number on this board BEFORE writing the file. Taken so far: 0006 events (J, on prod), 0007 is_platform_admin (J, in flight), 0008 Stripe dues (Q, pending renumber from 0006 — see c41).",
-    "Aug 13 — Process: Q's vertical branch is q/social-msg, cut from the family-tree tip. family-tree retires once PR #2 merges; PR #3 stacks on PR #2."
+    "Aug 13 — Process: Q's vertical branch is q/social-msg, cut from the family-tree tip. family-tree retires once PR #2 merges; PR #3 stacks on PR #2.",
+    "Aug 13 — Process: NO branch protection on main for now (Jose's call) — CI runs on every push/PR but is advisory, merges stay unblocked. Revisit before TestFlight. Apple Developer enrollment also parked until launch prep."
   ]
 }
 </script>

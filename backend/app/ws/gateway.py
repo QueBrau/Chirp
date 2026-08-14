@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.config import get_settings
 from app.db import get_session
+from app.middleware.auth import get_user_by_uid
 from app.ws.pubsub import get_redis
 
 router = APIRouter(tags=["ws"])
@@ -93,8 +94,7 @@ async def websocket_gateway(
     if uid is None:
         await websocket.close(code=4401)
         return
-    result = await session.execute(select(models.User).where(models.User.firebase_uid == uid))
-    user = result.scalar_one_or_none()
+    user = await get_user_by_uid(session, uid)
     if user is None:
         await websocket.close(code=4401)
         return

@@ -20,10 +20,10 @@ import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Modal, Pressable, TextInput, View } from "react-native";
 
-import { me } from "@/api/auth";
 import { ApiError } from "@/api/client";
 import { createReport, blockYakAuthor } from "@/api/moderation";
 import { createYak, listYaks, voteYak, type YakFeedOut, type YakVoteValue } from "@/api/yaks";
+import { useSession } from "@/auth";
 import { AppText, EmptyState, Screen, VotePill } from "@/components";
 import { MOCK_CAMPUS } from "@/mocks/data";
 import {
@@ -70,10 +70,12 @@ export default function YakScreen() {
   const { campusColors } = useAppearance();
   const navyWash = campusNightWash(campusColors);
 
-  // undefined = /auth/me hasn't resolved yet; null = signed-in account has no
-  // campus (alumni / non-campus); string = the real campus_id driving every
-  // API call below.
-  const [campusId, setCampusId] = useState<string | null | undefined>(undefined);
+  // The (tabs) layout gates on useSession().status === "ready" before this screen
+  // can ever mount, so `user` is guaranteed populated here — no separate /auth/me
+  // fetch needed (that would just duplicate SessionProvider's own call).
+  const { user } = useSession();
+  const campusId = user?.campus_id ?? null;
+
   const [yaks, setYaks] = useState<YakFeedOut[] | null>(null);
   const [myVotes, setMyVotes] = useState<Record<string, YakVoteValue>>({});
   const [composerText, setComposerText] = useState("");
@@ -92,14 +94,9 @@ export default function YakScreen() {
   }, []);
 
   useEffect(() => {
-    void me()
-      .then((user) => {
-        setCampusId(user.campus_id);
-        if (user.campus_id === null) return; // alumni/off-campus: nothing to load
-        return loadYaks(user.campus_id);
-      })
-      .catch((error: unknown) => showApiError(error, "Couldn't load the board"));
-  }, [loadYaks]);
+    if (campusId === null) return; // alumni/off-campus: nothing to load
+    void loadYaks(campusId).catch((error: unknown) => showApiError(error, "Couldn't load the board"));
+  }, [campusId, loadYaks]);
 
   const vote = async (yak: YakFeedOut, value: YakVoteValue) => {
     const previous: number = myVotes[yak.id] ?? 0;
@@ -133,7 +130,7 @@ export default function YakScreen() {
 
   const submitYak = async () => {
     const body = composerText.trim();
-    if (body.length === 0 || posting || campusId === null || campusId === undefined) return;
+    if (body.length === 0 || posting || campusId === null) return;
     setPosting(true);
     try {
       const created = await createYak(campusId, { body });
@@ -163,7 +160,7 @@ export default function YakScreen() {
       // ...then refetch, because the server hides EVERY yak by that author, not
       // just this one. Without this the author's other posts linger on screen and
       // contradict the promise the confirmation just made ("posts", plural).
-      if (campusId !== null && campusId !== undefined) await loadYaks(campusId);
+      if (campusId !== null) await loadYaks(campusId);
     } catch (error) {
       showApiError(error, "Couldn't block that");
     }

@@ -93,7 +93,9 @@ export async function listChapters(): Promise<ChapterOut[]> {
 /**
  * Caller's own active memberships — GET /me/memberships. This is how role-gated
  * screens learn their real chapter_id (and role) instead of importing
- * MOCK_CURRENT_MEMBERSHIP directly.
+ * MOCK_CURRENT_MEMBERSHIP directly. Distinct from fetchMe()'s embedded memberships
+ * (src/api/auth.ts / SessionProvider): that path doesn't join chapter_name, which
+ * the treasurer/secretary CSV export filenames need.
  */
 export async function myMemberships(): Promise<MyMembershipOut[]> {
   if (USE_MOCKS) {

@@ -15,15 +15,9 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { useColorScheme } from "react-native";
 
-import { hasFirebaseConfig, onIdTokenChanged } from "@/auth";
+import { hasFirebaseConfig, onIdTokenChanged, SessionProvider } from "@/auth";
 import { AppearanceProvider, useTheme } from "@/theme";
 import { MOCK_CAMPUS_COLORS, mockAppearancePrefs } from "@/mocks/data";
-
-/**
- * Mock auth state — flips which route group app/index.tsx lands on.
- * TODO(milestone-1): replace with real Firebase Auth session state.
- */
-export const IS_SIGNED_IN = true;
 
 /** Consumes useTheme() — must render inside AppearanceProvider. */
 function RootLayoutNav() {
@@ -70,8 +64,10 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <AppearanceProvider campusColors={MOCK_CAMPUS_COLORS} initialPrefs={mockAppearancePrefs}>
-      <RootLayoutNav />
-    </AppearanceProvider>
+    <SessionProvider>
+      <AppearanceProvider campusColors={MOCK_CAMPUS_COLORS} initialPrefs={mockAppearancePrefs}>
+        <RootLayoutNav />
+      </AppearanceProvider>
+    </SessionProvider>
   );
 }

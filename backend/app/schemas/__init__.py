@@ -20,6 +20,12 @@ from app.schemas.e2ee import (
     SignedPrekeyCreate,
     SignedPrekeyOut,
 )
+from app.schemas.events import (
+    EventCreate,
+    EventOut,
+    EventRsvpOut,
+    EventRsvpUpdate,
+)
 from app.schemas.finance import (
     DuesCycleCreate,
     DuesCycleOut,
@@ -109,6 +115,11 @@ __all__ = [
     "PrekeyUploadRequest",
     "SignedPrekeyCreate",
     "SignedPrekeyOut",
+    # events
+    "EventCreate",
+    "EventOut",
+    "EventRsvpOut",
+    "EventRsvpUpdate",
     # finance
     "DuesCycleCreate",
     "DuesCycleOut",

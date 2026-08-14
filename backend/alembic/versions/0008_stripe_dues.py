@@ -7,8 +7,8 @@ A DB constraint is required here — a check-then-insert in the handler races it
 """
 from alembic import op
 
-revision = "0006"
-down_revision = "0005"
+revision = "0008"
+down_revision = "0007"
 branch_labels = None
 depends_on = None
 

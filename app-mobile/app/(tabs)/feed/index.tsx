@@ -70,7 +70,9 @@ export default function FeedScreen() {
       );
       setItems(withCounts);
     };
-    void load();
+    // Fail soft until c34 wires real ids: mock chapter ids 422 against the live
+    // API, and a crash here takes down the whole tab shell.
+    load().catch(() => setItems([]));
   }, []);
 
   const toggleLike = async (item: FeedItem) => {

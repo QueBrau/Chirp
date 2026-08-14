@@ -52,6 +52,7 @@ class UserOut(_Schema):
     account_type: AccountType
     campus_id: uuid.UUID | None = None
     is_ghost: bool
+    is_platform_admin: bool
     created_at: datetime
 
 
@@ -113,6 +114,13 @@ class MembershipOut(_Schema):
     # of bare UUIDs, which makes secretary attendance and treasurer approval views
     # unusable on real data. Members already see each other by name (§8.4 org scope).
     display_name: str | None = None
+
+
+class MeOut(_Schema):
+    """Body for GET /auth/me: the caller's user row plus their active memberships."""
+
+    user: UserOut
+    memberships: list[MembershipOut]
 
 
 # ---- invites ----
