@@ -200,7 +200,7 @@
     {
       "id": "c38",
       "col": "done",
-      "title": "Yak on real API DONE (q/social-msg, PR #2 OPEN — not on main yet): campus-scoped list/create/vote, server-owned my_vote, composer, report + block. YakOut stays author-free structurally (no author field, no extra=allow, nothing publishes yaks to Redis). 49 backend tests. Two things NOT to 'simplify': block-by-yak returns 204 ALWAYS (a 409/204 split is a one-bit oracle for 'do these two yaks share an author'), and the feed filter is an anti-join on author_id scoped to blocker_id (keying it on yak_id passes every other test). NOTE Aug 14: PR #2 is NOT merged — CONFLICTING with main after PRs #4/#5 (8 files: yak/index, secretary, treasurer, api/auth+chapters, routers/auth, test_auth_me, HANDOFF). Needs Q rebase (~10 min); Claude can do it on request if Q agrees.",
+      "title": "Yak on real API DONE + MERGED to main via PR #2 (7d215be, Aug 14 — Q resolved both conflict rounds, CI green): campus-scoped list/create/vote, server-owned my_vote, composer, report + block. YakOut stays author-free structurally. Two things NOT to 'simplify': block-by-yak returns 204 ALWAYS (a 409/204 split is a one-bit oracle for 'do these two yaks share an author'), and the feed filter is an anti-join on author_id scoped to blocker_id. NOT YET DEPLOYED — prod is at rev 00006-smv (pre-PR#2); needs the next redeploy.",
       "owner": "Q",
       "tag": "vert:social-msg"
     },
@@ -326,14 +326,14 @@
     {
       "id": "c11",
       "col": "progress",
-      "title": "[B/Q] Stripe Connect dues — CODE COMPLETE in PR #3 (q/social-msg 1a87e4f) but the PR is now DRAFT, blocked on c41; NOT yet proven against real Stripe. Express accounts + direct charges (chapter is merchant of record, Chirp never holds the money); rail chosen before the intent because application_fee_amount is immutable at creation; webhook replay guarded by a UNIQUE partial index on ledger_entries.stripe_payment_intent_id plus processed_stripe_events; Stripe Customer per (member, chapter). Mobile: rail picker + PaymentSheet, /chapter/dues screen, treasurer onboarding entry. 107 backend tests, tsc clean, web bundle builds. LEFT: renumber the migration (c41 — BLOCKER), Stripe keys + APP_PUBLIC_BASE_URL (c40), EAS dev build (c39), then a test-mode payment on both rails.",
+      "title": "[B/Q] Stripe Connect dues — MERGED to main via PR #3 (0557375, Aug 14, CI green; c41 renumber done, migration is 0008). NOT yet proven against real Stripe. Express accounts + direct charges; rail locked before intent (application_fee_amount immutable); replay guarded by UNIQUE partial index + processed_stripe_events; Customer per (member, chapter). Keys are Optional in config so prod boots fine without them — dues endpoints dead until c40. LEFT: apply 0008 to prod + redeploy (Jose), Stripe keys + APP_PUBLIC_BASE_URL (c40), EAS dev build (c39), then a test-mode payment on both rails.",
       "owner": "Q",
       "tag": "m8"
     },
     {
       "id": "c41",
-      "col": "progress",
-      "title": "[shared] MIGRATION COLLISION — RESOLVED PLAN: 0006 (events) + 0007 (platform_admin) are Jose's, BOTH APPLIED TO PROD, merging first via jose/auth-orgs PR. PR #3 renumbers Stripe migration to 0008 (down_revision 0007) before merge. Next free number after that: 0009 — claim here before writing the file (CLAUDE.md rule). CONTAINED meanwhile: PR #3 flipped to DRAFT Aug 13 with the reason on the PR, so it cannot be merged as 0006 by accident. Q renames the file and re-runs the suite the moment jose/auth-orgs is on main.",
+      "col": "done",
+      "title": "[shared] MIGRATION COLLISION RESOLVED: Stripe migration renumbered to 0008 (down_revision 0007), chain verified linear 0001->0008, 116 tests run through the full chain, merged via PR #3 (0557375, CI green on main). NEXT FREE NUMBER: 0009 — claim here before writing the file (CLAUDE.md rule). 0008 NOT YET APPLIED TO PROD (prod alembic at 0007) — apply with the next redeploy.",
       "owner": "",
       "tag": "backend"
     },
@@ -354,7 +354,7 @@
     {
       "id": "c12",
       "col": "done",
-      "title": "Treasurer + Secretary dashboards DONE (q/social-msg, PR #2 OPEN — not on main yet): both fully on real data (zero mock imports), spend-approval decisions, ledger append, meeting create/minutes/attendance, CSV export via /ledger/export.csv + /meetings/export.csv -> share sheet. 80 backend tests. CSV injection defused, but sanitize_csv_text() is applied to TEXT FIELDS ONLY — ledger amounts are legitimately negative, so blanket sanitizing would turn every expense into '-500 and corrupt the export. Added MembershipOut.display_name (there is no GET /users/{id}, so it's the only way to render a member name).",
+      "title": "Treasurer + Secretary dashboards DONE + MERGED to main via PR #2 (7d215be, Aug 14): real data, spend-approval decisions, ledger append, meetings + minutes + attendance, CSV export -> share sheet. CSV injection defused on TEXT FIELDS ONLY (ledger amounts are legitimately negative — blanket sanitizing would corrupt every expense). Roster-name overlap with PR #6 resolved by keeping main's MemberOut (join + avatar_url); MembershipOut.display_name removed. NOT YET DEPLOYED — needs the next redeploy.",
       "owner": "Q",
       "tag": "m9"
     },
