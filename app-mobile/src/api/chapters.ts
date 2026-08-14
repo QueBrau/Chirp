@@ -72,11 +72,6 @@ export interface ChapterInviteOut {
   created_by: string;
 }
 
-export async function listChapters(): Promise<ChapterOut[]> {
-  if (USE_MOCKS) return mocked([MOCK_CHAPTER]);
-  return request<ChapterOut[]>("/chapters");
-}
-
 export async function createChapter(body: ChapterCreate): Promise<ChapterOut> {
   if (USE_MOCKS) return mocked(MOCK_CHAPTER);
   return request<ChapterOut>("/chapters", { method: "POST", body });

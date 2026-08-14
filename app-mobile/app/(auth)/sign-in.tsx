@@ -15,7 +15,7 @@
  * unchanged from the pre-auth mock version.
  */
 
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
@@ -28,6 +28,9 @@ type EmailAuthMode = "signin" | "signup";
 export default function SignInScreen() {
   const router = useRouter();
   const palette = useTheme();
+  // Carried through from an invite deep link that bounced an unauthenticated
+  // visitor here via join-chapter's Redirect (chirp://join-chapter?code=...).
+  const { code: inviteCode } = useLocalSearchParams<{ code?: string }>();
 
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [authMode, setAuthMode] = useState<EmailAuthMode>("signin");
@@ -36,7 +39,26 @@ export default function SignInScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const continueToOnboarding = () => router.push("/account-type");
+  // New identities keep the invite code in tow through account-type, which
+  // forwards it to join-chapter after bootstrap.
+  const continueToOnboarding = () =>
+    router.push(
+      inviteCode ? `/account-type?code=${encodeURIComponent(inviteCode)}` : "/account-type",
+    );
+
+  /**
+   * Post sign-in/up routing. "Sign in" means an already-registered user, so an
+   * invite code in tow sends them straight to redeem it instead of back through
+   * account-type (which would just 409). "Sign up" is a brand-new Firebase
+   * identity that still needs account-type regardless of any code.
+   */
+  const continueAfterAuth = () => {
+    if (authMode === "signin" && inviteCode) {
+      router.push(`/join-chapter?code=${encodeURIComponent(inviteCode)}`);
+      return;
+    }
+    continueToOnboarding();
+  };
 
   const resetEmailForm = () => {
     setShowEmailForm(false);
@@ -56,7 +78,7 @@ export default function SignInScreen() {
         }
       }
       // Demo mode (no Firebase project yet) falls straight into the mock flow.
-      continueToOnboarding();
+      continueAfterAuth();
     } catch {
       setError("Couldn't sign you in. Check your email and password and try again.");
     } finally {

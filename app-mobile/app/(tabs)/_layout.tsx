@@ -10,11 +10,10 @@ import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { Redirect, Tabs } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
-import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { hasFirebaseConfig, onAuthChanged } from "@/auth";
+import { useSession } from "@/auth";
 import { AppText } from "@/components";
 import { cardShadow, metrics, radii, spacing, typography, useTheme } from "@/theme";
 
@@ -110,18 +109,16 @@ function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
 
 export default function TabsLayout() {
   // Auth guard: with real Firebase config, the tabs are members-only — an
-  // unauthenticated visitor is redirected to sign-in instead of letting screens
-  // fire authenticated API calls with no token. Demo/mock mode never gates.
-  const [authState, setAuthState] = useState<"loading" | "signedIn" | "signedOut">(
-    hasFirebaseConfig() ? "loading" : "signedIn",
-  );
-  useEffect(() => {
-    if (!hasFirebaseConfig()) return;
-    return onAuthChanged((user) => setAuthState(user ? "signedIn" : "signedOut"));
-  }, []);
+  // unauthenticated visitor is redirected to sign-in, and a signed-in-but-
+  // unregistered one (bootstrap never finished, e.g. app killed mid-onboarding)
+  // is sent back to account-type instead of stranding here. Demo/mock mode
+  // resolves straight to "ready" and never gates. SessionProvider owns the
+  // loading timeout, so there's no local fallback needed here.
+  const { status } = useSession();
 
-  if (authState === "loading") return null;
-  if (authState === "signedOut") return <Redirect href="/sign-in" />;
+  if (status === "loading") return null;
+  if (status === "signedOut") return <Redirect href="/sign-in" />;
+  if (status === "unregistered") return <Redirect href="/account-type" />;
 
   return (
     <Tabs

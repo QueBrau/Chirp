@@ -197,8 +197,8 @@ export const MOCK_MEMBERSHIPS: MembershipOut[] = [
 export const MOCK_CURRENT_MEMBERSHIP: MembershipOut = MOCK_MEMBERSHIPS[0];
 
 /** Alpha Delta Pi (Zeta Rho) roster — kept as its own array (not merged into
- * MOCK_MEMBERSHIPS) since the mocked listMembers()/listChapters() (api/chapters.ts)
- * return MOCK_CHAPTER/MOCK_MEMBERSHIPS unconditionally; a separate export proves
+ * MOCK_MEMBERSHIPS) since the mocked listMembers() (api/chapters.ts) returns
+ * MOCK_MEMBERSHIPS unconditionally; a separate export proves
  * org-agnosticism in data without changing Jake's Sigma Chi member experience. */
 export const MOCK_MEMBERSHIPS_ADPI: MembershipOut[] = [
   membership("usr-grace", "president", "Fall 2022", MOCK_CHAPTER_ADPI.id),

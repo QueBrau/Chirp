@@ -5,13 +5,13 @@
  */
 
 import { Feather } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState, type ComponentProps } from "react";
 import { View } from "react-native";
 
 import { bootstrap, type AccountType } from "@/api/auth";
 import { ApiError } from "@/api/client";
-import { getFirebaseAuth, hasFirebaseConfig } from "@/auth";
+import { getFirebaseAuth, hasFirebaseConfig, useSession } from "@/auth";
 import { AppText, Button, Card, Screen } from "@/components";
 import { radii, spacing, typography, useTheme } from "@/theme";
 
@@ -85,6 +85,10 @@ function OptionIcon({ name, selected }: { name: FeatherName; selected: boolean }
 
 export default function AccountTypeScreen() {
   const router = useRouter();
+  const { refresh } = useSession();
+  // Invite code riding along from a deep link (join-chapter -> sign-in -> here);
+  // forwarded back to join-chapter after bootstrap so the code survives onboarding.
+  const { code: inviteCode } = useLocalSearchParams<{ code?: string }>();
   const [selected, setSelected] = useState<AccountType>("non_greek");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +97,9 @@ export default function AccountTypeScreen() {
     // Finding 13: onPress used to always route to join-chapter regardless of
     // selection — only greek should land there; everyone else goes to Home.
     if (selected === "greek") {
-      router.push("/join-chapter");
+      router.push(
+        inviteCode ? `/join-chapter?code=${encodeURIComponent(inviteCode)}` : "/join-chapter",
+      );
     } else {
       router.replace("/(tabs)/feed");
     }
@@ -121,9 +127,11 @@ export default function AccountTypeScreen() {
         display_name: user.displayName ?? user.email.split("@")[0],
         account_type: selected,
       });
+      await refresh();
       proceed();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
+        await refresh();
         proceed();
         return;
       }
