@@ -1,10 +1,11 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 14 2026, evening. Since the table below: PR #5 (session provider +
-/auth/me) MERGED and live-verified; PR #6 (Orgs on real memberships + invite UI +
-roster names) is review-absorbed with CI green, awaiting Jose's merge + one redeploy.
-Follow-up cards c43-c45 filed. PR #2 still needs Q's rebase (8 conflicting files,
-list on the board); PR #3 still needs the Stripe migration renumbered to 0008._
+_Last updated: Aug 14 2026, night. PR #5 (session provider + /auth/me) and PR #6
+(Orgs on real memberships + invite UI + roster names) are both MERGED; prod
+redeployed to rev chirp-api-00006-smv and live-verified (app-level 401s on
+/chapters/{id}/members and /auth/me). Follow-up cards c43-c45 filed. PR #2 still
+needs Q's rebase (8 conflicting files, list on the board); PR #3 still needs the
+Stripe migration renumbered to 0008._
 
 **board.html is the source of truth for tasks.** This file only answers the question the
 board can't: which copy of Chirp you are looking at.
@@ -13,9 +14,9 @@ board can't: which copy of Chirp you are looking at.
 
 | Where | What's there | State |
 | --- | --- | --- |
-| `main` | Everything through **PR #4**: Firebase live, app off mocks + auth guard, events backend, platform-admin chapter gating, review fixes, CI workflow, migrations **0001-0007** | Canonical; prod matches it |
-| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` (rev 00004) | `alembic_version` at **0007** = main's head; firebase-init-at-boot hardening deployed |
-| `jose/auth-orgs` | Synced to main, kept for Jose's future work | Merged via PR #4 |
+| `main` | Everything through **PR #6**: Firebase live, session provider + /auth/me, Orgs on real memberships + invite UI + roster names, events backend, platform-admin chapter gating, CI workflow, migrations **0001-0007** | Canonical; prod matches it |
+| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` (rev 00006-smv) | `alembic_version` at **0007** = main's head (PR #6 shipped no migration) |
+| `jose/auth-orgs` | Synced to main, kept for Jose's future work | Merged via PR #6 |
 | `q/social-msg` | Stripe Connect dues on top of merged main | **PR #3**, DRAFT — one blocker left, see below |
 | CI | `.github/workflows/ci.yml`: backend pytest vs PG16 + mobile tsc on every push/PR | First run green. No branch protection (deliberate, Aug 13) — CI is advisory |
 
