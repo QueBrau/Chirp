@@ -400,14 +400,14 @@
     {
       "id": "c43",
       "col": "next",
-      "title": "[shared] Batch endpoints to kill the N+1s: posts-with-counts (feed 2N -> 1, coordinate with c34/Q) + events-with-rsvp-counts (events 1+N -> 1). Flagged twice by reviews with file:line.",
+      "title": "[shared] Batch endpoints to kill the N+1s — SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's, riding with the c44 branch. Neither needs a migration (counts are queries, not schema) — 0009 stays free.",
       "owner": "",
       "tag": "backend"
     },
     {
       "id": "c44",
-      "col": "backlog",
-      "title": "[A/Jose] Role metadata from backend: invite-role options + eboard set served by the API instead of hand-typed frontend mirrors of permissions.py (drift risk flagged in PR #6 review).",
+      "col": "progress",
+      "title": "[A/Jose] Role metadata from backend: invite-role options + eboard set served by the API instead of hand-typed frontend mirrors of permissions.py (drift risk flagged in PR #6 review). CLAIMED Aug 14 night — in progress on jose/auth-orgs; c43's events-with-rsvp-counts endpoint rides on this branch too. c45 queued right after, same PR.",
       "owner": "J",
       "tag": "vert:auth-orgs"
     },
@@ -438,6 +438,7 @@
     "Aug 14 — Backend: roster display names are MemberOut, NOT a field on MembershipOut. PR #6 (Jose) and the dashboards work (Q) solved the same problem in parallel — no GET /users/{id} exists, so a roster is bare UUIDs — and PR #6's shape won: real INNER JOIN, non-null display_name, plus avatar_url. GET /chapters/{id}/members returns MemberOut; GET /me/memberships returns the plain MembershipOut. Re-adding a nullable display_name to MembershipOut is the regression to watch for. Worth knowing HOW this was nearly missed: git did NOT flag most of the overlap as a text conflict, so two branches solving the same problem can auto-merge into two competing mechanisms with a green build. When both verticals touch the same domain, diff it by hand.",
     "Aug 14 — Process: migration-number rule earned its keep. As 0006 the Stripe migration would have been silently skipped on a prod already stamped past it — Alembic marks it applied and moves on, so processed_stripe_events and the unique index on ledger_entries.stripe_payment_intent_id would simply not exist, with nothing erroring and the webhook-replay guard absent on the money path. Renumbered to 0008, chain verified linear/single-head on main. Next free number: 0009 — claim it here first.",
     "Aug 14 — Process: PR #2 merged before PR #3 deliberately. The branches had diverged and q/social-msg's content was a superset of family-tree's, so merging #3 first would have made #2 read as a Stripe revert. family-tree and q/social-msg are both retired; new work cuts from main.",
+    "Aug 14 — Process: c43 SPLIT along the consumer line — whoever consumes an endpoint designs it. Q builds posts-with-counts inside c34 (he is wiring the feed that calls it); Jose builds events-with-rsvp-counts with c44 (events backend is his). This is the lesson from the roster-names overlap applied in advance: one owner per shape, no parallel competing mechanisms.",
     "Aug 14 — Process: 'merged' is not 'working', and the board should say which. Stripe dues is on main with CI green and has never contacted real Stripe, so c11 stays in In Progress until a test-mode payment clears on BOTH card and ACH. Yak, the dashboards and CSV export are likewise only proven against mocks and the test suite — never driven on a device."
   ]
 }
