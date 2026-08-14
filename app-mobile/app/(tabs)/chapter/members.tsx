@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 
-import { listMembers, type MembershipOut, type RoleName } from "@/api/chapters";
-import { useSession } from "@/auth";
+import { listMembers, type MemberOut, type RoleName } from "@/api/chapters";
+import { useOwnChapter } from "@/org/OwnChapterProvider";
 import {
   AppText,
   Chip,
@@ -64,27 +64,19 @@ const ROLE_CHIP_VARIANT: Record<RoleName, ChipVariant> = {
   alumni: "neutral",
 };
 
-/**
- * TODO(backend): GET /chapters/{id}/members returns MembershipOut (user_id,
- * role, status) with no joined display name — there's no /users/{id} or bulk
- * name-resolution endpoint to call either (alumni.py joins display_name but
- * only within its own directory query). Until one of those exists, rows show
- * role + a shortened user id instead of a fabricated name.
- */
+/** Fallback label for the rare row whose display_name comes back empty. */
 function shortUserId(userId: string): string {
   return userId.length > 12 ? `${userId.slice(0, 6)}…${userId.slice(-4)}` : userId;
 }
 
 export default function MembersScreen() {
-  const { memberships } = useSession();
-  // Single-org world for now: the roster belongs to the member's first (and
-  // currently only) chapter membership.
-  const chapterId = memberships[0]?.chapter_id ?? null;
-  const [members, setMembers] = useState<MembershipOut[] | null>(null);
+  const { sessionStatus, membership, chapterLoading } = useOwnChapter();
+  const chapterId = membership?.chapter_id ?? null;
+  const [members, setMembers] = useState<MemberOut[] | null>(null);
 
   useEffect(() => {
     if (chapterId === null) {
-      setMembers([]);
+      setMembers(null);
       return;
     }
     // Fail soft: matches the repo pattern elsewhere in this stack.
@@ -93,6 +85,11 @@ export default function MembersScreen() {
       .catch(() => setMembers([]));
   }, [chapterId]);
 
+  // Session-status gating (PR #6 review): a real member's roster must never
+  // flash "No members" while the session/chapter/list are still resolving —
+  // same rule as chapter/index.tsx.
+  const loading = sessionStatus === "loading" || (membership !== null && chapterLoading) || members === null;
+
   const active = (members ?? []).filter((m) => m.status === "active");
   const groups = ROLE_ORDER.map((role) => ({
     role,
@@ -100,8 +97,10 @@ export default function MembersScreen() {
   })).filter((group) => group.rows.length > 0);
 
   return (
-    <Screen title="Members" subtitle={`${active.length} active`}>
-      {members !== null && active.length === 0 ? (
+    <Screen title="Members" subtitle={loading ? undefined : `${active.length} active`}>
+      {loading ? (
+        <EmptyState title="Loading members..." />
+      ) : active.length === 0 ? (
         <EmptyState title="No members" message="Invite your chapter to get the roster going." />
       ) : (
         <View style={{ gap: spacing.xl }}>
@@ -112,14 +111,14 @@ export default function MembersScreen() {
                 caption={`${rows.length} ${rows.length === 1 ? "member" : "members"}`}
               />
               <Card>
-                {rows.map((membership, index) => {
-                  const label = shortUserId(membership.user_id);
+                {rows.map((member, index) => {
+                  const label = member.display_name.length > 0 ? member.display_name : shortUserId(member.user_id);
                   return (
                     <ListRow
-                      key={membership.id}
+                      key={member.id}
                       title={label}
-                      subtitle={membership.pledge_class ?? undefined}
-                      left={<GradientAvatar name={label} size={40} />}
+                      subtitle={member.pledge_class ?? undefined}
+                      left={<GradientAvatar name={label} size={40} photoUrl={member.avatar_url} />}
                       right={
                         <Chip label={ROLE_CHIP_LABELS[role]} variant={ROLE_CHIP_VARIANT[role]} />
                       }

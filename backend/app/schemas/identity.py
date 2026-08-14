@@ -110,6 +110,20 @@ class MembershipOut(_Schema):
     joined_at: datetime
 
 
+class MemberOut(_Schema):
+    """MembershipOut plus the joined user's display identity, for roster views."""
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    chapter_id: uuid.UUID
+    role: RoleName
+    status: MembershipStatus
+    pledge_class: str | None = None
+    joined_at: datetime
+    display_name: str
+    avatar_url: str | None = None
+
+
 class MeOut(_Schema):
     """Body for GET /auth/me: the caller's user row plus their active memberships."""
 

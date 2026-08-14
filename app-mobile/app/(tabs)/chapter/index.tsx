@@ -5,10 +5,12 @@
  *   entirely in its own colors via OrgAccentScope (wrapped once at the
  *   chapter/_layout.tsx Stack level, so every screen/component below
  *   re-accents automatically).
- * non-member: real memberships from useSession() is empty — "No orgs yet"
- *   EmptyState routing to /join-chapter, plus a browsable category section
- *   (greek registration stays opt-in per §6). Route dir stays `chapter/` for
- *   backend parity.
+ * non-member: sessionStatus is "ready" and useOwnChapter().membership is
+ *   null — "No orgs yet" EmptyState routing to /join-chapter, plus a
+ *   browsable category section (greek registration stays opt-in per §6).
+ *   Gated on sessionStatus (PR #6 review) so a real member never flashes
+ *   this state while the session is still loading on cold start. Route dir
+ *   stays `chapter/` for backend parity.
  */
 
 import { useRouter, type Href } from "expo-router";
@@ -19,7 +21,6 @@ import { Image, Pressable, View, type ViewStyle } from "react-native";
 
 import {
   createInvite,
-  getChapter,
   type ChapterInviteOut,
   type ChapterOut,
   type MembershipOut,
@@ -27,7 +28,8 @@ import {
 } from "@/api/chapters";
 import { createEvent, listEvents, listRsvps, type EventOut, type EventRsvpOut } from "@/api/events";
 import { likePost, listComments, listLikes, unlikePost, type PostOut } from "@/api/feed";
-import { useSession } from "@/auth";
+import { withInviteCode } from "@/auth";
+import { useOwnChapter } from "@/org/OwnChapterProvider";
 import {
   AppText,
   AvatarStack,
@@ -489,7 +491,7 @@ function InviteCard({ chapterId, role }: { chapterId: string; role: RoleName }) 
               {invite.code}
             </AppText>
             <AppText variant="caption" tone="tertiary" selectable>
-              {`chirp://join-chapter?code=${invite.code}`}
+              {withInviteCode("chirp://join-chapter", invite.code)}
             </AppText>
           </View>
         ) : null}
@@ -549,30 +551,22 @@ function OrgToolsSegment({ chapterId, role }: { chapterId: string; role: RoleNam
 
 /**
  * Member state: org identity hero, then the Feed/Events/Tools segmented
- * control (§8.7). Fetches the real chapter for the caller's own membership
- * (single-org world — memberships[0], see OrgsScreen); undefined/null/value
- * mirrors the load-state pattern used by chapter/event/[id].tsx.
+ * control (§8.7). `chapter` comes from OwnChapterProvider (mounted in
+ * chapter/_layout.tsx, single-org world — memberships[0]) — OrgsScreen only
+ * renders this once chapter loading has settled, so null here means the
+ * fetch actually failed.
  */
 function MemberOrgHub({
   membership,
+  chapter,
   segment,
   onSegmentChange,
 }: {
   membership: MembershipOut;
+  chapter: ChapterOut | null;
   segment: OrgSegment;
   onSegmentChange: (segment: OrgSegment) => void;
 }) {
-  const [chapter, setChapter] = useState<ChapterOut | null | undefined>(undefined);
-
-  useEffect(() => {
-    getChapter(membership.chapter_id)
-      .then(setChapter)
-      .catch(() => setChapter(null));
-  }, [membership.chapter_id]);
-
-  if (chapter === undefined) {
-    return <EmptyState title="Loading your org..." />;
-  }
   if (chapter === null) {
     return <EmptyState title="Couldn't load your org" message="Check your connection and try again." />;
   }
@@ -647,11 +641,13 @@ function FindYourOrg() {
 
 export default function OrgsScreen() {
   const { campusColors } = useAppearance();
-  const { memberships } = useSession();
-  // Single-org world for now: the Orgs tab always shows the member's first
-  // (and currently only) chapter membership.
-  const membership = memberships[0] ?? null;
+  const { sessionStatus, membership, chapter, chapterLoading } = useOwnChapter();
   const [segment, setSegment] = useState<OrgSegment>("feed");
+
+  // Session-status gating (PR #6 review): a real member must never flash the
+  // non-member "No orgs yet" state on cold start — only render FindYourOrg
+  // once the session has actually settled AND resolved to no membership.
+  const loading = sessionStatus === "loading" || (membership !== null && chapterLoading);
 
   return (
     <View style={{ flex: 1 }}>
@@ -659,16 +655,24 @@ export default function OrgsScreen() {
         title="Orgs"
         eyebrow={`${MOCK_CAMPUS.name.toUpperCase()} · SPARTANS`}
         accentBarColor={campusColors.secondary}
-        subtitle={membership !== null ? "Your chapter, your tools." : `Find your org at ${MOCK_CAMPUS.name}`}
+        subtitle={
+          loading
+            ? undefined
+            : membership !== null
+              ? "Your chapter, your tools."
+              : `Find your org at ${MOCK_CAMPUS.name}`
+        }
       >
-        {membership !== null ? (
-          <MemberOrgHub membership={membership} segment={segment} onSegmentChange={setSegment} />
+        {loading ? (
+          <EmptyState title="Loading your org..." />
+        ) : membership !== null ? (
+          <MemberOrgHub membership={membership} chapter={chapter} segment={segment} onSegmentChange={setSegment} />
         ) : (
           <FindYourOrg />
         )}
       </Screen>
       {/* Org-colored composer FAB (§8.7) — Feed segment only, mirrors Home's Fab pattern. */}
-      {membership !== null && segment === "feed" ? <Fab /> : null}
+      {!loading && membership !== null && segment === "feed" ? <Fab /> : null}
     </View>
   );
 }

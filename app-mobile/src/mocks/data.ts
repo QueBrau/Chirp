@@ -225,13 +225,6 @@ export const MOCK_MEMBERSHIPS_ADPI: MembershipOut[] = [
   membership("usr-naomi", "member", "Fall 2025", MOCK_CHAPTER_ADPI.id),
 ];
 
-/**
- * UI-only mock flag for the Orgs tab: true renders the member org hub, false
- * renders the "Find your org" discovery state (DESIGN §6). Typed as plain
- * boolean (not the literal) so both branches stay type-live in screens.
- */
-export const mockIsOrgMember: boolean = true;
-
 export const MOCK_INVITES: ChapterInviteOut[] = [
   {
     id: "inv-1",
