@@ -187,7 +187,7 @@ function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: st
     const load = async () => {
       const posts = [
         ...MOCK_POSTS.filter(
-          (post) => post.chapter_id === chapterId && post.source === "org" && post.deleted_at === null,
+          (post) => post.chapter_id === chapterId && post.audience === "org" && post.deleted_at === null,
         ),
         ...MOCK_ORG_POSTS.filter((post) => post.chapter_id === chapterId),
       ].sort((a, b) => b.created_at.localeCompare(a.created_at));

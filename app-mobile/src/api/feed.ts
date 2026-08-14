@@ -1,4 +1,4 @@
-/** Feed API: chapter posts, likes, comments — routers/feed.py. */
+/** Feed API: campus FYP, chapter/org posts, likes, comments — routers/feed.py. */
 
 import { mocked, request, USE_MOCKS } from "./client";
 import {
@@ -6,13 +6,21 @@ import {
   MOCK_POST_COMMENTS,
   MOCK_POST_LIKES,
   MOCK_POSTS,
+  mockCampusIdForChapter,
+  mockUserById,
   newMockId,
   nowIso,
 } from "../mocks/data";
 
+/** Who can see a post. 'org' (default) = chapter-private, never on the FYP.
+ * 'campus' = surfaces on the public GET /campuses/{campus_id}/feed. */
+export type PostAudience = "org" | "campus";
+
 export interface PostCreate {
   body: string;
   media_urls?: string[] | null;
+  /** Server defaults to "org" when omitted (routers/feed.py). */
+  audience?: PostAudience;
 }
 
 export interface PostUpdate {
@@ -22,9 +30,6 @@ export interface PostUpdate {
 
 /** DESIGN §7 FYP: drives which MediaPostCard layout a post renders as. */
 export type PostType = "text" | "photo" | "video";
-
-/** DESIGN §7 filter pills: which feed tab a post surfaces under. */
-export type PostSource = "forYou" | "campus" | "org";
 
 export interface PostOut {
   id: string;
@@ -38,8 +43,22 @@ export interface PostOut {
   post_type?: PostType;
   /** Video posts only. */
   duration_sec?: number | null;
-  /** Optional; absent = "org" (chapter-scoped, the pre-FYP default). */
-  source?: PostSource;
+  /** Who can see this post — always present on rows the backend returns. */
+  audience: PostAudience;
+}
+
+/**
+ * FeedPostOut: the shape both feed list endpoints actually return — a post
+ * row plus the author display fields and engagement counts pre-joined
+ * server-side, so screens never have to fan out to listLikes/listComments
+ * per post.
+ */
+export interface FeedPostOut extends PostOut {
+  display_name: string;
+  avatar_url: string | null;
+  like_count: number;
+  comment_count: number;
+  liked_by_me: boolean;
 }
 
 export interface PostLikeOut {
@@ -61,16 +80,69 @@ export interface PostCommentOut {
   deleted_at: string | null;
 }
 
-/** Reverse-chron chapter feed (v1). */
-export async function listPosts(chapterId: string): Promise<PostOut[]> {
+export interface ListFeedOptions {
+  limit?: number;
+  /** created_at cursor — posts older than this. */
+  before?: string;
+  before_id?: string;
+}
+
+/** Attach author display fields + engagement counts to a raw mock post, matching
+ * the shape the real FeedPostOut-returning endpoints send over the wire. */
+function toFeedPostOut(post: PostOut): FeedPostOut {
+  const author = mockUserById(post.author_id);
+  const likeCount = MOCK_POST_LIKES.filter((l) => l.post_id === post.id).length;
+  const likedByMe = MOCK_POST_LIKES.some(
+    (l) => l.post_id === post.id && l.user_id === MOCK_CURRENT_USER.id,
+  );
+  const commentCount = MOCK_POST_COMMENTS.filter(
+    (c) => c.post_id === post.id && c.deleted_at === null,
+  ).length;
+  return {
+    ...post,
+    display_name: author?.display_name ?? "Unknown",
+    avatar_url: author?.avatar_url ?? null,
+    like_count: likeCount,
+    comment_count: commentCount,
+    liked_by_me: likedByMe,
+  };
+}
+
+/**
+ * Public campus FYP (audience="campus" only — org-private posts never appear
+ * here, enforced server-side): GET /campuses/{campus_id}/feed.
+ */
+export async function listCampusFeed(
+  campusId: string,
+  opts: ListFeedOptions = {},
+): Promise<FeedPostOut[]> {
   if (USE_MOCKS) {
-    return mocked(
-      MOCK_POSTS.filter((p) => p.chapter_id === chapterId && p.deleted_at === null).sort((a, b) =>
-        b.created_at.localeCompare(a.created_at),
-      ),
-    );
+    let posts = MOCK_POSTS.filter(
+      (p) =>
+        p.audience === "campus" &&
+        p.deleted_at === null &&
+        mockCampusIdForChapter(p.chapter_id) === campusId,
+    ).sort((a, b) => b.created_at.localeCompare(a.created_at));
+    if (opts.before !== undefined) {
+      posts = posts.filter((p) => p.created_at < opts.before!);
+    }
+    if (opts.limit !== undefined) posts = posts.slice(0, opts.limit);
+    return mocked(posts.map(toFeedPostOut));
   }
-  return request<PostOut[]>(`/chapters/${chapterId}/posts`);
+  return request<FeedPostOut[]>(`/campuses/${campusId}/feed`, {
+    query: { limit: opts.limit, before: opts.before, before_id: opts.before_id },
+  });
+}
+
+/** Reverse-chron chapter/org feed (any audience) — the org's own posts, FeedPostOut shape. */
+export async function listPosts(chapterId: string): Promise<FeedPostOut[]> {
+  if (USE_MOCKS) {
+    const posts = MOCK_POSTS.filter((p) => p.chapter_id === chapterId && p.deleted_at === null).sort(
+      (a, b) => b.created_at.localeCompare(a.created_at),
+    );
+    return mocked(posts.map(toFeedPostOut));
+  }
+  return request<FeedPostOut[]>(`/chapters/${chapterId}/posts`);
 }
 
 export async function createPost(chapterId: string, body: PostCreate): Promise<PostOut> {
@@ -83,6 +155,7 @@ export async function createPost(chapterId: string, body: PostCreate): Promise<P
       media_urls: body.media_urls ?? null,
       created_at: nowIso(),
       deleted_at: null,
+      audience: body.audience ?? "org",
     };
     MOCK_POSTS.push(post);
     return mocked(post);

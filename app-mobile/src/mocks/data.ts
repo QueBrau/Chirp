@@ -104,6 +104,17 @@ export function orgColorsByName(orgName: string): CampusColors {
   return ORG_COLORS_BY_NAME[orgName] ?? DEFAULT_ORG_COLORS;
 }
 
+/** chapter_id -> campus_id, for the campus feed endpoints (GET /campuses/{campus_id}/feed)
+ * to scope mock posts by campus the same way the real backend joins chapter -> campus. */
+const CAMPUS_ID_BY_CHAPTER: Record<string, string> = {
+  [MOCK_CHAPTER.id]: MOCK_CHAPTER.campus_id,
+  [MOCK_CHAPTER_ADPI.id]: MOCK_CHAPTER_ADPI.campus_id,
+};
+
+export function mockCampusIdForChapter(chapterId: string): string | undefined {
+  return CAMPUS_ID_BY_CHAPTER[chapterId];
+}
+
 // ---------- campus theming (DESIGN §8.5) ----------
 
 /** UNCG's brand colors — Spartan navy + gold (approx. brand values; swap for the
@@ -256,7 +267,7 @@ export const MOCK_POSTS: PostOut[] = [
     created_at: "2026-08-09T21:14:00Z",
     deleted_at: null,
     post_type: "text",
-    source: "org",
+    audience: "org",
   },
   {
     id: "post-2",
@@ -267,7 +278,7 @@ export const MOCK_POSTS: PostOut[] = [
     created_at: "2026-08-10T16:30:00Z",
     deleted_at: null,
     post_type: "text",
-    source: "org",
+    audience: "org",
   },
   {
     id: "post-3",
@@ -278,7 +289,7 @@ export const MOCK_POSTS: PostOut[] = [
     created_at: "2026-08-11T13:05:00Z",
     deleted_at: null,
     post_type: "text",
-    source: "org",
+    audience: "org",
   },
   {
     id: "post-4",
@@ -289,7 +300,7 @@ export const MOCK_POSTS: PostOut[] = [
     created_at: "2026-08-11T15:40:00Z",
     deleted_at: null,
     post_type: "photo",
-    source: "forYou",
+    audience: "campus",
   },
   {
     id: "post-5",
@@ -301,7 +312,7 @@ export const MOCK_POSTS: PostOut[] = [
     deleted_at: null,
     post_type: "video",
     duration_sec: 47,
-    source: "campus",
+    audience: "campus",
   },
   {
     id: "post-6",
@@ -312,7 +323,7 @@ export const MOCK_POSTS: PostOut[] = [
     created_at: "2026-08-11T19:20:00Z",
     deleted_at: null,
     post_type: "text",
-    source: "forYou",
+    audience: "campus",
   },
   {
     id: "post-7",
@@ -323,7 +334,7 @@ export const MOCK_POSTS: PostOut[] = [
     created_at: "2026-08-11T20:10:00Z",
     deleted_at: null,
     post_type: "photo",
-    source: "org",
+    audience: "org",
   },
   {
     id: "post-8",
@@ -335,7 +346,7 @@ export const MOCK_POSTS: PostOut[] = [
     deleted_at: null,
     post_type: "video",
     duration_sec: 22,
-    source: "forYou",
+    audience: "campus",
   },
   {
     id: "post-9",
@@ -346,7 +357,7 @@ export const MOCK_POSTS: PostOut[] = [
     created_at: "2026-08-12T10:15:00Z",
     deleted_at: null,
     post_type: "text",
-    source: "campus",
+    audience: "campus",
   },
 ];
 
@@ -425,7 +436,7 @@ export const MOCK_POST_COMMENTS: PostCommentOut[] = [
 // ---------- org-only feed posts (DESIGN §8.7 — chapter-only, never on the FYP) ----------
 // Rendered inside OrgAccentScope by the Orgs tab's Feed segment (app/(tabs)/chapter/index.tsx).
 // Kept as a separate array (not merged into MOCK_POSTS) since MOCK_POSTS already carries a few
-// `source: "org"` posts for the pre-§8.7 scaffold — the Feed segment reads both.
+// `audience: "org"` posts for the pre-§8.7 scaffold — the Feed segment reads both.
 export const MOCK_ORG_POSTS: PostOut[] = [
   {
     id: "post-org-1",
@@ -436,7 +447,7 @@ export const MOCK_ORG_POSTS: PostOut[] = [
     created_at: "2026-08-11T22:00:00Z",
     deleted_at: null,
     post_type: "text",
-    source: "org",
+    audience: "org",
   },
   {
     id: "post-org-2",
@@ -447,7 +458,7 @@ export const MOCK_ORG_POSTS: PostOut[] = [
     created_at: "2026-08-12T14:30:00Z",
     deleted_at: null,
     post_type: "photo",
-    source: "org",
+    audience: "org",
   },
   {
     id: "post-org-3",
@@ -458,7 +469,7 @@ export const MOCK_ORG_POSTS: PostOut[] = [
     created_at: "2026-08-12T16:10:00Z",
     deleted_at: null,
     post_type: "text",
-    source: "org",
+    audience: "org",
   },
   {
     id: "post-org-4",
@@ -469,7 +480,7 @@ export const MOCK_ORG_POSTS: PostOut[] = [
     created_at: "2026-08-12T18:45:00Z",
     deleted_at: null,
     post_type: "photo",
-    source: "org",
+    audience: "org",
   },
 ];
 
