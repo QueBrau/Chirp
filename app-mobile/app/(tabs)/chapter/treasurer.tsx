@@ -159,13 +159,7 @@ export default function TreasurerScreen() {
     // user_id -> display name. GET /chapters/{id}/members joins the name in; there
     // is no GET /users/{id}, so this roster is the only way to show who requested a
     // spend on real data.
-    setMemberNames(
-      new Map(
-        members
-          .filter((m) => m.display_name !== null)
-          .map((m) => [m.user_id, m.display_name as string]),
-      ),
-    );
+    setMemberNames(new Map(members.map((m) => [m.user_id, m.display_name])));
   }, []);
 
   useEffect(() => {

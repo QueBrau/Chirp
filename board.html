@@ -101,8 +101,8 @@
   "cards": [
     {
       "id": "c42",
-      "col": "progress",
-      "title": "[A/Jose] c42 MERGED to main (PR #5) — review absorbed, CI green. LAST STEP: Jose redeploys -> Claude runs live join E2E vs prod -> Done.",
+      "col": "done",
+      "title": "Session provider + /auth/me SHIPPED (PR #5) and VERIFIED LIVE Aug 14: full join E2E on prod — invite minted by QA president, fresh account bootstrapped, joined by code (role locked at mint time), membership visible in /auth/me. Second QA fixture account created (creds in INFRA-PRIVATE.html).",
       "owner": "J",
       "tag": "vert:auth-orgs"
     },
@@ -284,15 +284,15 @@
     {
       "id": "c5",
       "col": "backlog",
-      "title": "Invite deep links end-to-end (chirp://join-chapter)",
+      "title": "Invite deep links end-to-end (chirp://join-chapter) — BACKEND+CHAIN DONE via c42 (code survives sign-in AND onboarding, verified); LEFT: in-app invite-create UI for e-board (Tools segment) + share sheet/QR.",
       "owner": "",
       "tag": "m1"
     },
     {
       "id": "c6",
-      "col": "backlog",
-      "title": "Orgs tab wired to real memberships API (role gating live)",
-      "owner": "",
+      "col": "done",
+      "title": "[A/Jose] c6 DONE: PR #6 merged (42d8e35, CI green) + redeployed rev chirp-api-00006-smv. Verified live: /chapters/{id}/members and /auth/me both serve app-level 401 missing_bearer_token. Orgs on real memberships + invite UI + roster names are LIVE.",
+      "owner": "J",
       "tag": "m2"
     },
     {
@@ -392,6 +392,27 @@
       "title": "In-repo task board",
       "owner": "J",
       "tag": "aug11"
+    },
+    {
+      "id": "c43",
+      "col": "next",
+      "title": "[shared] Batch endpoints to kill the N+1s: posts-with-counts (feed 2N -> 1, coordinate with c34/Q) + events-with-rsvp-counts (events 1+N -> 1). Flagged twice by reviews with file:line.",
+      "owner": "",
+      "tag": "backend"
+    },
+    {
+      "id": "c44",
+      "col": "backlog",
+      "title": "[A/Jose] Role metadata from backend: invite-role options + eboard set served by the API instead of hand-typed frontend mirrors of permissions.py (drift risk flagged in PR #6 review).",
+      "owner": "J",
+      "tag": "vert:auth-orgs"
+    },
+    {
+      "id": "c45",
+      "col": "backlog",
+      "title": "[A/Jose] Returning-user sign-in UX: skip account-type when session resolves ready+registered (today every sign-in re-runs the who-are-you screen). Found during c6 browser QA.",
+      "owner": "J",
+      "tag": "vert:auth-orgs"
     }
   ],
   "decisions": [

@@ -1,5 +1,7 @@
 """GET /chapters/{id}/members: display_name join (users.display_name) and its interaction
-with org scoping (§8.4). Regression coverage for the MembershipOut.display_name field.
+with org scoping (§8.4). Regression coverage for MemberOut (roster rows joined with the
+user's display_name + avatar_url) — not a field on the bare MembershipOut, which
+GET /me/memberships still returns.
 """
 from __future__ import annotations
 
@@ -98,8 +100,8 @@ async def test_list_members_is_org_scoped_and_never_leaks_other_chapter(
 async def test_me_memberships_chapter_name_still_populated(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
-    """GET /me/memberships still joins chapter_name in — the MembershipOut.display_name
-    addition (joined from users, not chapters) must not disturb this unrelated join."""
+    """GET /me/memberships joins chapter_name in via MembershipOut, a plain schema with
+    no display_name field at all — that's MemberOut's job, for the roster route above."""
     setup = await make_chapter_with("secretary")
 
     response = await client.get("/me/memberships", headers=setup.member.headers)
@@ -110,6 +112,4 @@ async def test_me_memberships_chapter_name_still_populated(
     assert memberships[0]["chapter_id"] == setup.chapter_id
     assert memberships[0]["chapter_name"] == "Alpha"
     assert memberships[0]["org_name"]
-    # This route doesn't join users — display_name stays unset, confirming the new
-    # field is additive and doesn't require every route to populate it.
-    assert memberships[0]["display_name"] is None
+    assert "display_name" not in memberships[0]
