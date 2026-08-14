@@ -20,6 +20,7 @@ from app.schemas.identity import (
     ChapterInviteOut,
     ChapterJoinRequest,
     ChapterOut,
+    MemberOut,
     MembershipOut,
     MembershipUpdate,
 )
@@ -81,14 +82,30 @@ async def list_members(
     chapter_id: uuid.UUID,
     _membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
-) -> list[MembershipOut]:
-    """List the chapter's memberships; org-scoped to active members (§8.4)."""
+) -> list[MemberOut]:
+    """List the chapter's memberships with display identity; org-scoped (§8.4)."""
     result = await session.execute(
-        select(models.Membership)
+        select(models.Membership, models.User)
+        .join(models.User, models.User.id == models.Membership.user_id)
         .where(models.Membership.chapter_id == chapter_id)
         .order_by(models.Membership.joined_at)
     )
-    return [MembershipOut.model_validate(m) for m in result.scalars().all()]
+    entries: list[MemberOut] = []
+    for membership, member_user in result.all():
+        entries.append(
+            MemberOut(
+                id=membership.id,
+                user_id=membership.user_id,
+                chapter_id=membership.chapter_id,
+                role=membership.role,
+                status=membership.status,
+                pledge_class=membership.pledge_class,
+                joined_at=membership.joined_at,
+                display_name=member_user.display_name,
+                avatar_url=member_user.avatar_url,
+            )
+        )
+    return entries
 
 
 @router.patch("/chapters/{chapter_id}/members")

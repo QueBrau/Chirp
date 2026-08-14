@@ -6,6 +6,7 @@ import {
   MOCK_CURRENT_MEMBERSHIP,
   MOCK_INVITES,
   MOCK_MEMBERSHIPS,
+  mockUserById,
 } from "../mocks/data";
 
 export type RoleName =
@@ -58,6 +59,12 @@ export interface MembershipOut {
   joined_at: string;
 }
 
+/** listMembers() row: MembershipOut plus the joined display name/photo (GET /chapters/{id}/members). */
+export interface MemberOut extends MembershipOut {
+  display_name: string;
+  avatar_url: string | null;
+}
+
 export interface ChapterInviteCreate {
   role?: RoleName;
   expires_at?: string | null;
@@ -87,9 +94,16 @@ export async function updateChapter(chapterId: string, body: ChapterUpdate): Pro
   return request<ChapterOut>(`/chapters/${chapterId}`, { method: "PATCH", body });
 }
 
-export async function listMembers(chapterId: string): Promise<MembershipOut[]> {
-  if (USE_MOCKS) return mocked(MOCK_MEMBERSHIPS);
-  return request<MembershipOut[]>(`/chapters/${chapterId}/members`);
+export async function listMembers(chapterId: string): Promise<MemberOut[]> {
+  if (USE_MOCKS) {
+    return mocked(
+      MOCK_MEMBERSHIPS.map((membership) => {
+        const user = mockUserById(membership.user_id);
+        return { ...membership, display_name: user?.display_name ?? "", avatar_url: user?.avatar_url ?? null };
+      }),
+    );
+  }
+  return request<MemberOut[]>(`/chapters/${chapterId}/members`);
 }
 
 export async function updateMember(

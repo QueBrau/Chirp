@@ -57,3 +57,5 @@ async def test_platform_admin_create_chapter_is_201_and_creator_is_president(
     assert len(roster) == 1
     assert roster[0]["user_id"] == admin.id
     assert roster[0]["role"] == "president"
+    assert roster[0]["display_name"] == "Platform Admin"
+    assert roster[0]["avatar_url"] is None
