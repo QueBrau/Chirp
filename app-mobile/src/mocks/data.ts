@@ -12,7 +12,7 @@
 
 import type { CampusOut, UserOut } from "../api/auth";
 import { brand, DEFAULT_APPEARANCE_PREFS, type AppearancePrefs, type CampusColors } from "@/theme";
-import type { ChapterInviteOut, ChapterOut, MembershipOut } from "../api/chapters";
+import type { ChapterInviteOut, ChapterOut, MembershipOut, RoleMetaOut } from "../api/chapters";
 import type { DeviceOut, PrekeyBundleOut } from "../api/keys";
 import type { ConversationOut, MessageOut } from "../api/messages";
 import type { PostCommentOut, PostLikeOut, PostOut } from "../api/feed";
@@ -224,6 +224,14 @@ export const MOCK_MEMBERSHIPS_ADPI: MembershipOut[] = [
   membership("usr-sofia", "member", "Fall 2024", MOCK_CHAPTER_ADPI.id),
   membership("usr-naomi", "member", "Fall 2025", MOCK_CHAPTER_ADPI.id),
 ];
+
+/** Mocked GET /chapters/{id}/role-meta as the PRESIDENT sees it (Jake) — matches the
+ * backend rule: president may mint every role, common roles listed first. */
+export const MOCK_ROLE_META: RoleMetaOut = {
+  roles: ["president", "vice_president", "treasurer", "secretary", "historian", "member", "pledge", "alumni"],
+  eboard: ["president", "vice_president", "treasurer", "secretary", "historian"],
+  invitable: ["member", "pledge", "alumni", "president", "vice_president", "treasurer", "secretary", "historian"],
+};
 
 export const MOCK_INVITES: ChapterInviteOut[] = [
   {

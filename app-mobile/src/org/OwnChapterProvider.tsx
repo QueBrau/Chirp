@@ -14,7 +14,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { getChapter, type ChapterOut, type MembershipOut } from "@/api/chapters";
+import { getChapter, getRoleMeta, type ChapterOut, type MembershipOut, type RoleMetaOut } from "@/api/chapters";
 import { useSession, type SessionStatus } from "@/auth";
 
 export interface OwnChapterContextValue {
@@ -22,6 +22,10 @@ export interface OwnChapterContextValue {
   membership: MembershipOut | null;
   chapter: ChapterOut | null;
   chapterLoading: boolean;
+  /** Role taxonomy served by the backend (c44); null while loading or on a failed
+   * fetch — consumers fail soft (invite card hidden, roster falls back to
+   * first-seen grouping) rather than re-mirroring permissions.py. */
+  roleMeta: RoleMetaOut | null;
 }
 
 const OwnChapterContext = createContext<OwnChapterContextValue | null>(null);
@@ -34,10 +38,12 @@ export function OwnChapterProvider({ children }: { children: ReactNode }) {
   const chapterId = membership?.chapter_id ?? null;
   const [chapter, setChapter] = useState<ChapterOut | null>(null);
   const [chapterLoading, setChapterLoading] = useState(chapterId !== null);
+  const [roleMeta, setRoleMeta] = useState<RoleMetaOut | null>(null);
 
   useEffect(() => {
     if (chapterId === null) {
       setChapter(null);
+      setRoleMeta(null);
       setChapterLoading(false);
       return;
     }
@@ -55,14 +61,23 @@ export function OwnChapterProvider({ children }: { children: ReactNode }) {
       .finally(() => {
         if (!cancelled) setChapterLoading(false);
       });
+    // Same fail-soft posture, fetched in parallel; chapterLoading deliberately
+    // does not wait on this — role metadata refines the UI, it doesn't gate it.
+    getRoleMeta(chapterId)
+      .then((result) => {
+        if (!cancelled) setRoleMeta(result);
+      })
+      .catch(() => {
+        if (!cancelled) setRoleMeta(null);
+      });
     return () => {
       cancelled = true;
     };
   }, [chapterId]);
 
   const value = useMemo<OwnChapterContextValue>(
-    () => ({ sessionStatus, membership, chapter, chapterLoading }),
-    [sessionStatus, membership, chapter, chapterLoading],
+    () => ({ sessionStatus, membership, chapter, chapterLoading, roleMeta }),
+    [sessionStatus, membership, chapter, chapterLoading, roleMeta],
   );
 
   return <OwnChapterContext.Provider value={value}>{children}</OwnChapterContext.Provider>;

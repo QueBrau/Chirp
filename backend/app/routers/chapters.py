@@ -23,6 +23,7 @@ from app.schemas.identity import (
     MemberOut,
     MembershipOut,
     MembershipUpdate,
+    RoleMetaOut,
 )
 
 router = APIRouter(tags=["chapters"])
@@ -106,6 +107,30 @@ async def list_members(
             )
         )
     return entries
+
+
+@router.get("/chapters/{chapter_id}/role-meta")
+async def get_role_meta(
+    chapter_id: uuid.UUID,
+    membership: models.Membership = Depends(get_current_membership),
+) -> RoleMetaOut:
+    """Role taxonomy for this chapter's UI; org-scoped (§8.4).
+
+    Derived entirely from permissions.py so the app never hand-mirrors the
+    eboard set or the invite rule (c44). `invitable` applies the create_invite
+    rule for THIS caller: any e-board role may mint non-eboard invites, only a
+    president may mint e-board invites, everyone else gets an empty list.
+    """
+    roles = [role.value for role in Role]
+    eboard = [role.value for role in Role if role in EBOARD]
+    non_eboard = [role.value for role in Role if role not in EBOARD]
+    if membership.role == Role.president.value:
+        invitable = non_eboard + eboard
+    elif membership.role in _EBOARD_ROLE_VALUES:
+        invitable = non_eboard
+    else:
+        invitable = []
+    return RoleMetaOut(roles=roles, eboard=eboard, invitable=invitable)
 
 
 @router.patch("/chapters/{chapter_id}/members")

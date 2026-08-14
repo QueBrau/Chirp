@@ -44,14 +44,21 @@ export default function SignInScreen() {
   const continueToOnboarding = () => router.push(withInviteCode("/account-type", inviteCode));
 
   /**
-   * Post sign-in/up routing. "Sign in" means an already-registered user, so an
-   * invite code in tow sends them straight to redeem it instead of back through
-   * account-type (which would just 409). "Sign up" is a brand-new Firebase
-   * identity that still needs account-type regardless of any code.
+   * Post sign-in/up routing. "Sign in" means a returning user: with an invite
+   * code in tow they go straight to redeem it; otherwise they land on the tabs,
+   * whose auth guard resolves the session and only bounces a genuinely
+   * unregistered identity back to account-type (c45 — a returning registered
+   * user no longer re-answers "who are you?" on every sign-in). "Sign up" is a
+   * brand-new Firebase identity that still needs account-type regardless of any
+   * code. Demo mode (no Firebase project) keeps the mock onboarding walk.
    */
   const continueAfterAuth = () => {
     if (authMode === "signin" && inviteCode) {
       router.push(withInviteCode("/join-chapter", inviteCode));
+      return;
+    }
+    if (authMode === "signin" && hasFirebaseConfig()) {
+      router.replace("/(tabs)/feed");
       return;
     }
     continueToOnboarding();

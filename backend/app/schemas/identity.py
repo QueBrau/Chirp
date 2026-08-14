@@ -126,6 +126,20 @@ class MemberOut(_Schema):
     avatar_url: str | None = None
 
 
+class RoleMetaOut(_Schema):
+    """Body for GET /chapters/{id}/role-meta — the role taxonomy, served so the app
+    never hand-mirrors permissions.py (c44).
+
+    `roles` is every role in canonical display order, `eboard` the officer subset,
+    `invitable` the roles THIS caller may mint invites for (empty for non-eboard),
+    ordered as a picker should show them: common roles first.
+    """
+
+    roles: list[RoleName]
+    eboard: list[RoleName]
+    invitable: list[RoleName]
+
+
 class MeOut(_Schema):
     """Body for GET /auth/me: the caller's user row plus their active memberships."""
 

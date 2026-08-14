@@ -18,17 +18,6 @@ import {
 } from "@/components";
 import { spacing } from "@/theme";
 
-const ROLE_ORDER: RoleName[] = [
-  "president",
-  "vice_president",
-  "treasurer",
-  "secretary",
-  "historian",
-  "member",
-  "pledge",
-  "alumni",
-];
-
 const ROLE_LABELS: Record<RoleName, string> = {
   president: "President",
   vice_president: "Vice President",
@@ -52,17 +41,18 @@ const ROLE_CHIP_LABELS: Record<RoleName, string> = {
   alumni: "Alum",
 };
 
-/** E-board roles pop with the accent Chip; pledges get the pending-flavored warning Chip. */
-const ROLE_CHIP_VARIANT: Record<RoleName, ChipVariant> = {
-  president: "accent",
-  vice_president: "accent",
-  treasurer: "accent",
-  secretary: "accent",
-  historian: "accent",
-  member: "neutral",
-  pledge: "warning",
-  alumni: "neutral",
-};
+/** Prettified fallback for a role the closed label records don't know yet — the
+ * server owns the taxonomy (c44), so an unmapped value degrades gracefully. */
+function prettifyRole(role: string): string {
+  return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** E-board roles pop with the accent Chip (e-board set comes from role-meta, c44);
+ * pledges keep the pending-flavored warning Chip — a purely cosmetic, local rule. */
+function chipVariant(role: RoleName, eboard: RoleName[]): ChipVariant {
+  if (eboard.includes(role)) return "accent";
+  return role === "pledge" ? "warning" : "neutral";
+}
 
 /** Fallback label for the rare row whose display_name comes back empty. */
 function shortUserId(userId: string): string {
@@ -70,7 +60,7 @@ function shortUserId(userId: string): string {
 }
 
 export default function MembersScreen() {
-  const { sessionStatus, membership, chapterLoading } = useOwnChapter();
+  const { sessionStatus, membership, chapterLoading, roleMeta } = useOwnChapter();
   const chapterId = membership?.chapter_id ?? null;
   const [members, setMembers] = useState<MemberOut[] | null>(null);
 
@@ -91,7 +81,13 @@ export default function MembersScreen() {
   const loading = sessionStatus === "loading" || (membership !== null && chapterLoading) || members === null;
 
   const active = (members ?? []).filter((m) => m.status === "active");
-  const groups = ROLE_ORDER.map((role) => ({
+  // Group order comes from the server taxonomy (role-meta, c44). Fail soft on a
+  // null roleMeta — first-seen order still renders the full roster — and append
+  // any role present in the data but missing from the taxonomy so nobody vanishes.
+  const known = roleMeta?.roles ?? [];
+  const seen = [...new Set(active.map((m) => m.role))];
+  const roleOrder = [...known, ...seen.filter((role) => !known.includes(role))];
+  const groups = roleOrder.map((role) => ({
     role,
     rows: active.filter((m) => m.role === role),
   })).filter((group) => group.rows.length > 0);
@@ -107,7 +103,7 @@ export default function MembersScreen() {
           {groups.map(({ role, rows }) => (
             <View key={role}>
               <SectionHeader
-                title={ROLE_LABELS[role]}
+                title={ROLE_LABELS[role] ?? prettifyRole(role)}
                 caption={`${rows.length} ${rows.length === 1 ? "member" : "members"}`}
               />
               <Card>
@@ -120,7 +116,10 @@ export default function MembersScreen() {
                       subtitle={member.pledge_class ?? undefined}
                       left={<GradientAvatar name={label} size={40} photoUrl={member.avatar_url} />}
                       right={
-                        <Chip label={ROLE_CHIP_LABELS[role]} variant={ROLE_CHIP_VARIANT[role]} />
+                        <Chip
+                          label={ROLE_CHIP_LABELS[role] ?? prettifyRole(role)}
+                          variant={chipVariant(role, roleMeta?.eboard ?? [])}
+                        />
                       }
                       divider={index < rows.length - 1}
                     />
