@@ -83,7 +83,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1786729693947,
+  "updated": 1786736072754,
   "columns": [
     {
       "id": "backlog",
@@ -196,8 +196,8 @@
     },
     {
       "id": "c34",
-      "col": "next",
-      "title": "[B/Q] Wire FYP feed to real API. ROOT CAUSE PINNED by the Aug 14 audit — it is NOT src/api/feed (that layer is fine), it is the screen: app/(tabs)/feed/index.tsx:59 calls listPosts(MOCK_CURRENT_MEMBERSHIP.chapter_id), a hardcoded fake id, so the real backend 422s and the catch swallows it into an empty feed. Same file: likedByMe compares against MOCK_CURRENT_USER.id (line 67) and the whole Moments row is MOCK_MOMENTS (line 99). This is the FIRST screen every signed-in user sees (app/index.tsx redirects to /feed). Fix = take chapter/campus from useSession()/useOwnChapter(). UNBLOCKED: PRs #2/#3/#7 all on main, prod current. Coordinate with c43 — build posts-with-counts here (naive path is 2N queries/page).",
+      "col": "progress",
+      "title": "[B/Q] CLAIMED Aug 14 (branch q/feed) — FYP feed on real API. The root cause above is confirmed and necessary, but NOT sufficient: fixing the hardcoded chapter id still leaves Home empty, because feed/index.tsx:110 filters on post.source and the backend PostOut has NO source field — every live post gets filtered out. post_type/duration_sec are missing too (the media FYP silently degrades to text cards), the only posts route is chapter-scoped while org posts are barred from the FYP by the Aug 12 decision, and posts.chapter_id is NOT NULL so there is no data model for a campus post at all. Authors also resolve via mockUserById (no GET /users/{id}) = the same 'Unknown' bug the roster had. CLAIMING MIGRATION 0009. Doing: 0009 (audience org|campus, post_type, duration_sec) + GET /campuses/{id}/feed + author identity on the feed row + posts-with-counts (c43's half, 2N -> 1) + compose audience picker + wire the screen off useSession(). Audience defaults to ORG when a client omits it — a post must never broadcast campus-wide by accident.",
       "owner": "Q",
       "tag": "vert:social-msg"
     },
@@ -400,7 +400,7 @@
     {
       "id": "c43",
       "col": "next",
-      "title": "[shared] Batch endpoints to kill the N+1s — SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's — DONE + LIVE (PR #7 befba10, prod rev 00007-kff): GET /chapters/{id}/events-with-rsvps, 1+N -> one round trip, Events segment wired, route verified serving app-level 401. Q's posts-with-counts half still rides with c34 — this card stays open until that lands. No migration — 0009 stays free.",
+      "title": "[shared] Batch endpoints to kill the N+1s — SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's — DONE + LIVE (PR #7 befba10, prod rev 00007-kff): GET /chapters/{id}/events-with-rsvps, 1+N -> one round trip, Events segment wired, route verified serving app-level 401. Q's posts-with-counts half still rides with c34 — this card stays open until that lands. MIGRATION 0009 NOW CLAIMED by c34 (posts.audience/post_type/duration_sec) — next free is 0010.",
       "owner": "",
       "tag": "backend"
     },
@@ -456,7 +456,10 @@
     "Aug 14 — Process: the audit also closed two stale cards (c20 Firebase project, c26 events backend) that had been sitting in Next/backlog while the work was already Done and on prod, and found three more that overstate what is left (c5, c35, c36). Lesson: cards get moved when work lands, not when someone happens to notice; a stale board costs more than no board because it is trusted.",
     "Aug 14 — Infra: prod is CURRENT with main for the first time since sprint 0 — migration 0008 applied by Jose, then rev chirp-api-00007-kff shipped PRs #2, #3 and #7 in ONE redeploy. Ordering rule confirmed and now in INFRA-PRIVATE.html: MIGRATE FIRST, THEN DEPLOY. The Cloud Run deploy does not run migrations, and the post-#3 code selects ledger_entries.stripe_payment_intent_id, which does not exist until 0008 runs — deploying first would have 500'd the treasurer ledger. Also learned: cloud-sql-proxy is NOT bundled with the gcloud SDK and was missing entirely on Jose's Mac; the install command is now a documented prerequisite in the migration runbook.",
     "Aug 14 — Process: c43 SPLIT along the consumer line — whoever consumes an endpoint designs it. Q builds posts-with-counts inside c34 (he is wiring the feed that calls it); Jose builds events-with-rsvp-counts with c44 (events backend is his). This is the lesson from the roster-names overlap applied in advance: one owner per shape, no parallel competing mechanisms.",
-    "Aug 14 — Process: 'merged' is not 'working', and the board should say which. Stripe dues is on main with CI green and has never contacted real Stripe, so c11 stays in In Progress until a test-mode payment clears on BOTH card and ACH. Yak, the dashboards and CSV export are likewise only proven against mocks and the test suite — never driven on a device."
+    "Aug 14 — Process: 'merged' is not 'working', and the board should say which. Stripe dues is on main with CI green and has never contacted real Stripe, so c11 stays in In Progress until a test-mode payment clears on BOTH card and ACH. Yak, the dashboards and CSV export are likewise only proven against mocks and the test suite — never driven on a device.",
+    "Aug 14 — Product: a post's audience is chosen by the author at compose time. posts.audience is 'org' (private to the chapter, per the Aug 12 rule) or 'campus' (visible to everyone at that campus). 'For You' is a RANKING over campus posts, not a stored third value — so the two Home pills read the same campus feed and differ only in ordering. v1 ships both as reverse-chron; ranking is a later card, and until it exists the two pills will look identical. Audience defaults to 'org' server-side when the client omits it: the safe default is private, never accidental campus-wide broadcast.",
+    "Aug 14 — Process: migration 0009 CLAIMED by Q for c34 (posts.audience, post_type, duration_sec). Next free number is 0010. Claimed here before the file was written, per the rule c41 taught us.",
+    "Aug 14 — Scoping: c34 was carded as 'replace mock calls with live fetch' and was actually a backend gap. The client layer (src/api/feed) was already correct; what was missing was any way for the server to express a campus-visible post. Worth remembering when a card looks like a one-line swap: check that the API can express what the screen renders before estimating it."
   ]
 }
 </script>
