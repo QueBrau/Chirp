@@ -79,7 +79,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1786661908488,
+  "updated": 1786729693947,
   "columns": [
     {
       "id": "backlog",
@@ -193,7 +193,7 @@
     {
       "id": "c34",
       "col": "next",
-      "title": "[B/Q] Wire FYP feed to real API: replace mock calls in src/api/feed with live fetch (posts/likes/comments) against the shared backend",
+      "title": "[B/Q] Wire FYP feed to real API: replace mock calls in src/api/feed with live fetch (posts/likes/comments) against the shared backend. UNBLOCKED Aug 14 — PRs #2 and #3 are on main, q/social-msg is retired, so this cuts a fresh branch from main. Coordinate with c43 before wiring the counts: the naive path is 2N queries per feed page.",
       "owner": "Q",
       "tag": "vert:social-msg"
     },
@@ -347,7 +347,7 @@
     {
       "id": "c40",
       "col": "next",
-      "title": "[shared] Before dues can take real money: set STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY / STRIPE_WEBHOOK_SECRET and APP_PUBLIC_BASE_URL in Secret Manager + Cloud Run, then register the webhook endpoint pointing at /webhooks/stripe. APP_PUBLIC_BASE_URL must be https — Stripe rejects custom schemes, so Connect onboarding cannot return to a chirp:// deep link; it needs a web page that bounces back into the app.",
+      "title": "[shared] Before dues can take real money: set STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY / STRIPE_WEBHOOK_SECRET and APP_PUBLIC_BASE_URL in Secret Manager + Cloud Run, then register the webhook endpoint pointing at /webhooks/stripe. APP_PUBLIC_BASE_URL must be https — Stripe rejects custom schemes, so Connect onboarding cannot return to a chirp:// deep link; it needs a web page that bounces back into the app. ORDER: this comes AFTER the 0008 migrate + redeploy (see c41/c11) — the Stripe tables don't exist in prod until then. Full chain to working dues: migrate+redeploy -> keys (here) -> EAS build (c39) -> test-mode payment on card AND ACH.",
       "owner": "",
       "tag": "go-live"
     },
@@ -430,7 +430,11 @@
     "Aug 13 — Payments: dropped the ephemeral-key approach in HANDOFF for CustomerSession — Stripe's current mobile docs use it, the installed RN SDK 0.50.3 accepts either, and CustomerSession needs no pinned API version (one less thing to re-check on every SDK upgrade).",
     "Aug 13 — Process: migration numbers are a SHARED resource. Claim the next number on this board BEFORE writing the file. Taken so far: 0006 events (J, on prod), 0007 is_platform_admin (J, in flight), 0008 Stripe dues (Q, pending renumber from 0006 — see c41).",
     "Aug 13 — Process: Q's vertical branch is q/social-msg, cut from the family-tree tip. family-tree retires once PR #2 merges; PR #3 stacks on PR #2.",
-    "Aug 13 — Process: NO branch protection on main for now (Jose's call) — CI runs on every push/PR but is advisory, merges stay unblocked. Revisit before TestFlight. Apple Developer enrollment also parked until launch prep."
+    "Aug 13 — Process: NO branch protection on main for now (Jose's call) — CI runs on every push/PR but is advisory, merges stay unblocked. Revisit before TestFlight. Apple Developer enrollment also parked until launch prep.",
+    "Aug 14 — Backend: roster display names are MemberOut, NOT a field on MembershipOut. PR #6 (Jose) and the dashboards work (Q) solved the same problem in parallel — no GET /users/{id} exists, so a roster is bare UUIDs — and PR #6's shape won: real INNER JOIN, non-null display_name, plus avatar_url. GET /chapters/{id}/members returns MemberOut; GET /me/memberships returns the plain MembershipOut. Re-adding a nullable display_name to MembershipOut is the regression to watch for. Worth knowing HOW this was nearly missed: git did NOT flag most of the overlap as a text conflict, so two branches solving the same problem can auto-merge into two competing mechanisms with a green build. When both verticals touch the same domain, diff it by hand.",
+    "Aug 14 — Process: migration-number rule earned its keep. As 0006 the Stripe migration would have been silently skipped on a prod already stamped past it — Alembic marks it applied and moves on, so processed_stripe_events and the unique index on ledger_entries.stripe_payment_intent_id would simply not exist, with nothing erroring and the webhook-replay guard absent on the money path. Renumbered to 0008, chain verified linear/single-head on main. Next free number: 0009 — claim it here first.",
+    "Aug 14 — Process: PR #2 merged before PR #3 deliberately. The branches had diverged and q/social-msg's content was a superset of family-tree's, so merging #3 first would have made #2 read as a Stripe revert. family-tree and q/social-msg are both retired; new work cuts from main.",
+    "Aug 14 — Process: 'merged' is not 'working', and the board should say which. Stripe dues is on main with CI green and has never contacted real Stripe, so c11 stays in In Progress until a test-mode payment clears on BOTH card and ACH. Yak, the dashboards and CSV export are likewise only proven against mocks and the test suite — never driven on a device."
   ]
 }
 </script>
