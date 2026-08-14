@@ -19,7 +19,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
-import { hasFirebaseConfig, signInWithEmail, signUpWithEmail } from "@/auth";
+import { hasFirebaseConfig, signInWithEmail, signUpWithEmail, withInviteCode } from "@/auth";
 import { AppText, Button, HeroCard, Screen } from "@/components";
 import { radii, spacing, typography, useTheme } from "@/theme";
 
@@ -41,10 +41,7 @@ export default function SignInScreen() {
 
   // New identities keep the invite code in tow through account-type, which
   // forwards it to join-chapter after bootstrap.
-  const continueToOnboarding = () =>
-    router.push(
-      inviteCode ? `/account-type?code=${encodeURIComponent(inviteCode)}` : "/account-type",
-    );
+  const continueToOnboarding = () => router.push(withInviteCode("/account-type", inviteCode));
 
   /**
    * Post sign-in/up routing. "Sign in" means an already-registered user, so an
@@ -54,7 +51,7 @@ export default function SignInScreen() {
    */
   const continueAfterAuth = () => {
     if (authMode === "signin" && inviteCode) {
-      router.push(`/join-chapter?code=${encodeURIComponent(inviteCode)}`);
+      router.push(withInviteCode("/join-chapter", inviteCode));
       return;
     }
     continueToOnboarding();

@@ -8,7 +8,7 @@ from app import models
 from app.config import get_settings
 from app.core.errors import conflict, not_found
 from app.db import get_session
-from app.middleware.auth import get_verified_identity
+from app.middleware.auth import get_user_by_uid, get_verified_identity
 from app.schemas.identity import MeOut, MembershipOut, UserCreate, UserOut
 
 router = APIRouter(tags=["auth"])
@@ -74,8 +74,7 @@ async def get_me(
     authenticated-but-unregistered caller must see 404 user_not_registered instead.
     """
     uid, _verified_email = identity
-    result = await session.execute(select(models.User).where(models.User.firebase_uid == uid))
-    user = result.scalar_one_or_none()
+    user = await get_user_by_uid(session, uid)
     if user is None:
         raise not_found("user_not_registered")
 

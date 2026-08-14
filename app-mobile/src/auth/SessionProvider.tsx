@@ -9,14 +9,19 @@
  *
  * Real Firebase mode: subscribes to onAuthChanged. No Firebase user ->
  * "signedOut". A Firebase user -> fetchMe(): 200 -> "ready" with the backend
- * identity + memberships; 404 "user_not_registered" -> "unregistered" (a
- * Firebase account that hasn't finished bootstrap() yet). Any other error
- * leaves the prior status alone — except it never strands the app on
- * "loading": a failed first call, or the listener simply never firing within
- * 10s, falls back to "signedOut" instead of hanging forever.
+ * identity + memberships; 404 "user_not_registered" -> "unregistered".
+ *
+ * Staleness: every auth event and load bumps a generation counter, and a
+ * load's result is discarded unless its generation is still current — a slow
+ * response can never overwrite newer state (e.g. revive "ready" after the
+ * user signed out mid-flight).
+ *
+ * Failures: a non-404 failure while a Firebase user exists retries (bounded)
+ * instead of stranding the session; only when Firebase itself reports no user
+ * (or the listener never fires and no user is present) do we conclude
+ * "signedOut".
  */
 
-import type { User } from "firebase/auth";
 import {
   createContext,
   useCallback,
@@ -33,6 +38,7 @@ import { ApiError } from "@/api/client";
 import type { MembershipOut } from "@/api/chapters";
 
 import { hasFirebaseConfig } from "./config";
+import { getFirebaseAuth } from "./firebase";
 import { onAuthChanged } from "./session";
 
 export type SessionStatus = "loading" | "signedOut" | "unregistered" | "ready";
@@ -41,57 +47,111 @@ export interface SessionContextValue {
   status: SessionStatus;
   user: UserOut | null;
   memberships: MembershipOut[];
-  /** Re-run fetchMe() for the current Firebase user. No-op if signed out. */
-  refresh: () => Promise<void>;
+  /**
+   * Re-run fetchMe() for the current Firebase user. Resolves true when the
+   * session state was settled by a server answer (200 or 404), false when the
+   * call failed and the previous status was kept — callers that navigate based
+   * on session state should only proceed on true.
+   */
+  refresh: () => Promise<boolean>;
+  /**
+   * Seed the session directly from a successful POST /auth/bootstrap response:
+   * flips to "ready" synchronously (no second round trip) and refreshes
+   * memberships in the background.
+   */
+  applyBootstrap: (user: UserOut) => void;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-/** Falls back to "signedOut" if onAuthChanged never fires — never hang on "loading". */
+/** If onAuthChanged never fires AND Firebase knows no user, stop waiting. */
 const LOADING_TIMEOUT_MS = 10_000;
+/** Bounded retry for transient fetchMe failures while a Firebase user exists. */
+const RETRY_DELAY_MS = 3_000;
+const MAX_RETRIES = 3;
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SessionStatus>(hasFirebaseConfig() ? "loading" : "ready");
   const [user, setUser] = useState<UserOut | null>(null);
   const [memberships, setMemberships] = useState<MembershipOut[]>([]);
-  const firebaseUserRef = useRef<User | null>(null);
-  const statusRef = useRef<SessionStatus>(status);
-  statusRef.current = status;
+  // Bumped on every auth event / seed / load start; a load only applies its
+  // result while its generation is still current.
+  const genRef = useRef(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadMe = useCallback(async () => {
+  const clearRetry = () => {
+    if (retryTimerRef.current !== null) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  };
+
+  const loadMe = useCallback(async (attempt = 0): Promise<boolean> => {
+    const gen = ++genRef.current;
     try {
       const me = await fetchMe();
+      if (genRef.current !== gen) return false; // superseded mid-flight
       setUser(me.user);
       setMemberships(me.memberships);
       setStatus("ready");
+      return true;
     } catch (err) {
+      if (genRef.current !== gen) return false;
       if (err instanceof ApiError && err.status === 404) {
         setUser(null);
         setMemberships([]);
         setStatus("unregistered");
-        return;
+        return true; // settled by a server answer
       }
-      // Unknown/network error: keep whatever status we had, but don't let a
-      // failed first call strand the app on "loading" forever.
-      if (statusRef.current === "loading") setStatus("signedOut");
+      // Transient/network failure. If Firebase still has a user, retry rather
+      // than stranding them; never assert "signedOut" while a session exists.
+      const firebaseUser = getFirebaseAuth().currentUser;
+      if (firebaseUser && attempt < MAX_RETRIES) {
+        clearRetry();
+        retryTimerRef.current = setTimeout(() => {
+          if (genRef.current === gen) void loadMe(attempt + 1);
+        }, RETRY_DELAY_MS);
+        return false;
+      }
+      // Out of retries: only the never-left-"loading" case falls to signedOut
+      // (the app must not hang); otherwise keep the prior status.
+      setStatus((prev) => (prev === "loading" && !firebaseUser ? "signedOut" : prev));
+      return false;
     }
   }, []);
 
-  const refresh = useCallback(async () => {
-    if (!firebaseUserRef.current) return;
-    await loadMe();
+  const refresh = useCallback(async (): Promise<boolean> => {
+    if (!hasFirebaseConfig() || !getFirebaseAuth().currentUser) return false;
+    return loadMe();
   }, [loadMe]);
+
+  const applyBootstrap = useCallback(
+    (bootstrapped: UserOut) => {
+      genRef.current += 1; // discard any in-flight pre-bootstrap load
+      clearRetry();
+      setUser(bootstrapped);
+      setMemberships([]);
+      setStatus("ready");
+      void loadMe(); // pick up memberships in the background
+    },
+    [loadMe],
+  );
 
   useEffect(() => {
     if (!hasFirebaseConfig()) return;
 
     const timeout = setTimeout(() => {
-      if (statusRef.current === "loading") setStatus("signedOut");
+      // Listener never fired: conclude signedOut only if Firebase agrees
+      // there is no user; with a user present the loadMe retry path owns it.
+      if (!getFirebaseAuth().currentUser) {
+        setStatus((prev) => (prev === "loading" ? "signedOut" : prev));
+      }
     }, LOADING_TIMEOUT_MS);
 
     const unsubscribe = onAuthChanged((firebaseUser) => {
-      firebaseUserRef.current = firebaseUser;
       if (!firebaseUser) {
+        genRef.current += 1; // invalidate in-flight loads from the old session
+        clearRetry();
         setUser(null);
         setMemberships([]);
         setStatus("signedOut");
@@ -102,13 +162,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     return () => {
       clearTimeout(timeout);
+      clearRetry();
       unsubscribe();
     };
   }, [loadMe]);
 
   const value = useMemo<SessionContextValue>(
-    () => ({ status, user, memberships, refresh }),
-    [status, user, memberships, refresh],
+    () => ({ status, user, memberships, refresh, applyBootstrap }),
+    [status, user, memberships, refresh, applyBootstrap],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

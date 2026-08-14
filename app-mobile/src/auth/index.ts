@@ -13,6 +13,9 @@ export {
 export {
   SessionProvider,
   useSession,
+} from "./SessionProvider";
+export { withInviteCode } from "./inviteLink";
+export {
   type SessionContextValue,
   type SessionStatus,
 } from "./SessionProvider";
