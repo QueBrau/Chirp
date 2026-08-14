@@ -26,7 +26,7 @@ import {
   type MembershipOut,
   type RoleName,
 } from "@/api/chapters";
-import { createEvent, listEvents, listRsvps, type EventOut, type EventRsvpOut } from "@/api/events";
+import { createEvent, listEventsWithRsvps, type EventOut, type EventRsvpOut, type EventWithRsvpsOut } from "@/api/events";
 import { likePost, listComments, listLikes, unlikePost, type PostOut } from "@/api/feed";
 import { withInviteCode } from "@/auth";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
@@ -323,24 +323,16 @@ function EventCard({
   );
 }
 
-interface EventWithRsvps {
-  event: EventOut;
-  rsvps: EventRsvpOut[];
-}
-
 /** Events segment (§8.7): event list + mock create-event sheet, wired to src/api/events.ts. */
 function OrgEventsSegment({ chapterId }: { chapterId: string }) {
   const router = useRouter();
   const palette = useTheme();
-  const [events, setEvents] = useState<EventWithRsvps[] | null>(null);
+  const [events, setEvents] = useState<EventWithRsvpsOut[] | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const reload = useCallback(async () => {
-    const list = await listEvents(chapterId);
-    const withRsvps = await Promise.all(
-      list.map(async (event) => ({ event, rsvps: await listRsvps(event.id) })),
-    );
-    setEvents(withRsvps);
+    // One round trip (c43) — the old shape here was listEvents + listRsvps per event.
+    setEvents(await listEventsWithRsvps(chapterId));
   }, [chapterId]);
 
   useEffect(() => {

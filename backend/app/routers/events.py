@@ -16,7 +16,13 @@ from app.core.errors import forbidden, not_found
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.middleware.org_scope import get_current_membership
-from app.schemas.events import EventCreate, EventOut, EventRsvpOut, EventRsvpUpdate
+from app.schemas.events import (
+    EventCreate,
+    EventOut,
+    EventRsvpOut,
+    EventRsvpUpdate,
+    EventWithRsvpsOut,
+)
 
 router = APIRouter(tags=["events"])
 
@@ -61,6 +67,41 @@ async def list_events(
         .order_by(models.Event.created_at.desc())
     )
     return [EventOut.model_validate(e) for e in result.scalars().all()]
+
+
+@router.get("/chapters/{chapter_id}/events-with-rsvps")
+async def list_events_with_rsvps(
+    chapter_id: uuid.UUID,
+    _membership: models.Membership = Depends(get_current_membership),
+    session: AsyncSession = Depends(get_session),
+) -> list[EventWithRsvpsOut]:
+    """The chapter's events, newest first, each with all its RSVPs (c43).
+
+    Collapses the Events segment's 1+N (listEvents + listRsvps per event) into
+    two queries total: one for the events, one IN-clause for their RSVPs.
+    """
+    result = await session.execute(
+        select(models.Event)
+        .where(models.Event.chapter_id == chapter_id)
+        .order_by(models.Event.created_at.desc())
+    )
+    events = result.scalars().all()
+    rsvps_by_event: dict[uuid.UUID, list[EventRsvpOut]] = {}
+    if events:
+        rsvp_rows = await session.execute(
+            select(models.EventRsvp)
+            .where(models.EventRsvp.event_id.in_([event.id for event in events]))
+            .order_by(models.EventRsvp.created_at)
+        )
+        for rsvp in rsvp_rows.scalars().all():
+            rsvps_by_event.setdefault(rsvp.event_id, []).append(EventRsvpOut.model_validate(rsvp))
+    return [
+        EventWithRsvpsOut(
+            event=EventOut.model_validate(event),
+            rsvps=rsvps_by_event.get(event.id, []),
+        )
+        for event in events
+    ]
 
 
 @router.post("/chapters/{chapter_id}/events", status_code=201)

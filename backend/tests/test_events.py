@@ -187,3 +187,55 @@ async def test_unknown_event_id_is_404(
     )
     assert put.status_code == 404, put.text
     assert put.json() == {"detail": "event_not_found"}
+
+
+async def test_events_with_rsvps_batches_correctly(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """The c43 batch route returns every event newest-first with exactly its own RSVPs —
+    no cross-event bleed, and an RSVP-less event still appears with an empty list."""
+    setup = await make_chapter_with("member")
+
+    first = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body("First Mixer"),
+        headers=setup.member.headers,
+    )
+    second = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body("Second Mixer"),
+        headers=setup.president.headers,
+    )
+    assert first.status_code == 201 and second.status_code == 201
+
+    for headers, status in ((setup.member.headers, "going"), (setup.president.headers, "maybe")):
+        rsvp = await client.put(
+            f"/events/{first.json()['id']}/rsvps", json={"status": status}, headers=headers
+        )
+        assert rsvp.status_code == 200, rsvp.text
+
+    response = await client.get(
+        f"/chapters/{setup.chapter_id}/events-with-rsvps", headers=setup.member.headers
+    )
+
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert [row["event"]["title"] for row in rows] == ["Second Mixer", "First Mixer"]
+    assert rows[0]["rsvps"] == []
+    first_rsvps = {(r["user_id"], r["status"]) for r in rows[1]["rsvps"]}
+    assert first_rsvps == {(setup.member.id, "going"), (setup.president.id, "maybe")}
+
+
+async def test_events_with_rsvps_is_org_scoped(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """Same §8.4 rule as the plain events list: chapter A's member gets 403 on chapter B."""
+    chapter_a = await make_chapter_with("member")
+    chapter_b = await make_chapter_with("president")
+
+    response = await client.get(
+        f"/chapters/{chapter_b.chapter_id}/events-with-rsvps",
+        headers=chapter_a.member.headers,
+    )
+    assert response.status_code == 403, response.text
+    assert response.json() == {"detail": "not_a_member"}

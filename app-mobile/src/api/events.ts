@@ -72,6 +72,26 @@ export async function listRsvps(eventId: string): Promise<EventRsvpOut[]> {
   return request<EventRsvpOut[]>(`/events/${eventId}/rsvps`);
 }
 
+/** One row of listEventsWithRsvps() — mirrors backend EventWithRsvpsOut (c43). */
+export interface EventWithRsvpsOut {
+  event: EventOut;
+  rsvps: EventRsvpOut[];
+}
+
+/** The chapter's events, newest first, each with all its RSVPs in ONE round trip
+ * (c43) — replaces the Events segment's listEvents + listRsvps-per-event 1+N. */
+export async function listEventsWithRsvps(chapterId: string): Promise<EventWithRsvpsOut[]> {
+  if (USE_MOCKS) {
+    return mocked(
+      MOCK_ORG_EVENTS.filter((event) => event.chapter_id === chapterId).map((event) => ({
+        event,
+        rsvps: MOCK_ORG_EVENT_RSVPS.filter((rsvp) => rsvp.event_id === event.id),
+      })),
+    );
+  }
+  return request<EventWithRsvpsOut[]>(`/chapters/${chapterId}/events-with-rsvps`);
+}
+
 /** Upserts the current user's RSVP for an event (Going / Maybe / Can't, §8.7). */
 export async function setRsvp(eventId: string, status: RsvpStatus): Promise<EventRsvpOut> {
   if (USE_MOCKS) {

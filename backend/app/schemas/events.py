@@ -46,3 +46,11 @@ class EventRsvpOut(_Schema):
     user_id: uuid.UUID
     status: RsvpStatus
     created_at: datetime
+
+
+class EventWithRsvpsOut(_Schema):
+    """One row of GET /chapters/{id}/events-with-rsvps (c43): an event plus all its
+    RSVPs, so the Events segment renders in one round trip instead of 1+N."""
+
+    event: EventOut
+    rsvps: list[EventRsvpOut]
