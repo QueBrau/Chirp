@@ -330,7 +330,7 @@
     {
       "id": "c11",
       "col": "progress",
-      "title": "[B/Q] Stripe Connect dues — MERGED to main via PR #3 (0557375, Aug 14, CI green; c41 renumber done, migration is 0008). NOT yet proven against real Stripe. Express accounts + direct charges; rail locked before intent (application_fee_amount immutable); replay guarded by UNIQUE partial index + processed_stripe_events; Customer per (member, chapter). Keys are Optional in config so prod boots fine without them — dues endpoints dead until c40. LEFT: apply 0008 to prod + redeploy (Jose), Stripe keys + APP_PUBLIC_BASE_URL (c40), EAS dev build (c39), then a test-mode payment on both rails.",
+      "title": "[B/Q] Stripe Connect dues — MERGED to main via PR #3 (0557375, Aug 14, CI green; c41 renumber done, migration is 0008). NOT yet proven against real Stripe. Express accounts + direct charges; rail locked before intent (application_fee_amount immutable); replay guarded by UNIQUE partial index + processed_stripe_events; Customer per (member, chapter). Keys are Optional in config so prod boots fine without them — dues endpoints dead until c40. IN PROGRESS NOW (Aug 14 night, Jose authorized): applying 0008 to prod + redeploy. LEFT after that: Stripe keys + APP_PUBLIC_BASE_URL (c40), EAS dev build (c39), then a test-mode payment on both rails.",
       "owner": "Q",
       "tag": "m8"
     },
