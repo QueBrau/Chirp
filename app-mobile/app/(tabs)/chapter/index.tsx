@@ -5,19 +5,31 @@
  *   entirely in its own colors via OrgAccentScope (wrapped once at the
  *   chapter/_layout.tsx Stack level, so every screen/component below
  *   re-accents automatically).
- * non-member (behind mockIsOrgMember): "Find your org" — invite code input,
- *   category chips, EmptyState. Route dir stays `chapter/` for backend parity.
+ * non-member: sessionStatus is "ready" and useOwnChapter().membership is
+ *   null — "No orgs yet" EmptyState routing to /join-chapter, plus a
+ *   browsable category section (greek registration stays opt-in per §6).
+ *   Gated on sessionStatus (PR #6 review) so a real member never flashes
+ *   this state while the session is still loading on cold start. Route dir
+ *   stays `chapter/` for backend parity.
  */
 
 import { useRouter, type Href } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
 import { useCallback, useEffect, useState } from "react";
-import { Image, Pressable, TextInput, View, type ViewStyle } from "react-native";
+import { Image, Pressable, View, type ViewStyle } from "react-native";
 
-import { joinChapter, type RoleName } from "@/api/chapters";
+import {
+  createInvite,
+  type ChapterInviteOut,
+  type ChapterOut,
+  type MembershipOut,
+  type RoleName,
+} from "@/api/chapters";
 import { createEvent, listEvents, listRsvps, type EventOut, type EventRsvpOut } from "@/api/events";
 import { likePost, listComments, listLikes, unlikePost, type PostOut } from "@/api/feed";
+import { withInviteCode } from "@/auth";
+import { useOwnChapter } from "@/org/OwnChapterProvider";
 import {
   AppText,
   AvatarStack,
@@ -34,16 +46,7 @@ import {
   SectionHeader,
   type CreateEventInput,
 } from "@/components";
-import {
-  MOCK_CAMPUS,
-  MOCK_CHAPTER,
-  MOCK_CURRENT_MEMBERSHIP,
-  MOCK_CURRENT_USER,
-  MOCK_ORG_POSTS,
-  MOCK_POSTS,
-  mockIsOrgMember,
-  mockUserById,
-} from "@/mocks/data";
+import { MOCK_CAMPUS, MOCK_CURRENT_USER, MOCK_ORG_POSTS, MOCK_POSTS, mockUserById } from "@/mocks/data";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -93,6 +96,16 @@ const ROLE_LABELS: Record<RoleName, string> = {
   pledge: "Pledge",
   alumni: "Alum",
 };
+
+/** Mirrors backend permissions.EBOARD (chapters.py) — who can mint invites at all. */
+const EBOARD_ROLES: RoleName[] = ["president", "vice_president", "treasurer", "secretary", "historian"];
+
+/**
+ * Roles any e-board member may invite. President additionally gets the
+ * eboard roles (backend rule, chapters.py create_invite: minting an eboard
+ * invite requires the creator to already be president).
+ */
+const NON_EBOARD_INVITE_ROLES: RoleName[] = ["member", "pledge", "alumni"];
 
 const CATEGORIES = ["Fraternities", "Sororities", "Clubs", "Intramurals"] as const;
 type Category = (typeof CATEGORIES)[number];
@@ -161,18 +174,20 @@ interface OrgFeedItem {
 /**
  * Feed segment (§8.7): chapter-only posts, never on the FYP. Reads BOTH the
  * legacy `source: "org"` rows in MOCK_POSTS and the dedicated MOCK_ORG_POSTS
- * (data.ts keeps them separate; this is the one place that reads both).
+ * (data.ts keeps them separate; this is the one place that reads both), both
+ * filtered to the real chapterId so a different org never sees Sigma Chi's
+ * mock posts.
  */
-function OrgFeedSegment() {
+function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: string }) {
   const [items, setItems] = useState<OrgFeedItem[] | null>(null);
 
   useEffect(() => {
     const load = async () => {
       const posts = [
         ...MOCK_POSTS.filter(
-          (post) => post.chapter_id === MOCK_CHAPTER.id && post.source === "org" && post.deleted_at === null,
+          (post) => post.chapter_id === chapterId && post.source === "org" && post.deleted_at === null,
         ),
-        ...MOCK_ORG_POSTS,
+        ...MOCK_ORG_POSTS.filter((post) => post.chapter_id === chapterId),
       ].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
       const withCounts = await Promise.all(
@@ -190,7 +205,7 @@ function OrgFeedSegment() {
     };
     // Fail soft: mock ids 422 against the live API until wiring lands.
     load().catch(() => setItems([]));
-  }, []);
+  }, [chapterId]);
 
   const toggleLike = async (item: OrgFeedItem) => {
     if (item.likedByMe) {
@@ -215,7 +230,7 @@ function OrgFeedSegment() {
     return (
       <EmptyState
         title="Nothing posted yet"
-        message="Chapter-only posts land here — only Sigma Chi members ever see this feed."
+        message={`Chapter-only posts land here — only ${orgName} members ever see this feed.`}
       />
     );
   }
@@ -312,26 +327,27 @@ interface EventWithRsvps {
 }
 
 /** Events segment (§8.7): event list + mock create-event sheet, wired to src/api/events.ts. */
-function OrgEventsSegment() {
+function OrgEventsSegment({ chapterId }: { chapterId: string }) {
   const router = useRouter();
   const palette = useTheme();
   const [events, setEvents] = useState<EventWithRsvps[] | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const reload = useCallback(async () => {
-    const list = await listEvents(MOCK_CHAPTER.id);
+    const list = await listEvents(chapterId);
     const withRsvps = await Promise.all(
       list.map(async (event) => ({ event, rsvps: await listRsvps(event.id) })),
     );
     setEvents(withRsvps);
-  }, []);
+  }, [chapterId]);
 
   useEffect(() => {
-    void reload();
+    // Fail soft: mock ids 422 against the live API until wiring lands.
+    reload().catch(() => setEvents([]));
   }, [reload]);
 
   const handleCreate = async (input: CreateEventInput) => {
-    await createEvent(MOCK_CHAPTER.id, input);
+    await createEvent(chapterId, input);
     await reload();
   };
 
@@ -390,14 +406,111 @@ function OrgEventsSegment() {
   );
 }
 
-/** Tools segment (§8.7): the pre-existing role-gated tool grid, unchanged, moved under this segment. */
-function OrgToolsSegment({ role }: { role: RoleName }) {
+/**
+ * E-board invite-create card (Tools segment, §8.7/§10 pill-card idiom):
+ * role picker (Chip row) limited to member/pledge/alumni — president also
+ * gets the eboard roles, mirroring backend/app/routers/chapters.py's
+ * create_invite rule — then a "Create invite" Button that mints the code and
+ * shows it prominently with the deep-link share text. expo-clipboard isn't a
+ * project dependency yet, so the code/link render as selectable text instead
+ * of adding a copy button + new dependency.
+ */
+function InviteCard({ chapterId, role }: { chapterId: string; role: RoleName }) {
+  const palette = useTheme();
+  const options: RoleName[] = role === "president" ? [...NON_EBOARD_INVITE_ROLES, ...EBOARD_ROLES] : NON_EBOARD_INVITE_ROLES;
+  const [inviteRole, setInviteRole] = useState<RoleName>("member");
+  const [creating, setCreating] = useState(false);
+  const [invite, setInvite] = useState<ChapterInviteOut | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const create = async () => {
+    setCreating(true);
+    setError(null);
+    try {
+      const created = await createInvite(chapterId, { role: inviteRole });
+      setInvite(created);
+    } catch {
+      setError("Couldn't create the invite. Try again.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <Card>
+      <View style={{ gap: spacing.md }}>
+        <View style={{ gap: spacing.xs }}>
+          <AppText variant="headline">Invite someone</AppText>
+          <AppText variant="caption" tone="secondary">
+            E-board only — pick a role and mint a code.
+          </AppText>
+        </View>
+
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
+          {options.map((option) => (
+            <Pressable
+              key={option}
+              accessibilityRole="button"
+              accessibilityState={{ selected: inviteRole === option }}
+              onPress={() => {
+                setInviteRole(option);
+                setInvite(null);
+              }}
+              style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+            >
+              <Chip label={ROLE_LABELS[option]} variant={inviteRole === option ? "accent" : "neutral"} />
+            </Pressable>
+          ))}
+        </View>
+
+        {error !== null ? (
+          <AppText variant="caption" tone="danger">
+            {error}
+          </AppText>
+        ) : null}
+
+        <Button
+          label={creating ? "Creating..." : "Create invite"}
+          onPress={() => void create()}
+          disabled={creating}
+        />
+
+        {invite !== null ? (
+          <View
+            style={{
+              gap: spacing.xs,
+              padding: spacing.md,
+              borderRadius: radii.input,
+              backgroundColor: palette.surfaceAlt,
+            }}
+          >
+            <AppText variant="caption" tone="secondary">
+              Invite code · tap and hold to copy
+            </AppText>
+            <AppText variant="stat" selectable>
+              {invite.code}
+            </AppText>
+            <AppText variant="caption" tone="tertiary" selectable>
+              {withInviteCode("chirp://join-chapter", invite.code)}
+            </AppText>
+          </View>
+        ) : null}
+      </View>
+    </Card>
+  );
+}
+
+/** Tools segment (§8.7): the pre-existing role-gated tool grid, unchanged, plus the e-board invite card. */
+function OrgToolsSegment({ chapterId, role }: { chapterId: string; role: RoleName }) {
   const router = useRouter();
   const palette = useTheme();
   const visible = TOOLS.filter((tool) => tool.roles === undefined || tool.roles.includes(role));
+  const isEboard = EBOARD_ROLES.includes(role);
 
   return (
     <View style={{ gap: spacing.md }}>
+      {isEboard ? <InviteCard chapterId={chapterId} role={role} /> : null}
+
       {/* First tool gets a featured full-width row (§10 rule 1 — vary card sizes,
           not an unbroken grid of identical tiles); the rest share a 2-col grid. */}
       {visible[0] !== undefined ? (
@@ -436,15 +549,29 @@ function OrgToolsSegment({ role }: { role: RoleName }) {
   );
 }
 
-/** Member state: org identity hero, then the Feed/Events/Tools segmented control (§8.7). */
+/**
+ * Member state: org identity hero, then the Feed/Events/Tools segmented
+ * control (§8.7). `chapter` comes from OwnChapterProvider (mounted in
+ * chapter/_layout.tsx, single-org world — memberships[0]) — OrgsScreen only
+ * renders this once chapter loading has settled, so null here means the
+ * fetch actually failed.
+ */
 function MemberOrgHub({
+  membership,
+  chapter,
   segment,
   onSegmentChange,
 }: {
+  membership: MembershipOut;
+  chapter: ChapterOut | null;
   segment: OrgSegment;
   onSegmentChange: (segment: OrgSegment) => void;
 }) {
-  const role = MOCK_CURRENT_MEMBERSHIP.role;
+  if (chapter === null) {
+    return <EmptyState title="Couldn't load your org" message="Check your connection and try again." />;
+  }
+
+  const role = membership.role;
 
   return (
     <View style={{ gap: spacing.xl }}>
@@ -454,12 +581,10 @@ function MemberOrgHub({
             Your org
           </AppText>
           <AppText variant="title" tone="onAccent">
-            {MOCK_CHAPTER.org_name}
+            {chapter.org_name}
           </AppText>
           <AppText variant="caption" tone="onAccent">
-            {MOCK_CHAPTER.chapter_name !== null
-              ? `${MOCK_CHAPTER.chapter_name} · ${MOCK_CAMPUS.name}`
-              : MOCK_CAMPUS.name}
+            {chapter.chapter_name !== null ? `${chapter.chapter_name} · ${MOCK_CAMPUS.name}` : MOCK_CAMPUS.name}
           </AppText>
           <Chip label={ROLE_LABELS[role]} variant="accent" style={{ marginTop: spacing.xs }} />
         </View>
@@ -467,47 +592,28 @@ function MemberOrgHub({
 
       <OrgSegmentedControl segment={segment} onChange={onSegmentChange} />
 
-      {segment === "feed" ? <OrgFeedSegment /> : null}
-      {segment === "events" ? <OrgEventsSegment /> : null}
-      {segment === "tools" ? <OrgToolsSegment role={role} /> : null}
+      {segment === "feed" ? <OrgFeedSegment chapterId={chapter.id} orgName={chapter.org_name} /> : null}
+      {segment === "events" ? <OrgEventsSegment chapterId={chapter.id} /> : null}
+      {segment === "tools" ? <OrgToolsSegment chapterId={chapter.id} role={role} /> : null}
     </View>
   );
 }
 
-/** Non-member state per DESIGN §6: invite code entry + browsable categories (greek is opt-in here). */
+/** Non-member state per DESIGN §6: "No orgs yet" EmptyState routing to the dedicated
+ * /join-chapter screen (which already owns code redemption + error handling), plus a
+ * browsable category section — greek registration stays opt-in here. */
 function FindYourOrg() {
-  const palette = useTheme();
-  const [code, setCode] = useState("");
+  const router = useRouter();
   const [category, setCategory] = useState<Category>("Fraternities");
 
   return (
     <View style={{ gap: spacing.xl }}>
-      <Card>
-        <View style={{ gap: spacing.md }}>
-          <AppText variant="headline">Have an invite code?</AppText>
-          <TextInput
-            value={code}
-            onChangeText={setCode}
-            placeholder="e.g. SIGCHI-EM-F26"
-            placeholderTextColor={palette.inkFaint}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            style={{
-              ...typography.body,
-              color: palette.ink,
-              backgroundColor: palette.surfaceAlt,
-              borderRadius: radii.input,
-              paddingHorizontal: spacing.lg,
-              paddingVertical: spacing.md,
-            }}
-          />
-          <Button
-            label="Join with code"
-            disabled={code.trim().length === 0}
-            onPress={() => void joinChapter(code.trim())}
-          />
-        </View>
-      </Card>
+      <EmptyState
+        title="No orgs yet"
+        message="Join a fraternity, sorority, or campus org with an invite code from their e-board."
+        actionLabel="Enter invite code"
+        onAction={() => router.push("/join-chapter")}
+      />
 
       <View>
         <SectionHeader title="Browse by category" caption="Every kind of org lives here" />
@@ -535,7 +641,13 @@ function FindYourOrg() {
 
 export default function OrgsScreen() {
   const { campusColors } = useAppearance();
+  const { sessionStatus, membership, chapter, chapterLoading } = useOwnChapter();
   const [segment, setSegment] = useState<OrgSegment>("feed");
+
+  // Session-status gating (PR #6 review): a real member must never flash the
+  // non-member "No orgs yet" state on cold start — only render FindYourOrg
+  // once the session has actually settled AND resolved to no membership.
+  const loading = sessionStatus === "loading" || (membership !== null && chapterLoading);
 
   return (
     <View style={{ flex: 1 }}>
@@ -543,16 +655,24 @@ export default function OrgsScreen() {
         title="Orgs"
         eyebrow={`${MOCK_CAMPUS.name.toUpperCase()} · SPARTANS`}
         accentBarColor={campusColors.secondary}
-        subtitle={mockIsOrgMember ? "Your chapter, your tools." : `Find your org at ${MOCK_CAMPUS.name}`}
+        subtitle={
+          loading
+            ? undefined
+            : membership !== null
+              ? "Your chapter, your tools."
+              : `Find your org at ${MOCK_CAMPUS.name}`
+        }
       >
-        {mockIsOrgMember ? (
-          <MemberOrgHub segment={segment} onSegmentChange={setSegment} />
+        {loading ? (
+          <EmptyState title="Loading your org..." />
+        ) : membership !== null ? (
+          <MemberOrgHub membership={membership} chapter={chapter} segment={segment} onSegmentChange={setSegment} />
         ) : (
           <FindYourOrg />
         )}
       </Screen>
       {/* Org-colored composer FAB (§8.7) — Feed segment only, mirrors Home's Fab pattern. */}
-      {mockIsOrgMember && segment === "feed" ? <Fab /> : null}
+      {!loading && membership !== null && segment === "feed" ? <Fab /> : null}
     </View>
   );
 }

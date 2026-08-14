@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, TextInput, View } from "react-native";
 
-import { listMembers, myMemberships, type MembershipOut, type MyMembershipOut } from "@/api/chapters";
+import { listMembers, myMemberships, type MemberOut, type MyMembershipOut } from "@/api/chapters";
 import { ApiError } from "@/api/client";
 import {
   createMeeting,
@@ -122,7 +122,7 @@ export default function SecretaryScreen() {
   // real membership driving every call below.
   const [membership, setMembership] = useState<MyMembershipOut | null | undefined>(undefined);
   const [items, setItems] = useState<MeetingItem[] | null>(null);
-  const [roster, setRoster] = useState<MembershipOut[] | null>(null);
+  const [roster, setRoster] = useState<MemberOut[] | null>(null);
 
   // New-meeting form state.
   const [newTitle, setNewTitle] = useState("");
@@ -472,20 +472,21 @@ export default function SecretaryScreen() {
                             </AppText>
                           ) : (
                             activeRoster.map((member, index) => {
-                              // GET /chapters/{id}/members joins the name in; there is no
-                              // GET /users/{id}, so this is the only real-data source for
-                              // it. Fall back to the id rather than "Unknown" — taking
-                              // attendance against an unidentifiable row is worse than ugly.
-                              const name = member.display_name ?? member.user_id;
+                              // GET /chapters/{id}/members joins the name (and photo) in;
+                              // there is no GET /users/{id}, so this is the only real-data
+                              // source for either.
+                              const name = member.display_name;
                               const status = attendanceDraft[member.user_id] ?? "absent";
                               return (
                                 <ListRow
                                   key={member.user_id}
                                   title={name}
                                   left={
-                                    // No photoUrl: MembershipOut carries display_name but not
-                                    // avatar_url, so the roster falls back to initials.
-                                    <GradientAvatar name={name} size={32} />
+                                    <GradientAvatar
+                                      name={name}
+                                      size={32}
+                                      photoUrl={member.avatar_url}
+                                    />
                                   }
                                   divider={index < activeRoster.length - 1}
                                   right={

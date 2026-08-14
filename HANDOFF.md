@@ -1,6 +1,16 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 13 2026, late night (main caught up into family-tree + q/social-msg)._
+_Last updated: Aug 14 2026, night. main is through PR #6 (session provider +
+/auth/me, Orgs on real memberships + invite UI + roster names); prod redeployed to
+rev chirp-api-00006-smv and live-verified. `family-tree` is merged with main as of
+PR #6 — the 8-file conflict is resolved, PLUS a real (non-textual) conflict PR #6
+introduced: it added its own `MemberOut`/avatar_url solution to the same
+"roster needs display names" problem this branch had already solved with a
+`display_name` field bolted onto `MembershipOut`. Kept main's `MemberOut` (it's
+the better shape — real INNER JOIN, non-null `display_name`, plus `avatar_url`
+which this branch's version didn't have) and removed the now-dead
+`MembershipOut.display_name` field on both backend and mobile. `q/social-msg`
+still only has main through PR #5 — needs the same PR #6 catch-up repeated._
 
 **board.html is the source of truth for tasks.** This file only answers the question the
 board can't: which copy of Chirp you are looking at.
@@ -9,11 +19,11 @@ board can't: which copy of Chirp you are looking at.
 
 | Where | What's there | State |
 | --- | --- | --- |
-| `main` | Everything through **PR #4/#5**: Firebase live, app off mocks + auth guard, events backend, platform-admin chapter gating, session provider (`GET /auth/me` = user + memberships), review fixes, CI workflow, migrations **0001-0007** | Canonical; prod matches it |
-| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` | `alembic_version` at **0007** = main's head |
-| `jose/auth-orgs` | Synced to main, kept for Jose's future work | Merged via PR #5 |
-| `family-tree` | Yak + treasurer/secretary dashboards + export, now merged with main | **PR #2**, was conflicting, now caught up locally — needs push |
-| `q/social-msg` | Everything in PR #2, plus Stripe Connect dues, now merged with main | **PR #3**, was DRAFT/blocked, migration collision now resolved — needs push, then can come off draft |
+| `main` | Everything through **PR #6**: Firebase live, session provider + /auth/me, Orgs on real memberships + invite UI + roster names (`MemberOut` with `avatar_url`), events backend, platform-admin chapter gating, CI workflow, migrations **0001-0007** | Canonical; prod matches it |
+| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` (rev 00006-smv) | `alembic_version` at **0007** = main's head (PR #6 shipped no migration) |
+| `jose/auth-orgs` | Synced to main, kept for Jose's future work | Merged via PR #6 |
+| `family-tree` | Yak + treasurer/secretary dashboards + export, merged with main through PR #6 | **PR #2**, was conflicting, now caught up locally (both conflict rounds) — needs push |
+| `q/social-msg` | Everything in `family-tree`, plus Stripe Connect dues; merged with main through **PR #5 only** | **PR #3**, was DRAFT/blocked, migration collision resolved — still needs the PR #6 catch-up before push |
 | CI | `.github/workflows/ci.yml`: backend pytest vs PG16 + mobile tsc on every push/PR | Green. No branch protection (deliberate, Aug 13) — CI is advisory |
 
 Creds, runbooks, QA account, and live fixture ids: `INFRA-PRIVATE.html` at the repo root

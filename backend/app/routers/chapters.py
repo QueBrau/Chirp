@@ -20,6 +20,7 @@ from app.schemas.identity import (
     ChapterInviteOut,
     ChapterJoinRequest,
     ChapterOut,
+    MemberOut,
     MembershipOut,
     MembershipUpdate,
 )
@@ -81,25 +82,30 @@ async def list_members(
     chapter_id: uuid.UUID,
     _membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
-) -> list[MembershipOut]:
-    """List the chapter's memberships with each member's display name; §8.4 org-scoped.
-
-    The name is joined in because MembershipOut otherwise carries only user_id, and
-    there is no GET /users/{id} to resolve it — a roster of bare UUIDs is unusable for
-    the secretary's attendance view and the treasurer's spend-approval requesters.
-    """
+) -> list[MemberOut]:
+    """List the chapter's memberships with display identity; org-scoped (§8.4)."""
     result = await session.execute(
-        select(models.Membership, models.User.display_name)
+        select(models.Membership, models.User)
         .join(models.User, models.User.id == models.Membership.user_id)
         .where(models.Membership.chapter_id == chapter_id)
         .order_by(models.Membership.joined_at)
     )
-    members: list[MembershipOut] = []
-    for membership, display_name in result.all():
-        item = MembershipOut.model_validate(membership)
-        item.display_name = display_name
-        members.append(item)
-    return members
+    entries: list[MemberOut] = []
+    for membership, member_user in result.all():
+        entries.append(
+            MemberOut(
+                id=membership.id,
+                user_id=membership.user_id,
+                chapter_id=membership.chapter_id,
+                role=membership.role,
+                status=membership.status,
+                pledge_class=membership.pledge_class,
+                joined_at=membership.joined_at,
+                display_name=member_user.display_name,
+                avatar_url=member_user.avatar_url,
+            )
+        )
+    return entries
 
 
 @router.patch("/chapters/{chapter_id}/members")

@@ -11,7 +11,7 @@
  */
 
 import type { CampusOut, UserOut } from "../api/auth";
-import { DEFAULT_APPEARANCE_PREFS, type AppearancePrefs, type CampusColors } from "@/theme";
+import { brand, DEFAULT_APPEARANCE_PREFS, type AppearancePrefs, type CampusColors } from "@/theme";
 import type { ChapterInviteOut, ChapterOut, MembershipOut } from "../api/chapters";
 import type { DeviceOut, PrekeyBundleOut } from "../api/keys";
 import type { ConversationOut, MessageOut } from "../api/messages";
@@ -84,6 +84,25 @@ export const MOCK_CHAPTER_ADPI: MockChapter = {
   created_at: "2023-01-15T15:00:00Z",
   colors: { primary: "#2E9BD6", secondary: "#0B2340" }, // azure + navy
 };
+
+/**
+ * Org brand colors keyed by org_name (DESIGN §8.6), used by chapter/_layout.tsx
+ * to scope OrgAccentScope for the CURRENT (real) chapter — not just the two
+ * seeded mocks above. A real org created outside those two (e.g. the live
+ * "Chirp HQ — Founding Chapter" fixture) has no colors row in the backend yet,
+ * so it falls back to the Chirp brand gradient — a real, deliberate color pair
+ * rather than a null/gray theme, until orgs can set their own colors server-side.
+ */
+const ORG_COLORS_BY_NAME: Record<string, CampusColors> = {
+  [MOCK_CHAPTER.org_name]: MOCK_CHAPTER.colors,
+  [MOCK_CHAPTER_ADPI.org_name]: MOCK_CHAPTER_ADPI.colors,
+};
+
+export const DEFAULT_ORG_COLORS: CampusColors = { primary: brand, secondary: "#8B5CF6" };
+
+export function orgColorsByName(orgName: string): CampusColors {
+  return ORG_COLORS_BY_NAME[orgName] ?? DEFAULT_ORG_COLORS;
+}
 
 // ---------- campus theming (DESIGN §8.5) ----------
 
@@ -177,9 +196,6 @@ function membership(
     status: "active",
     pledge_class: pledgeClass,
     joined_at: "2024-09-05T18:00:00Z",
-    // Mirrors the backend's join on GET /chapters/{id}/members so roster screens
-    // render the same way under mocks and real data.
-    display_name: mockUserById(userId)?.display_name ?? null,
   };
 }
 
@@ -208,13 +224,6 @@ export const MOCK_MEMBERSHIPS_ADPI: MembershipOut[] = [
   membership("usr-sofia", "member", "Fall 2024", MOCK_CHAPTER_ADPI.id),
   membership("usr-naomi", "member", "Fall 2025", MOCK_CHAPTER_ADPI.id),
 ];
-
-/**
- * UI-only mock flag for the Orgs tab: true renders the member org hub, false
- * renders the "Find your org" discovery state (DESIGN §6). Typed as plain
- * boolean (not the literal) so both branches stay type-live in screens.
- */
-export const mockIsOrgMember: boolean = true;
 
 export const MOCK_INVITES: ChapterInviteOut[] = [
   {

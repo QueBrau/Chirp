@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 
-import { listMembers, type MembershipOut, type RoleName } from "@/api/chapters";
+import { listMembers, type MemberOut, type RoleName } from "@/api/chapters";
+import { useOwnChapter } from "@/org/OwnChapterProvider";
 import {
   AppText,
   Chip,
@@ -15,7 +16,6 @@ import {
   Screen,
   SectionHeader,
 } from "@/components";
-import { MOCK_CURRENT_MEMBERSHIP, mockUserById } from "@/mocks/data";
 import { spacing } from "@/theme";
 
 const ROLE_ORDER: RoleName[] = [
@@ -64,15 +64,31 @@ const ROLE_CHIP_VARIANT: Record<RoleName, ChipVariant> = {
   alumni: "neutral",
 };
 
+/** Fallback label for the rare row whose display_name comes back empty. */
+function shortUserId(userId: string): string {
+  return userId.length > 12 ? `${userId.slice(0, 6)}…${userId.slice(-4)}` : userId;
+}
+
 export default function MembersScreen() {
-  const [members, setMembers] = useState<MembershipOut[] | null>(null);
+  const { sessionStatus, membership, chapterLoading } = useOwnChapter();
+  const chapterId = membership?.chapter_id ?? null;
+  const [members, setMembers] = useState<MemberOut[] | null>(null);
 
   useEffect(() => {
-    // Fail soft: mock ids 422 against the live API until wiring lands.
-    listMembers(MOCK_CURRENT_MEMBERSHIP.chapter_id)
+    if (chapterId === null) {
+      setMembers(null);
+      return;
+    }
+    // Fail soft: matches the repo pattern elsewhere in this stack.
+    listMembers(chapterId)
       .then(setMembers)
       .catch(() => setMembers([]));
-  }, []);
+  }, [chapterId]);
+
+  // Session-status gating (PR #6 review): a real member's roster must never
+  // flash "No members" while the session/chapter/list are still resolving —
+  // same rule as chapter/index.tsx.
+  const loading = sessionStatus === "loading" || (membership !== null && chapterLoading) || members === null;
 
   const active = (members ?? []).filter((m) => m.status === "active");
   const groups = ROLE_ORDER.map((role) => ({
@@ -81,8 +97,10 @@ export default function MembersScreen() {
   })).filter((group) => group.rows.length > 0);
 
   return (
-    <Screen title="Members" subtitle={`${active.length} active`}>
-      {members !== null && active.length === 0 ? (
+    <Screen title="Members" subtitle={loading ? undefined : `${active.length} active`}>
+      {loading ? (
+        <EmptyState title="Loading members..." />
+      ) : active.length === 0 ? (
         <EmptyState title="No members" message="Invite your chapter to get the roster going." />
       ) : (
         <View style={{ gap: spacing.xl }}>
@@ -93,15 +111,14 @@ export default function MembersScreen() {
                 caption={`${rows.length} ${rows.length === 1 ? "member" : "members"}`}
               />
               <Card>
-                {rows.map((membership, index) => {
-                  const user = mockUserById(membership.user_id);
-                  const name = user?.display_name ?? "Unknown";
+                {rows.map((member, index) => {
+                  const label = member.display_name.length > 0 ? member.display_name : shortUserId(member.user_id);
                   return (
                     <ListRow
-                      key={membership.id}
-                      title={name}
-                      subtitle={membership.pledge_class ?? undefined}
-                      left={<GradientAvatar name={name} size={40} photoUrl={user?.avatar_url} />}
+                      key={member.id}
+                      title={label}
+                      subtitle={member.pledge_class ?? undefined}
+                      left={<GradientAvatar name={label} size={40} photoUrl={member.avatar_url} />}
                       right={
                         <Chip label={ROLE_CHIP_LABELS[role]} variant={ROLE_CHIP_VARIANT[role]} />
                       }

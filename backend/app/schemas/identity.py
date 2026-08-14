@@ -110,10 +110,20 @@ class MembershipOut(_Schema):
     joined_at: datetime
     org_name: str | None = None  # joined from chapters for GET /me/memberships
     chapter_name: str | None = None  # joined from chapters for GET /me/memberships
-    # Joined from users for GET /chapters/{id}/members: without it a roster is a list
-    # of bare UUIDs, which makes secretary attendance and treasurer approval views
-    # unusable on real data. Members already see each other by name (§8.4 org scope).
-    display_name: str | None = None
+
+
+class MemberOut(_Schema):
+    """MembershipOut plus the joined user's display identity, for roster views."""
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    chapter_id: uuid.UUID
+    role: RoleName
+    status: MembershipStatus
+    pledge_class: str | None = None
+    joined_at: datetime
+    display_name: str
+    avatar_url: str | None = None
 
 
 class MeOut(_Schema):
