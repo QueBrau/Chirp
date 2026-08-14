@@ -6,6 +6,7 @@ import {
   MOCK_CURRENT_MEMBERSHIP,
   MOCK_INVITES,
   MOCK_MEMBERSHIPS,
+  MOCK_ROLE_META,
   mockUserById,
 } from "../mocks/data";
 
@@ -86,6 +87,15 @@ export interface MyMembershipOut extends MembershipOut {
   chapter_name: string | null;
 }
 
+/** GET /chapters/{id}/role-meta — role taxonomy served from backend permissions.py
+ * (c44), so this app never hand-mirrors the eboard set or the create_invite rule.
+ * `invitable` is what the CALLER may mint (empty for non-eboard), common roles first. */
+export interface RoleMetaOut {
+  roles: RoleName[];
+  eboard: RoleName[];
+  invitable: RoleName[];
+}
+
 export async function listChapters(): Promise<ChapterOut[]> {
   if (USE_MOCKS) return mocked([MOCK_CHAPTER]);
   return request<ChapterOut[]>("/chapters");
@@ -130,6 +140,11 @@ export async function listMembers(chapterId: string): Promise<MemberOut[]> {
     );
   }
   return request<MemberOut[]>(`/chapters/${chapterId}/members`);
+}
+
+export async function getRoleMeta(chapterId: string): Promise<RoleMetaOut> {
+  if (USE_MOCKS) return mocked(MOCK_ROLE_META);
+  return request<RoleMetaOut>(`/chapters/${chapterId}/role-meta`);
 }
 
 export async function updateMember(

@@ -103,15 +103,11 @@ const ROLE_LABELS: Record<RoleName, string> = {
   alumni: "Alum",
 };
 
-/** Mirrors backend permissions.EBOARD (chapters.py) — who can mint invites at all. */
-const EBOARD_ROLES: RoleName[] = ["president", "vice_president", "treasurer", "secretary", "historian"];
-
-/**
- * Roles any e-board member may invite. President additionally gets the
- * eboard roles (backend rule, chapters.py create_invite: minting an eboard
- * invite requires the creator to already be president).
- */
-const NON_EBOARD_INVITE_ROLES: RoleName[] = ["member", "pledge", "alumni"];
+/** Runtime fallback for a role the closed ROLE_LABELS record doesn't know yet —
+ * the server owns the taxonomy (c44), so an unmapped value just gets prettified. */
+function roleLabel(role: RoleName): string {
+  return ROLE_LABELS[role] ?? role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 const CATEGORIES = ["Fraternities", "Sororities", "Clubs", "Intramurals"] as const;
 type Category = (typeof CATEGORIES)[number];
@@ -414,17 +410,17 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
 
 /**
  * E-board invite-create card (Tools segment, §8.7/§10 pill-card idiom):
- * role picker (Chip row) limited to member/pledge/alumni — president also
- * gets the eboard roles, mirroring backend/app/routers/chapters.py's
- * create_invite rule — then a "Create invite" Button that mints the code and
- * shows it prominently with the deep-link share text. expo-clipboard isn't a
- * project dependency yet, so the code/link render as selectable text instead
- * of adding a copy button + new dependency.
+ * role picker (Chip row) whose options come from GET /chapters/{id}/role-meta
+ * (c44) — the server applies the create_invite rule (any e-board mints
+ * member/pledge/alumni, president additionally mints e-board roles), so this
+ * file no longer mirrors permissions.py. Then a "Create invite" Button mints
+ * the code and shows it prominently with the deep-link share text.
+ * expo-clipboard isn't a project dependency yet, so the code/link render as
+ * selectable text instead of adding a copy button + new dependency.
  */
-function InviteCard({ chapterId, role }: { chapterId: string; role: RoleName }) {
+function InviteCard({ chapterId, options }: { chapterId: string; options: RoleName[] }) {
   const palette = useTheme();
-  const options: RoleName[] = role === "president" ? [...NON_EBOARD_INVITE_ROLES, ...EBOARD_ROLES] : NON_EBOARD_INVITE_ROLES;
-  const [inviteRole, setInviteRole] = useState<RoleName>("member");
+  const [inviteRole, setInviteRole] = useState<RoleName>(options[0] ?? "member");
   const [creating, setCreating] = useState(false);
   const [invite, setInvite] = useState<ChapterInviteOut | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -464,7 +460,7 @@ function InviteCard({ chapterId, role }: { chapterId: string; role: RoleName }) 
               }}
               style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
             >
-              <Chip label={ROLE_LABELS[option]} variant={inviteRole === option ? "accent" : "neutral"} />
+              <Chip label={roleLabel(option)} variant={inviteRole === option ? "accent" : "neutral"} />
             </Pressable>
           ))}
         </View>
@@ -510,12 +506,16 @@ function InviteCard({ chapterId, role }: { chapterId: string; role: RoleName }) 
 function OrgToolsSegment({ chapterId, role }: { chapterId: string; role: RoleName }) {
   const router = useRouter();
   const palette = useTheme();
+  const { roleMeta } = useOwnChapter();
   const visible = TOOLS.filter((tool) => tool.roles === undefined || tool.roles.includes(role));
-  const isEboard = EBOARD_ROLES.includes(role);
+  // Server-decided (c44): a non-empty invitable set means this caller may mint
+  // invites. Fail soft — while roleMeta is loading (or errored) the card is
+  // simply absent, never shown to someone the backend would 403.
+  const invitable = roleMeta?.invitable ?? [];
 
   return (
     <View style={{ gap: spacing.md }}>
-      {isEboard ? <InviteCard chapterId={chapterId} role={role} /> : null}
+      {invitable.length > 0 ? <InviteCard chapterId={chapterId} options={invitable} /> : null}
 
       {/* First tool gets a featured full-width row (§10 rule 1 — vary card sizes,
           not an unbroken grid of identical tiles); the rest share a 2-col grid. */}
