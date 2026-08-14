@@ -1,32 +1,48 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 14 2026, night. PR #5 (session provider + /auth/me) and PR #6
-(Orgs on real memberships + invite UI + roster names) are both MERGED; prod
-redeployed to rev chirp-api-00006-smv and live-verified. **Both dev branches are now
-caught up to main through PR #6**: PR #2's 8-file conflict is resolved and pushed,
-and PR #3's Stripe migration is renumbered to 0008. Neither is blocked anymore._
+_Last updated: Aug 14 2026, night. **PR #2 is MERGED to main.** PR #3 (Stripe dues)
+is merging right behind it. Everything through PR #6 (session provider + /auth/me,
+Orgs on real memberships + invite UI + roster names) was already on main and
+live-verified at prod rev chirp-api-00006-smv._
 
 **board.html is the source of truth for tasks.** This file only answers the question the
 board can't: which copy of Chirp you are looking at.
 
-## Current state: main, prod, and CI all agree
+## Current state
 
 | Where | What's there | State |
 | --- | --- | --- |
-| `main` | Everything through **PR #6**: Firebase live, session provider + /auth/me, Orgs on real memberships + invite UI + roster names, events backend, platform-admin chapter gating, CI workflow, migrations **0001-0007** | Canonical; prod matches it |
-| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` (rev 00006-smv) | `alembic_version` at **0007** = main's head (PR #6 shipped no migration) |
+| `main` | Everything through **PR #6** + **PR #2** (Yak on real API, treasurer/secretary dashboards, CSV export), and PR #3 (Stripe dues, migration **0008**) landing now | Canonical |
+| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` (rev 00006-smv) | `alembic_version` at **0007** — **BEHIND main once PR #3 lands.** Next redeploy runs migration 0008 |
 | `jose/auth-orgs` | Synced to main, kept for Jose's future work | Merged via PR #6 |
-| `family-tree` | Yak on real API + treasurer/secretary dashboards + CSV export | **PR #2**, merged with main through PR #6, 92 tests green, **pushed** |
-| `q/social-msg` | Everything in PR #2, plus Stripe Connect dues (migration **0008**) | **PR #3**, merged with main through PR #6 — ready to come off draft |
-| CI | `.github/workflows/ci.yml`: backend pytest vs PG16 + mobile tsc on every push/PR | First run green. No branch protection (deliberate, Aug 13) — CI is advisory |
+| `family-tree` | Merged via PR #2 | Done |
+| `q/social-msg` | Merged via PR #3 | Done |
+| CI | `.github/workflows/ci.yml`: backend pytest vs PG16 + mobile tsc on every push/PR | Green on both PRs at merge time. No branch protection (deliberate, Aug 13) — CI is advisory |
 
 Creds, runbooks, QA account, and live fixture ids: `INFRA-PRIVATE.html` at the repo root
 (gitignored — get a copy from Jose, never commit it).
 
+## Next human steps (in order)
+
+1. **Cloud Run redeploy.** Prod is at `alembic_version` 0007; main now carries **0008**
+   (Stripe: `chapter_stripe_customers`, `processed_stripe_events`, and the unique partial
+   index on `ledger_entries.stripe_payment_intent_id`). Nothing Stripe works until this
+   runs, and until it does prod is running older code than main.
+2. **Set the Stripe keys (c40)** — `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`,
+   `STRIPE_WEBHOOK_SECRET`, `APP_PUBLIC_BASE_URL` in Secret Manager + Cloud Run, then
+   register the webhook endpoint at `/webhooks/stripe`. `APP_PUBLIC_BASE_URL` must be
+   https — Stripe rejects custom schemes, so Connect onboarding cannot return to a
+   `chirp://` deep link; it needs a web page that bounces back into the app.
+3. **Rebuild the EAS dev build (c39)** — `expo-file-system`, `expo-sharing` and
+   `@stripe/stripe-react-native` were all added after the current build was cut, so CSV
+   export and the dues PaymentSheet can't be exercised on device until then.
+4. **Then, and only then, a test-mode dues payment on both card and ACH.** Until that
+   runs, treat the entire dues flow as unverified (see below).
+
 ## The Stripe migration number (board c41) — RESOLVED
 
-PR #3 shipped the Stripe migration as `0006`. That number was Jose's events migration,
-already applied to prod, with `0007` taken by `is_platform_admin`.
+PR #3 originally shipped the Stripe migration as `0006`. That number was Jose's events
+migration, already applied to prod, with `0007` taken by `is_platform_admin`.
 
 Left alone, prod (already past `0006`) would have had Alembic mark the Stripe migration
 as already-applied and never run it — no `processed_stripe_events`, no unique partial
@@ -35,11 +51,11 @@ so a Stripe retry would have appended a second dues payment to an append-only le
 Silent, and on the money path.
 
 **Fixed**: renamed to `0008_stripe_dues.py`, `revision = "0008"`,
-`down_revision = "0007"`. Verified the resulting chain is linear with a single head
+`down_revision = "0007"`. Verified the chain is linear with a single head
 (`0001` → … → `0008`), not merely that the file parses.
 
 **Rule that came out of this (now in CLAUDE.md): claim your migration number on the board
-before you write the file.**
+before you write the file. Next free number: `0009`.**
 
 ## The roster-names overlap (came out of the PR #6 catch-up)
 
@@ -55,15 +71,16 @@ nullable `display_name` to `MembershipOut`, that's the regression.
 
 ## Verification status
 
-- `family-tree`: **92 backend tests green**, tsc clean, post-merge with main through PR #6.
-- `q/social-msg`: **116 backend tests green** (the extra ones are the Stripe suite), tsc
-  clean, run fresh through the full 0001–0008 migration chain.
+- Both branches were green at merge: `family-tree` 92 backend tests, `q/social-msg` 116
+  (the extra ones are the Stripe suite), each run fresh against postgres:16 through the
+  full 0001–0008 chain. tsc clean on both. CI agreed.
 - Stripe is code-complete but **has never talked to real Stripe**. Nothing in the dues
-  flow is proven until the keys are set (c40) and a test-mode payment runs on both card
-  and ACH. Treat it as unverified.
-- The mobile half of Stripe additionally can't be exercised until the EAS dev build is
-  rebuilt (c39) — `expo-file-system`, `expo-sharing` and `@stripe/stripe-react-native`
-  were all added after the current build was cut.
+  flow is proven until step 2 above is done and a test-mode payment runs on card AND ACH.
+  Treat it as unverified — merged is not the same as working.
+- Yak, the dashboards, and CSV export are exercised only against mocks and the test
+  suite; they have not been driven on a device (the iOS Simulator was broken on Q's Mac
+  this session — `launchd_sim` failing to bind a session after an `xcode-select` switch;
+  a reboot is the known fix, not yet confirmed).
 
 ## Environment
 
