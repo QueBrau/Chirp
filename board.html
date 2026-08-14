@@ -83,7 +83,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1786729693947,
+  "updated": 1786736072754,
   "columns": [
     {
       "id": "backlog",
@@ -196,8 +196,8 @@
     },
     {
       "id": "c34",
-      "col": "next",
-      "title": "[B/Q] Wire FYP feed to real API: replace mock calls in src/api/feed with live fetch (posts/likes/comments) against the shared backend. UNBLOCKED Aug 14 — PRs #2 and #3 are on main, q/social-msg is retired, so this cuts a fresh branch from main. Coordinate with c43 before wiring the counts: the naive path is 2N queries per feed page.",
+      "col": "progress",
+      "title": "[B/Q] CLAIMED Aug 14 (branch q/feed) — FYP feed on real API. The root cause above is confirmed and necessary, but NOT sufficient: fixing the hardcoded chapter id still leaves Home empty, because feed/index.tsx:110 filters on post.source and the backend PostOut has NO source field — every live post gets filtered out. post_type/duration_sec are missing too (the media FYP silently degrades to text cards), the only posts route is chapter-scoped while org posts are barred from the FYP by the Aug 12 decision, and posts.chapter_id is NOT NULL so there is no data model for a campus post at all. Authors also resolve via mockUserById (no GET /users/{id}) = the same 'Unknown' bug the roster had. CLAIMING MIGRATION 0009. Doing: 0009 (audience org|campus, post_type, duration_sec) + GET /campuses/{id}/feed + author identity on the feed row + posts-with-counts (c43's half, 2N -> 1) + compose audience picker + wire the screen off useSession(). Audience defaults to ORG when a client omits it — a post must never broadcast campus-wide by accident.",
       "owner": "Q",
       "tag": "vert:social-msg"
     },
@@ -245,15 +245,15 @@
     },
     {
       "id": "c26",
-      "col": "backlog",
-      "title": "Events backend: events + event_rsvps tables, RSVP endpoints; org feed maps to existing /chapters/{id}/posts",
+      "col": "done",
+      "title": "Events backend DONE (duplicate of c33 — closed Aug 14 by audit): events + event_rsvps tables shipped in migration 0006, RSVP endpoints live. Card was stale in backlog while the work was already on prod.",
       "owner": "",
       "tag": "m5"
     },
     {
       "id": "c20",
-      "col": "next",
-      "title": "Create the Firebase project per SETUP-FIREBASE.md (console steps) — unblocks live auth",
+      "col": "done",
+      "title": "Firebase project DONE (duplicate of c31 — closed Aug 14 by audit): chirps-prod live, email/password enabled, config committed in src/auth/config.ts. Card was stale in Next while auth had been live for a day.",
       "owner": "",
       "tag": "m1"
     },
@@ -400,7 +400,7 @@
     {
       "id": "c43",
       "col": "next",
-      "title": "[shared] Batch endpoints to kill the N+1s — SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's — DONE + LIVE (PR #7 befba10, prod rev 00007-kff): GET /chapters/{id}/events-with-rsvps, 1+N -> one round trip, Events segment wired, route verified serving app-level 401. Q's posts-with-counts half still rides with c34 — this card stays open until that lands. No migration — 0009 stays free.",
+      "title": "[shared] Batch endpoints to kill the N+1s — SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's — DONE + LIVE (PR #7 befba10, prod rev 00007-kff): GET /chapters/{id}/events-with-rsvps, 1+N -> one round trip, Events segment wired, route verified serving app-level 401. Q's posts-with-counts half still rides with c34 — this card stays open until that lands. MIGRATION 0009 NOW CLAIMED by c34 (posts.audience/post_type/duration_sec) — next free is 0010.",
       "owner": "",
       "tag": "backend"
     },
@@ -410,6 +410,20 @@
       "title": "[A/Jose] Role metadata from backend DONE + LIVE (PR #7 merged befba10, prod rev 00007-kff, Aug 14): GET /chapters/{id}/role-meta serves roles/eboard/invitable from permissions.py with the create_invite rule applied server-side; mobile fully server-fed via OwnChapterProvider (invite card, roster grouping, chips) — the hand-typed mirrors flagged in PR #6 review are deleted. 4 tests assert against permissions.py itself so enum drift is caught automatically. Verified live: route serves app-level 401.",
       "owner": "J",
       "tag": "vert:auth-orgs"
+    },
+    {
+      "id": "c46",
+      "col": "progress",
+      "title": "[A/Jose] MOCK IDENTITY LEAK — Auth/Orgs screens. IN PROGRESS Aug 14 night on jose/auth-orgs. Fixing: (1) profile/index.tsx:145 'const user = MOCK_CURRENT_USER' — entire profile fake; now real session + myMemberships() for org/chapter/role + NEW GET /campuses/{id} for the real campus name. (2) chapter/tree.tsx:26 getLineage(mock id) with NO .catch — real users hung on 'Loading lineage...' forever; now real chapter id + fail-soft. (3) chapter/event/[id].tsx:44 listEvents(MOCK_CHAPTER.id) -> 'Event not found' on every real event; now real chapter id + listMembers for real host names. (4) chapter/index.tsx org Feed segment filtered MOCK_POSTS against the real chapter id; now real listPosts. PLUS repo-wide: deleting the dead USE_MOCKS layer (85 unreachable branches across 13 api files — the flag is false in every build, which is exactly why this class of bug hid so long). NOT TOUCHING feed/index.tsx — Q claimed it under c34 the same hour.",
+      "owner": "J",
+      "tag": "vert:auth-orgs"
+    },
+    {
+      "id": "c47",
+      "col": "next",
+      "title": "[B/Q] MOCK IDENTITY LEAK — Messaging screens (Aug 14 audit). messages/[id].tsx fetches REAL conversations/messages but then renders message.mock_plaintext (line 82), a field that exists only on the mock type — real MessageOut carries ciphertext_b64, so every real message renders BLANK; and line 55 compares message.sender_user_id === MOCK_CURRENT_USER.id, a field real MessageOut does not have, so every bubble (including your own) renders as 'theirs'. messages/index.tsx degrades more gently: real conversation list, but titles fall back to 'Direct message' and the unread dot is keyed on MOCK_CURRENT_USER.id. Composer is hard-disabled (milestone-4). Ties into c36 (crypto stubs) — decrypt has to land before plaintext can render at all. HEADS UP Q (Aug 14 night): Jose is making these two screens TRUTHFUL only — deleting the renders of fields that do not exist so messages stop coming out blank and every bubble stops claiming to be 'theirs', replaced with an explicit encrypted-placeholder state. No redesign, no crypto, no new endpoints; the messaging experience is still yours. What stays genuinely blocked and is NOT being touched: real message text (needs the decrypt layer, c36) and DM titles (needs a GET /users/{id}, which does not exist).",
+      "owner": "Q",
+      "tag": "vert:social-msg"
     },
     {
       "id": "c45",
@@ -438,9 +452,16 @@
     "Aug 14 — Backend: roster display names are MemberOut, NOT a field on MembershipOut. PR #6 (Jose) and the dashboards work (Q) solved the same problem in parallel — no GET /users/{id} exists, so a roster is bare UUIDs — and PR #6's shape won: real INNER JOIN, non-null display_name, plus avatar_url. GET /chapters/{id}/members returns MemberOut; GET /me/memberships returns the plain MembershipOut. Re-adding a nullable display_name to MembershipOut is the regression to watch for. Worth knowing HOW this was nearly missed: git did NOT flag most of the overlap as a text conflict, so two branches solving the same problem can auto-merge into two competing mechanisms with a green build. When both verticals touch the same domain, diff it by hand.",
     "Aug 14 — Process: migration-number rule earned its keep. As 0006 the Stripe migration would have been silently skipped on a prod already stamped past it — Alembic marks it applied and moves on, so processed_stripe_events and the unique index on ledger_entries.stripe_payment_intent_id would simply not exist, with nothing erroring and the webhook-replay guard absent on the money path. Renumbered to 0008, chain verified linear/single-head on main. Next free number: 0009 — claim it here first.",
     "Aug 14 — Process: PR #2 merged before PR #3 deliberately. The branches had diverged and q/social-msg's content was a superset of family-tree's, so merging #3 first would have made #2 read as a Stripe revert. family-tree and q/social-msg are both retired; new work cuts from main.",
+    "Aug 14 — Backend: added GET /campuses/{campus_id} (Jose, c46). Trivial route, but it closes a real gap — users.campus_id existed with no way to resolve it to a name, which is WHY Profile and the Yak header hardcoded a mock campus. Any registered caller may read one; campus name/slug are public-facing labels, not org-scoped data. 3 tests. No migration.",
+    "Aug 14 — Process: near-miss avoided. Jose's de-mock sweep and Q's c34 both wanted app/(tabs)/feed/index.tsx within the same hour; Q had claimed it on the board first (branch q/feed, migration 0009), so Jose dropped his changes to that ONE file and kept the rest. This is the roster-names collision from earlier today NOT happening, because the claim was on the board. Both devs independently reached the same root cause, which is also a good sign the finding is real.",
+    "Aug 14 — Audit finding (13-agent sweep, every claim adversarially verified): the gap between 'backend is live' and 'the app shows real data' is BIGGER than the board implied, and it is not the USE_MOCKS flag. USE_MOCKS is false in every build (no .env or eas.json ever sets it), so those api-layer branches are dead code — the real problem is screens importing MOCK_* constants directly and using them as the signed-in identity. Home feed, Profile, Family Tree, Event detail, org Feed segment and the DM thread are all affected; filed as c34 (sharpened), c46 (Jose) and c47 (Q). Rule going forward: a screen must source identity from useSession()/useOwnChapter(), never from @/mocks/data — cosmetic-only mock imports (theme colors, campus label) are the sole allowed exception and should carry a comment saying so.",
+    "Aug 14 — Process: the audit also closed two stale cards (c20 Firebase project, c26 events backend) that had been sitting in Next/backlog while the work was already Done and on prod, and found three more that overstate what is left (c5, c35, c36). Lesson: cards get moved when work lands, not when someone happens to notice; a stale board costs more than no board because it is trusted.",
     "Aug 14 — Infra: prod is CURRENT with main for the first time since sprint 0 — migration 0008 applied by Jose, then rev chirp-api-00007-kff shipped PRs #2, #3 and #7 in ONE redeploy. Ordering rule confirmed and now in INFRA-PRIVATE.html: MIGRATE FIRST, THEN DEPLOY. The Cloud Run deploy does not run migrations, and the post-#3 code selects ledger_entries.stripe_payment_intent_id, which does not exist until 0008 runs — deploying first would have 500'd the treasurer ledger. Also learned: cloud-sql-proxy is NOT bundled with the gcloud SDK and was missing entirely on Jose's Mac; the install command is now a documented prerequisite in the migration runbook.",
     "Aug 14 — Process: c43 SPLIT along the consumer line — whoever consumes an endpoint designs it. Q builds posts-with-counts inside c34 (he is wiring the feed that calls it); Jose builds events-with-rsvp-counts with c44 (events backend is his). This is the lesson from the roster-names overlap applied in advance: one owner per shape, no parallel competing mechanisms.",
-    "Aug 14 — Process: 'merged' is not 'working', and the board should say which. Stripe dues is on main with CI green and has never contacted real Stripe, so c11 stays in In Progress until a test-mode payment clears on BOTH card and ACH. Yak, the dashboards and CSV export are likewise only proven against mocks and the test suite — never driven on a device."
+    "Aug 14 — Process: 'merged' is not 'working', and the board should say which. Stripe dues is on main with CI green and has never contacted real Stripe, so c11 stays in In Progress until a test-mode payment clears on BOTH card and ACH. Yak, the dashboards and CSV export are likewise only proven against mocks and the test suite — never driven on a device.",
+    "Aug 14 — Product: a post's audience is chosen by the author at compose time. posts.audience is 'org' (private to the chapter, per the Aug 12 rule) or 'campus' (visible to everyone at that campus). 'For You' is a RANKING over campus posts, not a stored third value — so the two Home pills read the same campus feed and differ only in ordering. v1 ships both as reverse-chron; ranking is a later card, and until it exists the two pills will look identical. Audience defaults to 'org' server-side when the client omits it: the safe default is private, never accidental campus-wide broadcast.",
+    "Aug 14 — Process: migration 0009 CLAIMED by Q for c34 (posts.audience, post_type, duration_sec). Next free number is 0010. Claimed here before the file was written, per the rule c41 taught us.",
+    "Aug 14 — Scoping: c34 was carded as 'replace mock calls with live fetch' and was actually a backend gap. The client layer (src/api/feed) was already correct; what was missing was any way for the server to express a campus-visible post. Worth remembering when a card looks like a one-line swap: check that the API can express what the screen renders before estimating it."
   ]
 }
 </script>
