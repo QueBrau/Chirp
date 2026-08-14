@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 
 import { listMembers, type MembershipOut, type RoleName } from "@/api/chapters";
+import { useSession } from "@/auth";
 import {
   AppText,
   Chip,
@@ -15,7 +16,6 @@ import {
   Screen,
   SectionHeader,
 } from "@/components";
-import { MOCK_CURRENT_MEMBERSHIP, mockUserById } from "@/mocks/data";
 import { spacing } from "@/theme";
 
 const ROLE_ORDER: RoleName[] = [
@@ -64,15 +64,34 @@ const ROLE_CHIP_VARIANT: Record<RoleName, ChipVariant> = {
   alumni: "neutral",
 };
 
+/**
+ * TODO(backend): GET /chapters/{id}/members returns MembershipOut (user_id,
+ * role, status) with no joined display name — there's no /users/{id} or bulk
+ * name-resolution endpoint to call either (alumni.py joins display_name but
+ * only within its own directory query). Until one of those exists, rows show
+ * role + a shortened user id instead of a fabricated name.
+ */
+function shortUserId(userId: string): string {
+  return userId.length > 12 ? `${userId.slice(0, 6)}…${userId.slice(-4)}` : userId;
+}
+
 export default function MembersScreen() {
+  const { memberships } = useSession();
+  // Single-org world for now: the roster belongs to the member's first (and
+  // currently only) chapter membership.
+  const chapterId = memberships[0]?.chapter_id ?? null;
   const [members, setMembers] = useState<MembershipOut[] | null>(null);
 
   useEffect(() => {
-    // Fail soft: mock ids 422 against the live API until wiring lands.
-    listMembers(MOCK_CURRENT_MEMBERSHIP.chapter_id)
+    if (chapterId === null) {
+      setMembers([]);
+      return;
+    }
+    // Fail soft: matches the repo pattern elsewhere in this stack.
+    listMembers(chapterId)
       .then(setMembers)
       .catch(() => setMembers([]));
-  }, []);
+  }, [chapterId]);
 
   const active = (members ?? []).filter((m) => m.status === "active");
   const groups = ROLE_ORDER.map((role) => ({
@@ -94,14 +113,13 @@ export default function MembersScreen() {
               />
               <Card>
                 {rows.map((membership, index) => {
-                  const user = mockUserById(membership.user_id);
-                  const name = user?.display_name ?? "Unknown";
+                  const label = shortUserId(membership.user_id);
                   return (
                     <ListRow
                       key={membership.id}
-                      title={name}
+                      title={label}
                       subtitle={membership.pledge_class ?? undefined}
-                      left={<GradientAvatar name={name} size={40} photoUrl={user?.avatar_url} />}
+                      left={<GradientAvatar name={label} size={40} />}
                       right={
                         <Chip label={ROLE_CHIP_LABELS[role]} variant={ROLE_CHIP_VARIANT[role]} />
                       }
