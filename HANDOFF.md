@@ -1,11 +1,13 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 14 2026, late night. **PRs #2 AND #3 are MERGED to main** (both
-retired branches deleted; new work cuts from main). **PR #7 is OPEN** from
-jose/auth-orgs: c44 role-meta endpoint, c45 returning-user sign-in, c43's events
-batch endpoint — 122 backend tests + tsc green. Everything through PR #6 was
-already live-verified at prod rev chirp-api-00006-smv; **prod is now BEHIND main**
-until the 0008 migration + redeploy below happen._
+_Last updated: Aug 14 2026, late night. **PRs #2, #3 and #7 are all MERGED — zero open
+PRs, and PROD IS CURRENT WITH MAIN for the first time since sprint 0.** Jose applied
+migration 0008 (`alembic current` = `0008 (head)`), then one redeploy shipped all three
+PRs as rev **chirp-api-00007-kff**. Live-verified by probing routes from each PR: every
+one answers with the app's own 401 `missing_bearer_token`, a bogus path still 404s (so
+the 401s are real routing, not a catch-all), and `POST /webhooks/stripe` answers 400
+`missing_stripe_signature` — its own error, which proves the payments module imports and
+executes in the container. No code work is blocked on infrastructure right now._
 
 **board.html is the source of truth for tasks.** This file only answers the question the
 board can't: which copy of Chirp you are looking at.
@@ -14,11 +16,10 @@ board can't: which copy of Chirp you are looking at.
 
 | Where | What's there | State |
 | --- | --- | --- |
-| `main` | Everything through **PR #3**: PR #2 (Yak on real API, treasurer/secretary dashboards, CSV export) + PR #3 (Stripe dues, migration **0008**) | Canonical |
-| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` (rev 00006-smv) | `alembic_version` at **0007** — **BEHIND main.** Human steps below, in order |
-| `jose/auth-orgs` | c44 (role-meta from the API) + c45 (returning-user sign-in) + c43's events-with-rsvps endpoint | **PR #7 OPEN**, 122 tests + tsc green, awaiting Jose's merge |
-| `family-tree` | Merged via PR #2 | Done |
-| `q/social-msg` | Merged via PR #3 | Done |
+| `main` | Everything through **PR #7** (head `befba10`): Yak on real API, treasurer/secretary dashboards + CSV export, Stripe dues, role-meta, events batch endpoint, returning-user sign-in. Migrations **0001-0008** | Canonical |
+| Cloud Run (prod) | `chirp-api-593616178468.us-central1.run.app`, rev **00007-kff** | `alembic_version` **0008** = main's head. **MATCHES MAIN.** Route-probe verified |
+| `jose/auth-orgs` | Synced to main, kept for Jose's next card | Merged via PR #7 |
+| `family-tree`, `q/social-msg` | RETIRED — merged via PRs #2/#3 and deleted | New work cuts fresh branches from main |
 | CI | `.github/workflows/ci.yml`: backend pytest vs PG16 + mobile tsc on every push/PR | Green on both PRs at merge time. No branch protection (deliberate, Aug 13) — CI is advisory |
 
 Creds, runbooks, QA account, and live fixture ids: `INFRA-PRIVATE.html` at the repo root
@@ -26,24 +27,24 @@ Creds, runbooks, QA account, and live fixture ids: `INFRA-PRIVATE.html` at the r
 
 ## Next human steps (in order)
 
-1. **Apply migration 0008, THEN redeploy — two separate steps, in that order.** The
-   redeploy does NOT run migrations. First the migration runbook (INFRA-PRIVATE.html:
-   proxy on 5433 → `alembic upgrade head` → kill proxy) brings prod to 0008 (Stripe:
-   `chapter_stripe_customers`, `processed_stripe_events`, the unique partial index on
-   `ledger_entries.stripe_payment_intent_id`); then one `gcloud run deploy` ships
-   PRs #2/#3 (+#7 once merged). Deploying first would 500 the treasurer ledger —
-   the new `LedgerEntry` model selects `stripe_payment_intent_id`, which doesn't
-   exist in prod until 0008 runs. NOTE: the migration is Jose-only — agent sessions
-   are permission-blocked from the prod DB (the redeploy itself is not).
-2. **Set the Stripe keys (c40)** — `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`,
+_(Step 1, the 0008 migration + redeploy, is DONE as of Aug 14 — see the top of this file.
+The rule it established, now also in INFRA-PRIVATE.html: **migrate first, then deploy.**
+The Cloud Run deploy does not run migrations, and post-#3 code selects
+`ledger_entries.stripe_payment_intent_id`, which does not exist until 0008 runs —
+deploying first would have 500'd the treasurer ledger. Two gotchas worth keeping:
+`cloud-sql-proxy` is NOT part of the gcloud SDK and has to be installed separately
+(command is in the runbook), and the prod DB is human-only — agent sessions are
+permission-blocked from it, though the redeploy itself is not.)_
+
+1. **Set the Stripe keys (c40)** — `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`,
    `STRIPE_WEBHOOK_SECRET`, `APP_PUBLIC_BASE_URL` in Secret Manager + Cloud Run, then
    register the webhook endpoint at `/webhooks/stripe`. `APP_PUBLIC_BASE_URL` must be
    https — Stripe rejects custom schemes, so Connect onboarding cannot return to a
    `chirp://` deep link; it needs a web page that bounces back into the app.
-3. **Rebuild the EAS dev build (c39)** — `expo-file-system`, `expo-sharing` and
+2. **Rebuild the EAS dev build (c39)** — `expo-file-system`, `expo-sharing` and
    `@stripe/stripe-react-native` were all added after the current build was cut, so CSV
    export and the dues PaymentSheet can't be exercised on device until then.
-4. **Then, and only then, a test-mode dues payment on both card and ACH.** Until that
+3. **Then, and only then, a test-mode dues payment on both card and ACH.** Until that
    runs, treat the entire dues flow as unverified (see below).
 
 ## The Stripe migration number (board c41) — RESOLVED
