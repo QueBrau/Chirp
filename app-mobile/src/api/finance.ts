@@ -4,15 +4,7 @@
  * corrections are new entries with entry_type="correction" + corrects_entry_id.
  */
 
-import { mocked, request, requestText, USE_MOCKS } from "./client";
-import {
-  MOCK_CURRENT_USER,
-  MOCK_DUES_CYCLES,
-  MOCK_LEDGER_ENTRIES,
-  MOCK_SPEND_APPROVALS,
-  newMockId,
-  nowIso,
-} from "../mocks/data";
+import { request, requestText } from "./client";
 
 export type LedgerEntryType =
   | "dues_payment"
@@ -82,7 +74,6 @@ export interface SpendApprovalOut {
 }
 
 export async function listDuesCycles(chapterId: string): Promise<DuesCycleOut[]> {
-  if (USE_MOCKS) return mocked(MOCK_DUES_CYCLES.filter((c) => c.chapter_id === chapterId));
   return request<DuesCycleOut[]>(`/chapters/${chapterId}/dues-cycles`);
 }
 
@@ -90,18 +81,6 @@ export async function createDuesCycle(
   chapterId: string,
   body: DuesCycleCreate,
 ): Promise<DuesCycleOut> {
-  if (USE_MOCKS) {
-    const cycle: DuesCycleOut = {
-      id: newMockId("cycle"),
-      chapter_id: chapterId,
-      name: body.name,
-      amount_cents: body.amount_cents,
-      due_date: body.due_date,
-      created_at: nowIso(),
-    };
-    MOCK_DUES_CYCLES.push(cycle);
-    return mocked(cycle);
-  }
   return request<DuesCycleOut>(`/chapters/${chapterId}/dues-cycles`, { method: "POST", body });
 }
 
@@ -110,23 +89,7 @@ export async function listLedger(
   chapterId: string,
   filters: { category?: string; from?: string; to?: string } = {},
 ): Promise<LedgerEntryOut[]> {
-  if (USE_MOCKS) {
-    return mocked(
-      MOCK_LEDGER_ENTRIES.filter(
-        (e) =>
-          e.chapter_id === chapterId &&
-          (filters.category === undefined || e.category === filters.category),
-      ),
-    );
-  }
   return request<LedgerEntryOut[]>(`/chapters/${chapterId}/ledger`, { query: filters });
-}
-
-/** Quote a CSV field if it contains a comma, quote, or newline; escape embedded quotes. */
-function csvField(value: string | number | null): string {
-  if (value === null) return "";
-  const str = String(value);
-  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
 }
 
 /**
@@ -138,25 +101,6 @@ export async function exportLedgerCsv(
   chapterId: string,
   filters: { category?: string; from?: string; to?: string } = {},
 ): Promise<string> {
-  if (USE_MOCKS) {
-    const rows = MOCK_LEDGER_ENTRIES.filter(
-      (e) =>
-        e.chapter_id === chapterId &&
-        (filters.category === undefined || e.category === filters.category),
-    );
-    const header = "id,entry_type,amount_cents,category,description,created_at";
-    const lines = rows.map((e) =>
-      [
-        csvField(e.id),
-        csvField(e.entry_type),
-        csvField(e.amount_cents),
-        csvField(e.category),
-        csvField(e.description),
-        csvField(e.created_at),
-      ].join(","),
-    );
-    return mocked([header, ...lines].join("\n") + "\n");
-  }
   return requestText(`/chapters/${chapterId}/ledger/export.csv`, { query: filters });
 }
 
@@ -165,29 +109,10 @@ export async function createLedgerEntry(
   chapterId: string,
   body: LedgerEntryCreate,
 ): Promise<LedgerEntryOut> {
-  if (USE_MOCKS) {
-    const entry: LedgerEntryOut = {
-      id: newMockId("led"),
-      chapter_id: chapterId,
-      entry_type: body.entry_type,
-      amount_cents: body.amount_cents,
-      category: body.category ?? null,
-      description: body.description ?? null,
-      related_user_id: body.related_user_id ?? null,
-      dues_cycle_id: body.dues_cycle_id ?? null,
-      stripe_payment_intent_id: null,
-      corrects_entry_id: body.corrects_entry_id ?? null,
-      created_by: MOCK_CURRENT_USER.id,
-      created_at: nowIso(),
-    };
-    MOCK_LEDGER_ENTRIES.push(entry);
-    return mocked(entry);
-  }
   return request<LedgerEntryOut>(`/chapters/${chapterId}/ledger`, { method: "POST", body });
 }
 
 export async function listSpendApprovals(chapterId: string): Promise<SpendApprovalOut[]> {
-  if (USE_MOCKS) return mocked(MOCK_SPEND_APPROVALS.filter((s) => s.chapter_id === chapterId));
   return request<SpendApprovalOut[]>(`/chapters/${chapterId}/spend-approvals`);
 }
 
@@ -195,21 +120,6 @@ export async function createSpendApproval(
   chapterId: string,
   body: SpendApprovalCreate,
 ): Promise<SpendApprovalOut> {
-  if (USE_MOCKS) {
-    const approval: SpendApprovalOut = {
-      id: newMockId("spend"),
-      chapter_id: chapterId,
-      requested_by: MOCK_CURRENT_USER.id,
-      amount_cents: body.amount_cents,
-      description: body.description,
-      status: "pending",
-      decided_by: null,
-      decided_at: null,
-      created_at: nowIso(),
-    };
-    MOCK_SPEND_APPROVALS.push(approval);
-    return mocked(approval);
-  }
   return request<SpendApprovalOut>(`/chapters/${chapterId}/spend-approvals`, {
     method: "POST",
     body,
@@ -222,16 +132,6 @@ export async function decideSpendApproval(
   approvalId: string,
   status: "approved" | "rejected",
 ): Promise<SpendApprovalOut> {
-  if (USE_MOCKS) {
-    const approval = MOCK_SPEND_APPROVALS.find((s) => s.id === approvalId);
-    if (approval) {
-      approval.status = status;
-      approval.decided_by = MOCK_CURRENT_USER.id;
-      approval.decided_at = nowIso();
-      return mocked(approval);
-    }
-    return mocked(MOCK_SPEND_APPROVALS[0]);
-  }
   return request<SpendApprovalOut>(
     `/chapters/${chapterId}/spend-approvals/${approvalId}/decide`,
     { method: "POST", body: { status } },

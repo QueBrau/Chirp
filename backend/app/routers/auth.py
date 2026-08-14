@@ -1,4 +1,10 @@
-"""Auth router: POST /auth/bootstrap creates the users row; GET /auth/me returns it."""
+"""Auth router: POST /auth/bootstrap creates the users row; GET /auth/me returns it.
+
+Also serves GET /campuses/{campus_id} — campus identity, so screens can render the
+caller's real campus name instead of a hardcoded one (c46).
+"""
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -8,8 +14,8 @@ from app import models
 from app.config import get_settings
 from app.core.errors import conflict, not_found
 from app.db import get_session
-from app.middleware.auth import get_user_by_uid, get_verified_identity
-from app.schemas.identity import MeOut, MembershipOut, UserCreate, UserOut
+from app.middleware.auth import get_current_user, get_user_by_uid, get_verified_identity
+from app.schemas.identity import CampusOut, MeOut, MembershipOut, UserCreate, UserOut
 
 router = APIRouter(tags=["auth"])
 
@@ -87,3 +93,21 @@ async def get_me(
         user=UserOut.model_validate(user),
         memberships=[MembershipOut.model_validate(m) for m in memberships.scalars().all()],
     )
+
+
+@router.get("/campuses/{campus_id}", response_model=CampusOut)
+async def get_campus(
+    campus_id: uuid.UUID,
+    _user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> CampusOut:
+    """Return a campus by id; any registered caller may read one (c46).
+
+    Campus name/slug are public-facing labels shown on Profile and the Yak board
+    header. Before this route the app had no way to resolve users.campus_id to a
+    name, so those screens hardcoded a mock campus — the bug this fixes.
+    """
+    campus = await session.get(models.Campus, campus_id)
+    if campus is None:
+        raise not_found("campus_not_found")
+    return CampusOut.model_validate(campus)

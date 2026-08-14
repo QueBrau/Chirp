@@ -1,14 +1,6 @@
 /** Chapters API: CRUD, member management, invites, join-by-code — mirrors routers/chapters.py. */
 
-import { mocked, request, USE_MOCKS } from "./client";
-import {
-  MOCK_CHAPTER,
-  MOCK_CURRENT_MEMBERSHIP,
-  MOCK_INVITES,
-  MOCK_MEMBERSHIPS,
-  MOCK_ROLE_META,
-  mockUserById,
-} from "../mocks/data";
+import { request } from "./client";
 
 export type RoleName =
   | "president"
@@ -58,6 +50,9 @@ export interface MembershipOut {
   status: MembershipStatus;
   pledge_class: string | null;
   joined_at: string;
+  /** Joined from chapters by GET /me/memberships only — null on the /auth/me path. */
+  org_name?: string | null;
+  chapter_name?: string | null;
 }
 
 /** listMembers() row: MembershipOut plus the joined display name/photo (GET /chapters/{id}/members). */
@@ -97,7 +92,6 @@ export interface RoleMetaOut {
 }
 
 export async function listChapters(): Promise<ChapterOut[]> {
-  if (USE_MOCKS) return mocked([MOCK_CHAPTER]);
   return request<ChapterOut[]>("/chapters");
 }
 
@@ -109,41 +103,26 @@ export async function listChapters(): Promise<ChapterOut[]> {
  * the treasurer/secretary CSV export filenames need.
  */
 export async function myMemberships(): Promise<MyMembershipOut[]> {
-  if (USE_MOCKS) {
-    return mocked([{ ...MOCK_CURRENT_MEMBERSHIP, chapter_name: MOCK_CHAPTER.chapter_name }]);
-  }
   return request<MyMembershipOut[]>("/me/memberships");
 }
 
 export async function createChapter(body: ChapterCreate): Promise<ChapterOut> {
-  if (USE_MOCKS) return mocked(MOCK_CHAPTER);
   return request<ChapterOut>("/chapters", { method: "POST", body });
 }
 
 export async function getChapter(chapterId: string): Promise<ChapterOut> {
-  if (USE_MOCKS) return mocked(MOCK_CHAPTER);
   return request<ChapterOut>(`/chapters/${chapterId}`);
 }
 
 export async function updateChapter(chapterId: string, body: ChapterUpdate): Promise<ChapterOut> {
-  if (USE_MOCKS) return mocked({ ...MOCK_CHAPTER, ...body } as ChapterOut);
   return request<ChapterOut>(`/chapters/${chapterId}`, { method: "PATCH", body });
 }
 
 export async function listMembers(chapterId: string): Promise<MemberOut[]> {
-  if (USE_MOCKS) {
-    return mocked(
-      MOCK_MEMBERSHIPS.map((membership) => {
-        const user = mockUserById(membership.user_id);
-        return { ...membership, display_name: user?.display_name ?? "", avatar_url: user?.avatar_url ?? null };
-      }),
-    );
-  }
   return request<MemberOut[]>(`/chapters/${chapterId}/members`);
 }
 
 export async function getRoleMeta(chapterId: string): Promise<RoleMetaOut> {
-  if (USE_MOCKS) return mocked(MOCK_ROLE_META);
   return request<RoleMetaOut>(`/chapters/${chapterId}/role-meta`);
 }
 
@@ -151,16 +130,6 @@ export async function updateMember(
   chapterId: string,
   body: MembershipUpdate,
 ): Promise<MembershipOut> {
-  if (USE_MOCKS) {
-    const membership = MOCK_MEMBERSHIPS.find((m) => m.user_id === body.user_id);
-    if (membership) {
-      if (body.role != null) membership.role = body.role;
-      if (body.status != null) membership.status = body.status;
-      if (body.pledge_class !== undefined) membership.pledge_class = body.pledge_class;
-      return mocked(membership);
-    }
-    return mocked(MOCK_CURRENT_MEMBERSHIP);
-  }
   return request<MembershipOut>(`/chapters/${chapterId}/members`, { method: "PATCH", body });
 }
 
@@ -168,12 +137,10 @@ export async function createInvite(
   chapterId: string,
   body: ChapterInviteCreate,
 ): Promise<ChapterInviteOut> {
-  if (USE_MOCKS) return mocked(MOCK_INVITES[0]);
   return request<ChapterInviteOut>(`/chapters/${chapterId}/invites`, { method: "POST", body });
 }
 
 /** Redeem an invite code (deep link `chirp://join-chapter?code=...`). */
 export async function joinChapter(code: string): Promise<MembershipOut> {
-  if (USE_MOCKS) return mocked(MOCK_CURRENT_MEMBERSHIP);
   return request<MembershipOut>("/chapters/join", { method: "POST", body: { code } });
 }
