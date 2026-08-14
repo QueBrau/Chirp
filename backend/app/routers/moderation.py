@@ -166,6 +166,45 @@ async def create_block(
     return UserBlockOut.model_validate(block)
 
 
+@router.post("/moderation/blocks/by-yak/{yak_id}", status_code=204)
+async def block_yak_author(
+    yak_id: uuid.UUID,
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Block the (anonymous) author of a yak without ever revealing who that author is.
+
+    Resolves author_id server-side and returns no body — unlike POST /moderation/blocks,
+    which echoes UserBlockOut(blocked_id=...). Echoing blocked_id here would let a caller
+    block-by-yak on two different yaks and diff the response to learn whether they share
+    an author, breaking the SPEC §8.3 anonymity invariant. For the same reason, an
+    already-existing block (including one lost to a concurrent insert race) is treated
+    as success (204) rather than 409: a 409-vs-204 split is itself a one-bit oracle for
+    "have I already blocked this yak's author", which also leaks author identity across
+    yaks. So this endpoint is idempotent by design, not just by convenience.
+    """
+    yak = await session.get(models.Yak, yak_id)
+    if yak is None or yak.removed_at is not None:
+        raise not_found("yak_not_found")
+    if user.campus_id != yak.campus_id:
+        raise forbidden("not_your_campus")
+    if yak.author_id == user.id:
+        raise forbidden("cannot_block_self")
+
+    existing = await session.get(models.UserBlock, (user.id, yak.author_id))
+    if existing is not None:
+        return None
+    block = models.UserBlock(blocker_id=user.id, blocked_id=yak.author_id)
+    session.add(block)
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Concurrent duplicate insert race on the (blocker_id, blocked_id) PK — same
+        # idempotent-success reasoning as above, not a 409.
+        await session.rollback()
+    return None
+
+
 @router.delete("/moderation/blocks", status_code=204)
 async def delete_block(
     blocked_id: uuid.UUID,

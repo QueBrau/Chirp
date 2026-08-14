@@ -1,4 +1,4 @@
-"""Auth router: POST /auth/bootstrap creates the users row for a verified Firebase uid."""
+"""Auth router: POST /auth/bootstrap creates the users row; GET /auth/me returns it."""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError

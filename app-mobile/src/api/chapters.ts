@@ -79,6 +79,32 @@ export interface ChapterInviteOut {
   created_by: string;
 }
 
+/** MembershipOut plus the chapter's display name, so role-gated screens (treasurer/
+ * secretary dashboards) can resolve their real chapter_id from `GET /me/memberships`
+ * instead of importing MOCK_CURRENT_MEMBERSHIP directly. */
+export interface MyMembershipOut extends MembershipOut {
+  chapter_name: string | null;
+}
+
+export async function listChapters(): Promise<ChapterOut[]> {
+  if (USE_MOCKS) return mocked([MOCK_CHAPTER]);
+  return request<ChapterOut[]>("/chapters");
+}
+
+/**
+ * Caller's own active memberships — GET /me/memberships. This is how role-gated
+ * screens learn their real chapter_id (and role) instead of importing
+ * MOCK_CURRENT_MEMBERSHIP directly. Distinct from fetchMe()'s embedded memberships
+ * (src/api/auth.ts / SessionProvider): that path doesn't join chapter_name, which
+ * the treasurer/secretary CSV export filenames need.
+ */
+export async function myMemberships(): Promise<MyMembershipOut[]> {
+  if (USE_MOCKS) {
+    return mocked([{ ...MOCK_CURRENT_MEMBERSHIP, chapter_name: MOCK_CHAPTER.chapter_name }]);
+  }
+  return request<MyMembershipOut[]>("/me/memberships");
+}
+
 export async function createChapter(body: ChapterCreate): Promise<ChapterOut> {
   if (USE_MOCKS) return mocked(MOCK_CHAPTER);
   return request<ChapterOut>("/chapters", { method: "POST", body });

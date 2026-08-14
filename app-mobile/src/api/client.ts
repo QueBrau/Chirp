@@ -85,6 +85,25 @@ function doFetch(path: string, options: RequestOptions): Promise<Response> {
   });
 }
 
+/**
+ * On a 401, retry ONCE after forcing a fresh Firebase ID token — the ~1hr token can
+ * go stale between onIdTokenChanged refreshes (e.g. app resumed from background).
+ * Gated on hasFirebaseConfig(): a no-op in mock/demo mode.
+ */
+async function fetchWithAuthRetry(path: string, options: RequestOptions): Promise<Response> {
+  let response = await doFetch(path, options);
+
+  if (response.status === 401 && hasFirebaseConfig()) {
+    const freshToken = await getIdToken(true);
+    if (freshToken) {
+      setAuthToken(freshToken);
+      response = await doFetch(path, options);
+    }
+  }
+
+  return response;
+}
+
 /** Turn a fetch Response into the resolved payload, or throw ApiError on non-2xx. */
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -103,25 +122,29 @@ async function parseResponse<T>(response: Response): Promise<T> {
 
 /**
  * Perform an authenticated JSON request against the backend. Throws ApiError on non-2xx.
- *
- * On a 401, retries ONCE after forcing a fresh Firebase ID token — the ~1hr token can
- * go stale between onIdTokenChanged refreshes (e.g. app resumed from background), and
- * without this the client would be stranded until the next natural refresh. Gated on
- * hasFirebaseConfig(): a total no-op in mock/demo mode, where a 401 throws immediately
- * exactly as before.
  */
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  let response = await doFetch(path, options);
+  return parseResponse<T>(await fetchWithAuthRetry(path, options));
+}
 
-  if (response.status === 401 && hasFirebaseConfig()) {
-    const freshToken = await getIdToken(true);
-    if (freshToken) {
-      setAuthToken(freshToken);
-      response = await doFetch(path, options);
+/**
+ * Same auth/URL/error handling as `request`, but resolves the raw response body as
+ * text instead of JSON-parsing it. For endpoints that don't return JSON — e.g. the
+ * treasurer/secretary CSV exports (`/ledger/export.csv`, `/meetings/export.csv`).
+ */
+export async function requestText(path: string, options: RequestOptions = {}): Promise<string> {
+  const response = await fetchWithAuthRetry(path, options);
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const payload = (await response.json()) as { detail?: unknown };
+      if (typeof payload.detail === "string") detail = payload.detail;
+    } catch {
+      // non-JSON error body; keep statusText
     }
+    throw new ApiError(response.status, detail);
   }
-
-  return parseResponse<T>(response);
+  return response.text();
 }
 
 /**

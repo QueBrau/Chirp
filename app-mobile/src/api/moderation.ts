@@ -85,7 +85,28 @@ export async function unblockUser(blockedId: string): Promise<void> {
     if (index >= 0) MOCK_BLOCKS.splice(index, 1);
     return mocked(undefined);
   }
-  return request<void>("/moderation/blocks", { method: "DELETE", body: { blocked_id: blockedId } });
+  // backend/app/routers/moderation.py `delete_block` takes blocked_id as a QUERY
+  // param ("identified by ?blocked_id=", a bare uuid.UUID arg outside the path) —
+  // NOT a request body, so it rides `query` here rather than `body`.
+  return request<void>("/moderation/blocks", { method: "DELETE", query: { blocked_id: blockedId } });
+}
+
+/**
+ * Block the (server-known) author of a yak — distinct from blockUser because a
+ * yak carries NO author field on the wire (SPEC §8.3): the client never learns
+ * whose yak it is, so it can't pass a blocked_id to POST /moderation/blocks.
+ * The server resolves the yak's author internally and blocks them; the response
+ * identifies nothing back to the client (204, no body).
+ */
+export async function blockYakAuthor(yakId: string): Promise<void> {
+  if (USE_MOCKS) {
+    // Approximates "blocked author's content disappears" without knowing who
+    // the author is client-side: just remove this one yak from the mock feed.
+    const index = MOCK_YAKS.findIndex((y) => y.id === yakId);
+    if (index >= 0) MOCK_YAKS.splice(index, 1);
+    return mocked(undefined);
+  }
+  return request<void>(`/moderation/blocks/by-yak/${yakId}`, { method: "POST" });
 }
 
 /** Admin removal of a yak (moderator action, distinct from author delete). */

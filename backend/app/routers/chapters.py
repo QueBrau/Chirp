@@ -201,3 +201,32 @@ async def join_chapter(
         raise conflict("already_member") from None
     await session.refresh(membership)
     return MembershipOut.model_validate(membership)
+
+
+@router.get("/me/memberships")
+async def list_my_memberships(
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[MembershipOut]:
+    """List the caller's ACTIVE memberships, each with its chapter's name joined in.
+
+    Uses get_current_user, not get_current_membership — get_current_membership needs
+    a chapter_id already in the path, which is exactly the chicken-and-egg this route
+    solves: it's how the client first learns its own chapter_id/role.
+    """
+    result = await session.execute(
+        select(models.Membership, models.Chapter.org_name, models.Chapter.chapter_name)
+        .join(models.Chapter, models.Chapter.id == models.Membership.chapter_id)
+        .where(
+            models.Membership.user_id == user.id,
+            models.Membership.status == "active",
+        )
+        .order_by(models.Membership.joined_at)
+    )
+    memberships: list[MembershipOut] = []
+    for membership, org_name, chapter_name in result.all():
+        out = MembershipOut.model_validate(membership)
+        out.org_name = org_name
+        out.chapter_name = chapter_name
+        memberships.append(out)
+    return memberships

@@ -108,6 +108,8 @@ class MembershipOut(_Schema):
     status: MembershipStatus
     pledge_class: str | None = None
     joined_at: datetime
+    org_name: str | None = None  # joined from chapters for GET /me/memberships
+    chapter_name: str | None = None  # joined from chapters for GET /me/memberships
 
 
 class MemberOut(_Schema):

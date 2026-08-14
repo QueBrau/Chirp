@@ -1,12 +1,15 @@
 """Finance: dues cycles, append-only ledger (SPEC §8.2 — no update/delete), spend approvals."""
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app import models
+from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.errors import conflict, not_found
 from app.core.permissions import Role, require_role
 from app.db import get_session
@@ -125,6 +128,77 @@ async def create_ledger_entry(
     await session.commit()
     await session.refresh(entry)
     return LedgerEntryOut.model_validate(entry)
+
+
+def _format_amount_cents(amount_cents: int) -> str:
+    """Cents -> decimal dollar string, e.g. -1250 -> "-12.50" (SPEC: positive=in, negative=out).
+
+    Never run through sanitize_csv_text: it's a formatted number, not free text, and
+    sanitizing it would corrupt every negative (expense) amount in the export.
+    """
+    return str((Decimal(amount_cents) / 100).quantize(Decimal("0.01")))
+
+
+@router.get("/chapters/{chapter_id}/ledger/export.csv")
+async def export_ledger_csv(
+    chapter_id: uuid.UUID,
+    category: str | None = Query(default=None),
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = Query(default=None),
+    _membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Export the (optionally filtered) ledger as CSV; treasurer/president only.
+
+    Exports the COMPLETE ledger for the chapter — this is the financial record of
+    truth, and a partial export is worse than none. Supports the same category/from/to
+    filters as list_ledger_entries, so a filtered view exports exactly what it shows.
+    corrects_entry_id is included: the ledger is append-only and corrections are new
+    offsetting entries, so that linkage has to survive export or the CSV misrepresents
+    the record.
+    """
+    related_user = aliased(models.User)
+    creator_user = aliased(models.User)
+    query = (
+        select(models.LedgerEntry, related_user.display_name, creator_user.display_name)
+        .outerjoin(related_user, related_user.id == models.LedgerEntry.related_user_id)
+        .join(creator_user, creator_user.id == models.LedgerEntry.created_by)
+        .where(models.LedgerEntry.chapter_id == chapter_id)
+    )
+    if category is not None:
+        query = query.where(models.LedgerEntry.category == category)
+    if from_ is not None:
+        query = query.where(models.LedgerEntry.created_at >= from_)
+    if to is not None:
+        query = query.where(models.LedgerEntry.created_at <= to)
+    result = await session.execute(query.order_by(models.LedgerEntry.created_at.desc()))
+
+    header = [
+        "date",
+        "entry_type",
+        "amount",
+        "category",
+        "description",
+        "related_member",
+        "dues_cycle_id",
+        "corrects_entry_id",
+        "created_by",
+    ]
+    rows = [
+        [
+            entry.created_at.isoformat(),
+            entry.entry_type,
+            _format_amount_cents(entry.amount_cents),
+            sanitize_csv_text(entry.category),
+            sanitize_csv_text(entry.description),
+            sanitize_csv_text(related_name),
+            str(entry.dues_cycle_id) if entry.dues_cycle_id is not None else "",
+            str(entry.corrects_entry_id) if entry.corrects_entry_id is not None else "",
+            sanitize_csv_text(creator_name),
+        ]
+        for entry, related_name, creator_name in result.all()
+    ]
+    return csv_response(f"ledger_{chapter_id}.csv", header, rows)
 
 
 # ---- spend approvals ----
