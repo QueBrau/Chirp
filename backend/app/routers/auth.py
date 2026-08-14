@@ -6,10 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import get_settings
-from app.core.errors import conflict
+from app.core.errors import conflict, not_found
 from app.db import get_session
-from app.middleware.auth import get_current_user, get_verified_identity
-from app.schemas.identity import UserCreate, UserOut
+from app.middleware.auth import get_user_by_uid, get_verified_identity
+from app.schemas.identity import MeOut, MembershipOut, UserCreate, UserOut
 
 router = APIRouter(tags=["auth"])
 
@@ -62,7 +62,28 @@ async def bootstrap_account(
     return UserOut.model_validate(user)
 
 
-@router.get("/auth/me", response_model=UserOut)
-async def get_me(user: models.User = Depends(get_current_user)) -> UserOut:
-    """Return the authenticated caller's own user row (so the client can learn its campus_id)."""
-    return UserOut.model_validate(user)
+@router.get("/auth/me", response_model=MeOut)
+async def get_me(
+    identity: tuple[str, str | None] = Depends(get_verified_identity),
+    session: AsyncSession = Depends(get_session),
+) -> MeOut:
+    """Return the caller's user row and active memberships.
+
+    Resolves the user from the verified identity directly rather than via
+    get_current_user, since that dependency 401s on an unregistered uid — here an
+    authenticated-but-unregistered caller must see 404 user_not_registered instead.
+    """
+    uid, _verified_email = identity
+    user = await get_user_by_uid(session, uid)
+    if user is None:
+        raise not_found("user_not_registered")
+
+    memberships = await session.execute(
+        select(models.Membership)
+        .where(models.Membership.user_id == user.id, models.Membership.status == "active")
+        .order_by(models.Membership.joined_at)
+    )
+    return MeOut(
+        user=UserOut.model_validate(user),
+        memberships=[MembershipOut.model_validate(m) for m in memberships.scalars().all()],
+    )

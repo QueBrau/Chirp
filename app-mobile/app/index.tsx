@@ -1,9 +1,7 @@
-/** Entry redirect: signed-in users land on the Feed tab, everyone else on sign-in. */
+/** Entry redirect: always land on the Feed tab — the (tabs) auth guard bounces signed-out users to sign-in. */
 
 import { Redirect } from "expo-router";
 
-import { IS_SIGNED_IN } from "./_layout";
-
 export default function Index() {
-  return <Redirect href={IS_SIGNED_IN ? "/feed" : "/sign-in"} />;
+  return <Redirect href="/feed" />;
 }

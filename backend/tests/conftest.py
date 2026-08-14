@@ -183,6 +183,18 @@ def make_campus() -> MakeCampus:
     return _make_campus
 
 
+async def _grant_platform_admin(user_id: str) -> None:
+    """Flip is_platform_admin directly in the DB (no API grants it — board card c28)."""
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text("UPDATE users SET is_platform_admin = true WHERE id = :id"),
+            {"id": user_id},
+        )
+        await session.commit()
+
+
 @pytest.fixture
 def make_chapter_with(
     client: AsyncClient, make_user: MakeUser, make_campus: MakeCampus
@@ -190,11 +202,13 @@ def make_chapter_with(
     """Factory: create a chapter through the API and add a member with the given role.
 
     The creator becomes president; other roles join via an e-board invite code
-    (POST /chapters/{id}/invites then POST /chapters/join).
+    (POST /chapters/{id}/invites then POST /chapters/join). The creator is granted
+    is_platform_admin directly in the DB first, since POST /chapters is admin-only.
     """
 
     async def _make_chapter_with(role: str = "member") -> ChapterSetup:
         president = await make_user("Chapter President")
+        await _grant_platform_admin(president.id)
         campus_id = await make_campus()
         created = await client.post(
             "/chapters",

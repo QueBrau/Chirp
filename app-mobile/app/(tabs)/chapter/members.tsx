@@ -68,7 +68,10 @@ export default function MembersScreen() {
   const [members, setMembers] = useState<MembershipOut[] | null>(null);
 
   useEffect(() => {
-    void listMembers(MOCK_CURRENT_MEMBERSHIP.chapter_id).then(setMembers);
+    // Fail soft: mock ids 422 against the live API until wiring lands.
+    listMembers(MOCK_CURRENT_MEMBERSHIP.chapter_id)
+      .then(setMembers)
+      .catch(() => setMembers([]));
   }, []);
 
   const active = (members ?? []).filter((m) => m.status === "active");

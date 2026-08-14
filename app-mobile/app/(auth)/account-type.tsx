@@ -5,11 +5,13 @@
  */
 
 import { Feather } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState, type ComponentProps } from "react";
 import { View } from "react-native";
 
-import type { AccountType } from "@/api/auth";
+import { bootstrap, type AccountType } from "@/api/auth";
+import { ApiError } from "@/api/client";
+import { getFirebaseAuth, hasFirebaseConfig, useSession, withInviteCode } from "@/auth";
 import { AppText, Button, Card, Screen } from "@/components";
 import { radii, spacing, typography, useTheme } from "@/theme";
 
@@ -83,7 +85,67 @@ function OptionIcon({ name, selected }: { name: FeatherName; selected: boolean }
 
 export default function AccountTypeScreen() {
   const router = useRouter();
+  const { refresh, applyBootstrap } = useSession();
+  // Invite code riding along from a deep link (join-chapter -> sign-in -> here);
+  // forwarded back to join-chapter after bootstrap so the code survives onboarding.
+  const { code: inviteCode } = useLocalSearchParams<{ code?: string }>();
   const [selected, setSelected] = useState<AccountType>("non_greek");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const proceed = () => {
+    // Finding 13: onPress used to always route to join-chapter regardless of
+    // selection — only greek should land there; everyone else goes to Home.
+    if (selected === "greek") {
+      router.push(withInviteCode("/join-chapter", inviteCode));
+    } else {
+      router.replace("/(tabs)/feed");
+    }
+  };
+
+  /**
+   * Persist account_type via POST /auth/bootstrap after Firebase sign-in
+   * (milestone-1 TODO). No-op in demo mode (no Firebase project configured)
+   * or if there's no signed-in Firebase user, so the mock flow is unchanged.
+   * A 409 "already_registered" means an existing user signed back in and
+   * landed here again — that's expected, not an error, so it just proceeds.
+   */
+  const handleContinue = async () => {
+    const user = hasFirebaseConfig() ? getFirebaseAuth().currentUser : null;
+    if (!user || !user.email) {
+      proceed();
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      const created = await bootstrap({
+        email: user.email,
+        display_name: user.displayName ?? user.email.split("@")[0],
+        account_type: selected,
+      });
+      // Seed the session from the bootstrap response directly — no second
+      // round trip, and navigation can't outrun a failed refresh.
+      applyBootstrap(created);
+      proceed();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        // Already registered (signed back in). Only proceed once the session
+        // actually reflects it, or the guards would bounce us straight back.
+        const settled = await refresh();
+        if (settled) {
+          proceed();
+          return;
+        }
+        setError("We couldn't load your account. Check your connection and try again.");
+        return;
+      }
+      setError("Couldn't finish setting up your account. Try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <Screen title="Who are you?" subtitle="Pick how you'll use Chirp — you can add a chapter later.">
@@ -106,19 +168,23 @@ export default function AccountTypeScreen() {
           );
         })}
 
-        {/* TODO(milestone-1): persist account_type via POST /auth/bootstrap after Firebase sign-in. */}
+        {error !== null ? (
+          <AppText variant="caption" tone="danger">
+            {error}
+          </AppText>
+        ) : null}
+
         <Button
-          label={selected === "greek" ? "Next: join your chapter" : "Continue"}
+          label={
+            submitting
+              ? "Please wait..."
+              : selected === "greek"
+                ? "Next: join your chapter"
+                : "Continue"
+          }
+          disabled={submitting}
           style={{ marginTop: spacing.lg }}
-          onPress={() => {
-            // Finding 13: onPress used to always route to join-chapter regardless of
-            // selection — only greek should land there; everyone else goes to Home.
-            if (selected === "greek") {
-              router.push("/join-chapter");
-            } else {
-              router.replace("/(tabs)/feed");
-            }
-          }}
+          onPress={() => void handleContinue()}
         />
       </View>
     </Screen>
