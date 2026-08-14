@@ -1,9 +1,11 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 14 2026, night. **PR #2 is MERGED to main.** PR #3 (Stripe dues)
-is merging right behind it. Everything through PR #6 (session provider + /auth/me,
-Orgs on real memberships + invite UI + roster names) was already on main and
-live-verified at prod rev chirp-api-00006-smv._
+_Last updated: Aug 14 2026, late night. **PRs #2 AND #3 are MERGED to main** (both
+retired branches deleted; new work cuts from main). **PR #7 is OPEN** from
+jose/auth-orgs: c44 role-meta endpoint, c45 returning-user sign-in, c43's events
+batch endpoint — 122 backend tests + tsc green. Everything through PR #6 was
+already live-verified at prod rev chirp-api-00006-smv; **prod is now BEHIND main**
+until the 0008 migration + redeploy below happen._
 
 **board.html is the source of truth for tasks.** This file only answers the question the
 board can't: which copy of Chirp you are looking at.
@@ -12,9 +14,9 @@ board can't: which copy of Chirp you are looking at.
 
 | Where | What's there | State |
 | --- | --- | --- |
-| `main` | Everything through **PR #6** + **PR #2** (Yak on real API, treasurer/secretary dashboards, CSV export), and PR #3 (Stripe dues, migration **0008**) landing now | Canonical |
-| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` (rev 00006-smv) | `alembic_version` at **0007** — **BEHIND main once PR #3 lands.** Next redeploy runs migration 0008 |
-| `jose/auth-orgs` | Synced to main, kept for Jose's future work | Merged via PR #6 |
+| `main` | Everything through **PR #3**: PR #2 (Yak on real API, treasurer/secretary dashboards, CSV export) + PR #3 (Stripe dues, migration **0008**) | Canonical |
+| Cloud Run (prod) | Live backend at `chirp-api-593616178468.us-central1.run.app` (rev 00006-smv) | `alembic_version` at **0007** — **BEHIND main.** Human steps below, in order |
+| `jose/auth-orgs` | c44 (role-meta from the API) + c45 (returning-user sign-in) + c43's events-with-rsvps endpoint | **PR #7 OPEN**, 122 tests + tsc green, awaiting Jose's merge |
 | `family-tree` | Merged via PR #2 | Done |
 | `q/social-msg` | Merged via PR #3 | Done |
 | CI | `.github/workflows/ci.yml`: backend pytest vs PG16 + mobile tsc on every push/PR | Green on both PRs at merge time. No branch protection (deliberate, Aug 13) — CI is advisory |
@@ -24,10 +26,15 @@ Creds, runbooks, QA account, and live fixture ids: `INFRA-PRIVATE.html` at the r
 
 ## Next human steps (in order)
 
-1. **Cloud Run redeploy.** Prod is at `alembic_version` 0007; main now carries **0008**
-   (Stripe: `chapter_stripe_customers`, `processed_stripe_events`, and the unique partial
-   index on `ledger_entries.stripe_payment_intent_id`). Nothing Stripe works until this
-   runs, and until it does prod is running older code than main.
+1. **Apply migration 0008, THEN redeploy — two separate steps, in that order.** The
+   redeploy does NOT run migrations. First the migration runbook (INFRA-PRIVATE.html:
+   proxy on 5433 → `alembic upgrade head` → kill proxy) brings prod to 0008 (Stripe:
+   `chapter_stripe_customers`, `processed_stripe_events`, the unique partial index on
+   `ledger_entries.stripe_payment_intent_id`); then one `gcloud run deploy` ships
+   PRs #2/#3 (+#7 once merged). Deploying first would 500 the treasurer ledger —
+   the new `LedgerEntry` model selects `stripe_payment_intent_id`, which doesn't
+   exist in prod until 0008 runs. NOTE: the migration is Jose-only — agent sessions
+   are permission-blocked from the prod DB (the redeploy itself is not).
 2. **Set the Stripe keys (c40)** — `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`,
    `STRIPE_WEBHOOK_SECRET`, `APP_PUBLIC_BASE_URL` in Secret Manager + Cloud Run, then
    register the webhook endpoint at `/webhooks/stripe`. `APP_PUBLIC_BASE_URL` must be
@@ -74,6 +81,9 @@ nullable `display_name` to `MembershipOut`, that's the regression.
 - Both branches were green at merge: `family-tree` 92 backend tests, `q/social-msg` 116
   (the extra ones are the Stripe suite), each run fresh against postgres:16 through the
   full 0001–0008 chain. tsc clean on both. CI agreed.
+- PR #7 adds 6 tests (role-meta anti-drift asserts against permissions.py itself;
+  events-with-rsvps grouping + org-scoping): **122 green** on Jose's local PG14, tsc
+  clean. No migration — `0009` stays free.
 - Stripe is code-complete but **has never talked to real Stripe**. Nothing in the dues
   flow is proven until step 2 above is done and a test-mode payment runs on card AND ACH.
   Treat it as unverified — merged is not the same as working.
