@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, TextInput, View } from "react-native";
+import { Alert, Linking, Pressable, TextInput, View } from "react-native";
 
 import { listMembers, myMemberships, type MyMembershipOut } from "@/api/chapters";
 import { ApiError } from "@/api/client";
@@ -27,6 +27,11 @@ import {
   type LedgerEntryType,
   type SpendApprovalOut,
 } from "@/api/finance";
+import {
+  createOnboardingLink,
+  getChapterPaymentsStatus,
+  type ChapterPaymentsStatus,
+} from "@/api/payments";
 import {
   AppText,
   Button,
@@ -125,6 +130,8 @@ export default function TreasurerScreen() {
   const [decidingId, setDecidingId] = useState<string | null>(null);
   const [exportingCsv, setExportingCsv] = useState(false);
   const [memberNames, setMemberNames] = useState<Map<string, string>>(new Map());
+  const [payments, setPayments] = useState<ChapterPaymentsStatus | null>(null);
+  const [openingOnboarding, setOpeningOnboarding] = useState(false);
 
   // Add-entry form state.
   const [amountInput, setAmountInput] = useState("");
@@ -137,15 +144,18 @@ export default function TreasurerScreen() {
   const chapterId = membership?.chapter_id ?? null;
 
   const loadDashboard = useCallback(async (id: string) => {
-    const [duesCycles, entries, spendApprovals, members] = await Promise.all([
+    const [duesCycles, entries, spendApprovals, members, paymentsStatus] = await Promise.all([
       listDuesCycles(id),
       listLedger(id),
       listSpendApprovals(id),
       listMembers(id),
+      // Connect status is informational; a Stripe hiccup shouldn't blank the ledger.
+      getChapterPaymentsStatus(id).catch(() => null),
     ]);
     setCycles(duesCycles);
     setLedger(entries);
     setApprovals(spendApprovals);
+    setPayments(paymentsStatus);
     // user_id -> display name. GET /chapters/{id}/members joins the name in; there
     // is no GET /users/{id}, so this roster is the only way to show who requested a
     // spend on real data.
@@ -188,6 +198,21 @@ export default function TreasurerScreen() {
   const sortedApprovals = [...(approvals ?? [])].sort((a, b) =>
     b.created_at.localeCompare(a.created_at),
   );
+
+  /** Stripe-hosted onboarding: the link is single-use and short-lived, so it's
+   * fetched on tap rather than held in state. */
+  const openConnectOnboarding = async () => {
+    if (chapterId === null) return;
+    setOpeningOnboarding(true);
+    try {
+      const link = await createOnboardingLink(chapterId);
+      await Linking.openURL(link.url);
+    } catch (error) {
+      showApiError(error, "Couldn't open Stripe setup");
+    } finally {
+      setOpeningOnboarding(false);
+    }
+  };
 
   const decide = async (approval: SpendApprovalOut, status: "approved" | "rejected") => {
     if (chapterId === null || decidingId !== null) return; // double-submit guard
@@ -329,6 +354,44 @@ export default function TreasurerScreen() {
             ) : null}
           </View>
         </HeroCard>
+
+        <View>
+          <SectionHeader
+            title="Card & bank payments"
+            caption="Dues land in the chapter's Stripe balance"
+          />
+          <Card>
+            <View style={{ gap: spacing.md }}>
+              {payments?.onboarded ? (
+                <>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                    <Chip label="Active" variant="success" />
+                    <AppText variant="body" style={{ flex: 1 }}>
+                      Members can pay dues in the app.
+                    </AppText>
+                  </View>
+                  <AppText variant="caption" tone="tertiary">
+                    Chirp takes 1% on card and 2% on bank transfers. Chargebacks are the
+                    chapter&apos;s — Chirp never holds your money.
+                  </AppText>
+                </>
+              ) : (
+                <>
+                  <AppText variant="body">
+                    {payments?.details_submitted
+                      ? "Stripe is still reviewing the chapter's details. Payments switch on automatically once it clears."
+                      : "Finish Stripe setup to collect dues by card or bank transfer."}
+                  </AppText>
+                  <Button
+                    label={openingOnboarding ? "Opening…" : "Set up payments"}
+                    onPress={() => void openConnectOnboarding()}
+                    disabled={openingOnboarding}
+                  />
+                </>
+              )}
+            </View>
+          </Card>
+        </View>
 
         <View>
           <SectionHeader title="Spend approvals" caption="Newest first" />

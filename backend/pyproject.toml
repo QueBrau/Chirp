@@ -17,6 +17,7 @@ dependencies = [
     "pydantic-settings",
     "redis>=5",
     "greenlet",
+    "stripe>=12",
 ]
 
 [project.optional-dependencies]
@@ -28,9 +29,6 @@ dev = [
 ]
 firebase = [
     "firebase-admin",
-]
-payments = [
-    "stripe",
 ]
 
 [tool.setuptools.packages.find]

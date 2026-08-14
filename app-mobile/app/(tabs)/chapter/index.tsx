@@ -71,6 +71,12 @@ const TOOLS: Tool[] = [
     description: "Directory, contacts, and job board",
   },
   {
+    href: "/chapter/dues",
+    icon: "credit-card",
+    title: "Dues",
+    description: "What you owe, and how to pay it",
+  },
+  {
     href: "/chapter/treasurer",
     icon: "dollar-sign",
     title: "Treasurer",

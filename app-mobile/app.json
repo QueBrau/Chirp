@@ -40,7 +40,13 @@
       "expo-sqlite",
       "expo-notifications",
       "expo-font",
-      "@stripe/stripe-react-native"
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "",
+          "enableGooglePay": false
+        }
+      ]
     ]
   }
 }
