@@ -151,6 +151,49 @@ class ChapterStripeCustomer(Base):
     )
 
 
+class DuesPaymentIntent(Base):
+    """One member's attempt to pay one dues cycle (board card c51).
+
+    This exists because nothing else knew a payment was IN FLIGHT. A dues payment
+    was only recorded once its webhook settled, so across ACH's multi-day
+    "processing" window the cycle still read as unpaid — and since the Stripe
+    idempotency key was scoped per rail, a retry on the other rail created a
+    genuinely different PaymentIntent rather than a deduped one. Both settled,
+    both appended to an append-only ledger, and the member paid twice.
+
+    The row is inserted BEFORE Stripe is called, so a second attempt loses the
+    race against uq_dues_intent_live at the database rather than at Stripe.
+    Only 'open' and 'succeeded' hold the reservation: a genuinely failed or
+    canceled payment must stay retryable, which is why payment_failed and
+    payment_intent.canceled move the row out of those states.
+    """
+
+    __tablename__ = "dues_payment_intents"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    chapter_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False
+    )
+    dues_cycle_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("dues_cycles.id"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    rail: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'open'"))
+    # Null between reserving the slot and Stripe answering.
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class ProcessedStripeEvent(Base):
     """Event-level webhook dedup: the PK insert fails on a replayed event id."""
 

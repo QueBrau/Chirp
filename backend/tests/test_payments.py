@@ -640,3 +640,118 @@ async def test_event_without_chirp_metadata_is_ignored(
         },
     )
     assert response.status_code == 200
+
+
+async def _reserved_intent_id(cycle_id: str, user_id: str) -> str | None:
+    """The Stripe intent id stored on the live dues reservation (c51)."""
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            text(
+                "SELECT stripe_payment_intent_id FROM dues_payment_intents "
+                "WHERE dues_cycle_id = :c AND user_id = :u "
+                "AND status IN ('open', 'succeeded')"
+            ),
+            {"c": cycle_id, "u": user_id},
+        )
+        return result.scalar_one_or_none()
+
+
+# ---- c51: one member cannot pay one dues cycle twice ----
+
+
+async def test_switching_rail_while_a_payment_is_in_flight_is_rejected(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """The double-charge path: ACH sits in 'processing' for days, so the ledger is
+    still empty and the cycle still looks unpaid. Retrying on card used to mint a
+    GENUINELY different PaymentIntent (the Stripe idempotency key is per-rail), and
+    both would settle into an append-only ledger with no reversal path."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    ach = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "ach"},
+        headers=setup.member.headers,
+    )
+    assert ach.status_code == 200, ach.text
+
+    card = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert card.status_code == 409, card.text
+    assert card.json() == {"detail": "payment_already_in_progress"}
+    # The decisive assertion: Stripe was never asked for a second intent.
+    assert len(stripe_calls["payment_intent"]) == 1
+
+
+async def test_a_failed_payment_releases_the_reservation_so_the_member_can_retry(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """The guard must not strand a member whose payment genuinely failed."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    first = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "ach"},
+        headers=setup.member.headers,
+    )
+    assert first.status_code == 200, first.text
+
+    # The failure event must carry the intent id Stripe actually returned, which
+    # is what _resolve_reservation matches on.
+    intent_id = await _reserved_intent_id(cycle_id, setup.member.id)
+    assert intent_id is not None
+    failed = dict(_succeeded_event(cycle_id, setup.member.id, intent_id, "evt_failed_1"))
+    failed["type"] = "payment_intent.payment_failed"
+    assert (await _post_webhook(client, failed)).status_code == 200
+
+    retry = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert retry.status_code == 200, retry.text
+    assert len(stripe_calls["payment_intent"]) == 2
+
+
+async def test_two_distinct_intents_for_one_cycle_cannot_both_reach_the_ledger(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Backstop, independent of the reservation: even if two different intents somehow
+    both settle (a pre-0010 intent, a manual Stripe dashboard charge), the ledger's
+    partial unique index keeps exactly one dues_payment per (cycle, member). The older
+    uq_ledger_stripe_payment_intent only dedups a REPLAY of one intent id."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    first = await _post_webhook(
+        client, _succeeded_event(cycle_id, setup.member.id, "pi_ach", "evt_ach")
+    )
+    second = await _post_webhook(
+        client, _succeeded_event(cycle_id, setup.member.id, "pi_card", "evt_card")
+    )
+
+    assert first.status_code == 200
+    # Stripe must still get a 2xx or it retries for days.
+    assert second.status_code == 200
+    assert await _ledger_count(setup.chapter_id) == 1
