@@ -399,8 +399,8 @@
     },
     {
       "id": "c43",
-      "col": "next",
-      "title": "[shared] Batch endpoints to kill the N+1s \u2014 SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's \u2014 DONE + LIVE (PR #7 befba10, prod rev 00007-kff): GET /chapters/{id}/events-with-rsvps, 1+N -> one round trip, Events segment wired, route verified serving app-level 401. Q's posts-with-counts half still rides with c34 \u2014 this card stays open until that lands. MIGRATION 0009 NOW CLAIMED by c34 (posts.audience/post_type/duration_sec) \u2014 next free is 0010. UPDATE: Q's posts-with-counts half is BUILT in PR #9 \u2014 counts + author identity ride on the feed row, 2N fan-out gone. Correlated scalar subqueries, NOT join+COUNT(DISTINCT) (joining two one-to-many tables fans out: 3 likes x 4 comments = 12 rows). Regression test confirmed load-bearing by swapping the naive join back in and watching it fail. Closes when PR #9 merges. UPDATE Aug 15: Q's posts-with-counts half LANDED in PR #9 (FeedPostOut carries display_name/avatar_url/like_count/comment_count/liked_by_me from one query). The org feed consumer is wired to it. This card closes when PR #9 merges.",
+      "col": "done",
+      "title": "[shared] Batch endpoints to kill the N+1s \u2014 SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's \u2014 DONE + LIVE (PR #7 befba10, prod rev 00007-kff): GET /chapters/{id}/events-with-rsvps, 1+N -> one round trip, Events segment wired, route verified serving app-level 401. Q's posts-with-counts half still rides with c34 \u2014 this card stays open until that lands. MIGRATION 0009 NOW CLAIMED by c34 (posts.audience/post_type/duration_sec) \u2014 next free is 0010. UPDATE: Q's posts-with-counts half is BUILT in PR #9 \u2014 counts + author identity ride on the feed row, 2N fan-out gone. Correlated scalar subqueries, NOT join+COUNT(DISTINCT) (joining two one-to-many tables fans out: 3 likes x 4 comments = 12 rows). Regression test confirmed load-bearing by swapping the naive join back in and watching it fail. Closes when PR #9 merges. UPDATE Aug 15: Q's posts-with-counts half LANDED in PR #9 (FeedPostOut carries display_name/avatar_url/like_count/comment_count/liked_by_me from one query). The org feed consumer is wired to it. This card closes when PR #9 merges. CLOSED Aug 15: both halves exist. Jose's events-with-rsvps is live on prod; Q's posts-with-counts (FeedPostOut) landed in PR #9 and the org feed consumer now uses it \u2014 that segment dropped its 2N listLikes+listComments AND its roster call in PR #11.",
       "owner": "",
       "tag": "backend"
     },
@@ -455,10 +455,10 @@
     },
     {
       "id": "c51",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "vert:social-msg",
-      "title": "[B/Q] Consistency: the campus feed does NOT filter blocked authors, but Yak DOES (anti-join on user_blocks). Block someone and their yaks vanish while their campus posts stay \u2014 surprising, and arguably an App Store 1.2 gap since block should mean block. Fold into c35 or fix in the feed query; yaks.py's anti-join is the pattern."
+      "title": "[A/Jose] CRITICAL dues double-charge FIXED \u2014 PR #11 (Aug 15). Reserve-before-charging: migration 0010 adds dues_payment_intents, written BEFORE Stripe is called, so the DB arbitrates not Stripe. uq_dues_intent_live holds one live reservation per (cycle, member) ACROSS BOTH RAILS, so a rail switch mid-flight is 409 and Stripe is never asked for a second intent. Same-rail retries stay idempotent (the existing contract test caught a blunter first version that broke them). payment_failed/canceled RELEASE the reservation so a genuinely failed payment is still retryable. Ledger backstop: uq_ledger_dues_payment_once. 3 new tests. Still latent-only today since Stripe keys are unset (c40) \u2014 fixed before go-live, not after."
     },
     {
       "id": "c50",
@@ -469,31 +469,52 @@
     },
     {
       "id": "c52",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "vert:auth-orgs",
-      "title": "[A/Jose] IN PROGRESS \u2014 HIGH \u2014 Dues screen shows 'Nothing due' to a member who genuinely owes money. dues.tsx:37: listDuesCycles() is the ONE call in load() without a fail-soft .catch() (listLedger and getChapterPaymentsStatus both have one), so a transient network blip rejects the whole chain and the screen renders its empty state. A member reasonably concludes they owe nothing. Fix: .catch(() => []) plus a visible error state, matching the pattern secretary.tsx already uses."
+      "title": "[A/Jose] Dues 'Nothing due' on a failed load FIXED \u2014 PR #11. listDuesCycles now fails to null (not []) so a network failure stays distinguishable from an empty cycle list, with its own error state."
     },
     {
       "id": "c53",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "security",
-      "title": "[B/Q vertical, Jose fixing Aug 15 \u2014 security, small, Q is on q/feed so no collision] MEDIUM \u2014 block-by-yak TIMING side channel reopens the anonymity oracle the 204-vs-409 fix closed. moderation.py:194: the endpoint correctly always returns 204, but the two paths differ in latency \u2014 an already-blocked author short-circuits on a session.get, while a new block does an INSERT + commit. Measuring response time still answers 'do these two yaks share an author'. Fix: make both paths latency-equivalent with a single unconditional INSERT ... ON CONFLICT DO NOTHING so every call does the same work."
+      "title": "[B/Q vertical, Jose fixed] Yak block-by-yak TIMING oracle FIXED \u2014 PR #11. Was read-then-maybe-insert: same 204 either way, but very different latency, so timing still answered 'do these two yaks share an author'. Now an unconditional INSERT ... ON CONFLICT DO NOTHING \u2014 identical work every call. Test asserts both calls 204 and exactly one row."
     },
     {
       "id": "c54",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "money",
-      "title": "[A/Jose] IN PROGRESS \u2014 MEDIUM \u2014 unhandled IntegrityError on the ChapterStripeCustomer race (payments.py:117). Two concurrent 'Pay' taps both miss the session.get, both insert, the loser gets a raw 500 AND leaves an orphaned Stripe Customer on the connected account. Every other race in this same PR is handled (webhook dedup, RSVP upsert, join); this one was missed. Fix: try/except IntegrityError -> rollback + re-fetch, or INSERT ... ON CONFLICT DO NOTHING RETURNING."
+      "title": "[A/Jose] ChapterStripeCustomer race FIXED \u2014 PR #11. Concurrent first payment 500'd and orphaned a Stripe Customer on the connected account; now defers to the race winner."
     },
     {
       "id": "c55",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "vert:auth-orgs",
-      "title": "[A/Jose] IN PROGRESS \u2014 MEDIUM \u2014 Orgs tab Events segment still shows 'Hosted by Unknown' for every event. chapter/index.tsx:284 EventCard resolves host_id and rsvp.user_id through mockUserById() against real UUIDs, so it never matches. Missed by the c46 sweep because that pass fixed OrgFeedSegment and event/[id].tsx but not EventCard. Fix: fetch the roster once via listMembers(chapterId) and pass it into EventCard, same as the findMember helper already in event/[id].tsx."
+      "title": "[A/Jose] Orgs Events 'Hosted by Unknown' FIXED \u2014 PR #11. EventCard resolved identities via mockUserById against real UUIDs; roster now fetched once per segment and passed down (mirrors event/[id].tsx). Last mockUserById call site in the app is gone."
+    },
+    {
+      "id": "c56",
+      "col": "next",
+      "owner": "J",
+      "tag": "go-live",
+      "title": "[A/Jose] PUBLIC WEBSITE \u2014 decided Aug 15, NOT started. Lives IN THIS REPO at web/ (static HTML/CSS, no Expo, no auth, no RN bundle), deployed to FIREBASE HOSTING on the existing chirps-prod project (zero new vendors, free tier, easy custom domain, and it is where universal-link .well-known files go later). Pages: landing, features, how it works, about, PRIVACY POLICY, TERMS, disclosure/contact. PLUS two functional pages the backend already needs: /stripe/connect/return + /stripe/connect/refresh, and an invite bounce page that turns an https link into chirp://join-chapter?code=... . Design: take Instagram's STRUCTURE and polish bar (split hero, dark canvas, real product imagery, one clear CTA, quiet footer) but NOT its look \u2014 app-mobile/DESIGN.md is binding and Chirp keeps its own identity (violet accent, soft canvas, pill everything). Do not ship an Instagram clone."
+    },
+    {
+      "id": "c57",
+      "col": "next",
+      "owner": "",
+      "tag": "go-live",
+      "title": "[shared] BLOCKER CHAIN: the website (c56) gates Stripe (c40), not the other way round. backend/app/routers/payments.py:36-38 raises 503 app_public_base_url_not_configured when APP_PUBLIC_BASE_URL is unset, and Stripe REJECTS custom schemes so it can never be a chirp:// link \u2014 Connect onboarding needs a real https return/refresh URL. The App Store also requires a publicly reachable privacy-policy URL before submission (c10). AND the app already lies: app-mobile/app/(auth)/sign-in.tsx tells every user 'you agree to Chirp's Terms of Service and acknowledge our Privacy Policy' \u2014 neither document exists. Order: c56 web pages -> set APP_PUBLIC_BASE_URL -> c40 Stripe TEST keys -> c39 EAS build -> test-mode payment on card AND ACH."
+    },
+    {
+      "id": "c58",
+      "col": "next",
+      "owner": "J",
+      "tag": "qa",
+      "title": "[A/Jose] LIVE BROWSER QA \u2014 still NEVER DONE, and it is now the biggest unverified surface. Everything from Aug 14-15 (c6, c44, c45, c43, c46, c51-c55) is proven only by pytest + tsc. Nobody has driven the real app against real prod. Proven loop: cloud-sql-proxy 5433 + local uvicorn AUTH_MODE=firebase + Metro 8082 with EXPO_PUBLIC_API_URL pointed at prod, using the three QA accounts in INFRA-PRIVATE.html. Walk: sign in (returning user should NOT re-run account-type, c45), profile shows REAL name/campus/chapter/role (c46), Orgs feed + events show real names not 'Unknown' (c46/c55), family tree loads or fails soft instead of hanging (c46), invite mint + join, dues screen states."
     }
   ],
   "decisions": [
@@ -527,7 +548,9 @@
     "Aug 14 \u2014 Scoping: c34 was carded as 'replace mock calls with live fetch' and was actually a backend gap. The client layer (src/api/feed) was already correct; what was missing was any way for the server to express a campus-visible post. Worth remembering when a card looks like a one-line swap: check that the API can express what the screen renders before estimating it.",
     "Aug 14 \u2014 Engineering: with-counts routes use correlated scalar subqueries, never join+COUNT(DISTINCT). Joining posts to both post_likes and post_comments multiplies rows before counting (3 x 4 = 12) and COUNT(DISTINCT) hides it while making the query slower. Pattern: routers/feed.py _post_counts_select.",
     "Aug 15 \u2014 Money: dues payment intents are now PERSISTED and RESERVED before Stripe is called (migration 0010, dues_payment_intents + a partial unique index on (dues_cycle_id, user_id) WHERE status IN ('open','succeeded')). The old design only recorded a payment AFTER its webhook settled, so during ACH's multi-day 'processing' window nothing in the DB knew a payment was in flight: the cycle still read as unpaid, and because the Stripe idempotency key was scoped per-rail (dues:{cycle}:{user}:{rail}) a retry on the other rail created a GENUINELY different PaymentIntent. Both would succeed and both would append to an append-only ledger. Reserve-then-call is the fix; the ledger partial unique index is the backstop, and payment_failed/canceled webhooks now RELEASE the reservation so a genuinely failed payment can still be retried.",
-    "Aug 15 \u2014 Process: agent sessions must not share one working tree. A background agent fixing three review findings had the repo switched under it mid-edit (a concurrent branch checkout for the q/feed merge). It behaved correctly \u2014 detected the foreign MERGE_HEAD, reverted its own two edits by hand, made ZERO net changes and reported rather than forcing a checkout that would have yanked the branch out from under an unresolved merge. No damage, but the lesson stands: concurrent work on this repo runs in a git worktree, or strictly sequentially. Cheap rule, and it just cost a round trip to learn."
+    "Aug 15 \u2014 Process: agent sessions must not share one working tree. A background agent fixing three review findings had the repo switched under it mid-edit (a concurrent branch checkout for the q/feed merge). It behaved correctly \u2014 detected the foreign MERGE_HEAD, reverted its own two edits by hand, made ZERO net changes and reported rather than forcing a checkout that would have yanked the branch out from under an unresolved merge. No damage, but the lesson stands: concurrent work on this repo runs in a git worktree, or strictly sequentially. Cheap rule, and it just cost a round trip to learn.",
+    "Aug 15 \u2014 Money: reserve-before-charging is now the rule for anything that moves money. A guard that only reads settled state (the ledger) cannot see an in-flight payment, and Stripe idempotency keys only dedup identical parameters \u2014 so any key scoped to a user-changeable field (here, the rail) is not a double-charge guard at all. Write the reservation to OUR database before calling the processor, and let a partial unique index arbitrate. Corollary learned from a failing test: the guard must not block same-parameter retries, or ordinary client retries break.",
+    "Aug 15 \u2014 Product/infra: Chirp gets a PUBLIC WEBSITE and it lives in THIS repo under web/, deployed to Firebase Hosting on chirps-prod. Rationale: it is not a marketing nice-to-have, it is load-bearing \u2014 Stripe Connect cannot onboard without an https return URL (the endpoint 503s), the App Store will not accept a submission without a public privacy-policy URL, invite deep links need an https bounce page to survive being tapped in a text message, and the sign-in screen already promises Terms + Privacy documents that do not exist. Same repo so the privacy policy stays honest about what the app actually collects; static HTML, never the Expo bundle, so it loads fast and works with no auth."
   ]
 }
 </script>
