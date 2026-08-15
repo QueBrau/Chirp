@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Join your org on Chirp</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="/img/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/site.css">
+</head>
+<!--
+  Invite bounce page.
+
+  An https link survives being pasted into a text message; a raw chirp:// link
+  does not, which is the whole reason this page exists. It reads ?code= from its
+  own URL and hands off to chirp://join-chapter?code=..., which is the deep link
+  app-mobile/app/(auth)/join-chapter.tsx already handles.
+
+  Path is /join-chapter, NOT /join: app-mobile/app.json already declares that path
+  in both the iOS associatedDomains entry and the Android intent filter (currently
+  against a placeholder host). Any other name means editing app.json twice later.
+
+  Once a real domain and an Apple Team ID exist, iOS can intercept this URL as a
+  Universal Link and never render this page at all. Until then the visible button
+  below IS the mechanism, not a fallback.
+-->
+<body class="on-brand">
+
+<main class="bounce">
+  <div class="bounce__card">
+    <div class="bounce__mark" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>
+      </svg>
+    </div>
+
+    <h1 class="title">You've been invited to an org on Chirp</h1>
+    <p class="lede" style="margin: var(--space-4) auto 0; font-size: 15px">
+      Open Chirp to join. Your role is already set by whoever invited you.
+    </p>
+
+    <!-- Populated by the script below only when a code is present. -->
+    <div class="code-well" id="code-well" hidden>
+      <p class="caption">Invite code &middot; tap and hold to copy</p>
+      <p class="code-well__value" id="code-value"></p>
+    </div>
+
+    <!--
+      The button is always rendered and is the reliable path. iOS Safari
+      routinely blocks a custom-scheme navigation that was not triggered by a
+      direct user gesture, so the automatic attempt below is a convenience, never
+      the mechanism.
+    -->
+    <a class="btn btn--primary" id="open-app" href="chirp://join-chapter">Open Chirp</a>
+
+    <p class="caption" style="margin-top: var(--space-5)">
+      Don't have Chirp yet? <a href="/">Find out what it is</a>, then come back to
+      this link.
+    </p>
+  </div>
+</main>
+
+<script>
+  (function () {
+    // The code arrives from a URL anyone can craft, so it is untrusted input.
+    // It is written to the page with textContent (never innerHTML) and encoded
+    // with encodeURIComponent when building the outbound URL — matching
+    // withInviteCode() in app-mobile/src/auth/inviteLink.ts so the two cannot
+    // drift on encoding.
+    var code = new URLSearchParams(window.location.search).get('code');
+
+    var target = 'chirp://join-chapter';
+    if (code) {
+      target += '?code=' + encodeURIComponent(code);
+
+      var well = document.getElementById('code-well');
+      document.getElementById('code-value').textContent = code;
+      well.hidden = false;
+    }
+
+    document.getElementById('open-app').setAttribute('href', target);
+
+    // Best-effort auto-open. If the browser blocks it, the button above still
+    // works, which is why nothing here depends on this succeeding.
+    window.setTimeout(function () {
+      window.location.href = target;
+    }, 350);
+  })();
+</script>
+
+</body>
+</html>
