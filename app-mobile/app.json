@@ -12,7 +12,10 @@
       "supportsTablet": false,
       "associatedDomains": [
         "applinks:chirp.example.com"
-      ]
+      ],
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.chirp.app",
@@ -47,6 +50,12 @@
           "enableGooglePay": false
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a0a48d48-9308-4bb2-944a-496960739cff"
+      }
+    }
   }
 }
