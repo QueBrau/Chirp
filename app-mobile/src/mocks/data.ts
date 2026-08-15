@@ -1,4 +1,9 @@
-/** One coherent mock world for the Chirp app — served by src/api/* while USE_MOCKS is true.
+/** Leftover mock world. NOTE: the USE_MOCKS layer this once fed was DELETED in
+ * PR #8 — src/api/* now always talks to the real backend, so nothing here is
+ * served by the API layer any more. What still reads it: the Home Moments row
+ * (no backend concept exists) and a few design constants (campus/org colors).
+ * Treat any OTHER import of this module as a bug — it means a screen is
+ * rendering fake data against a live app.
  *
  * UNC Greensboro → Sigma Chi, Epsilon Mu chapter. Current user is the president
  * (Jake Miller). A second org, Alpha Delta Pi (Zeta Rho), exists purely to prove

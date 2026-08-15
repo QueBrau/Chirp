@@ -15,10 +15,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 
+import { getCampus, type CampusOut } from "@/api/auth";
 import { likePost, listCampusFeed, unlikePost, type FeedPostOut } from "@/api/feed";
 import { useSession } from "@/auth";
 import { AppText, EmptyState, Fab, MediaPostCard, MomentsRow, Screen } from "@/components";
-import { MOCK_CAMPUS, MOCK_MOMENTS, mockUserById } from "@/mocks/data";
+import { MOCK_MOMENTS, mockUserById } from "@/mocks/data";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
 
 type FeedFilter = "forYou" | "campus";
@@ -51,6 +52,7 @@ export default function FeedScreen() {
   const [items, setItems] = useState<FeedPostOut[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [filter, setFilter] = useState<FeedFilter>("forYou");
+  const [campus, setCampus] = useState<CampusOut | null>(null);
 
   // Alumni / non-campus accounts have no campus_id — there's no campus feed to
   // call the endpoint with, so that's handled as its own EmptyState below
@@ -72,6 +74,19 @@ export default function FeedScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Real campus name for the header eyebrow (GET /campuses/{id}, added with c46).
+  // Fails soft to null: a missing campus name is cosmetic and must never blank
+  // out the feed itself, which is driven by campusId.
+  useEffect(() => {
+    if (campusId === null) {
+      setCampus(null);
+      return;
+    }
+    getCampus(campusId)
+      .then(setCampus)
+      .catch(() => setCampus(null));
+  }, [campusId]);
 
   const toggleLike = async (item: FeedPostOut) => {
     const wasLiked = item.liked_by_me;
@@ -102,8 +117,10 @@ export default function FeedScreen() {
   };
 
   // Moments row: MOCK ONLY, always — there is no backend concept of "moments"
-  // (no endpoint anywhere in the contract). Left on src/mocks/data.ts
-  // deliberately rather than inventing one; this is unaffected by USE_MOCKS.
+  // anywhere in the contract. This is the last mock data rendered in the app
+  // (the USE_MOCKS layer itself was deleted in PR #8); it stays until either a
+  // moments endpoint exists or the row is cut. Left explicit rather than
+  // inventing an endpoint to hide it.
   const moments = MOCK_MOMENTS.map((moment) => {
     const momentUser = mockUserById(moment.userId);
     return {
@@ -121,10 +138,11 @@ export default function FeedScreen() {
     <View style={{ flex: 1 }}>
       <Screen
         title="Home"
-        // TODO: campus NAME is still mocked — /auth/me gives campus_id but there is
-        // no GET /campuses/{id} to resolve the name (same gap as the Yak header).
-        // Cosmetic only: campusId, not this, drives every request on this screen.
-        eyebrow={`${MOCK_CAMPUS.name.toUpperCase()} · SPARTANS`}
+        // Real campus name now that GET /campuses/{id} exists (c46). Undefined
+        // until it resolves — an absent eyebrow beats a wrong one. The old value
+        // also hardcoded "· SPARTANS", which is UNCG's mascot: wrong for every
+        // other campus, and CampusOut has no mascot field to replace it with.
+        eyebrow={campus ? campus.name.toUpperCase() : undefined}
         accentBarColor={campusColors.secondary}
         subtitle="Your campus, right now."
       >
