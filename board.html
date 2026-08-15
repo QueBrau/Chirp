@@ -83,7 +83,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1786737602469,
+  "updated": 1786834688814,
   "columns": [
     {
       "id": "backlog",
@@ -106,21 +106,21 @@
     {
       "id": "c42",
       "col": "done",
-      "title": "Session provider + /auth/me SHIPPED (PR #5) and VERIFIED LIVE Aug 14: full join E2E on prod \u2014 invite minted by QA president, fresh account bootstrapped, joined by code (role locked at mint time), membership visible in /auth/me. Second QA fixture account created (creds in INFRA-PRIVATE.html).",
+      "title": "Session provider + /auth/me SHIPPED (PR #5) and VERIFIED LIVE Aug 14: full join E2E on prod — invite minted by QA president, fresh account bootstrapped, joined by code (role locked at mint time), membership visible in /auth/me. Second QA fixture account created (creds in INFRA-PRIVATE.html).",
       "owner": "J",
       "tag": "vert:auth-orgs"
     },
     {
       "id": "c1",
       "col": "done",
-      "title": "Frontend redesign (dribbble pass, Orgs reframe) \u2014 merged to main",
+      "title": "Frontend redesign (dribbble pass, Orgs reframe) — merged to main",
       "owner": "J",
       "tag": "design"
     },
     {
       "id": "c18",
       "col": "done",
-      "title": "No-emoji sweep (Feather icons) + user-arrangeable profile sections \u2014 merged",
+      "title": "No-emoji sweep (Feather icons) + user-arrangeable profile sections — merged",
       "owner": "J",
       "tag": "design"
     },
@@ -134,7 +134,7 @@
     {
       "id": "c3",
       "col": "done",
-      "title": "libsignal spike PASSED \u2014 real X3DH/Double Ratchet vs live backend + sender-key groups (spikes/libsignal-node/FINDINGS.md)",
+      "title": "libsignal spike PASSED — real X3DH/Double Ratchet vs live backend + sender-key groups (spikes/libsignal-node/FINDINGS.md)",
       "owner": "J",
       "tag": "m3"
     },
@@ -148,63 +148,63 @@
     {
       "id": "c19",
       "col": "done",
-      "title": "Kyber/PQXDH prekeys shipped \u2014 migration 0002, bundle API, spike re-verified with server-supplied post-quantum keys",
+      "title": "Kyber/PQXDH prekeys shipped — migration 0002, bundle API, spike re-verified with server-supplied post-quantum keys",
       "owner": "J",
       "tag": "m4"
     },
     {
       "id": "c25",
       "col": "done",
-      "title": "Org space: private org-only feed + Partiful events (Feed/Events/Tools segments, RSVP) \u2014 merged",
+      "title": "Org space: private org-only feed + Partiful events (Feed/Events/Tools segments, RSVP) — merged",
       "owner": "J",
       "tag": "design"
     },
     {
       "id": "c27",
       "col": "done",
-      "title": "Security review (15 findings) + fixes: moderation campus-scope, invite/email escalation, CORS guard, WS log-redaction, TOCTOU races, pagination \u2014 33 tests pass. See SECURITY-REVIEW.md",
+      "title": "Security review (15 findings) + fixes: moderation campus-scope, invite/email escalation, CORS guard, WS log-redaction, TOCTOU races, pagination — 33 tests pass. See SECURITY-REVIEW.md",
       "owner": "J",
       "tag": "security"
     },
     {
       "id": "c30",
       "col": "done",
-      "title": "SHARED BACKEND LIVE: https://chirp-api-593616178468.us-central1.run.app (Cloud Run chirp-api + Cloud SQL PG16 + Secret Manager + Firebase auth). Verified end-to-end Aug 13: 401 gating + REAL firebase token -> user_not_registered (signature + DB lookup both proven). Point all clients here \u2014 unblocks c32/c34/c38. Runbook: INFRA-PRIVATE.html.",
+      "title": "SHARED BACKEND LIVE: https://chirp-api-593616178468.us-central1.run.app (Cloud Run chirp-api + Cloud SQL PG16 + Secret Manager + Firebase auth). Verified end-to-end Aug 13: 401 gating + REAL firebase token -> user_not_registered (signature + DB lookup both proven). Point all clients here — unblocks c32/c34/c38. Runbook: INFRA-PRIVATE.html.",
       "owner": "J",
       "tag": "go-live"
     },
     {
       "id": "c31",
       "col": "done",
-      "title": "Firebase LIVE on chirps-prod (same GCP project as backend): auth initialized, Email/Password enabled, web app chirp-web registered, real config in src/auth/config.ts (app off demo mode) + firebase_admin audience pinned \u2014 on jose/auth-orgs (ad57dde), tsc + 5 auth tests green. LEFT (console, later): Google + Apple provider toggles.",
+      "title": "Firebase LIVE on chirps-prod (same GCP project as backend): auth initialized, Email/Password enabled, web app chirp-web registered, real config in src/auth/config.ts (app off demo mode) + firebase_admin audience pinned — on jose/auth-orgs (ad57dde), tsc + 5 auth tests green. LEFT (console, later): Google + Apple provider toggles.",
       "owner": "J",
       "tag": "vert:auth-orgs"
     },
     {
       "id": "c32",
       "col": "done",
-      "title": "App OFF MOCKS (jose/auth-orgs 738c0a3): API_BASE_URL/USE_MOCKS env-driven, default = live Cloud Run (EXPO_PUBLIC_USE_MOCKS=true restores mocks). VERIFIED IN BROWSER: real Firebase sign-up -> /auth/bootstrap 201 against prod -> feed. Membership join flow still needs chapters to exist = c28 decision. NOTE for c34/c38: un-wired screens now hit the real API with mock ids (422s) \u2014 replace with real ids.",
+      "title": "App OFF MOCKS (jose/auth-orgs 738c0a3): API_BASE_URL/USE_MOCKS env-driven, default = live Cloud Run (EXPO_PUBLIC_USE_MOCKS=true restores mocks). VERIFIED IN BROWSER: real Firebase sign-up -> /auth/bootstrap 201 against prod -> feed. Membership join flow still needs chapters to exist = c28 decision. NOTE for c34/c38: un-wired screens now hit the real API with mock ids (422s) — replace with real ids.",
       "owner": "J",
       "tag": "vert:auth-orgs"
     },
     {
       "id": "c33",
       "col": "done",
-      "title": "Events backend DONE (jose/auth-orgs 7f7e2dd): events + event_rsvps (migration 0006 APPLIED to prod), member-gated router matching src/api/events.ts contract exactly, 46 tests green. VERIFIED LIVE Aug 13 after redeploy: full prod round-trip campus -> chapter 'Chirp HQ' -> event -> RSVP via public API (fixture ids in INFRA-PRIVATE.html). Events UI already had real-API branches \u2014 zero mobile changes needed.",
+      "title": "Events backend DONE (jose/auth-orgs 7f7e2dd): events + event_rsvps (migration 0006 APPLIED to prod), member-gated router matching src/api/events.ts contract exactly, 46 tests green. VERIFIED LIVE Aug 13 after redeploy: full prod round-trip campus -> chapter 'Chirp HQ' -> event -> RSVP via public API (fixture ids in INFRA-PRIVATE.html). Events UI already had real-API branches — zero mobile changes needed.",
       "owner": "J",
       "tag": "vert:auth-orgs"
     },
     {
       "id": "c34",
       "col": "done",
-      "title": "[B/Q] FYP feed on real data \u2014 DONE, PR #9 MERGED Aug 15 (6334957, CI green). NOT YET ON PROD: migration 0009 is unapplied and the route is absent live \u2014 GET /campuses/{id}/feed 404s on prod right now, see c60. Was: PR #9 OPEN (branch q/feed). 132 backend tests green vs PG16 through the full 0001-0009 chain, tsc clean. Migration 0009 lands here (posts.audience org|campus, post_type, duration_sec; defaults to 'org', existing rows NEVER backfilled \u2014 the other default would silently broadcast every private chapter post campus-wide). GET /campuses/{id}/feed returns only audience='campus', 403s other campuses, compound (created_at,id) cursor. TWO causes were fixed, not one: the hardcoded mock chapter id AND the screen filtering on post.source, a field PostOut never had \u2014 fixing only the id still leaves Home empty. Failed loads no longer render as an empty feed. CONFLICT WARNING: PR #8 rewrites src/api/feed.ts (USE_MOCKS purge) and chapter/index.tsx org feed \u2014 both files PR #9 also rewrites. Whichever merges second eats the conflict; see c51.",
+      "title": "[B/Q] FYP feed on real data — DONE, PR #9 MERGED Aug 15 (6334957, CI green). NOT YET ON PROD: migration 0009 is unapplied and the route is absent live — GET /campuses/{id}/feed 404s on prod right now, see c60. Was: PR #9 OPEN (branch q/feed). 132 backend tests green vs PG16 through the full 0001-0009 chain, tsc clean. Migration 0009 lands here (posts.audience org|campus, post_type, duration_sec; defaults to 'org', existing rows NEVER backfilled — the other default would silently broadcast every private chapter post campus-wide). GET /campuses/{id}/feed returns only audience='campus', 403s other campuses, compound (created_at,id) cursor. TWO causes were fixed, not one: the hardcoded mock chapter id AND the screen filtering on post.source, a field PostOut never had — fixing only the id still leaves Home empty. Failed loads no longer render as an empty feed. CONFLICT WARNING: PR #8 rewrites src/api/feed.ts (USE_MOCKS purge) and chapter/index.tsx org feed — both files PR #9 also rewrites. Whichever merges second eats the conflict; see c51.",
       "owner": "Q",
       "tag": "vert:social-msg"
     },
     {
       "id": "c38",
       "col": "done",
-      "title": "Yak on real API DONE + MERGED to main via PR #2 (7d215be, Aug 14 \u2014 Q resolved both conflict rounds, CI green): campus-scoped list/create/vote, server-owned my_vote, composer, report + block. YakOut stays author-free structurally. Two things NOT to 'simplify': block-by-yak returns 204 ALWAYS (a 409/204 split is a one-bit oracle for 'do these two yaks share an author'), and the feed filter is an anti-join on author_id scoped to blocker_id. LIVE ON PROD Aug 14 (rev chirp-api-00007-kff) \u2014 verified: GET /campuses/{id}/yaks and PUT /yaks/{id}/vote both serve app-level 401.",
+      "title": "Yak on real API DONE + MERGED to main via PR #2 (7d215be, Aug 14 — Q resolved both conflict rounds, CI green): campus-scoped list/create/vote, server-owned my_vote, composer, report + block. YakOut stays author-free structurally. Two things NOT to 'simplify': block-by-yak returns 204 ALWAYS (a 409/204 split is a one-bit oracle for 'do these two yaks share an author'), and the feed filter is an anti-join on author_id scoped to blocker_id. LIVE ON PROD Aug 14 (rev chirp-api-00007-kff) — verified: GET /campuses/{id}/yaks and PUT /yaks/{id}/vote both serve app-level 401.",
       "owner": "Q",
       "tag": "vert:social-msg"
     },
@@ -225,7 +225,7 @@
     {
       "id": "c37",
       "col": "done",
-      "title": "CI LIVE (c37): pytest vs PG16 container + mobile tsc on every push/PR \u2014 first run GREEN on the PR #4 merge (both jobs). Advisory only: NO branch protection (Jose, Aug 13).",
+      "title": "CI LIVE (c37): pytest vs PG16 container + mobile tsc on every push/PR — first run GREEN on the PR #4 merge (both jobs). Advisory only: NO branch protection (Jose, Aug 13).",
       "owner": "J",
       "tag": "infra"
     },
@@ -239,35 +239,35 @@
     {
       "id": "c29",
       "col": "done",
-      "title": "Deferred security items shipped: prekey-bundle rate limiting + Firebase token auto-refresh + msg compound index (migration 0005) \u2014 on main (6a41341), 40 tests green",
+      "title": "Deferred security items shipped: prekey-bundle rate limiting + Firebase token auto-refresh + msg compound index (migration 0005) — on main (6a41341), 40 tests green",
       "owner": "J",
       "tag": "security"
     },
     {
       "id": "c26",
       "col": "done",
-      "title": "Events backend DONE (duplicate of c33 \u2014 closed Aug 14 by audit): events + event_rsvps tables shipped in migration 0006, RSVP endpoints live. Card was stale in backlog while the work was already on prod.",
+      "title": "Events backend DONE (duplicate of c33 — closed Aug 14 by audit): events + event_rsvps tables shipped in migration 0006, RSVP endpoints live. Card was stale in backlog while the work was already on prod.",
       "owner": "",
       "tag": "m5"
     },
     {
       "id": "c20",
       "col": "done",
-      "title": "Firebase project DONE (duplicate of c31 \u2014 closed Aug 14 by audit): chirps-prod live, email/password enabled, config committed in src/auth/config.ts. Card was stale in Next while auth had been live for a day.",
+      "title": "Firebase project DONE (duplicate of c31 — closed Aug 14 by audit): chirps-prod live, email/password enabled, config committed in src/auth/config.ts. Card was stale in Next while auth had been live for a day.",
       "owner": "",
       "tag": "m1"
     },
     {
       "id": "c21",
-      "col": "next",
-      "title": "Verify WS/Redis real-time fan-out end-to-end (spike Finding 3: HTTP path proven, WS path not)",
-      "owner": "",
+      "col": "progress",
+      "title": "[B/Q] WS/Redis fan-out VERIFIED end to end — PR #12 open (branch q/ws-verify). The repo had ZERO websocket tests; now 5. POST -> Redis PUBLISH user:{recipient_id} -> gateway SUBSCRIBE -> forwarded down the socket, proven against real Redis: payload matches, per-user isolation holds (an unrelated CONNECTED user gets nothing — the only thing keeping one user's ciphertext metadata off another's socket), missing + unknown uid both close 4401. The happy-path test was FALSIFIED before being trusted (published to a wrong channel, confirmed it fails on timeout rather than passing vacuously). Subscription readiness polls Redis PUBSUB NUMSUB rather than sleeping, so it can't pass on timing luck. 144 tests. Also pinned: pub/sub is fire-and-forget, so an event published while the recipient is offline is DROPPED — recoverable because GET /conversations/{id}/messages serves catch-up (asserted, not assumed). Card closes when PR #12 merges.",
+      "owner": "Q",
       "tag": "m4"
     },
     {
       "id": "c22",
       "col": "done",
-      "title": "Backend suite on Postgres 16 DONE \u2014 Q's Mac has Docker, so the suite now runs against a postgres:16 container (chirp-test-pg, host port 5434), matching prod's PG16. 107 tests green there Aug 13. Setup recorded in CLAUDE.md.",
+      "title": "Backend suite on Postgres 16 DONE — Q's Mac has Docker, so the suite now runs against a postgres:16 container (chirp-test-pg, host port 5434), matching prod's PG16. 107 tests green there Aug 13. Setup recorded in CLAUDE.md.",
       "owner": "Q",
       "tag": "backend"
     },
@@ -281,14 +281,14 @@
     {
       "id": "c24",
       "col": "done",
-      "title": "FYP feed (story tiles, filter pills, photo/video/text posts, FAB) + school-color theming w/ Appearance screen \u2014 browser-verified",
+      "title": "FYP feed (story tiles, filter pills, photo/video/text posts, FAB) + school-color theming w/ Appearance screen — browser-verified",
       "owner": "J",
       "tag": "design"
     },
     {
       "id": "c5",
       "col": "backlog",
-      "title": "Invite deep links end-to-end (chirp://join-chapter) \u2014 BACKEND+CHAIN DONE via c42 (code survives sign-in AND onboarding, verified); LEFT: in-app invite-create UI for e-board (Tools segment) + share sheet/QR.",
+      "title": "Invite deep links — https SHARE LINK LANDED in PR #13. chapter/index.tsx now shares https://chirps-prod.web.app/join-chapter?code=... via a new inviteShareUrl(), instead of the raw chirp:// string it used to print: a custom scheme is not linkified by Messages or most DM apps, so invites arrived as dead text exactly where they get sent. withInviteCode() is unchanged because the auth chain still uses it for internal router paths. BACKEND+CHAIN was already DONE via c42. LEFT: in-app invite-create UI for e-board (Tools segment) + share sheet/QR, and universal links — which need a real Apple Team ID and an EAS release cert fingerprint, so web/public/.well-known/ is deliberately left EMPTY rather than holding a fabricated Team ID that would serve 200 and read as done.",
       "owner": "",
       "tag": "m1"
     },
@@ -316,7 +316,7 @@
     {
       "id": "c9",
       "col": "done",
-      "title": "Lineage tree Skia canvas (pan/pinch, family colors, ghost nodes) \u2014 shipped by Q via PR #1",
+      "title": "Lineage tree Skia canvas (pan/pinch, family colors, ghost nodes) — shipped by Q via PR #1",
       "owner": "Q",
       "tag": "m6"
     },
@@ -330,42 +330,42 @@
     {
       "id": "c11",
       "col": "progress",
-      "title": "[B/Q] Stripe Connect dues \u2014 MERGED to main via PR #3 (0557375, Aug 14, CI green; c41 renumber done, migration is 0008). NOT yet proven against real Stripe. Express accounts + direct charges; rail locked before intent (application_fee_amount immutable); replay guarded by UNIQUE partial index + processed_stripe_events; Customer per (member, chapter). Keys are Optional in config so prod boots fine without them \u2014 dues endpoints dead until c40. DEPLOYED TO PROD Aug 14 (migration 0008 applied + rev 00007-kff): POST /webhooks/stripe answers with its OWN error (400 missing_stripe_signature), proving the payments module imports and runs live. STILL NOT PROVEN AGAINST REAL STRIPE. UPDATE Aug 15: the reserve-before-charging fix (c51, migration 0010) is now MERGED to main via PR #11 (9673ff6) but is NOT on prod — 0010 is unapplied, see c60. LEFT, in this exact order: migrate 0009+0010 + redeploy (c60) -> website so APP_PUBLIC_BASE_URL can exist (c56) -> Stripe TEST keys (c40) -> EAS dev build (c39) -> test-mode payment on card AND ACH. When that payment runs, deliberately exercise the cross-rail retry: start on one rail, retry on the other before the first settles, and confirm 409 rather than a second PaymentIntent.",
+      "title": "[B/Q] Stripe Connect dues — MERGED to main via PR #3 (0557375, Aug 14, CI green; c41 renumber done, migration is 0008). NOT yet proven against real Stripe. Express accounts + direct charges; rail locked before intent (application_fee_amount immutable); replay guarded by UNIQUE partial index + processed_stripe_events; Customer per (member, chapter). Keys are Optional in config so prod boots fine without them — dues endpoints dead until c40. DEPLOYED TO PROD Aug 14 (migration 0008 applied + rev 00007-kff): POST /webhooks/stripe answers with its OWN error (400 missing_stripe_signature), proving the payments module imports and runs live. STILL NOT PROVEN AGAINST REAL STRIPE. UPDATE Aug 15: the reserve-before-charging fix (c51, migration 0010) is now MERGED to main via PR #11 (9673ff6) but is NOT on prod — 0010 is unapplied, see c60. LEFT, in this exact order: migrate 0009+0010 + redeploy (c60) -> website so APP_PUBLIC_BASE_URL can exist (c56) -> Stripe TEST keys (c40) -> EAS dev build (c39) -> test-mode payment on card AND ACH. When that payment runs, deliberately exercise the cross-rail retry: start on one rail, retry on the other before the first settles, and confirm 409 rather than a second PaymentIntent.",
       "owner": "Q",
       "tag": "m8"
     },
     {
       "id": "c41",
       "col": "done",
-      "title": "[shared] MIGRATION COLLISION RESOLVED: Stripe migration renumbered to 0008 (down_revision 0007), chain verified linear 0001->0008, 116 tests run through the full chain, merged via PR #3 (0557375, CI green on main). NEXT FREE NUMBER: 0009 \u2014 claim here before writing the file (CLAUDE.md rule). 0008 APPLIED TO PROD Aug 14 by Jose (alembic current = 0008 head), then redeployed rev 00007-kff. Learned: cloud-sql-proxy is NOT part of the gcloud SDK and was missing on Jose's Mac \u2014 install step now documented in INFRA-PRIVATE.html.",
+      "title": "[shared] MIGRATION COLLISION RESOLVED: Stripe migration renumbered to 0008 (down_revision 0007), chain verified linear 0001->0008, 116 tests run through the full chain, merged via PR #3 (0557375, CI green on main). NEXT FREE NUMBER: 0009 — claim here before writing the file (CLAUDE.md rule). 0008 APPLIED TO PROD Aug 14 by Jose (alembic current = 0008 head), then redeployed rev 00007-kff. Learned: cloud-sql-proxy is NOT part of the gcloud SDK and was missing on Jose's Mac — install step now documented in INFRA-PRIVATE.html.",
       "owner": "",
       "tag": "backend"
     },
     {
       "id": "c39",
       "col": "next",
-      "title": "[B/Q] Rebuild the EAS dev build \u2014 three native modules have been added since the last one (expo-file-system, expo-sharing, @stripe/stripe-react-native), so CSV export and the dues PaymentSheet cannot be tested on device until it's rebuilt. Note: the Stripe config plugin was registered as a bare string in app.json, so it got no props and threw on merchantIdentifier \u2014 that broke expo export/prebuild and ANY EAS build. Fixed in PR #3, with Apple Pay deliberately left off (empty merchantIdentifier). UPDATE Aug 15: the PREP is merged (PR #10, 1aa19ba) — the two blockers that would have failed this build are fixed and the EAS project link is kept. The build itself has NOT been run. This is ON THE CRITICAL PATH for the sprint goal: no dues PaymentSheet on device until it lands.",
+      "title": "[B/Q] Rebuild the EAS dev build — three native modules have been added since the last one (expo-file-system, expo-sharing, @stripe/stripe-react-native), so CSV export and the dues PaymentSheet cannot be tested on device until it's rebuilt. Note: the Stripe config plugin was registered as a bare string in app.json, so it got no props and threw on merchantIdentifier — that broke expo export/prebuild and ANY EAS build. Fixed in PR #3, with Apple Pay deliberately left off (empty merchantIdentifier). UPDATE Aug 15: the PREP is merged (PR #10, 1aa19ba) — the two blockers that would have failed this build are fixed and the EAS project link is kept. The build itself has NOT been run. This is ON THE CRITICAL PATH for the sprint goal: no dues PaymentSheet on device until it lands.",
       "owner": "Q",
       "tag": "m8"
     },
     {
       "id": "c40",
       "col": "next",
-      "title": "[shared] Before dues can take real money: set STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY / STRIPE_WEBHOOK_SECRET and APP_PUBLIC_BASE_URL in Secret Manager + Cloud Run, then register the webhook endpoint pointing at /webhooks/stripe. APP_PUBLIC_BASE_URL must be https \u2014 Stripe rejects custom schemes, so Connect onboarding cannot return to a chirp:// deep link; it needs a web page that bounces back into the app. ORDER: this comes AFTER the 0008 migrate + redeploy (see c41/c11) \u2014 the Stripe tables don't exist in prod until then. Full chain to working dues: migrate+redeploy -> keys (here) -> EAS build (c39) -> test-mode payment on card AND ACH. DOMAIN DECIDED Aug 15: APP_PUBLIC_BASE_URL = https://chirps-prod.web.app \u2014 the free Firebase Hosting domain on the existing project. Stripe accepts it, it costs nothing, and it unblocks this card as soon as c56 deploys. A custom domain is deferred to its own card; it only becomes load-bearing when iOS universal links do (app-mobile/app.json still declares the placeholder applinks:chirp.example.com, which is wrong either way).",
+      "title": "[shared] Before dues can take real money: set STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY / STRIPE_WEBHOOK_SECRET and APP_PUBLIC_BASE_URL in Secret Manager + Cloud Run, then register the webhook endpoint pointing at /webhooks/stripe. APP_PUBLIC_BASE_URL must be https — Stripe rejects custom schemes, so Connect onboarding cannot return to a chirp:// deep link; it needs a web page that bounces back into the app. ORDER: this comes AFTER the 0008 migrate + redeploy (see c41/c11) — the Stripe tables don't exist in prod until then. Full chain to working dues: migrate+redeploy -> keys (here) -> EAS build (c39) -> test-mode payment on card AND ACH. DOMAIN DECIDED Aug 15: APP_PUBLIC_BASE_URL = https://chirps-prod.web.app — the free Firebase Hosting domain on the existing project. Stripe accepts it, it costs nothing, and it unblocks this card as soon as c56 deploys. A custom domain is deferred to its own card; it only becomes load-bearing when iOS universal links do (app-mobile/app.json still declares the placeholder applinks:chirp.example.com, which is wrong either way).",
       "owner": "",
       "tag": "go-live"
     },
     {
       "id": "c12",
       "col": "done",
-      "title": "Treasurer + Secretary dashboards DONE + MERGED to main via PR #2 (7d215be, Aug 14): real data, spend-approval decisions, ledger append, meetings + minutes + attendance, CSV export -> share sheet. CSV injection defused on TEXT FIELDS ONLY (ledger amounts are legitimately negative \u2014 blanket sanitizing would corrupt every expense). Roster-name overlap with PR #6 resolved by keeping main's MemberOut (join + avatar_url); MembershipOut.display_name removed. LIVE ON PROD Aug 14 (rev 00007-kff) \u2014 /ledger/export.csv and /meetings verified serving app-level 401.",
+      "title": "Treasurer + Secretary dashboards DONE + MERGED to main via PR #2 (7d215be, Aug 14): real data, spend-approval decisions, ledger append, meetings + minutes + attendance, CSV export -> share sheet. CSV injection defused on TEXT FIELDS ONLY (ledger amounts are legitimately negative — blanket sanitizing would corrupt every expense). Roster-name overlap with PR #6 resolved by keeping main's MemberOut (join + avatar_url); MembershipOut.display_name removed. LIVE ON PROD Aug 14 (rev 00007-kff) — /ledger/export.csv and /meetings verified serving app-level 401.",
       "owner": "Q",
       "tag": "m9"
     },
     {
       "id": "c13",
       "col": "done",
-      "title": "Alumni network + job board \u2014 shipped by Q via PR #1 (UI + lineage_service + schemas)",
+      "title": "Alumni network + job board — shipped by Q via PR #1 (UI + lineage_service + schemas)",
       "owner": "Q",
       "tag": "m10"
     },
@@ -400,35 +400,35 @@
     {
       "id": "c43",
       "col": "done",
-      "title": "[shared] Batch endpoints to kill the N+1s \u2014 SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's \u2014 DONE + LIVE (PR #7 befba10, prod rev 00007-kff): GET /chapters/{id}/events-with-rsvps, 1+N -> one round trip, Events segment wired, route verified serving app-level 401. Q's posts-with-counts half still rides with c34 \u2014 this card stays open until that lands. MIGRATION 0009 NOW CLAIMED by c34 (posts.audience/post_type/duration_sec) \u2014 next free is 0010. UPDATE: Q's posts-with-counts half is BUILT in PR #9 \u2014 counts + author identity ride on the feed row, 2N fan-out gone. Correlated scalar subqueries, NOT join+COUNT(DISTINCT) (joining two one-to-many tables fans out: 3 likes x 4 comments = 12 rows). Regression test confirmed load-bearing by swapping the naive join back in and watching it fail. Closes when PR #9 merges. UPDATE Aug 15: Q's posts-with-counts half LANDED in PR #9 (FeedPostOut carries display_name/avatar_url/like_count/comment_count/liked_by_me from one query). The org feed consumer is wired to it. This card closes when PR #9 merges. CLOSED Aug 15: both halves exist. Jose's events-with-rsvps is live on prod; Q's posts-with-counts (FeedPostOut) landed in PR #9 and the org feed consumer now uses it \u2014 that segment dropped its 2N listLikes+listComments AND its roster call in PR #11.",
+      "title": "[shared] Batch endpoints to kill the N+1s — SPLIT (Aug 14 decision below): posts-with-counts is Q's, built INSIDE c34 so the endpoint shape matches the feed consumer he is wiring; events-with-rsvp-counts is Jose's — DONE + LIVE (PR #7 befba10, prod rev 00007-kff): GET /chapters/{id}/events-with-rsvps, 1+N -> one round trip, Events segment wired, route verified serving app-level 401. Q's posts-with-counts half still rides with c34 — this card stays open until that lands. MIGRATION 0009 NOW CLAIMED by c34 (posts.audience/post_type/duration_sec) — next free is 0010. UPDATE: Q's posts-with-counts half is BUILT in PR #9 — counts + author identity ride on the feed row, 2N fan-out gone. Correlated scalar subqueries, NOT join+COUNT(DISTINCT) (joining two one-to-many tables fans out: 3 likes x 4 comments = 12 rows). Regression test confirmed load-bearing by swapping the naive join back in and watching it fail. Closes when PR #9 merges. UPDATE Aug 15: Q's posts-with-counts half LANDED in PR #9 (FeedPostOut carries display_name/avatar_url/like_count/comment_count/liked_by_me from one query). The org feed consumer is wired to it. This card closes when PR #9 merges. CLOSED Aug 15: both halves exist. Jose's events-with-rsvps is live on prod; Q's posts-with-counts (FeedPostOut) landed in PR #9 and the org feed consumer now uses it — that segment dropped its 2N listLikes+listComments AND its roster call in PR #11.",
       "owner": "",
       "tag": "backend"
     },
     {
       "id": "c44",
       "col": "done",
-      "title": "[A/Jose] Role metadata from backend DONE + LIVE (PR #7 merged befba10, prod rev 00007-kff, Aug 14): GET /chapters/{id}/role-meta serves roles/eboard/invitable from permissions.py with the create_invite rule applied server-side; mobile fully server-fed via OwnChapterProvider (invite card, roster grouping, chips) \u2014 the hand-typed mirrors flagged in PR #6 review are deleted. 4 tests assert against permissions.py itself so enum drift is caught automatically. Verified live: route serves app-level 401.",
+      "title": "[A/Jose] Role metadata from backend DONE + LIVE (PR #7 merged befba10, prod rev 00007-kff, Aug 14): GET /chapters/{id}/role-meta serves roles/eboard/invitable from permissions.py with the create_invite rule applied server-side; mobile fully server-fed via OwnChapterProvider (invite card, roster grouping, chips) — the hand-typed mirrors flagged in PR #6 review are deleted. 4 tests assert against permissions.py itself so enum drift is caught automatically. Verified live: route serves app-level 401.",
       "owner": "J",
       "tag": "vert:auth-orgs"
     },
     {
       "id": "c46",
       "col": "done",
-      "title": "[A/Jose] MOCK IDENTITY LEAK \u2014 DONE + MERGED (PR #8, 9cace1c, Aug 15). Screens off mock identity onto the real session: profile (was 'const user = MOCK_CURRENT_USER'; now useSession + myMemberships + new GET /campuses/{id}), chapter/tree (mock id AND no .catch \u2014 real users hung on 'Loading lineage...' forever), chapter/event/[id] ('Event not found' on every real event), org Feed segment, and alumni/post-job (mock chapter_id meant a real job post could never succeed). Dead USE_MOCKS layer DELETED repo-wide: 85 unreachable branches / 13 api modules / -812 lines. 125 tests + tsc green, CI green. NOT YET DEPLOYED (prod still rev 00007-kff) and NOT YET seen in a live browser \u2014 both pending.",
+      "title": "[A/Jose] MOCK IDENTITY LEAK — DONE + MERGED (PR #8, 9cace1c, Aug 15). Screens off mock identity onto the real session: profile (was 'const user = MOCK_CURRENT_USER'; now useSession + myMemberships + new GET /campuses/{id}), chapter/tree (mock id AND no .catch — real users hung on 'Loading lineage...' forever), chapter/event/[id] ('Event not found' on every real event), org Feed segment, and alumni/post-job (mock chapter_id meant a real job post could never succeed). Dead USE_MOCKS layer DELETED repo-wide: 85 unreachable branches / 13 api modules / -812 lines. 125 tests + tsc green, CI green. NOT YET DEPLOYED (prod still rev 00007-kff) and NOT YET seen in a live browser — both pending.",
       "owner": "J",
       "tag": "vert:auth-orgs"
     },
     {
       "id": "c47",
       "col": "done",
-      "title": "[B/Q] MOCK IDENTITY LEAK \u2014 Messaging screens \u2014 CLOSED Aug 15, verified fixed on main. Re-checked directly: neither mock_plaintext nor MOCK_CURRENT_USER appears anywhere in messages/[id].tsx or messages/index.tsx, and the thread now renders the designed encrypted placeholder ('Direct message \u00b7 encrypted') instead of faking text or ownership. The card sat in Next after the work had already landed \u2014 same staleness the Aug 14 audit called out. What is still GENUINELY blocked and is NOT part of this card: real message text needs the decrypt layer (c36), and DM titles need a GET /users/{id} that does not exist. ORIGINAL: (Aug 14 audit). messages/[id].tsx fetches REAL conversations/messages but then renders message.mock_plaintext (line 82), a field that exists only on the mock type \u2014 real MessageOut carries ciphertext_b64, so every real message renders BLANK; and line 55 compares message.sender_user_id === MOCK_CURRENT_USER.id, a field real MessageOut does not have, so every bubble (including your own) renders as 'theirs'. messages/index.tsx degrades more gently: real conversation list, but titles fall back to 'Direct message' and the unread dot is keyed on MOCK_CURRENT_USER.id. Composer is hard-disabled (milestone-4). Ties into c36 (crypto stubs) \u2014 decrypt has to land before plaintext can render at all. HEADS UP Q (Aug 14 night): Jose is making these two screens TRUTHFUL only \u2014 deleting the renders of fields that do not exist so messages stop coming out blank and every bubble stops claiming to be 'theirs', replaced with an explicit encrypted-placeholder state. No redesign, no crypto, no new endpoints; the messaging experience is still yours. What stays genuinely blocked and is NOT being touched: real message text (needs the decrypt layer, c36) and DM titles (needs a GET /users/{id}, which does not exist).",
+      "title": "[B/Q] MOCK IDENTITY LEAK — Messaging screens — CLOSED Aug 15, verified fixed on main. Re-checked directly: neither mock_plaintext nor MOCK_CURRENT_USER appears anywhere in messages/[id].tsx or messages/index.tsx, and the thread now renders the designed encrypted placeholder ('Direct message · encrypted') instead of faking text or ownership. The card sat in Next after the work had already landed — same staleness the Aug 14 audit called out. What is still GENUINELY blocked and is NOT part of this card: real message text needs the decrypt layer (c36), and DM titles need a GET /users/{id} that does not exist. ORIGINAL: (Aug 14 audit). messages/[id].tsx fetches REAL conversations/messages but then renders message.mock_plaintext (line 82), a field that exists only on the mock type — real MessageOut carries ciphertext_b64, so every real message renders BLANK; and line 55 compares message.sender_user_id === MOCK_CURRENT_USER.id, a field real MessageOut does not have, so every bubble (including your own) renders as 'theirs'. messages/index.tsx degrades more gently: real conversation list, but titles fall back to 'Direct message' and the unread dot is keyed on MOCK_CURRENT_USER.id. Composer is hard-disabled (milestone-4). Ties into c36 (crypto stubs) — decrypt has to land before plaintext can render at all. HEADS UP Q (Aug 14 night): Jose is making these two screens TRUTHFUL only — deleting the renders of fields that do not exist so messages stop coming out blank and every bubble stops claiming to be 'theirs', replaced with an explicit encrypted-placeholder state. No redesign, no crypto, no new endpoints; the messaging experience is still yours. What stays genuinely blocked and is NOT being touched: real message text (needs the decrypt layer, c36) and DM titles (needs a GET /users/{id}, which does not exist).",
       "owner": "Q",
       "tag": "vert:social-msg"
     },
     {
       "id": "c45",
       "col": "done",
-      "title": "[A/Jose] Returning-user sign-in UX DONE (PR #7 merged befba10, Aug 14): plain sign-in lands on tabs and the existing auth guard decides (registered -> feed, unregistered -> account-type); invite-code, sign-up, and demo walks unchanged. Was: every sign-in re-ran the who-are-you screen (found in c6 browser QA). NOT yet re-QA'd in a live browser against prod \u2014 worth one pass on the next QA loop.",
+      "title": "[A/Jose] Returning-user sign-in UX DONE (PR #7 merged befba10, Aug 14): plain sign-in lands on tabs and the existing auth guard decides (registered -> feed, unregistered -> account-type); invite-code, sign-up, and demo walks unchanged. Was: every sign-in re-ran the who-are-you screen (found in c6 browser QA). NOT yet re-QA'd in a live browser against prod — worth one pass on the next QA loop.",
       "owner": "J",
       "tag": "vert:auth-orgs"
     },
@@ -437,77 +437,77 @@
       "col": "done",
       "owner": "",
       "tag": "backend",
-      "title": "[shared] PR #8 / PR #9 COLLISION \u2014 RESOLVED as planned (Aug 15). Both devs independently reached the same order; PR #8 merged first (9cace1c, bigger blast radius: 13 api modules of deletions). PR #9 is now CONFLICTING/DIRTY as expected \u2014 Q rebases q/feed onto main and re-resolves the two shared files (src/api/feed.ts, chapter/index.tsx org feed segment). Note both branches had independently deleted the same post.source filter, which git does NOT flag as a text conflict \u2014 diff that segment BY HAND after the rebase, same trap as the MemberOut overlap. RESOLVED Aug 15 by Jose (Q was offline and a CRITICAL money fix was queued behind it): merged origin/main into q/feed \u2014 NOT a rebase, no force-push, so Q loses nothing. Kept Q's whole feature surface (PostAudience, FeedPostOut, listCampusFeed, cursor opts) and applied the USE_MOCKS purge to it. Bonus: OrgFeedSegment now drops BOTH the per-post listLikes+listComments (2N) and its listMembers roster call, because Q's FeedPostOut already carries author identity + batched counts \u2014 that is c43's posts-with-counts half, delivered. 135 tests + tsc green. PR #9 is MERGEABLE again."
+      "title": "[shared] PR #8 / PR #9 COLLISION — RESOLVED as planned (Aug 15). Both devs independently reached the same order; PR #8 merged first (9cace1c, bigger blast radius: 13 api modules of deletions). PR #9 is now CONFLICTING/DIRTY as expected — Q rebases q/feed onto main and re-resolves the two shared files (src/api/feed.ts, chapter/index.tsx org feed segment). Note both branches had independently deleted the same post.source filter, which git does NOT flag as a text conflict — diff that segment BY HAND after the rebase, same trap as the MemberOut overlap. RESOLVED Aug 15 by Jose (Q was offline and a CRITICAL money fix was queued behind it): merged origin/main into q/feed — NOT a rebase, no force-push, so Q loses nothing. Kept Q's whole feature surface (PostAudience, FeedPostOut, listCampusFeed, cursor opts) and applied the USE_MOCKS purge to it. Bonus: OrgFeedSegment now drops BOTH the per-post listLikes+listComments (2N) and its listMembers roster call, because Q's FeedPostOut already carries author identity + batched counts — that is c43's posts-with-counts half, delivered. 135 tests + tsc green. PR #9 is MERGEABLE again."
     },
     {
       "id": "c49",
       "col": "next",
       "owner": "Q",
       "tag": "vert:social-msg",
-      "title": "[B/Q] NO COMPOSE FLOW EXISTS \u2014 found while wiring c34. src/components/CreateSheet.tsx is a pure mock: its Photo/Video/Text rows just call onClose, and createPost() is never called anywhere in the app (grep confirms only its own definition). So nothing can create a post from the client at all, and the Aug 14 'author picks audience at compose time' decision has no UI to exercise \u2014 the backend accepts audience, nothing sends it. Until this lands the campus feed can only be populated by direct API calls. Needs a real compose screen + an org-vs-campus picker defaulting to org."
+      "title": "[B/Q] NO COMPOSE FLOW EXISTS — found while wiring c34. src/components/CreateSheet.tsx is a pure mock: its Photo/Video/Text rows just call onClose, and createPost() is never called anywhere in the app (grep confirms only its own definition). So nothing can create a post from the client at all, and the Aug 14 'author picks audience at compose time' decision has no UI to exercise — the backend accepts audience, nothing sends it. Until this lands the campus feed can only be populated by direct API calls. Needs a real compose screen + an org-vs-campus picker defaulting to org."
     },
     {
       "id": "c51",
       "col": "done",
       "owner": "J",
       "tag": "vert:social-msg",
-      "title": "[A/Jose] CRITICAL dues double-charge FIXED \u2014 PR #11 (Aug 15). Reserve-before-charging: migration 0010 adds dues_payment_intents, written BEFORE Stripe is called, so the DB arbitrates not Stripe. uq_dues_intent_live holds one live reservation per (cycle, member) ACROSS BOTH RAILS, so a rail switch mid-flight is 409 and Stripe is never asked for a second intent. Same-rail retries stay idempotent (the existing contract test caught a blunter first version that broke them). payment_failed/canceled RELEASE the reservation so a genuinely failed payment is still retryable. Ledger backstop: uq_ledger_dues_payment_once. 3 new tests. Still latent-only today since Stripe keys are unset (c40) \u2014 fixed before go-live, not after."
+      "title": "[A/Jose] CRITICAL dues double-charge FIXED — PR #11 (Aug 15). Reserve-before-charging: migration 0010 adds dues_payment_intents, written BEFORE Stripe is called, so the DB arbitrates not Stripe. uq_dues_intent_live holds one live reservation per (cycle, member) ACROSS BOTH RAILS, so a rail switch mid-flight is 409 and Stripe is never asked for a second intent. Same-rail retries stay idempotent (the existing contract test caught a blunter first version that broke them). payment_failed/canceled RELEASE the reservation so a genuinely failed payment is still retryable. Ledger backstop: uq_ledger_dues_payment_once. 3 new tests. Still latent-only today since Stripe keys are unset (c40) — fixed before go-live, not after."
     },
     {
       "id": "c50",
       "col": "done",
       "owner": "J",
       "tag": "review",
-      "title": "[shared] REVIEW DEBT \u2014 REVIEW RUN Aug 15 (42d8e35..HEAD = PRs #2/#3/#7/#8, 66 files / ~5.3k added lines, none previously reviewed). 5 lenses (money, authz, anonymity, data-integrity, mobile), every finding double-refuted before reporting: 6 raised, 6 SURVIVED, 0 refuted. Filed as c51-c55. Authz lens found NOTHING \u2014 org/campus scoping held up across every new route, which is the reassuring half of this. SECURITY-REVIEW.md is still dated Aug 13 and should be refreshed once c51 lands."
+      "title": "[shared] REVIEW DEBT — REVIEW RUN Aug 15 (42d8e35..HEAD = PRs #2/#3/#7/#8, 66 files / ~5.3k added lines, none previously reviewed). 5 lenses (money, authz, anonymity, data-integrity, mobile), every finding double-refuted before reporting: 6 raised, 6 SURVIVED, 0 refuted. Filed as c51-c55. Authz lens found NOTHING — org/campus scoping held up across every new route, which is the reassuring half of this. SECURITY-REVIEW.md is still dated Aug 13 and should be refreshed once c51 lands."
     },
     {
       "id": "c52",
       "col": "done",
       "owner": "J",
       "tag": "vert:auth-orgs",
-      "title": "[A/Jose] Dues 'Nothing due' on a failed load FIXED \u2014 PR #11. listDuesCycles now fails to null (not []) so a network failure stays distinguishable from an empty cycle list, with its own error state."
+      "title": "[A/Jose] Dues 'Nothing due' on a failed load FIXED — PR #11. listDuesCycles now fails to null (not []) so a network failure stays distinguishable from an empty cycle list, with its own error state."
     },
     {
       "id": "c53",
       "col": "done",
       "owner": "J",
       "tag": "security",
-      "title": "[B/Q vertical, Jose fixed] Yak block-by-yak TIMING oracle FIXED \u2014 PR #11. Was read-then-maybe-insert: same 204 either way, but very different latency, so timing still answered 'do these two yaks share an author'. Now an unconditional INSERT ... ON CONFLICT DO NOTHING \u2014 identical work every call. Test asserts both calls 204 and exactly one row."
+      "title": "[B/Q vertical, Jose fixed] Yak block-by-yak TIMING oracle FIXED — PR #11. Was read-then-maybe-insert: same 204 either way, but very different latency, so timing still answered 'do these two yaks share an author'. Now an unconditional INSERT ... ON CONFLICT DO NOTHING — identical work every call. Test asserts both calls 204 and exactly one row."
     },
     {
       "id": "c54",
       "col": "done",
       "owner": "J",
       "tag": "money",
-      "title": "[A/Jose] ChapterStripeCustomer race FIXED \u2014 PR #11. Concurrent first payment 500'd and orphaned a Stripe Customer on the connected account; now defers to the race winner."
+      "title": "[A/Jose] ChapterStripeCustomer race FIXED — PR #11. Concurrent first payment 500'd and orphaned a Stripe Customer on the connected account; now defers to the race winner."
     },
     {
       "id": "c55",
       "col": "done",
       "owner": "J",
       "tag": "vert:auth-orgs",
-      "title": "[A/Jose] Orgs Events 'Hosted by Unknown' FIXED \u2014 PR #11. EventCard resolved identities via mockUserById against real UUIDs; roster now fetched once per segment and passed down (mirrors event/[id].tsx). CORRECTION Aug 15: this card claimed 'the last mockUserById call site in the app is gone'. That was WRONG — it was gone from THIS file only. chapter/alumni/index.tsx:64 still resolves a real UUID through the mock table. Caught by Q while merging, re-verified on main, filed as c59."
+      "title": "[A/Jose] Orgs Events 'Hosted by Unknown' FIXED — PR #11. EventCard resolved identities via mockUserById against real UUIDs; roster now fetched once per segment and passed down (mirrors event/[id].tsx). CORRECTION Aug 15: this card claimed 'the last mockUserById call site in the app is gone'. That was WRONG — it was gone from THIS file only. chapter/alumni/index.tsx:64 still resolves a real UUID through the mock table. Caught by Q while merging, re-verified on main, filed as c59."
     },
     {
       "id": "c56",
       "col": "progress",
       "owner": "J",
       "tag": "go-live",
-      "title": "[A/Jose] PUBLIC WEBSITE \u2014 IN PROGRESS Aug 15, Jose building now. TARGET ORIGIN DECIDED: the free https://chirps-prod.web.app (Firebase Hosting on the existing project) \u2014 Stripe accepts it, zero cost, unblocks APP_PUBLIC_BASE_URL the moment it deploys; custom domain deferred to its own card. NOTE: Hosting is greenfield here \u2014 there is no firebase.json anywhere in the repo, and SETUP-FIREBASE.md/DEPLOY.md cover only Auth and Cloud Run, so hosting config is part of this card. The privacy policy has to be honest about what backend/app/models actually stores, and must state the chapter is merchant of record for dues (Chirp never takes custody of funds); legal wording needs Jose's human sign-off. CAUGHT DURING DESIGN, do not miss this: building the bounce page ALONE fixes nothing. chapter/index.tsx:499 currently shares the raw string withInviteCode('chirp://join-chapter', code), so invites still go out as a chirp:// link that dies when pasted into a text message and NOTHING will ever point at the new page. The bounce page only earns its keep once that line shares https://chirps-prod.web.app/join-chapter?code=... instead — one-line mobile change, ships with this card. Bounce-page path must be /join-chapter (not /join): app.json:14 and :26-27 already hardcode that path in the placeholder universal-link config, so any other name means editing app.json twice. The page reads ?code= and hands off to chirp://join-chapter?code=..., ALWAYS with a visible manual button (iOS Safari blocks custom-scheme navigation without a user gesture) and the raw code shown for copy/paste. Treat ?code= as attacker-controlled: textContent to display, encodeURIComponent to build the URL. No store-badge fallback yet — the app is not published, so link the landing page instead of a badge that 404s. Universal links (.well-known/apple-app-site-association + assetlinks.json) are a LATER card: they need a real Apple Team ID and an EAS release cert fingerprint, neither of which exists. Create .well-known/ empty; do NOT commit placeholder AASA content, a fake Team ID serving 200 reads as done. Was: decided Aug 15, NOT started. Lives IN THIS REPO at web/ (static HTML/CSS, no Expo, no auth, no RN bundle), deployed to FIREBASE HOSTING on the existing chirps-prod project (zero new vendors, free tier, easy custom domain, and it is where universal-link .well-known files go later). Pages: landing, features, how it works, about, PRIVACY POLICY, TERMS, disclosure/contact. PLUS two functional pages the backend already needs: /stripe/connect/return + /stripe/connect/refresh, and an invite bounce page that turns an https link into chirp://join-chapter?code=... . Design: take Instagram's STRUCTURE and polish bar (split hero, dark canvas, real product imagery, one clear CTA, quiet footer) but NOT its look \u2014 app-mobile/DESIGN.md is binding and Chirp keeps its own identity (violet accent, soft canvas, pill everything). Do not ship an Instagram clone."
+      "title": "[A/Jose] PUBLIC WEBSITE — BUILT, PR #13 OPEN (branch jose/website). web/ is static HTML/CSS on Firebase Hosting (chirps-prod), target origin https://chirps-prod.web.app. All pages built: landing, features, how it works, about, contact, 404, privacy, terms, PLUS the three functional ones — /stripe/connect/return, /stripe/connect/refresh and /join-chapter. firebase.json pins trailingSlash:false and adds explicit rewrites for the two Stripe paths rather than trusting cleanUrls on a two-segment path: Stripe hits those URLs exactly as payments.py:40 builds them and a redirect hop there fails confusingly, after a real user has already finished KYC. VERIFIED in a real browser at 1280x900 and 390x844: every page 200s, no console errors, no horizontal overflow. Invite page tested with untrusted input since ?code= is attacker-controllable — an img/onerror payload renders as inert text and the href comes back percent-encoded. NOT DEPLOYABLE YET ON PURPOSE, checklist in web/README.md: 11 CONTACT_EMAIL_PLACEHOLDER occurrences, the company paragraph in about.html, 6 NEEDS DECISION calls in privacy.html (retention, ghost profiles, age minimum, which privacy regimes apply), and terms sections 8-10 deliberately undrafted — an agent-written arbitration/liability clause reads as enforceable while being untailored to the entity and the state, which is worse than an empty section. Everything unmarked in privacy.html traces to a model under backend/app/models/. LEFT: Jose fills the placeholders, lawyer does terms 8-10, then firebase deploy, then APP_PUBLIC_BASE_URL, which unblocks c40."
     },
     {
       "id": "c57",
       "col": "next",
       "owner": "",
       "tag": "go-live",
-      "title": "[shared] BLOCKER CHAIN: the website (c56) gates Stripe (c40), not the other way round. backend/app/routers/payments.py:36-38 raises 503 app_public_base_url_not_configured when APP_PUBLIC_BASE_URL is unset, and Stripe REJECTS custom schemes so it can never be a chirp:// link \u2014 Connect onboarding needs a real https return/refresh URL. The App Store also requires a publicly reachable privacy-policy URL before submission (c10). AND the app already lies: app-mobile/app/(auth)/sign-in.tsx tells every user 'you agree to Chirp's Terms of Service and acknowledge our Privacy Policy' \u2014 neither document exists. Order: c56 web pages -> set APP_PUBLIC_BASE_URL -> c40 Stripe TEST keys -> c39 EAS build -> test-mode payment on card AND ACH."
+      "title": "[shared] BLOCKER CHAIN: the website (c56) gates Stripe (c40), not the other way round. backend/app/routers/payments.py:36-38 raises 503 app_public_base_url_not_configured when APP_PUBLIC_BASE_URL is unset, and Stripe REJECTS custom schemes so it can never be a chirp:// link — Connect onboarding needs a real https return/refresh URL. The App Store also requires a publicly reachable privacy-policy URL before submission (c10). AND the app already lies: app-mobile/app/(auth)/sign-in.tsx tells every user 'you agree to Chirp's Terms of Service and acknowledge our Privacy Policy' — neither document exists. Order: c56 web pages -> set APP_PUBLIC_BASE_URL -> c40 Stripe TEST keys -> c39 EAS build -> test-mode payment on card AND ACH."
     },
     {
       "id": "c58",
       "col": "next",
       "owner": "J",
       "tag": "qa",
-      "title": "[A/Jose] LIVE BROWSER QA \u2014 still NEVER DONE, and it is now the biggest unverified surface. SPLIT Aug 15: Q drives his vertical (Yak, campus feed, messaging, treasurer/secretary dashboards, CSV export), Jose drives auth/orgs. NOTE the walk below expects real names \u2014 c59 means the Orgs eyebrow, Yak eyebrow and alumni job board will still show wrong data until that lands, so fix c59 first or expect known-bad output there. Everything from Aug 14-15 (c6, c44, c45, c43, c46, c51-c55) is proven only by pytest + tsc. Nobody has driven the real app against real prod. Proven loop: cloud-sql-proxy 5433 + local uvicorn AUTH_MODE=firebase + Metro 8082 with EXPO_PUBLIC_API_URL pointed at prod, using the three QA accounts in INFRA-PRIVATE.html. Walk: sign in (returning user should NOT re-run account-type, c45), profile shows REAL name/campus/chapter/role (c46), Orgs feed + events show real names not 'Unknown' (c46/c55), family tree loads or fails soft instead of hanging (c46), invite mint + join, dues screen states."
+      "title": "[A/Jose] LIVE BROWSER QA — still NEVER DONE, and it is now the biggest unverified surface. SPLIT Aug 15: Q drives his vertical (Yak, campus feed, messaging, treasurer/secretary dashboards, CSV export), Jose drives auth/orgs. NOTE the walk below expects real names — c59 means the Orgs eyebrow, Yak eyebrow and alumni job board will still show wrong data until that lands, so fix c59 first or expect known-bad output there. Everything from Aug 14-15 (c6, c44, c45, c43, c46, c51-c55) is proven only by pytest + tsc. Nobody has driven the real app against real prod. Proven loop: cloud-sql-proxy 5433 + local uvicorn AUTH_MODE=firebase + Metro 8082 with EXPO_PUBLIC_API_URL pointed at prod, using the three QA accounts in INFRA-PRIVATE.html. Walk: sign in (returning user should NOT re-run account-type, c45), profile shows REAL name/campus/chapter/role (c46), Orgs feed + events show real names not 'Unknown' (c46/c55), family tree loads or fails soft instead of hanging (c46), invite mint + join, dues screen states."
     },
     {
       "id": "c60",
@@ -518,49 +518,79 @@
     },
     {
       "id": "c59",
-      "col": "next",
+      "col": "progress",
       "owner": "J",
       "tag": "vert:auth-orgs",
-      "title": "[A/Jose] FAKE DATA STILL ON SCREEN — the de-mock sweep was reported complete and is NOT. Three real bugs, each verified by hand on main (1aa19ba), not inferred. (1) chapter/index.tsx:53,597,666,673 — MOCK_CAMPUS.name is hardcoded into the Orgs hero subtitle, the screen eyebrow and the 'Find your org at ...' empty state, plus a literal '· SPARTANS'. Every user sees UNC Greensboro and UNCG's mascot regardless of their real campus. (2) yak/index.tsx:28,211 — same bug, and its TODO comment claims no campus-detail endpoint exists; that comment is stale, GET /campuses/{id} shipped with c46. (3) chapter/alumni/index.tsx:9,64 — mockUserById(job.posted_by) resolves a REAL UUID through the mock table, so it never matches and every job renders 'Posted by Alumni'. FIX PATTERN for (1) and (2) already exists in the repo: copy feed/index.tsx:86,145 which calls getCampus(campusId) (src/api/auth.ts:42-44) and fails soft to an absent eyebrow — an absent label beats a wrong one. Drop '· SPARTANS' outright; CampusOut has no mascot field to source it from. (3) needs a small backend change: JobPostOut (schemas/alumni.py:63-73) carries no display name and there is no GET /users/{id}, so mirror the join list_directory already does at routers/alumni.py:76-107 and add a nullable posted_by_name. Query-level join, should need no migration — if that changes, claim 0011 on this board first. DO NOT overshoot: four other @/mocks imports on main are legitimate and were each checked — orgColorsByName (design tokens), mockProfileLayout (section ordering), MOCK_CAMPUS_COLORS/mockAppearancePrefs (default theme, no server field exists), and feed/index.tsx:125's mockUserById, which resolves a MOCK id from MOCK_MOMENTS through the mock table and is therefore consistent, not a leak. The rule that separates them is the Aug 14 one: a screen may import mock COSMETICS, never mock IDENTITY."
+      "title": "[A/Jose] FAKE DATA STILL ON SCREEN — FIXED, PR #13 OPEN. All three closed. Orgs (chapter/index.tsx) and Yak (yak/index.tsx) now resolve the real campus via a new useCampus() hook and render NOTHING until it does — an absent label beats a wrong one; the literal '. SPARTANS' is deleted outright rather than replaced, since CampusOut has no mascot field to source it from. The alumni job board's mockUserById(job.posted_by) is gone: GET /jobs now joins users and returns posted_by_name, mirroring what list_directory already did. Inner join not outer, because posted_by is a non-null FK so an outer join would only add a branch that cannot be taken. 3 new tests, and the third is the load-bearing one — it reads the list as a DIFFERENT member than the poster, the only way to catch the name being wired to the authenticated caller instead. Confirmed it catches exactly that by making the mistake on purpose and watching that one test fail while the other two passed. 142 backend tests green, tsc clean. NOT yet driven against real prod — that is c58. NOTE: feed/index.tsx still has its own inline copy of the campus effect; left alone deliberately because it is Q's active file for c49, and it should adopt useCampus() when he next touches it."
+    },
+    {
+      "id": "c61",
+      "col": "progress",
+      "owner": "J",
+      "tag": "go-live",
+      "title": "[shared] REDIS WAS NEVER PROVISIONED — CONFIRMED Aug 15 by Jose with gcloud, and it is worse than 'probably missing'. Three independent checks, all negative: (1) `gcloud redis instances list` fails with 'Memorystore for Redis API has not been used in project chirps-prod before or it is disabled' — the API has never been ENABLED, so no instance was ever created; (2) `gcloud compute networks vpc-access connectors list` fails the same way on the Serverless VPC Access API, so there is no connector either; (3) the running service chirp-api-00008-4sw has NO REDIS_URL env var at all and no vpc-access-connector annotation — its full env is ENV, AUTH_MODE, FIREBASE_PROJECT_ID, CORS_ORIGINS and the DATABASE_URL secret. So config.py's default redis://localhost:6379/0 is what is live, pointing at localhost inside a container where nothing listens. COMBINED WITH c62 THIS IS NOT DEGRADED, IT IS DEAD: gateway.py subscribes AFTER websocket.accept() with no try/except, so every websocket connection in prod drops at connect time, 100%, not intermittently. It is latent ONLY because c63 found nothing in the app opens a socket yet. Q was right to flag it and right that a fully green suite says otherwise, because the suite runs against a real local Redis. DECISION NEEDED before m4 messaging: provision Memorystore + VPC connector (DEPLOY.md section 2, ~$40/mo for the smallest basic tier) or make Redis optional and degrade properly. Do NOT provision it just to have it — nothing uses it yet."
+    },
+    {
+      "id": "c62",
+      "col": "next",
+      "owner": "",
+      "tag": "backend",
+      "title": "[shared] gateway.py does NOT degrade gracefully when Redis is down — DEPLOY.md claims it does, and that claim is only half true. messages.py wraps publish_to_user in try/except so SENDING still succeeds (graceful, correct). But ws/gateway.py's `await pubsub.subscribe(channel)` has NO try/except and runs AFTER websocket.accept(), so an unreachable Redis drops every socket at connect time. Probed directly with REDIS_URL on a dead port: GET /auth/me returned 200 while the websocket raised ConnectionError. Fails per-connection with no startup signal, so it would look like flaky clients rather than missing infra. FIX: catch the subscribe failure and either close with a distinct code the client can reason about, or fail loudly at boot like the firebase_admin init does. Pairs with the Redis-provisioning card. CONFIRMED WORSE Aug 15: c61 is now settled — Redis does not exist in prod at all and REDIS_URL is unset, so this is not a hypothetical failure mode. Every websocket connect in production hits it today. Still invisible only because no client opens a socket (c63). Whatever the c61 decision is, this fix should land regardless: a gateway that drops sockets with no distinguishable signal is the thing that turns missing infra into 'flaky clients' during a launch."
+    },
+    {
+      "id": "c63",
+      "col": "backlog",
+      "owner": "Q",
+      "tag": "m4",
+      "title": "[B/Q] Nothing in the app opens a websocket. src/realtime/socket.ts defines ChirpSocket with reconnect/backoff and status listeners, and src/api/messages.ts exposes listMessages(), but NO screen imports ChirpSocket — so the verified gateway is unused by the client today. That's why the two Redis findings are latent rather than live. Wiring it needs a reconnect-triggered catch-up fetch, since pub/sub drops anything published while the socket was down (proven in c21's suite). Rides with m4 real messaging."
+    },
+    {
+      "id": "c64",
+      "col": "next",
+      "owner": "J",
+      "tag": "go-live",
+      "title": "[A/Jose] PROD CORS IS POINTED AT A DEV ORIGIN. Found while settling c61: the live service has CORS_ORIGINS = [\"http://localhost:8081\"], which is Jose's local Metro dev server and nothing else. Not urgent and not currently exploitable in any meaningful way — the native mobile app is not subject to CORS at all, and the new public website (c56) deliberately makes zero API calls — but a production API whose only allowed browser origin is localhost is wrong in both directions: it permits a page served from the developer's own machine and permits nothing real. Decide the actual answer when Expo web or any browser client becomes a supported target. Worth doing in the same Cloud Run env update as c40's Stripe keys, since that is already an env-only change and needs no rebuild."
     }
   ],
   "decisions": [
-    "Aug 11 \u2014 Product: Chirp is for ALL students; greek chapters are orgs you join under the Orgs tab. Same auth for everyone.",
-    "Aug 11 \u2014 Design: default scaffold theme rejected. Dribbble-modern direction is binding, spec in app-mobile/DESIGN.md (violet accent, soft neutral canvas, pill everything, floating tab bar).",
-    "Aug 11 \u2014 Process: this board is the source of truth for who's doing what. Not on the board = not claimed.",
-    "Aug 12 \u2014 Design: Home = media FYP (Twitter/Insta/Snap mix \u2014 anything postable), themed to SCHOOL COLORS with user-controlled accent/background (DESIGN.md \u00a77 + \u00a78.5). Two dribbble refs codified.",
-    "Aug 12 \u2014 Crypto: libsignal requires PQXDH (post-quantum Kyber prekeys) \u2014 key directory being extended (kyber_prekeys, migration 0002). 1:1 wire-format rule documented in SPEC \u00a76.",
-    "Aug 12 \u2014 E2EE spike verdict: @signalapp/libsignal-client works on macOS x64 Node; RN path recommendation in spikes/libsignal-node/FINDINGS.md; physical-device test still owed.",
-    "Aug 12 \u2014 Product: org posts are PRIVATE to the org (never on the FYP). Orgs tab = Feed / Events / Tools segments in org colors; Events = Partiful-style planning (DESIGN \u00a78.7). App rebranded to UNC Greensboro; every frat/sorority wears its own colors (\u00a78.6).",
-    "Aug 13 \u2014 Process: work split BY FEATURE VERTICAL. Vertical A (Auth & Orgs) = Jose; Vertical B (Social & Messaging) = Q. First milestone = GO-LIVE INTEGRATION. Sprint 0 (shared): one reachable backend + Firebase project before either vertical starts. Shared files (api/client, theme, components, mocks): touch sparingly, ping each other.",
-    "Aug 13 \u2014 Process: feature work happens on per-dev branches (jose/auth-orgs, q/social-msg) merged to main via PR \u2014 no more direct-to-main feature commits, avoids merge collisions. EXCEPTION: board.html updates commit straight to main so both devs always see the live board.",
-    "Aug 13 \u2014 Infra: shared backend = GCP project chirps-prod (us-central1), billing linked, account chirp.shared@gmail.com. Order: Cloud SQL + secrets + migrations first; Cloud Run public deploy only after Firebase exists (ENV guard requires AUTH_MODE=firebase + real CORS).",
-    "Aug 13 \u2014 Payments: Stripe Connect EXPRESS accounts + DIRECT charges. The chapter is merchant of record, funds land in the chapter's balance, the chapter carries chargeback liability \u2014 Chirp never takes custody of the money. Platform fee 1% card / 2% ACH as application_fee_amount (ACH still lands cheaper for the chapter all-in, ~2.8% vs ~3.9%). The member picks the rail BEFORE the intent is created, because application_fee_amount is immutable once a PaymentIntent exists and PaymentSheet would otherwise pick the rail afterwards. Saved cards use a Stripe Customer per (member, chapter): under direct charges the Customer lives on the connected account, so a users.stripe_customer_id column works for the first chapter and silently breaks the second.",
-    "Aug 13 \u2014 Payments: dropped the ephemeral-key approach in HANDOFF for CustomerSession \u2014 Stripe's current mobile docs use it, the installed RN SDK 0.50.3 accepts either, and CustomerSession needs no pinned API version (one less thing to re-check on every SDK upgrade).",
-    "Aug 13 \u2014 Process: migration numbers are a SHARED resource. Claim the next number on this board BEFORE writing the file. Taken so far: 0006 events (J, on prod), 0007 is_platform_admin (J, in flight), 0008 Stripe dues (Q, pending renumber from 0006 \u2014 see c41).",
-    "Aug 13 \u2014 Process: Q's vertical branch is q/social-msg, cut from the family-tree tip. family-tree retires once PR #2 merges; PR #3 stacks on PR #2.",
-    "Aug 13 \u2014 Process: NO branch protection on main for now (Jose's call) \u2014 CI runs on every push/PR but is advisory, merges stay unblocked. Revisit before TestFlight. Apple Developer enrollment also parked until launch prep.",
-    "Aug 14 \u2014 Backend: roster display names are MemberOut, NOT a field on MembershipOut. PR #6 (Jose) and the dashboards work (Q) solved the same problem in parallel \u2014 no GET /users/{id} exists, so a roster is bare UUIDs \u2014 and PR #6's shape won: real INNER JOIN, non-null display_name, plus avatar_url. GET /chapters/{id}/members returns MemberOut; GET /me/memberships returns the plain MembershipOut. Re-adding a nullable display_name to MembershipOut is the regression to watch for. Worth knowing HOW this was nearly missed: git did NOT flag most of the overlap as a text conflict, so two branches solving the same problem can auto-merge into two competing mechanisms with a green build. When both verticals touch the same domain, diff it by hand.",
-    "Aug 14 \u2014 Process: migration-number rule earned its keep. As 0006 the Stripe migration would have been silently skipped on a prod already stamped past it \u2014 Alembic marks it applied and moves on, so processed_stripe_events and the unique index on ledger_entries.stripe_payment_intent_id would simply not exist, with nothing erroring and the webhook-replay guard absent on the money path. Renumbered to 0008, chain verified linear/single-head on main. Next free number: 0009 \u2014 claim it here first.",
-    "Aug 14 \u2014 Process: PR #2 merged before PR #3 deliberately. The branches had diverged and q/social-msg's content was a superset of family-tree's, so merging #3 first would have made #2 read as a Stripe revert. family-tree and q/social-msg are both retired; new work cuts from main.",
-    "Aug 14 \u2014 Backend: added GET /campuses/{campus_id} (Jose, c46). Trivial route, but it closes a real gap \u2014 users.campus_id existed with no way to resolve it to a name, which is WHY Profile and the Yak header hardcoded a mock campus. Any registered caller may read one; campus name/slug are public-facing labels, not org-scoped data. 3 tests. No migration.",
-    "Aug 14 \u2014 Process: near-miss avoided. Jose's de-mock sweep and Q's c34 both wanted app/(tabs)/feed/index.tsx within the same hour; Q had claimed it on the board first (branch q/feed, migration 0009), so Jose dropped his changes to that ONE file and kept the rest. This is the roster-names collision from earlier today NOT happening, because the claim was on the board. Both devs independently reached the same root cause, which is also a good sign the finding is real.",
-    "Aug 14 \u2014 Audit finding (13-agent sweep, every claim adversarially verified): the gap between 'backend is live' and 'the app shows real data' is BIGGER than the board implied, and it is not the USE_MOCKS flag. USE_MOCKS is false in every build (no .env or eas.json ever sets it), so those api-layer branches are dead code \u2014 the real problem is screens importing MOCK_* constants directly and using them as the signed-in identity. Home feed, Profile, Family Tree, Event detail, org Feed segment and the DM thread are all affected; filed as c34 (sharpened), c46 (Jose) and c47 (Q). Rule going forward: a screen must source identity from useSession()/useOwnChapter(), never from @/mocks/data \u2014 cosmetic-only mock imports (theme colors, campus label) are the sole allowed exception and should carry a comment saying so.",
-    "Aug 14 \u2014 Process: the audit also closed two stale cards (c20 Firebase project, c26 events backend) that had been sitting in Next/backlog while the work was already Done and on prod, and found three more that overstate what is left (c5, c35, c36). Lesson: cards get moved when work lands, not when someone happens to notice; a stale board costs more than no board because it is trusted.",
-    "Aug 14 \u2014 Infra: prod is CURRENT with main for the first time since sprint 0 \u2014 migration 0008 applied by Jose, then rev chirp-api-00007-kff shipped PRs #2, #3 and #7 in ONE redeploy. Ordering rule confirmed and now in INFRA-PRIVATE.html: MIGRATE FIRST, THEN DEPLOY. The Cloud Run deploy does not run migrations, and the post-#3 code selects ledger_entries.stripe_payment_intent_id, which does not exist until 0008 runs \u2014 deploying first would have 500'd the treasurer ledger. Also learned: cloud-sql-proxy is NOT bundled with the gcloud SDK and was missing entirely on Jose's Mac; the install command is now a documented prerequisite in the migration runbook.",
-    "Aug 14 \u2014 Process: c43 SPLIT along the consumer line \u2014 whoever consumes an endpoint designs it. Q builds posts-with-counts inside c34 (he is wiring the feed that calls it); Jose builds events-with-rsvp-counts with c44 (events backend is his). This is the lesson from the roster-names overlap applied in advance: one owner per shape, no parallel competing mechanisms.",
-    "Aug 14 \u2014 Process: 'merged' is not 'working', and the board should say which. Stripe dues is on main with CI green and has never contacted real Stripe, so c11 stays in In Progress until a test-mode payment clears on BOTH card and ACH. Yak, the dashboards and CSV export are likewise only proven against mocks and the test suite \u2014 never driven on a device.",
-    "Aug 14 \u2014 Product: a post's audience is chosen by the author at compose time. posts.audience is 'org' (private to the chapter, per the Aug 12 rule) or 'campus' (visible to everyone at that campus). 'For You' is a RANKING over campus posts, not a stored third value \u2014 so the two Home pills read the same campus feed and differ only in ordering. v1 ships both as reverse-chron; ranking is a later card, and until it exists the two pills will look identical. Audience defaults to 'org' server-side when the client omits it: the safe default is private, never accidental campus-wide broadcast.",
-    "Aug 14 \u2014 Process: migration 0009 CLAIMED by Q for c34 (posts.audience, post_type, duration_sec). Next free number is 0010. Claimed here before the file was written, per the rule c41 taught us.",
-    "Aug 14 \u2014 Scoping: c34 was carded as 'replace mock calls with live fetch' and was actually a backend gap. The client layer (src/api/feed) was already correct; what was missing was any way for the server to express a campus-visible post. Worth remembering when a card looks like a one-line swap: check that the API can express what the screen renders before estimating it.",
-    "Aug 14 \u2014 Engineering: with-counts routes use correlated scalar subqueries, never join+COUNT(DISTINCT). Joining posts to both post_likes and post_comments multiplies rows before counting (3 x 4 = 12) and COUNT(DISTINCT) hides it while making the query slower. Pattern: routers/feed.py _post_counts_select.",
-    "Aug 15 \u2014 Money: dues payment intents are now PERSISTED and RESERVED before Stripe is called (migration 0010, dues_payment_intents + a partial unique index on (dues_cycle_id, user_id) WHERE status IN ('open','succeeded')). The old design only recorded a payment AFTER its webhook settled, so during ACH's multi-day 'processing' window nothing in the DB knew a payment was in flight: the cycle still read as unpaid, and because the Stripe idempotency key was scoped per-rail (dues:{cycle}:{user}:{rail}) a retry on the other rail created a GENUINELY different PaymentIntent. Both would succeed and both would append to an append-only ledger. Reserve-then-call is the fix; the ledger partial unique index is the backstop, and payment_failed/canceled webhooks now RELEASE the reservation so a genuinely failed payment can still be retried.",
-    "Aug 15 \u2014 Process: agent sessions must not share one working tree. A background agent fixing three review findings had the repo switched under it mid-edit (a concurrent branch checkout for the q/feed merge). It behaved correctly \u2014 detected the foreign MERGE_HEAD, reverted its own two edits by hand, made ZERO net changes and reported rather than forcing a checkout that would have yanked the branch out from under an unresolved merge. No damage, but the lesson stands: concurrent work on this repo runs in a git worktree, or strictly sequentially. Cheap rule, and it just cost a round trip to learn.",
-    "Aug 15 \u2014 Money: reserve-before-charging is now the rule for anything that moves money. A guard that only reads settled state (the ledger) cannot see an in-flight payment, and Stripe idempotency keys only dedup identical parameters \u2014 so any key scoped to a user-changeable field (here, the rail) is not a double-charge guard at all. Write the reservation to OUR database before calling the processor, and let a partial unique index arbitrate. Corollary learned from a failing test: the guard must not block same-parameter retries, or ordinary client retries break.",
-    "Aug 15 \u2014 Product/infra: Chirp gets a PUBLIC WEBSITE and it lives in THIS repo under web/, deployed to Firebase Hosting on chirps-prod. Rationale: it is not a marketing nice-to-have, it is load-bearing \u2014 Stripe Connect cannot onboard without an https return URL (the endpoint 503s), the App Store will not accept a submission without a public privacy-policy URL, invite deep links need an https bounce page to survive being tapped in a text message, and the sign-in screen already promises Terms + Privacy documents that do not exist. Same repo so the privacy policy stays honest about what the app actually collects; static HTML, never the Expo bundle, so it loads fast and works with no auth.",
+    "Aug 11 — Product: Chirp is for ALL students; greek chapters are orgs you join under the Orgs tab. Same auth for everyone.",
+    "Aug 11 — Design: default scaffold theme rejected. Dribbble-modern direction is binding, spec in app-mobile/DESIGN.md (violet accent, soft neutral canvas, pill everything, floating tab bar).",
+    "Aug 11 — Process: this board is the source of truth for who's doing what. Not on the board = not claimed.",
+    "Aug 12 — Design: Home = media FYP (Twitter/Insta/Snap mix — anything postable), themed to SCHOOL COLORS with user-controlled accent/background (DESIGN.md §7 + §8.5). Two dribbble refs codified.",
+    "Aug 12 — Crypto: libsignal requires PQXDH (post-quantum Kyber prekeys) — key directory being extended (kyber_prekeys, migration 0002). 1:1 wire-format rule documented in SPEC §6.",
+    "Aug 12 — E2EE spike verdict: @signalapp/libsignal-client works on macOS x64 Node; RN path recommendation in spikes/libsignal-node/FINDINGS.md; physical-device test still owed.",
+    "Aug 12 — Product: org posts are PRIVATE to the org (never on the FYP). Orgs tab = Feed / Events / Tools segments in org colors; Events = Partiful-style planning (DESIGN §8.7). App rebranded to UNC Greensboro; every frat/sorority wears its own colors (§8.6).",
+    "Aug 13 — Process: work split BY FEATURE VERTICAL. Vertical A (Auth & Orgs) = Jose; Vertical B (Social & Messaging) = Q. First milestone = GO-LIVE INTEGRATION. Sprint 0 (shared): one reachable backend + Firebase project before either vertical starts. Shared files (api/client, theme, components, mocks): touch sparingly, ping each other.",
+    "Aug 13 — Process: feature work happens on per-dev branches (jose/auth-orgs, q/social-msg) merged to main via PR — no more direct-to-main feature commits, avoids merge collisions. EXCEPTION: board.html updates commit straight to main so both devs always see the live board.",
+    "Aug 13 — Infra: shared backend = GCP project chirps-prod (us-central1), billing linked, account chirp.shared@gmail.com. Order: Cloud SQL + secrets + migrations first; Cloud Run public deploy only after Firebase exists (ENV guard requires AUTH_MODE=firebase + real CORS).",
+    "Aug 13 — Payments: Stripe Connect EXPRESS accounts + DIRECT charges. The chapter is merchant of record, funds land in the chapter's balance, the chapter carries chargeback liability — Chirp never takes custody of the money. Platform fee 1% card / 2% ACH as application_fee_amount (ACH still lands cheaper for the chapter all-in, ~2.8% vs ~3.9%). The member picks the rail BEFORE the intent is created, because application_fee_amount is immutable once a PaymentIntent exists and PaymentSheet would otherwise pick the rail afterwards. Saved cards use a Stripe Customer per (member, chapter): under direct charges the Customer lives on the connected account, so a users.stripe_customer_id column works for the first chapter and silently breaks the second.",
+    "Aug 13 — Payments: dropped the ephemeral-key approach in HANDOFF for CustomerSession — Stripe's current mobile docs use it, the installed RN SDK 0.50.3 accepts either, and CustomerSession needs no pinned API version (one less thing to re-check on every SDK upgrade).",
+    "Aug 13 — Process: migration numbers are a SHARED resource. Claim the next number on this board BEFORE writing the file. Taken so far: 0006 events (J, on prod), 0007 is_platform_admin (J, in flight), 0008 Stripe dues (Q, pending renumber from 0006 — see c41).",
+    "Aug 13 — Process: Q's vertical branch is q/social-msg, cut from the family-tree tip. family-tree retires once PR #2 merges; PR #3 stacks on PR #2.",
+    "Aug 13 — Process: NO branch protection on main for now (Jose's call) — CI runs on every push/PR but is advisory, merges stay unblocked. Revisit before TestFlight. Apple Developer enrollment also parked until launch prep.",
+    "Aug 14 — Backend: roster display names are MemberOut, NOT a field on MembershipOut. PR #6 (Jose) and the dashboards work (Q) solved the same problem in parallel — no GET /users/{id} exists, so a roster is bare UUIDs — and PR #6's shape won: real INNER JOIN, non-null display_name, plus avatar_url. GET /chapters/{id}/members returns MemberOut; GET /me/memberships returns the plain MembershipOut. Re-adding a nullable display_name to MembershipOut is the regression to watch for. Worth knowing HOW this was nearly missed: git did NOT flag most of the overlap as a text conflict, so two branches solving the same problem can auto-merge into two competing mechanisms with a green build. When both verticals touch the same domain, diff it by hand.",
+    "Aug 14 — Process: migration-number rule earned its keep. As 0006 the Stripe migration would have been silently skipped on a prod already stamped past it — Alembic marks it applied and moves on, so processed_stripe_events and the unique index on ledger_entries.stripe_payment_intent_id would simply not exist, with nothing erroring and the webhook-replay guard absent on the money path. Renumbered to 0008, chain verified linear/single-head on main. Next free number: 0009 — claim it here first.",
+    "Aug 14 — Process: PR #2 merged before PR #3 deliberately. The branches had diverged and q/social-msg's content was a superset of family-tree's, so merging #3 first would have made #2 read as a Stripe revert. family-tree and q/social-msg are both retired; new work cuts from main.",
+    "Aug 14 — Backend: added GET /campuses/{campus_id} (Jose, c46). Trivial route, but it closes a real gap — users.campus_id existed with no way to resolve it to a name, which is WHY Profile and the Yak header hardcoded a mock campus. Any registered caller may read one; campus name/slug are public-facing labels, not org-scoped data. 3 tests. No migration.",
+    "Aug 14 — Process: near-miss avoided. Jose's de-mock sweep and Q's c34 both wanted app/(tabs)/feed/index.tsx within the same hour; Q had claimed it on the board first (branch q/feed, migration 0009), so Jose dropped his changes to that ONE file and kept the rest. This is the roster-names collision from earlier today NOT happening, because the claim was on the board. Both devs independently reached the same root cause, which is also a good sign the finding is real.",
+    "Aug 14 — Audit finding (13-agent sweep, every claim adversarially verified): the gap between 'backend is live' and 'the app shows real data' is BIGGER than the board implied, and it is not the USE_MOCKS flag. USE_MOCKS is false in every build (no .env or eas.json ever sets it), so those api-layer branches are dead code — the real problem is screens importing MOCK_* constants directly and using them as the signed-in identity. Home feed, Profile, Family Tree, Event detail, org Feed segment and the DM thread are all affected; filed as c34 (sharpened), c46 (Jose) and c47 (Q). Rule going forward: a screen must source identity from useSession()/useOwnChapter(), never from @/mocks/data — cosmetic-only mock imports (theme colors, campus label) are the sole allowed exception and should carry a comment saying so.",
+    "Aug 14 — Process: the audit also closed two stale cards (c20 Firebase project, c26 events backend) that had been sitting in Next/backlog while the work was already Done and on prod, and found three more that overstate what is left (c5, c35, c36). Lesson: cards get moved when work lands, not when someone happens to notice; a stale board costs more than no board because it is trusted.",
+    "Aug 14 — Infra: prod is CURRENT with main for the first time since sprint 0 — migration 0008 applied by Jose, then rev chirp-api-00007-kff shipped PRs #2, #3 and #7 in ONE redeploy. Ordering rule confirmed and now in INFRA-PRIVATE.html: MIGRATE FIRST, THEN DEPLOY. The Cloud Run deploy does not run migrations, and the post-#3 code selects ledger_entries.stripe_payment_intent_id, which does not exist until 0008 runs — deploying first would have 500'd the treasurer ledger. Also learned: cloud-sql-proxy is NOT bundled with the gcloud SDK and was missing entirely on Jose's Mac; the install command is now a documented prerequisite in the migration runbook.",
+    "Aug 14 — Process: c43 SPLIT along the consumer line — whoever consumes an endpoint designs it. Q builds posts-with-counts inside c34 (he is wiring the feed that calls it); Jose builds events-with-rsvp-counts with c44 (events backend is his). This is the lesson from the roster-names overlap applied in advance: one owner per shape, no parallel competing mechanisms.",
+    "Aug 14 — Process: 'merged' is not 'working', and the board should say which. Stripe dues is on main with CI green and has never contacted real Stripe, so c11 stays in In Progress until a test-mode payment clears on BOTH card and ACH. Yak, the dashboards and CSV export are likewise only proven against mocks and the test suite — never driven on a device.",
+    "Aug 14 — Product: a post's audience is chosen by the author at compose time. posts.audience is 'org' (private to the chapter, per the Aug 12 rule) or 'campus' (visible to everyone at that campus). 'For You' is a RANKING over campus posts, not a stored third value — so the two Home pills read the same campus feed and differ only in ordering. v1 ships both as reverse-chron; ranking is a later card, and until it exists the two pills will look identical. Audience defaults to 'org' server-side when the client omits it: the safe default is private, never accidental campus-wide broadcast.",
+    "Aug 14 — Process: migration 0009 CLAIMED by Q for c34 (posts.audience, post_type, duration_sec). Next free number is 0010. Claimed here before the file was written, per the rule c41 taught us.",
+    "Aug 14 — Scoping: c34 was carded as 'replace mock calls with live fetch' and was actually a backend gap. The client layer (src/api/feed) was already correct; what was missing was any way for the server to express a campus-visible post. Worth remembering when a card looks like a one-line swap: check that the API can express what the screen renders before estimating it.",
+    "Aug 14 — Engineering: with-counts routes use correlated scalar subqueries, never join+COUNT(DISTINCT). Joining posts to both post_likes and post_comments multiplies rows before counting (3 x 4 = 12) and COUNT(DISTINCT) hides it while making the query slower. Pattern: routers/feed.py _post_counts_select.",
+    "Aug 15 — Money: dues payment intents are now PERSISTED and RESERVED before Stripe is called (migration 0010, dues_payment_intents + a partial unique index on (dues_cycle_id, user_id) WHERE status IN ('open','succeeded')). The old design only recorded a payment AFTER its webhook settled, so during ACH's multi-day 'processing' window nothing in the DB knew a payment was in flight: the cycle still read as unpaid, and because the Stripe idempotency key was scoped per-rail (dues:{cycle}:{user}:{rail}) a retry on the other rail created a GENUINELY different PaymentIntent. Both would succeed and both would append to an append-only ledger. Reserve-then-call is the fix; the ledger partial unique index is the backstop, and payment_failed/canceled webhooks now RELEASE the reservation so a genuinely failed payment can still be retried.",
+    "Aug 15 — Process: agent sessions must not share one working tree. A background agent fixing three review findings had the repo switched under it mid-edit (a concurrent branch checkout for the q/feed merge). It behaved correctly — detected the foreign MERGE_HEAD, reverted its own two edits by hand, made ZERO net changes and reported rather than forcing a checkout that would have yanked the branch out from under an unresolved merge. No damage, but the lesson stands: concurrent work on this repo runs in a git worktree, or strictly sequentially. Cheap rule, and it just cost a round trip to learn.",
+    "Aug 15 — Money: reserve-before-charging is now the rule for anything that moves money. A guard that only reads settled state (the ledger) cannot see an in-flight payment, and Stripe idempotency keys only dedup identical parameters — so any key scoped to a user-changeable field (here, the rail) is not a double-charge guard at all. Write the reservation to OUR database before calling the processor, and let a partial unique index arbitrate. Corollary learned from a failing test: the guard must not block same-parameter retries, or ordinary client retries break.",
+    "Aug 15 — Product/infra: Chirp gets a PUBLIC WEBSITE and it lives in THIS repo under web/, deployed to Firebase Hosting on chirps-prod. Rationale: it is not a marketing nice-to-have, it is load-bearing — Stripe Connect cannot onboard without an https return URL (the endpoint 503s), the App Store will not accept a submission without a public privacy-policy URL, invite deep links need an https bounce page to survive being tapped in a text message, and the sign-in screen already promises Terms + Privacy documents that do not exist. Same repo so the privacy policy stays honest about what the app actually collects; static HTML, never the Expo bundle, so it loads fast and works with no auth.",
     "Aug 15 — Process: the #9 -> #11 -> #10 merge queue EXECUTED CORRECTLY and is closed (6334957, 9673ff6, 1aa19ba; CI green on all three). Q ran it, including the conflict Jose's PR #11 hit once #9's newer tip landed. The resolution is worth recording because it is the one that usually goes wrong: both sides were KEPT rather than one side taken. feed/index.tsx has Q's getCampus() eyebrow with the hardcoded mascot deleted; chapter/index.tsx has Jose's listMembers()/findMember() roster resolution with mockUserById gone. Taking either side wholesale would have silently reintroduced a bug the other side had just fixed, with a green build. Same trap as the roster-names overlap, avoided this time.",
     "Aug 15 — Infra: the public website ships on the FREE Firebase Hosting domain, https://chirps-prod.web.app, and that is what APP_PUBLIC_BASE_URL will be set to. Stripe accepts it, it costs nothing, and it unblocks Connect onboarding the day the site deploys — waiting on a domain purchase would have blocked the entire dues chain behind a shopping decision. A custom domain is deferred to its own card and only becomes load-bearing when iOS universal links do; app-mobile/app.json's applinks:chirp.example.com is a placeholder and is wrong under either choice.",
-    "Aug 15 — Correction: the de-mock sweep was reported COMPLETE and was not, and c55 specifically claimed 'the last mockUserById call site in the app is gone' when it was gone from one file only. Three screens still render fake identity against live data (filed as c59). Q caught the alumni one while merging. The failure mode is worth naming: a claim about the WHOLE repo was made from the scope of a single PR's diff. When closing a card that asserts something repo-wide, re-grep the repo, not the branch."
+    "Aug 15 — Correction: the de-mock sweep was reported COMPLETE and was not, and c55 specifically claimed 'the last mockUserById call site in the app is gone' when it was gone from one file only. Three screens still render fake identity against live data (filed as c59). Q caught the alumni one while merging. The failure mode is worth naming: a claim about the WHOLE repo was made from the scope of a single PR's diff. When closing a card that asserts something repo-wide, re-grep the repo, not the branch.",
+    "Aug 15 — Testing: a green test you have not tried to break proves nothing. c21's happy-path fan-out test was falsified first (published to a deliberately wrong channel, confirmed it failed) before the PASS was believed. Worth repeating for any test asserting that something ARRIVES — those pass vacuously when the transport is silently broken.",
+    "Aug 15 — Infra: Redis/Memorystore was never provisioned in chirps-prod, confirmed three ways with gcloud (API never enabled, no VPC connector, no REDIS_URL on the running revision). Recorded because of HOW it stayed hidden: the backend test suite is fully green on the websocket path and runs against a real local Redis, so the suite actively asserts that fan-out works while production has no Redis to fan out through. A green suite proves the code, never the environment — infra existence needs its own check, and 'DEPLOY.md says this can come second' is not evidence that it was ever done. c30's inventory of live infra was accurate and complete; nobody re-read it when the WS work landed."
   ]
 }
 </script>
