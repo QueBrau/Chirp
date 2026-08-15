@@ -455,8 +455,8 @@
     },
     {
       "id": "c51",
-      "col": "backlog",
-      "owner": "Q",
+      "col": "progress",
+      "owner": "J",
       "tag": "vert:social-msg",
       "title": "[B/Q] Consistency: the campus feed does NOT filter blocked authors, but Yak DOES (anti-join on user_blocks). Block someone and their yaks vanish while their campus posts stay \u2014 surprising, and arguably an App Store 1.2 gap since block should mean block. Fold into c35 or fix in the feed query; yaks.py's anti-join is the pattern."
     },
@@ -469,31 +469,31 @@
     },
     {
       "id": "c52",
-      "col": "next",
+      "col": "progress",
       "owner": "J",
       "tag": "vert:auth-orgs",
-      "title": "[A/Jose] HIGH \u2014 Dues screen shows 'Nothing due' to a member who genuinely owes money. dues.tsx:37: listDuesCycles() is the ONE call in load() without a fail-soft .catch() (listLedger and getChapterPaymentsStatus both have one), so a transient network blip rejects the whole chain and the screen renders its empty state. A member reasonably concludes they owe nothing. Fix: .catch(() => []) plus a visible error state, matching the pattern secretary.tsx already uses."
+      "title": "[A/Jose] IN PROGRESS \u2014 HIGH \u2014 Dues screen shows 'Nothing due' to a member who genuinely owes money. dues.tsx:37: listDuesCycles() is the ONE call in load() without a fail-soft .catch() (listLedger and getChapterPaymentsStatus both have one), so a transient network blip rejects the whole chain and the screen renders its empty state. A member reasonably concludes they owe nothing. Fix: .catch(() => []) plus a visible error state, matching the pattern secretary.tsx already uses."
     },
     {
       "id": "c53",
-      "col": "next",
-      "owner": "Q",
+      "col": "progress",
+      "owner": "J",
       "tag": "security",
-      "title": "[B/Q] MEDIUM \u2014 block-by-yak TIMING side channel reopens the anonymity oracle the 204-vs-409 fix closed. moderation.py:194: the endpoint correctly always returns 204, but the two paths differ in latency \u2014 an already-blocked author short-circuits on a session.get, while a new block does an INSERT + commit. Measuring response time still answers 'do these two yaks share an author'. Fix: make both paths latency-equivalent with a single unconditional INSERT ... ON CONFLICT DO NOTHING so every call does the same work."
+      "title": "[B/Q vertical, Jose fixing Aug 15 \u2014 security, small, Q is on q/feed so no collision] MEDIUM \u2014 block-by-yak TIMING side channel reopens the anonymity oracle the 204-vs-409 fix closed. moderation.py:194: the endpoint correctly always returns 204, but the two paths differ in latency \u2014 an already-blocked author short-circuits on a session.get, while a new block does an INSERT + commit. Measuring response time still answers 'do these two yaks share an author'. Fix: make both paths latency-equivalent with a single unconditional INSERT ... ON CONFLICT DO NOTHING so every call does the same work."
     },
     {
       "id": "c54",
-      "col": "next",
+      "col": "progress",
       "owner": "J",
       "tag": "money",
-      "title": "[shared] MEDIUM \u2014 unhandled IntegrityError on the ChapterStripeCustomer race (payments.py:117). Two concurrent 'Pay' taps both miss the session.get, both insert, the loser gets a raw 500 AND leaves an orphaned Stripe Customer on the connected account. Every other race in this same PR is handled (webhook dedup, RSVP upsert, join); this one was missed. Fix: try/except IntegrityError -> rollback + re-fetch, or INSERT ... ON CONFLICT DO NOTHING RETURNING."
+      "title": "[A/Jose] IN PROGRESS \u2014 MEDIUM \u2014 unhandled IntegrityError on the ChapterStripeCustomer race (payments.py:117). Two concurrent 'Pay' taps both miss the session.get, both insert, the loser gets a raw 500 AND leaves an orphaned Stripe Customer on the connected account. Every other race in this same PR is handled (webhook dedup, RSVP upsert, join); this one was missed. Fix: try/except IntegrityError -> rollback + re-fetch, or INSERT ... ON CONFLICT DO NOTHING RETURNING."
     },
     {
       "id": "c55",
-      "col": "next",
+      "col": "progress",
       "owner": "J",
       "tag": "vert:auth-orgs",
-      "title": "[A/Jose] MEDIUM \u2014 Orgs tab Events segment still shows 'Hosted by Unknown' for every event. chapter/index.tsx:284 EventCard resolves host_id and rsvp.user_id through mockUserById() against real UUIDs, so it never matches. Missed by the c46 sweep because that pass fixed OrgFeedSegment and event/[id].tsx but not EventCard. Fix: fetch the roster once via listMembers(chapterId) and pass it into EventCard, same as the findMember helper already in event/[id].tsx."
+      "title": "[A/Jose] IN PROGRESS \u2014 MEDIUM \u2014 Orgs tab Events segment still shows 'Hosted by Unknown' for every event. chapter/index.tsx:284 EventCard resolves host_id and rsvp.user_id through mockUserById() against real UUIDs, so it never matches. Missed by the c46 sweep because that pass fixed OrgFeedSegment and event/[id].tsx but not EventCard. Fix: fetch the roster once via listMembers(chapterId) and pass it into EventCard, same as the findMember helper already in event/[id].tsx."
     }
   ],
   "decisions": [
@@ -525,7 +525,8 @@
     "Aug 14 \u2014 Product: a post's audience is chosen by the author at compose time. posts.audience is 'org' (private to the chapter, per the Aug 12 rule) or 'campus' (visible to everyone at that campus). 'For You' is a RANKING over campus posts, not a stored third value \u2014 so the two Home pills read the same campus feed and differ only in ordering. v1 ships both as reverse-chron; ranking is a later card, and until it exists the two pills will look identical. Audience defaults to 'org' server-side when the client omits it: the safe default is private, never accidental campus-wide broadcast.",
     "Aug 14 \u2014 Process: migration 0009 CLAIMED by Q for c34 (posts.audience, post_type, duration_sec). Next free number is 0010. Claimed here before the file was written, per the rule c41 taught us.",
     "Aug 14 \u2014 Scoping: c34 was carded as 'replace mock calls with live fetch' and was actually a backend gap. The client layer (src/api/feed) was already correct; what was missing was any way for the server to express a campus-visible post. Worth remembering when a card looks like a one-line swap: check that the API can express what the screen renders before estimating it.",
-    "Aug 14 \u2014 Engineering: with-counts routes use correlated scalar subqueries, never join+COUNT(DISTINCT). Joining posts to both post_likes and post_comments multiplies rows before counting (3 x 4 = 12) and COUNT(DISTINCT) hides it while making the query slower. Pattern: routers/feed.py _post_counts_select."
+    "Aug 14 \u2014 Engineering: with-counts routes use correlated scalar subqueries, never join+COUNT(DISTINCT). Joining posts to both post_likes and post_comments multiplies rows before counting (3 x 4 = 12) and COUNT(DISTINCT) hides it while making the query slower. Pattern: routers/feed.py _post_counts_select.",
+    "Aug 15 \u2014 Money: dues payment intents are now PERSISTED and RESERVED before Stripe is called (migration 0010, dues_payment_intents + a partial unique index on (dues_cycle_id, user_id) WHERE status IN ('open','succeeded')). The old design only recorded a payment AFTER its webhook settled, so during ACH's multi-day 'processing' window nothing in the DB knew a payment was in flight: the cycle still read as unpaid, and because the Stripe idempotency key was scoped per-rail (dues:{cycle}:{user}:{rail}) a retry on the other rail created a GENUINELY different PaymentIntent. Both would succeed and both would append to an append-only ledger. Reserve-then-call is the fix; the ledger partial unique index is the backstop, and payment_failed/canceled webhooks now RELEASE the reservation so a genuinely failed payment can still be retried."
   ]
 }
 </script>
