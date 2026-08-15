@@ -6,12 +6,16 @@ import { useRouter } from "expo-router";
 
 import { createJob } from "@/api/alumni";
 import { AppText, Button, Screen } from "@/components";
-import { MOCK_CURRENT_MEMBERSHIP } from "@/mocks/data";
+import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { radii, spacing, typography, useTheme } from "@/theme";
 
 export default function PostJobScreen() {
   const palette = useTheme();
   const router = useRouter();
+  // Real chapter from the session, not a hardcoded id — a mock id fails the
+  // backend's uuid validation, so posting a job could never succeed (c46).
+  const { membership } = useOwnChapter();
+  const chapterId = membership?.chapter_id ?? null;
   const [title, setTitle] = useState("");
   const [company, setCompany] = useState("");
   const [location, setLocation] = useState("");
@@ -32,6 +36,7 @@ export default function PostJobScreen() {
   };
 
   const canSubmit =
+    chapterId !== null &&
     title.trim().length > 0 &&
     company.trim().length > 0 &&
     location.trim().length > 0 &&
@@ -39,12 +44,12 @@ export default function PostJobScreen() {
     !submitting;
 
   const onSubmit = async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || chapterId === null) return;
     setSubmitting(true);
     setError(null);
     try {
       await createJob({
-        chapter_id: MOCK_CURRENT_MEMBERSHIP.chapter_id,
+        chapter_id: chapterId,
         title: title.trim(),
         company: company.trim(),
         location: location.trim(),

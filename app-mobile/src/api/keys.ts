@@ -1,7 +1,6 @@
 /** E2EE key-directory API: device registration, prekey upload/count, prekey bundles — routers/keys.py. */
 
-import { mocked, request, USE_MOCKS } from "./client";
-import { MOCK_DEVICE, MOCK_PREKEY_BUNDLE } from "../mocks/data";
+import { request } from "./client";
 
 export interface SignedPrekeyCreate {
   key_id: number;
@@ -71,22 +70,18 @@ export interface PrekeyBundleOut {
 }
 
 export async function registerDevice(body: DeviceCreate): Promise<DeviceOut> {
-  if (USE_MOCKS) return mocked(MOCK_DEVICE);
   return request<DeviceOut>("/devices", { method: "POST", body });
 }
 
 export async function uploadPrekeys(deviceId: string, body: PrekeyUpload): Promise<PrekeyCountOut> {
-  if (USE_MOCKS) return mocked({ device_id: deviceId, one_time_prekeys_available: 100 });
   return request<PrekeyCountOut>(`/devices/${deviceId}/prekeys`, { method: "POST", body });
 }
 
 export async function getPrekeyCount(deviceId: string): Promise<PrekeyCountOut> {
-  if (USE_MOCKS) return mocked({ device_id: deviceId, one_time_prekeys_available: 87 });
   return request<PrekeyCountOut>(`/devices/${deviceId}/prekeys/count`);
 }
 
 /** Fetch a user's prekey bundle to start sessions (server consumes one OTK per device atomically). */
 export async function getPrekeyBundle(userId: string): Promise<PrekeyBundleOut> {
-  if (USE_MOCKS) return mocked({ ...MOCK_PREKEY_BUNDLE, user_id: userId });
   return request<PrekeyBundleOut>(`/users/${userId}/prekey-bundle`);
 }

@@ -3,10 +3,9 @@
  * Event frames mirror the backend pubsub contract (app.ws.pubsub):
  * `{"type": "<event_type>", ...payload}`. Events never carry ciphertext beyond
  * the opaque base64 `ciphertext` blob field (CONVENTIONS).
- * In mock mode (USE_MOCKS) connect() is an explicit no-op.
  */
 
-import { USE_MOCKS, wsUrl } from "../api/client";
+import { wsUrl } from "../api/client";
 import type { MessageType } from "../api/messages";
 
 /** New message fan-out, published by the messages router on POST. */
@@ -68,10 +67,6 @@ export class ChirpSocket {
 
   /** Open the connection (token rides the ?token= query param — see wsUrl()). */
   connect(): void {
-    if (USE_MOCKS) {
-      // Mock mode: no backend, no socket. Explicit no-op (CONVENTIONS: stubs no-op explicitly).
-      return;
-    }
     this.shouldRun = true;
     this.open();
   }

@@ -1,4 +1,4 @@
-/** Typed fetch wrapper for the Chirp backend: base URL, auth header injection, USE_MOCKS switch. */
+/** Typed fetch wrapper for the Chirp backend: base URL, auth header injection. */
 
 import { getIdToken, hasFirebaseConfig } from "@/auth";
 
@@ -9,13 +9,6 @@ import { getIdToken, hasFirebaseConfig } from "@/auth";
  */
 export const API_BASE_URL: string =
   process.env.EXPO_PUBLIC_API_URL ?? "https://chirp-api-593616178468.us-central1.run.app";
-
-/**
- * While true, every src/api function resolves from src/mocks/data.ts instead of
- * the network. Defaults to false (live backend); set EXPO_PUBLIC_USE_MOCKS=true
- * to bring back the mock/local-dev flow.
- */
-export const USE_MOCKS: boolean = process.env.EXPO_PUBLIC_USE_MOCKS === "true";
 
 let authToken: string | null = null;
 let debugFirebaseUid: string | null = null;
@@ -156,9 +149,4 @@ export function wsUrl(): string {
   const base = API_BASE_URL.replace(/^http/, "ws");
   const token = authToken ?? debugFirebaseUid;
   return token ? `${base}/ws?token=${encodeURIComponent(token)}` : `${base}/ws`;
-}
-
-/** Resolve mock data as an API response (single place to add latency simulation later). */
-export function mocked<T>(data: T): Promise<T> {
-  return Promise.resolve(data);
 }
