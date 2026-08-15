@@ -5,6 +5,7 @@ from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
 from app.models.events import Event, EventRsvp
 from app.models.finance import (
     ChapterStripeCustomer,
+    DuesPaymentIntent,
     DuesCycle,
     LedgerEntry,
     ProcessedStripeEvent,
@@ -28,6 +29,7 @@ __all__ = [
     "Chapter",
     "ChapterInvite",
     "ChapterStripeCustomer",
+    "DuesPaymentIntent",
     "ContentReport",
     "Conversation",
     "ConversationMember",

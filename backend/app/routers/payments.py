@@ -132,7 +132,20 @@ async def _get_or_create_customer(
             user_id=user.id, chapter_id=chapter_id, stripe_customer_id=customer_id
         )
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Concurrent first payment (double-tap, or a client retry on a flaky
+        # connection) raced us to insert the same (user, chapter) row. Defer to
+        # the winner rather than 500ing; our own Stripe Customer is left unused
+        # on the connected account, which is harmless and inert.
+        await session.rollback()
+        winner = await session.get(
+            models.ChapterStripeCustomer, {"user_id": user.id, "chapter_id": chapter_id}
+        )
+        if winner is None:
+            raise
+        return winner.stripe_customer_id
     return customer_id
 
 
@@ -181,15 +194,63 @@ async def create_dues_payment_intent(
         raise conflict("chapter_not_onboarded")
 
     customer_id = await _get_or_create_customer(session, user, chapter.id, account_id)
-    intent = await stripe_service.create_dues_payment_intent(
-        account_id=account_id,
-        customer_id=customer_id,
-        amount_cents=cycle.amount_cents,
-        rail=body.rail,
-        cycle_id=cycle.id,
-        user_id=user.id,
-        chapter_id=chapter.id,
+
+    # RESERVE BEFORE CHARGING (c51). The already_paid check above can only see
+    # SETTLED payments, so it cannot stop a member re-paying a cycle whose ACH
+    # debit is still processing — and because the Stripe idempotency key is
+    # per-rail, that retry would mint a genuinely different PaymentIntent.
+    # uq_dues_intent_live makes the database, not Stripe, arbitrate: the second
+    # attempt loses here, before any money moves.
+    live = await session.execute(
+        select(models.DuesPaymentIntent).where(
+            models.DuesPaymentIntent.dues_cycle_id == cycle.id,
+            models.DuesPaymentIntent.user_id == user.id,
+            models.DuesPaymentIntent.status.in_(("open", "succeeded")),
+        )
     )
+    reservation = live.scalar_one_or_none()
+    if reservation is not None:
+        if reservation.status == "succeeded":
+            raise conflict("already_paid")
+        if reservation.rail != body.rail:
+            # THE double-charge case: an ACH debit is still processing (days) and
+            # the member is now trying to pay the same cycle by card. The per-rail
+            # Stripe idempotency key would happily mint a second real intent.
+            raise conflict("payment_already_in_progress")
+        # Same rail — an ordinary client retry. Reuse the reservation; the
+        # idempotency key is identical, so Stripe resolves it to the same intent.
+    else:
+        reservation = models.DuesPaymentIntent(
+            chapter_id=chapter.id, dues_cycle_id=cycle.id, user_id=user.id, rail=body.rail
+        )
+        session.add(reservation)
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Concurrent first attempt won the race. uq_dues_intent_live, not the
+            # check above, is what actually makes this safe under concurrency.
+            await session.rollback()
+            raise conflict("payment_already_in_progress") from None
+
+    try:
+        intent = await stripe_service.create_dues_payment_intent(
+            account_id=account_id,
+            customer_id=customer_id,
+            amount_cents=cycle.amount_cents,
+            rail=body.rail,
+            cycle_id=cycle.id,
+            user_id=user.id,
+            chapter_id=chapter.id,
+        )
+    except Exception:
+        # Stripe never created an intent, so the reservation must not keep
+        # blocking a legitimate retry.
+        reservation.status = "canceled"
+        await session.commit()
+        raise
+
+    reservation.stripe_payment_intent_id = intent.id
+    await session.commit()
     customer_session_secret = await stripe_service.create_customer_session(
         account_id, customer_id
     )
@@ -205,6 +266,27 @@ async def create_dues_payment_intent(
         ),
         rail=body.rail,
     )
+
+
+async def _resolve_reservation(
+    session: AsyncSession, intent: dict, status: str
+) -> None:
+    """Move a dues reservation out of (or into) its terminal state (c51).
+
+    'succeeded' keeps holding uq_dues_intent_live — the cycle is paid, so a second
+    payment must stay blocked. 'failed'/'canceled' release it, because a member
+    whose payment genuinely failed has to be able to try again.
+    """
+    result = await session.execute(
+        select(models.DuesPaymentIntent).where(
+            models.DuesPaymentIntent.stripe_payment_intent_id == intent["id"]
+        )
+    )
+    reservation = result.scalar_one_or_none()
+    if reservation is None:
+        return
+    reservation.status = status
+    reservation.updated_at = datetime.now(timezone.utc)
 
 
 async def _record_dues_payment(session: AsyncSession, intent: dict) -> None:
@@ -266,7 +348,13 @@ async def stripe_webhook(
         models.ProcessedStripeEvent(event_id=event["id"], event_type=event["type"])
     )
     if event["type"] == "payment_intent.succeeded":
+        await _resolve_reservation(session, event["data"]["object"], "succeeded")
         await _record_dues_payment(session, event["data"]["object"])
+    elif event["type"] == "payment_intent.payment_failed":
+        # Releases uq_dues_intent_live so the member can genuinely retry (c51).
+        await _resolve_reservation(session, event["data"]["object"], "failed")
+    elif event["type"] == "payment_intent.canceled":
+        await _resolve_reservation(session, event["data"]["object"], "canceled")
 
     try:
         await session.commit()

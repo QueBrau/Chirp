@@ -21,8 +21,10 @@ import { Image, Pressable, View, type ViewStyle } from "react-native";
 
 import {
   createInvite,
+  listMembers,
   type ChapterInviteOut,
   type ChapterOut,
+  type MemberOut,
   type MembershipOut,
   type RoleName,
 } from "@/api/chapters";
@@ -46,9 +48,9 @@ import {
   SectionHeader,
   type CreateEventInput,
 } from "@/components";
-// MOCK_CAMPUS/mockUserById remain: campus name display and the Events segment's
-// host/RSVP lookups are outside this task's scope (cosmetic/pre-existing, per c44 split).
-import { MOCK_CAMPUS, mockUserById } from "@/mocks/data";
+// MOCK_CAMPUS is cosmetic only (campus label); there is no campus-name source on
+// this screen's data. All identity now comes from the roster via listMembers().
+import { MOCK_CAMPUS } from "@/mocks/data";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -119,6 +121,12 @@ const SEGMENTS: { key: OrgSegment; label: string }[] = [
   { key: "events", label: "Events" },
   { key: "tools", label: "Tools" },
 ];
+
+/** Resolve a user id against the chapter roster — the only name source available
+ * (there is no GET /users/{id}). Mirrors the helper in chapter/event/[id].tsx. */
+function findMember(members: MemberOut[], userId: string): MemberOut | undefined {
+  return members.find((member) => member.user_id === userId);
+}
 
 /** Compact relative age for card captions ("just now", "5m", "3h", "2d") — matches Home's feed. */
 function age(iso: string): string {
@@ -255,17 +263,19 @@ function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: st
 function EventCard({
   event,
   rsvps,
+  members,
   onPress,
 }: {
   event: EventOut;
   rsvps: EventRsvpOut[];
+  members: MemberOut[];
   onPress: () => void;
 }) {
   const palette = useTheme();
-  const host = mockUserById(event.host_id);
+  const host = findMember(members, event.host_id);
   const going = rsvps.filter((rsvp) => rsvp.status === "going");
   const goingPeople = going.map((rsvp) => {
-    const user = mockUserById(rsvp.user_id);
+    const user = findMember(members, rsvp.user_id);
     return { name: user?.display_name ?? "Guest", photoUrl: user?.avatar_url };
   });
 
@@ -321,6 +331,9 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
   const palette = useTheme();
   const [events, setEvents] = useState<EventWithRsvpsOut[] | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  // Fetched once here, not per card: the roster is the only way to turn a
+  // host_id/rsvp.user_id into a name (no GET /users/{id} exists).
+  const [members, setMembers] = useState<MemberOut[]>([]);
 
   const reload = useCallback(async () => {
     // One round trip (c43) — the old shape here was listEvents + listRsvps per event.
@@ -328,9 +341,15 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
   }, [chapterId]);
 
   useEffect(() => {
-    // Fail soft: mock ids 422 against the live API until wiring lands.
+    // Fail soft: a failed events load must not crash the segment.
     reload().catch(() => setEvents([]));
   }, [reload]);
+
+  useEffect(() => {
+    listMembers(chapterId)
+      .then(setMembers)
+      .catch(() => setMembers([]));
+  }, [chapterId]);
 
   const handleCreate = async (input: CreateEventInput) => {
     await createEvent(chapterId, input);
@@ -377,6 +396,7 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
               key={event.id}
               event={event}
               rsvps={rsvps}
+              members={members}
               onPress={() => router.push(`/chapter/event/${event.id}`)}
             />
           ))}
