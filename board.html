@@ -494,6 +494,27 @@
       "owner": "J",
       "tag": "vert:auth-orgs",
       "title": "[A/Jose] Orgs Events 'Hosted by Unknown' FIXED \u2014 PR #11. EventCard resolved identities via mockUserById against real UUIDs; roster now fetched once per segment and passed down (mirrors event/[id].tsx). Last mockUserById call site in the app is gone."
+    },
+    {
+      "id": "c56",
+      "col": "next",
+      "owner": "J",
+      "tag": "go-live",
+      "title": "[A/Jose] PUBLIC WEBSITE \u2014 decided Aug 15, NOT started. Lives IN THIS REPO at web/ (static HTML/CSS, no Expo, no auth, no RN bundle), deployed to FIREBASE HOSTING on the existing chirps-prod project (zero new vendors, free tier, easy custom domain, and it is where universal-link .well-known files go later). Pages: landing, features, how it works, about, PRIVACY POLICY, TERMS, disclosure/contact. PLUS two functional pages the backend already needs: /stripe/connect/return + /stripe/connect/refresh, and an invite bounce page that turns an https link into chirp://join-chapter?code=... . Design: take Instagram's STRUCTURE and polish bar (split hero, dark canvas, real product imagery, one clear CTA, quiet footer) but NOT its look \u2014 app-mobile/DESIGN.md is binding and Chirp keeps its own identity (violet accent, soft canvas, pill everything). Do not ship an Instagram clone."
+    },
+    {
+      "id": "c57",
+      "col": "next",
+      "owner": "",
+      "tag": "go-live",
+      "title": "[shared] BLOCKER CHAIN: the website (c56) gates Stripe (c40), not the other way round. backend/app/routers/payments.py:36-38 raises 503 app_public_base_url_not_configured when APP_PUBLIC_BASE_URL is unset, and Stripe REJECTS custom schemes so it can never be a chirp:// link \u2014 Connect onboarding needs a real https return/refresh URL. The App Store also requires a publicly reachable privacy-policy URL before submission (c10). AND the app already lies: app-mobile/app/(auth)/sign-in.tsx tells every user 'you agree to Chirp's Terms of Service and acknowledge our Privacy Policy' \u2014 neither document exists. Order: c56 web pages -> set APP_PUBLIC_BASE_URL -> c40 Stripe TEST keys -> c39 EAS build -> test-mode payment on card AND ACH."
+    },
+    {
+      "id": "c58",
+      "col": "next",
+      "owner": "J",
+      "tag": "qa",
+      "title": "[A/Jose] LIVE BROWSER QA \u2014 still NEVER DONE, and it is now the biggest unverified surface. Everything from Aug 14-15 (c6, c44, c45, c43, c46, c51-c55) is proven only by pytest + tsc. Nobody has driven the real app against real prod. Proven loop: cloud-sql-proxy 5433 + local uvicorn AUTH_MODE=firebase + Metro 8082 with EXPO_PUBLIC_API_URL pointed at prod, using the three QA accounts in INFRA-PRIVATE.html. Walk: sign in (returning user should NOT re-run account-type, c45), profile shows REAL name/campus/chapter/role (c46), Orgs feed + events show real names not 'Unknown' (c46/c55), family tree loads or fails soft instead of hanging (c46), invite mint + join, dues screen states."
     }
   ],
   "decisions": [
@@ -528,7 +549,8 @@
     "Aug 14 \u2014 Engineering: with-counts routes use correlated scalar subqueries, never join+COUNT(DISTINCT). Joining posts to both post_likes and post_comments multiplies rows before counting (3 x 4 = 12) and COUNT(DISTINCT) hides it while making the query slower. Pattern: routers/feed.py _post_counts_select.",
     "Aug 15 \u2014 Money: dues payment intents are now PERSISTED and RESERVED before Stripe is called (migration 0010, dues_payment_intents + a partial unique index on (dues_cycle_id, user_id) WHERE status IN ('open','succeeded')). The old design only recorded a payment AFTER its webhook settled, so during ACH's multi-day 'processing' window nothing in the DB knew a payment was in flight: the cycle still read as unpaid, and because the Stripe idempotency key was scoped per-rail (dues:{cycle}:{user}:{rail}) a retry on the other rail created a GENUINELY different PaymentIntent. Both would succeed and both would append to an append-only ledger. Reserve-then-call is the fix; the ledger partial unique index is the backstop, and payment_failed/canceled webhooks now RELEASE the reservation so a genuinely failed payment can still be retried.",
     "Aug 15 \u2014 Process: agent sessions must not share one working tree. A background agent fixing three review findings had the repo switched under it mid-edit (a concurrent branch checkout for the q/feed merge). It behaved correctly \u2014 detected the foreign MERGE_HEAD, reverted its own two edits by hand, made ZERO net changes and reported rather than forcing a checkout that would have yanked the branch out from under an unresolved merge. No damage, but the lesson stands: concurrent work on this repo runs in a git worktree, or strictly sequentially. Cheap rule, and it just cost a round trip to learn.",
-    "Aug 15 \u2014 Money: reserve-before-charging is now the rule for anything that moves money. A guard that only reads settled state (the ledger) cannot see an in-flight payment, and Stripe idempotency keys only dedup identical parameters \u2014 so any key scoped to a user-changeable field (here, the rail) is not a double-charge guard at all. Write the reservation to OUR database before calling the processor, and let a partial unique index arbitrate. Corollary learned from a failing test: the guard must not block same-parameter retries, or ordinary client retries break."
+    "Aug 15 \u2014 Money: reserve-before-charging is now the rule for anything that moves money. A guard that only reads settled state (the ledger) cannot see an in-flight payment, and Stripe idempotency keys only dedup identical parameters \u2014 so any key scoped to a user-changeable field (here, the rail) is not a double-charge guard at all. Write the reservation to OUR database before calling the processor, and let a partial unique index arbitrate. Corollary learned from a failing test: the guard must not block same-parameter retries, or ordinary client retries break.",
+    "Aug 15 \u2014 Product/infra: Chirp gets a PUBLIC WEBSITE and it lives in THIS repo under web/, deployed to Firebase Hosting on chirps-prod. Rationale: it is not a marketing nice-to-have, it is load-bearing \u2014 Stripe Connect cannot onboard without an https return URL (the endpoint 503s), the App Store will not accept a submission without a public privacy-policy URL, invite deep links need an https bounce page to survive being tapped in a text message, and the sign-in screen already promises Terms + Privacy documents that do not exist. Same repo so the privacy policy stays honest about what the app actually collects; static HTML, never the Expo bundle, so it loads fast and works with no auth."
   ]
 }
 </script>
