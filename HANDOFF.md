@@ -1,40 +1,67 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 15 2026. **THREE PRs ARE OPEN AND ALL MERGEABLE — nothing is blocked
-on anyone.** PR #8 (screens off mock identity + deletion of the dead USE_MOCKS layer) is
-already merged AND deployed as rev **chirp-api-00008-4sw**. What is left is a merge queue
-plus two migrations, both listed below. The first-ever review of PRs #2/#3/#7/#8 ran on
-Aug 15 and found a CRITICAL dues double-charge, now fixed in PR #11 — see "The review"._
+_Last updated: Aug 15 2026 (late). **THERE ARE NO OPEN PRs. The merge queue is closed.**
+`gh pr list --state open` returns `[]`. The one thing standing between `main` and a
+working prod is that **prod is two migrations behind** — see the next section. The
+first-ever review of PRs #2/#3/#7/#8 ran on Aug 15 and found a CRITICAL dues
+double-charge, fixed in PR #11 and now on `main` — see "The review"._
 
 **board.html is the source of truth for tasks.** This file only answers the question the
 board can't: which copy of Chirp you are looking at.
 
-## MERGE THIS FIRST, IN THIS ORDER
+## THE MERGE QUEUE IS DONE
 
-1. **PR #9** (`q/feed`) — Q's campus FYP + migration **0009**.
-2. **PR #11** (`jose/auth-orgs`) — the review fixes + migration **0010**.
-   **Order is not optional**: 0010's `down_revision` is `0009`. Merging #11 first
-   breaks the migration chain.
-3. **PR #10** (`q/eas-prep`) — independent of the other two, merge whenever.
-4. Then **apply BOTH migrations** (0009 then 0010) via the INFRA-PRIVATE.md runbook,
-   **then** redeploy. Migrate-first is a hard rule here, see below.
+All three merged Aug 15 in the required order, CI green on every merge commit:
 
-PR #9 was CONFLICTING after PR #8 landed; Jose resolved it on Aug 15 by merging `main`
-into `q/feed` (a merge, NOT a rebase — no force-push, so Q lost nothing). Both sides of
-that conflict are already reconciled and CI is green.
+| PR | branch | brings | merge commit |
+| --- | --- | --- | --- |
+| #9 | `q/feed` | campus FYP, migration **0009** | `6334957` |
+| #11 | `jose/auth-orgs` | six review fixes, migration **0010** | `9673ff6` |
+| #10 | `q/eas-prep` | EAS dev-build blockers | `1aa19ba` |
+
+`main` is at **`1aa19ba`**. The migration chain is linear and single-head, `0001 → 0010`.
+
+Q ran the queue, including the conflict PR #11 hit once #9's newer tip (`bba26e0`)
+landed. **The resolution kept both sides rather than taking one**, which is the part
+worth remembering: `app-mobile/app/(tabs)/feed/index.tsx` has Q's `getCampus()` eyebrow
+with the hardcoded mascot deleted, and `app-mobile/app/(tabs)/chapter/index.tsx` has
+Jose's `listMembers()`/`findMember()` roster resolution with `mockUserById` gone. Taking
+either side wholesale would have silently reverted a fix the other side had just made,
+and the build would still have been green. Same trap as the roster-names overlap.
+
+## WHAT IS ACTUALLY BLOCKING NOW: prod is two migrations behind
+
+Prod is alive and healthy but still serving the pre-0009 surface. Route-probed Aug 15:
+
+```
+GET /auth/me                      401   (auth gate works)
+GET /docs                         200
+GET /campuses/{uuid}/feed         404   <- 0009's campus feed route does not exist live
+```
+
+Apply **0009 then 0010**, **then** redeploy — migrate-first is a hard rule here, see
+below. Board card **c60** carries the full runbook, including a pre-flight check that
+0010 specifically needs: it creates a UNIQUE index on the already-populated
+`ledger_entries` table, so a duplicate `dues_payment` row would abort the migration
+mid-flight. Expect zero rows; if not, stop and reconcile by hand rather than deleting
+from an append-only ledger.
+
+Verify the redeploy by **route probe, not by the deploy log**: `/campuses/{uuid}/feed`
+must go 404 → 401, and `alembic current` must read `0010`.
 
 ## Current state
 
 | Where | What's there | State |
 | --- | --- | --- |
-| `main` | Everything through **PR #8** (head `9cace1c`): Yak on real API, dashboards + CSV export, Stripe dues, role-meta, events batch endpoint, sign-in UX, screens on real session data, `GET /campuses/{id}`, and NO `USE_MOCKS` layer. Migrations **0001-0008** | Canonical |
-| Cloud Run (prod) | `chirp-api-593616178468.us-central1.run.app`, rev **00008-4sw** | `alembic_version` **0008** = main's head. Matches main. Route-probe verified |
-| `q/feed` | Campus FYP, `posts.audience`, batched `FeedPostOut`, migration 0009 | **PR #9 OPEN, mergeable** — merge FIRST |
-| `jose/auth-orgs` | All six review fixes incl. the dues double-charge, migration 0010 | **PR #11 OPEN, mergeable** — merge SECOND |
-| `q/eas-prep` | EAS dev-build blockers (c39) | **PR #10 OPEN, mergeable** — independent |
+| `main` | Everything through **PR #10** (head `1aa19ba`): Yak on real API, dashboards + CSV export, Stripe dues + the reserve-before-charging fix, role-meta, events batch endpoint, sign-in UX, screens on real session data, `GET /campuses/{id}`, the campus FYP, EAS build blockers fixed, and NO `USE_MOCKS` layer. Migrations **0001-0010** | Canonical |
+| Cloud Run (prod) | `chirp-api-593616178468.us-central1.run.app`, rev **00008-4sw** | `alembic_version` **0008** — **TWO BEHIND main**. `/campuses/{id}/feed` 404s live. Migrate + redeploy, board c60 |
+| `q/feed`, `jose/auth-orgs`, `q/eas-prep` | all merged | Retired. New work cuts from `main` |
+| `web/` | The public website (c56) | **Does not exist yet.** No `firebase.json` anywhere in the repo; Hosting is greenfield |
 | CI | `.github/workflows/ci.yml`: backend pytest vs PG16 + mobile tsc on every push/PR | Green. No branch protection (deliberate, Aug 13) — CI is advisory |
 
-Test counts: **139 backend tests green** on `jose/auth-orgs`, tsc clean.
+Test counts: **139 backend tests green** on `jose/auth-orgs` before it merged, tsc clean;
+CI green on all three merge commits. Nobody has re-run the suite against merged `main`
+locally yet — CI has, which is what the green check on `1aa19ba` means.
 
 Creds, runbooks, QA account, and live fixture ids: `INFRA-PRIVATE.html` at the repo root
 (gitignored — get a copy from Jose, never commit it).
@@ -76,8 +103,8 @@ deploying first would have 500'd the treasurer ledger. Two gotchas worth keeping
 (command is in the runbook), and the prod DB is human-only — agent sessions are
 permission-blocked from it, though the redeploy itself is not.)_
 
-1. **Merge #9, then #11, then #10; apply migrations 0009 AND 0010; redeploy.** See the
-   merge-order section at the top — the order is load-bearing.
+1. **Apply migrations 0009 AND 0010, then redeploy** (board c60). The merges are done;
+   this is all that is left of that chain. Migrate first, then deploy.
 2. **Build the public website (board c56)** — DECIDED Aug 15, not started. It lives in
    **this repo** under `web/` as plain static HTML/CSS (never the Expo bundle: it must
    load fast and work with no auth), deployed to **Firebase Hosting** on the existing
@@ -106,8 +133,45 @@ This ordering is not aesthetic. `backend/app/routers/payments.py:36-38` raises
 **rejects custom schemes**, so it can never be a `chirp://` link — Connect onboarding
 needs a real https return/refresh URL that exists. Two more forcing functions: the App
 Store will not accept a submission without a publicly reachable privacy-policy URL, and
-`app-mobile/app/(auth)/sign-in.tsx` **already tells every user** "you agree to Chirp's
-Terms of Service and acknowledge our Privacy Policy" — neither document exists today.
+`app-mobile/app/(auth)/sign-in.tsx:198` **already tells every user** "you agree to
+Chirp's Terms of Service and acknowledge our Privacy Policy" — neither document exists
+today, and the sentence is not even a link.
+
+**Domain decided Aug 15: `https://chirps-prod.web.app`**, the free Firebase Hosting
+domain on the existing project. Stripe accepts it, it costs nothing, and it unblocks
+`APP_PUBLIC_BASE_URL` the day the site deploys — waiting on a domain purchase would have
+parked the entire dues chain behind a shopping decision. A custom domain is its own card
+and only becomes load-bearing when iOS universal links do; `app-mobile/app.json:14,26`
+still declares the placeholder `applinks:chirp.example.com`, which is wrong either way.
+
+One thing not to miss: **the invite bounce page fixes nothing on its own.**
+`app-mobile/app/(tabs)/chapter/index.tsx:499` currently shares the raw
+`withInviteCode("chirp://join-chapter", code)` string, so invites still go out as a
+`chirp://` link that dies when pasted into a text message and nothing will ever point at
+the new page. That one-line mobile change ships with c56.
+
+## The de-mock sweep is NOT complete (board c59) — correction
+
+PR #8 was reported as finishing the de-mock work, and c55 specifically claimed "the last
+`mockUserById` call site in the app is gone." **Both overstated it.** Re-grepped on
+`main` (`1aa19ba`), three screens still render fake identity against live data:
+
+- `app-mobile/app/(tabs)/chapter/index.tsx:53,597,666,673` — `MOCK_CAMPUS.name`
+  hardcoded into the Orgs hero subtitle, screen eyebrow and empty state, plus a literal
+  `· SPARTANS`. Every user sees UNC Greensboro and UNCG's mascot.
+- `app-mobile/app/(tabs)/yak/index.tsx:28,211` — same, with a stale `TODO` claiming no
+  campus endpoint exists. `GET /campuses/{id}` shipped with c46.
+- `app-mobile/app/(tabs)/chapter/alumni/index.tsx:9,64` — `mockUserById(job.posted_by)`
+  resolves a **real** UUID through the mock table, so it never matches and every job
+  renders "Posted by Alumni".
+
+The fix pattern for the first two is already in the repo: `feed/index.tsx:86,145` calls
+`getCampus(campusId)` and fails soft to an absent eyebrow. Four other `@/mocks` imports
+on `main` are legitimate and are listed on c59 so the cleanup does not overshoot.
+
+The failure mode is worth naming: **a claim about the whole repo was made from the scope
+of one PR's diff.** When closing a card that asserts something repo-wide, re-grep the
+repo, not the branch.
 
 ## Live browser QA has NEVER been done (board c58)
 
