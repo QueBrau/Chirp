@@ -20,12 +20,12 @@ import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Modal, Pressable, TextInput, View } from "react-native";
 
+import { getCampus, type CampusOut } from "@/api/auth";
 import { ApiError } from "@/api/client";
 import { createReport, blockYakAuthor } from "@/api/moderation";
 import { createYak, listYaks, voteYak, type YakFeedOut, type YakVoteValue } from "@/api/yaks";
 import { useSession } from "@/auth";
 import { AppText, EmptyState, Screen, VotePill } from "@/components";
-import { MOCK_CAMPUS } from "@/mocks/data";
 import {
   campusNightWash,
   elevation,
@@ -81,6 +81,20 @@ export default function YakScreen() {
   const [composerText, setComposerText] = useState("");
   const [posting, setPosting] = useState(false);
   const [sheet, setSheet] = useState<{ title: string; options: SheetOption[] } | null>(null);
+  const [campus, setCampus] = useState<CampusOut | null>(null);
+
+  // Real campus name for the header eyebrow (GET /campuses/{id}, same pattern as
+  // Home). Fails soft to null: a missing campus name is cosmetic and must never
+  // blank out the board itself, which is driven by campusId.
+  useEffect(() => {
+    if (campusId === null) {
+      setCampus(null);
+      return;
+    }
+    getCampus(campusId)
+      .then(setCampus)
+      .catch(() => setCampus(null));
+  }, [campusId]);
 
   const loadYaks = useCallback(async (id: string) => {
     const feed = await listYaks(id);
@@ -205,11 +219,16 @@ export default function YakScreen() {
           regardless of system scheme, so header text is pinned to onAccent (white)
           rather than the system-following ink/inkSecondary tones. */}
       <View style={{ marginBottom: spacing.xl, gap: spacing.xs }}>
-        <AppText variant="micro" tone="onAccent">
-          {/* TODO: no campus-detail endpoint exists yet; only campus_id is available
-              from /auth/me. The name is cosmetic; campusId (below) drives every API call. */}
-          {MOCK_CAMPUS.name.toUpperCase()} · SPARTANS
-        </AppText>
+        {/* Real campus name via GET /campuses/{id} (same pattern as Home). Fails
+            soft: while unresolved (or on a failed fetch) the eyebrow is simply
+            absent rather than showing a wrong campus. The old value also
+            hardcoded "· SPARTANS", UNCG's mascot — wrong for every other campus,
+            and CampusOut has no mascot field to replace it with. */}
+        {campus !== null ? (
+          <AppText variant="micro" tone="onAccent">
+            {campus.name.toUpperCase()}
+          </AppText>
+        ) : null}
         <AppText variant="display" tone="onAccent">
           Yak
         </AppText>

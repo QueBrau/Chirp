@@ -168,10 +168,16 @@ async def list_job_posts(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[JobPostOut]:
-    """List network-wide jobs plus jobs scoped to the caller's chapters; no expired."""
+    """List network-wide jobs plus jobs scoped to the caller's chapters; no expired.
+
+    Outer-joins the poster's display_name so the client can show a real name
+    instead of resolving posted_by (a real user uuid) against mock data. Outer,
+    not inner: a job must still render if its poster row is ever gone.
+    """
     now = datetime.now(timezone.utc)
     result = await session.execute(
-        select(models.JobPost)
+        select(models.JobPost, models.User.display_name)
+        .outerjoin(models.User, models.User.id == models.JobPost.posted_by)
         .where(
             or_(
                 models.JobPost.chapter_id.is_(None),
@@ -184,7 +190,12 @@ async def list_job_posts(
         )
         .order_by(models.JobPost.created_at.desc())
     )
-    return [JobPostOut.model_validate(j) for j in result.scalars().all()]
+    posts: list[JobPostOut] = []
+    for job, poster_name in result.all():
+        out = JobPostOut.model_validate(job)
+        out.posted_by_name = poster_name
+        posts.append(out)
+    return posts
 
 
 @router.delete("/jobs/{job_id}", status_code=204)

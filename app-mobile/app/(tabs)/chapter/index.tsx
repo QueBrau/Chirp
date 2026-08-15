@@ -19,6 +19,7 @@ import type { ComponentProps } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { Image, Pressable, View, type ViewStyle } from "react-native";
 
+import { getCampus, type CampusOut } from "@/api/auth";
 import {
   createInvite,
   listMembers,
@@ -48,9 +49,6 @@ import {
   SectionHeader,
   type CreateEventInput,
 } from "@/components";
-// MOCK_CAMPUS is cosmetic only (campus label); there is no campus-name source on
-// this screen's data. All identity now comes from the roster via listMembers().
-import { MOCK_CAMPUS } from "@/mocks/data";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -569,11 +567,15 @@ function OrgToolsSegment({ chapterId, role }: { chapterId: string; role: RoleNam
 function MemberOrgHub({
   membership,
   chapter,
+  campusName,
   segment,
   onSegmentChange,
 }: {
   membership: MembershipOut;
   chapter: ChapterOut | null;
+  /** Real campus name, resolved by OrgsScreen via GET /campuses/{id}; null while
+   * loading or on a failed fetch — fail soft, never a wrong or mock name. */
+  campusName: string | null;
   segment: OrgSegment;
   onSegmentChange: (segment: OrgSegment) => void;
 }) {
@@ -582,6 +584,15 @@ function MemberOrgHub({
   }
 
   const role = membership.role;
+  // Fail soft: if neither piece is available, render nothing rather than a
+  // blank/wrong line. (chapter_name and campusName can each independently be
+  // absent.)
+  const captionLine =
+    chapter.chapter_name !== null
+      ? campusName !== null
+        ? `${chapter.chapter_name} · ${campusName}`
+        : chapter.chapter_name
+      : campusName;
 
   return (
     <View style={{ gap: spacing.xl }}>
@@ -593,9 +604,11 @@ function MemberOrgHub({
           <AppText variant="title" tone="onAccent">
             {chapter.org_name}
           </AppText>
-          <AppText variant="caption" tone="onAccent">
-            {chapter.chapter_name !== null ? `${chapter.chapter_name} · ${MOCK_CAMPUS.name}` : MOCK_CAMPUS.name}
-          </AppText>
+          {captionLine !== null ? (
+            <AppText variant="caption" tone="onAccent">
+              {captionLine}
+            </AppText>
+          ) : null}
           <Chip label={ROLE_LABELS[role]} variant="accent" style={{ marginTop: spacing.xs }} />
         </View>
       </HeroCard>
@@ -651,32 +664,61 @@ function FindYourOrg() {
 
 export default function OrgsScreen() {
   const { campusColors } = useAppearance();
+  const { user } = useSession();
   const { sessionStatus, membership, chapter, chapterLoading } = useOwnChapter();
   const [segment, setSegment] = useState<OrgSegment>("feed");
+  const [campus, setCampus] = useState<CampusOut | null>(null);
 
   // Session-status gating (PR #6 review): a real member must never flash the
   // non-member "No orgs yet" state on cold start — only render FindYourOrg
   // once the session has actually settled AND resolved to no membership.
   const loading = sessionStatus === "loading" || (membership !== null && chapterLoading);
 
+  // Real campus name (GET /campuses/{id}, same pattern as Home/Yak), sourced
+  // from the caller's own session rather than a new fetch path — works in
+  // both the member and non-member states, unlike chapter.campus_id which is
+  // only populated once a chapter has loaded. Fails soft to null: a missing
+  // campus name is cosmetic and must never blank out the screen.
+  const campusId = user?.campus_id ?? null;
+  useEffect(() => {
+    if (campusId === null) {
+      setCampus(null);
+      return;
+    }
+    getCampus(campusId)
+      .then(setCampus)
+      .catch(() => setCampus(null));
+  }, [campusId]);
+
   return (
     <View style={{ flex: 1 }}>
       <Screen
         title="Orgs"
-        eyebrow={`${MOCK_CAMPUS.name.toUpperCase()} · SPARTANS`}
+        // Real campus name, no fallback — the old value also hardcoded
+        // "· SPARTANS", UNCG's mascot: wrong for every other campus, and
+        // CampusOut has no mascot field to replace it with.
+        eyebrow={campus !== null ? campus.name.toUpperCase() : undefined}
         accentBarColor={campusColors.secondary}
         subtitle={
           loading
             ? undefined
             : membership !== null
               ? "Your chapter, your tools."
-              : `Find your org at ${MOCK_CAMPUS.name}`
+              : campus !== null
+                ? `Find your org at ${campus.name}`
+                : "Find your org"
         }
       >
         {loading ? (
           <EmptyState title="Loading your org..." />
         ) : membership !== null ? (
-          <MemberOrgHub membership={membership} chapter={chapter} segment={segment} onSegmentChange={setSegment} />
+          <MemberOrgHub
+            membership={membership}
+            chapter={chapter}
+            campusName={campus?.name ?? null}
+            segment={segment}
+            onSegmentChange={setSegment}
+          />
         ) : (
           <FindYourOrg />
         )}

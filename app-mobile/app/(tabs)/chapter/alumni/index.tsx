@@ -6,7 +6,6 @@ import { useFocusEffect, useRouter } from "expo-router";
 
 import { getAlumniDirectory, listJobs, type AlumniProfileOut, type JobPostOut } from "@/api/alumni";
 import { AppText, Avatar, Badge, Button, Card, EmptyState, Screen } from "@/components";
-import { mockUserById } from "@/mocks/data";
 import { radii, spacing, useTheme } from "@/theme";
 
 type Segment = "directory" | "jobs";
@@ -61,8 +60,10 @@ function AlumniCard({ profile }: { profile: AlumniProfileOut }) {
 }
 
 function JobCard({ job }: { job: JobPostOut }) {
-  const poster = mockUserById(job.posted_by);
-  const posterName = poster?.display_name ?? "Alumni";
+  // posted_by is a real user uuid — posted_by_name comes from the backend's
+  // join onto it (GET /jobs). Null when the join didn't run (POST /jobs) or
+  // the poster row is gone; "Alumni" is the fallback, never a mock lookup.
+  const posterName = job.posted_by_name ?? "Alumni";
 
   return (
     <Card>

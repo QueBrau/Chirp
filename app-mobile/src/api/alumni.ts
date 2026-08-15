@@ -49,6 +49,8 @@ export interface JobPostOut {
   apply_url: string | null;
   created_at: string;
   expires_at: string | null;
+  /** Joined from users (GET /jobs only — POST /jobs returns null here). */
+  posted_by_name: string | null;
 }
 
 export async function getMyAlumniProfile(): Promise<AlumniProfileOut> {

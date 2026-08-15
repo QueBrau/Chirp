@@ -71,3 +71,8 @@ class JobPostOut(_Schema):
     apply_url: str | None = None
     created_at: datetime
     expires_at: datetime | None = None
+    # Joined from users for the job board (list_job_posts only — POST /jobs
+    # returns null here, before any join runs). Nullable deliberately: it
+    # survives a poster row going missing, matching AlumniProfileOut's pattern
+    # for joined display fields above.
+    posted_by_name: str | None = None

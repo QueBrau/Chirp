@@ -910,6 +910,7 @@ export const MOCK_JOB_POSTS: JobPostOut[] = [
   {
     id: "job-1",
     posted_by: "usr-alexis",
+    posted_by_name: "Alexis Turner",
     chapter_id: MOCK_CHAPTER.id,
     title: "Summer Analyst Intern",
     company: "Northgate Capital",
@@ -923,6 +924,7 @@ export const MOCK_JOB_POSTS: JobPostOut[] = [
   {
     id: "job-2",
     posted_by: "usr-jordan",
+    posted_by_name: "Jordan Reyes",
     chapter_id: null, // network-wide
     title: "Associate Product Manager (New Grad)",
     company: "Harbor Health",
@@ -936,6 +938,7 @@ export const MOCK_JOB_POSTS: JobPostOut[] = [
   {
     id: "job-3",
     posted_by: "usr-alumni-priya",
+    posted_by_name: "Priya Desai",
     chapter_id: MOCK_CHAPTER.id,
     title: "Backend Engineer (New Grad)",
     company: "Stripe",
