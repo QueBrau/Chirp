@@ -5,33 +5,30 @@
  *
  * Filter pills are "For You" / "Campus" only (§8.6 — NOT "My Orgs": org posts
  * never surface on the public FYP, they live inside the org's own space,
- * §8.7). Since MOCK_POSTS tagged `source: "org"` simply have no matching
- * filter here, they're excluded from Home by construction — no separate
- * filtering step needed, and no org stripe/Chip belongs on this screen either.
+ * §8.7). Both pills read the SAME GET /campuses/{campus_id}/feed response —
+ * that endpoint only ever returns `audience: "campus"` rows, so org posts are
+ * excluded by construction, no client-side filtering needed. "For You" is a
+ * ranking that doesn't exist on the backend yet, so both tabs currently show
+ * the identical reverse-chron list; see the `visibleItems` comment below.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 
-import {
-  likePost,
-  listComments,
-  listLikes,
-  listPosts,
-  unlikePost,
-  type PostOut,
-  type PostSource,
-} from "@/api/feed";
+import { getCampus, type CampusOut } from "@/api/auth";
+import { likePost, listCampusFeed, unlikePost, type FeedPostOut } from "@/api/feed";
+import { useSession } from "@/auth";
 import { AppText, EmptyState, Fab, MediaPostCard, MomentsRow, Screen } from "@/components";
-import { MOCK_CAMPUS, MOCK_CURRENT_MEMBERSHIP, MOCK_CURRENT_USER, MOCK_MOMENTS, mockUserById } from "@/mocks/data";
+import { MOCK_MOMENTS, mockUserById } from "@/mocks/data";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
 
-interface FeedItem {
-  post: PostOut;
-  likeCount: number;
-  commentCount: number;
-  likedByMe: boolean;
-}
+type FeedFilter = "forYou" | "campus";
+
+/** Loading: initial fetch in flight. Loaded: fetch settled, `items` reflects the
+ * server (possibly genuinely empty). Error: the fetch itself failed — must never
+ * be presented the same as a genuinely empty feed (that's what hid the
+ * hardcoded-chapter-id bug for a week: a failed load silently rendered []). */
+type LoadState = "loading" | "loaded" | "error";
 
 /** Compact relative age for card captions ("just now", "5m", "3h", "2d"). */
 function age(iso: string): string {
@@ -43,7 +40,7 @@ function age(iso: string): string {
   return `${Math.round(hours / 24)}d`;
 }
 
-const FILTERS: { key: PostSource; label: string }[] = [
+const FILTERS: { key: FeedFilter; label: string }[] = [
   { key: "forYou", label: "For You" },
   { key: "campus", label: "Campus" },
 ];
@@ -51,69 +48,101 @@ const FILTERS: { key: PostSource; label: string }[] = [
 export default function FeedScreen() {
   const palette = useTheme();
   const { campusColors } = useAppearance();
-  const [items, setItems] = useState<FeedItem[] | null>(null);
-  const [filter, setFilter] = useState<PostSource>("forYou");
+  const { user } = useSession();
+  const [items, setItems] = useState<FeedPostOut[]>([]);
+  const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [filter, setFilter] = useState<FeedFilter>("forYou");
+  const [campus, setCampus] = useState<CampusOut | null>(null);
+
+  // Alumni / non-campus accounts have no campus_id — there's no campus feed to
+  // call the endpoint with, so that's handled as its own EmptyState below
+  // rather than firing a request with a null id.
+  const campusId = user?.campus_id ?? null;
+
+  const load = useCallback(async () => {
+    if (campusId === null) return;
+    setLoadState("loading");
+    try {
+      const posts = await listCampusFeed(campusId);
+      setItems(posts);
+      setLoadState("loaded");
+    } catch {
+      setLoadState("error");
+    }
+  }, [campusId]);
 
   useEffect(() => {
-    const load = async () => {
-      const posts = await listPosts(MOCK_CURRENT_MEMBERSHIP.chapter_id);
-      const withCounts = await Promise.all(
-        posts.map(async (post) => {
-          const [likes, comments] = await Promise.all([listLikes(post.id), listComments(post.id)]);
-          return {
-            post,
-            likeCount: likes.length,
-            commentCount: comments.length,
-            likedByMe: likes.some((like) => like.user_id === MOCK_CURRENT_USER.id),
-          };
-        }),
-      );
-      setItems(withCounts);
-    };
-    // Fail soft until c34 wires real ids: mock chapter ids 422 against the live
-    // API, and a crash here takes down the whole tab shell.
-    load().catch(() => setItems([]));
-  }, []);
+    void load();
+  }, [load]);
 
-  const toggleLike = async (item: FeedItem) => {
-    if (item.likedByMe) {
-      await unlikePost(item.post.id);
-    } else {
-      await likePost(item.post.id);
+  // Real campus name for the header eyebrow (GET /campuses/{id}, added with c46).
+  // Fails soft to null: a missing campus name is cosmetic and must never blank
+  // out the feed itself, which is driven by campusId.
+  useEffect(() => {
+    if (campusId === null) {
+      setCampus(null);
+      return;
     }
+    getCampus(campusId)
+      .then(setCampus)
+      .catch(() => setCampus(null));
+  }, [campusId]);
+
+  const toggleLike = async (item: FeedPostOut) => {
+    const wasLiked = item.liked_by_me;
     setItems((current) =>
-      (current ?? []).map((entry) =>
-        entry.post.id === item.post.id
-          ? {
-              ...entry,
-              likedByMe: !entry.likedByMe,
-              likeCount: entry.likeCount + (entry.likedByMe ? -1 : 1),
-            }
+      current.map((entry) =>
+        entry.id === item.id
+          ? { ...entry, liked_by_me: !wasLiked, like_count: entry.like_count + (wasLiked ? -1 : 1) }
           : entry,
       ),
     );
+    try {
+      if (wasLiked) {
+        await unlikePost(item.id);
+      } else {
+        await likePost(item.id);
+      }
+    } catch {
+      // Roll back the optimistic flip — previously this just never reverted,
+      // leaving the UI claiming a like/unlike that the server never recorded.
+      setItems((current) =>
+        current.map((entry) =>
+          entry.id === item.id
+            ? { ...entry, liked_by_me: wasLiked, like_count: entry.like_count + (wasLiked ? 1 : -1) }
+            : entry,
+        ),
+      );
+    }
   };
 
-  const moments = useMemo(
-    () =>
-      MOCK_MOMENTS.map((moment) => {
-        const user = mockUserById(moment.userId);
-        return {
-          id: moment.id,
-          name: user?.display_name.split(" ")[0] ?? "Friend",
-          photoUrl: user?.avatar_url,
-        };
-      }),
-    [],
-  );
+  // Moments row: MOCK ONLY, always — there is no backend concept of "moments"
+  // anywhere in the contract. This is the last mock data rendered in the app
+  // (the USE_MOCKS layer itself was deleted in PR #8); it stays until either a
+  // moments endpoint exists or the row is cut. Left explicit rather than
+  // inventing an endpoint to hide it.
+  const moments = MOCK_MOMENTS.map((moment) => {
+    const momentUser = mockUserById(moment.userId);
+    return {
+      id: moment.id,
+      name: momentUser?.display_name.split(" ")[0] ?? "Friend",
+      photoUrl: momentUser?.avatar_url,
+    };
+  });
 
-  const visibleItems = (items ?? []).filter((item) => item.post.source === filter);
+  // Both pills render the same list — see file header. `filter` only drives
+  // which pill looks active until a real "For You" ranking exists server-side.
+  const visibleItems = items;
 
   return (
     <View style={{ flex: 1 }}>
       <Screen
         title="Home"
-        eyebrow={`${MOCK_CAMPUS.name.toUpperCase()} · SPARTANS`}
+        // Real campus name now that GET /campuses/{id} exists (c46). Undefined
+        // until it resolves — an absent eyebrow beats a wrong one. The old value
+        // also hardcoded "· SPARTANS", which is UNCG's mascot: wrong for every
+        // other campus, and CampusOut has no mascot field to replace it with.
+        eyebrow={campus ? campus.name.toUpperCase() : undefined}
         accentBarColor={campusColors.secondary}
         subtitle="Your campus, right now."
       >
@@ -146,30 +175,41 @@ export default function FeedScreen() {
           })}
         </View>
 
-        {items !== null && visibleItems.length === 0 ? (
-          <EmptyState title="Nothing here yet" message="Posts matching this filter will show up here." />
+        {campusId === null ? (
+          <EmptyState
+            title="No campus feed"
+            message="Your account isn't linked to a campus, so there's nothing to show here."
+          />
+        ) : loadState === "error" ? (
+          <EmptyState
+            title="Couldn't load your feed"
+            message="Something went wrong reaching the server."
+            actionLabel="Try again"
+            onAction={() => void load()}
+          />
+        ) : loadState === "loading" ? (
+          <EmptyState title="Loading your feed..." />
+        ) : visibleItems.length === 0 ? (
+          <EmptyState title="Nothing here yet" message="Posts from your campus will show up here." />
         ) : (
           <View style={{ gap: spacing.md }}>
-            {visibleItems.map((item) => {
-              const author = mockUserById(item.post.author_id);
-              return (
-                <MediaPostCard
-                  key={item.post.id}
-                  post={item.post}
-                  authorName={author?.display_name ?? "Unknown"}
-                  authorPhotoUrl={author?.avatar_url}
-                  timeLabel={age(item.post.created_at)}
-                  likeCount={item.likeCount}
-                  commentCount={item.commentCount}
-                  likedByMe={item.likedByMe}
-                  onToggleLike={() => void toggleLike(item)}
-                />
-              );
-            })}
+            {visibleItems.map((item) => (
+              <MediaPostCard
+                key={item.id}
+                post={item}
+                authorName={item.display_name}
+                authorPhotoUrl={item.avatar_url}
+                timeLabel={age(item.created_at)}
+                likeCount={item.like_count}
+                commentCount={item.comment_count}
+                likedByMe={item.liked_by_me}
+                onToggleLike={() => void toggleLike(item)}
+              />
+            ))}
           </View>
         )}
       </Screen>
-      <Fab />
+      {campusId !== null ? <Fab /> : null}
     </View>
   );
 }

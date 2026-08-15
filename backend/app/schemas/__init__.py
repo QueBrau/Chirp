@@ -77,6 +77,7 @@ from app.schemas.messaging import (
     MessageReceiptOut,
 )
 from app.schemas.social import (
+    FeedPostOut,
     PostCommentCreate,
     PostCommentOut,
     PostCreate,
@@ -166,6 +167,7 @@ __all__ = [
     "MessageReceiptCreate",
     "MessageReceiptOut",
     # social
+    "FeedPostOut",
     "PostCommentCreate",
     "PostCommentOut",
     "PostCreate",

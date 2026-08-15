@@ -1,9 +1,16 @@
-"""Chapter feed: posts CRUD (soft delete), likes, and comments."""
+"""Chapter feed + campus feed: posts CRUD (soft delete), likes, comments.
+
+Post audience: 'org' (private to the chapter, never leaves /chapters/{id}/posts)
+or 'campus' (also surfaces on GET /campuses/{id}/feed). Chosen by the author at
+compose time (PostCreate.audience), defaulting to 'org' — see board Decisions log,
+Aug 14. "For You" is a ranking over the same campus posts, not a third value.
+"""
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Path, Query
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +21,7 @@ from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.middleware.org_scope import get_current_membership
 from app.schemas.social import (
+    FeedPostOut,
     PostCommentCreate,
     PostCommentOut,
     PostCreate,
@@ -23,6 +31,88 @@ from app.schemas.social import (
 )
 
 router = APIRouter(tags=["feed"])
+
+
+def _post_counts_select(caller_id: uuid.UUID):
+    """Base SELECT for posts + author identity + batched like/comment counts (c43).
+
+    Scalar subqueries (not a join-and-COUNT(DISTINCT)) so a post with many likes
+    AND many comments doesn't fan out into a cartesian product of rows before
+    counting — that would multiply rows (3 likes x 4 comments = 12 rows) and
+    COUNT(DISTINCT) only masks the bug while making the query slow.
+    """
+    like_count = (
+        select(func.count())
+        .select_from(models.PostLike)
+        .where(models.PostLike.post_id == models.Post.id)
+        .correlate(models.Post)
+        .scalar_subquery()
+    )
+    comment_count = (
+        select(func.count())
+        .select_from(models.PostComment)
+        .where(
+            models.PostComment.post_id == models.Post.id,
+            models.PostComment.deleted_at.is_(None),
+        )
+        .correlate(models.Post)
+        .scalar_subquery()
+    )
+    liked_by_me = (
+        select(models.PostLike.post_id)
+        .where(
+            models.PostLike.post_id == models.Post.id,
+            models.PostLike.user_id == caller_id,
+        )
+        .correlate(models.Post)
+        .exists()
+    )
+    return (
+        select(
+            models.Post,
+            models.User.display_name,
+            models.User.avatar_url,
+            like_count.label("like_count"),
+            comment_count.label("comment_count"),
+            liked_by_me.label("liked_by_me"),
+        )
+        # INNER JOIN: display_name is non-null on FeedPostOut (matches MemberOut).
+        .join(models.User, models.User.id == models.Post.author_id)
+    )
+
+
+def _feed_post_out(row: Any) -> FeedPostOut:
+    """Build a FeedPostOut from one row of `_post_counts_select`."""
+    post, display_name, avatar_url, like_count, comment_count, liked_by_me = row
+    return FeedPostOut(
+        id=post.id,
+        chapter_id=post.chapter_id,
+        author_id=post.author_id,
+        body=post.body,
+        media_urls=post.media_urls,
+        audience=post.audience,
+        post_type=post.post_type,
+        duration_sec=post.duration_sec,
+        created_at=post.created_at,
+        display_name=display_name,
+        avatar_url=avatar_url,
+        like_count=like_count,
+        comment_count=comment_count,
+        liked_by_me=liked_by_me,
+    )
+
+
+async def _require_campus_user(
+    campus_id: uuid.UUID = Path(...),
+    user: models.User = Depends(get_current_user),
+) -> models.User:
+    """403 unless the caller belongs to the campus in the path (users.campus_id).
+
+    Matches routers/yaks.py `_require_campus_user`.
+    """
+    if user.campus_id != campus_id:
+        raise forbidden("not_your_campus")
+    return user
 
 
 async def _post_with_membership(
@@ -55,19 +145,24 @@ async def _post_with_membership(
 @router.get("/chapters/{chapter_id}/posts")
 async def list_posts(
     chapter_id: uuid.UUID,
-    _membership: models.Membership = Depends(get_current_membership),
+    membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
-) -> list[PostOut]:
-    """List the chapter's posts, newest first, excluding soft-deleted ones."""
-    result = await session.execute(
-        select(models.Post)
+) -> list[FeedPostOut]:
+    """List the chapter's posts, newest first, excluding soft-deleted ones.
+
+    Includes author identity and batched like/comment counts in one round trip
+    (c43) — see `_post_counts_select` for why this isn't a join-and-COUNT(DISTINCT).
+    """
+    stmt = (
+        _post_counts_select(membership.user_id)
         .where(
             models.Post.chapter_id == chapter_id,
             models.Post.deleted_at.is_(None),
         )
         .order_by(models.Post.created_at.desc())
     )
-    return [PostOut.model_validate(p) for p in result.scalars().all()]
+    result = await session.execute(stmt)
+    return [_feed_post_out(row) for row in result.all()]
 
 
 @router.post("/chapters/{chapter_id}/posts", status_code=201)
@@ -77,17 +172,68 @@ async def create_post(
     membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
 ) -> PostOut:
-    """Create a post authored by the caller."""
+    """Create a post authored by the caller.
+
+    `audience` defaults to 'org' (PostCreate schema default) so a client that
+    omits it can never accidentally broadcast a chapter post campus-wide.
+    """
     post = models.Post(
         chapter_id=chapter_id,
         author_id=membership.user_id,
         body=body.body,
         media_urls=body.media_urls,
+        audience=body.audience,
+        post_type=body.post_type,
+        duration_sec=body.duration_sec,
     )
     session.add(post)
     await session.commit()
     await session.refresh(post)
     return PostOut.model_validate(post)
+
+
+@router.get("/campuses/{campus_id}/feed")
+async def list_campus_feed(
+    campus_id: uuid.UUID,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    user: models.User = Depends(_require_campus_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[FeedPostOut]:
+    """Campus-wide feed: only `audience = 'campus'` posts from chapters on this
+    campus, newest first. 'org' posts NEVER appear here — that is the endpoint's
+    core privacy guarantee (board Decisions log, Aug 14).
+
+    Reverse-chron with a compound (created_at, id) cursor (`before` + `before_id`)
+    so rows sharing a timestamp at a page boundary are never skipped, matching
+    routers/messages.py list_messages / tests/test_pagination.py exactly. `before`
+    alone still works (legacy clients) but doesn't guarantee that tie-break.
+
+    Also carries author identity and batched like/comment counts (c43), same
+    shape as GET /chapters/{id}/posts.
+    """
+    stmt = (
+        _post_counts_select(user.id)
+        .join(models.Chapter, models.Chapter.id == models.Post.chapter_id)
+        .where(
+            models.Chapter.campus_id == campus_id,
+            models.Post.audience == "campus",
+            models.Post.deleted_at.is_(None),
+        )
+    )
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.Post.created_at, models.Post.id) < (before, before_id)
+        )
+    elif before is not None:
+        stmt = stmt.where(models.Post.created_at < before)
+    stmt = stmt.order_by(
+        models.Post.created_at.desc(), models.Post.id.desc()
+    ).limit(limit)
+
+    result = await session.execute(stmt)
+    return [_feed_post_out(row) for row in result.all()]
 
 
 @router.patch("/chapters/{chapter_id}/posts/{post_id}")

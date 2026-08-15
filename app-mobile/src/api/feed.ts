@@ -1,10 +1,16 @@
-/** Feed API: chapter posts, likes, comments — routers/feed.py. */
+/** Feed API: campus FYP, chapter/org posts, likes, comments — routers/feed.py. */
 
 import { request } from "./client";
+
+/** Who can see a post. 'org' (default) = chapter-private, never on the FYP.
+ * 'campus' = surfaces on the public GET /campuses/{campus_id}/feed. */
+export type PostAudience = "org" | "campus";
 
 export interface PostCreate {
   body: string;
   media_urls?: string[] | null;
+  /** Server defaults to "org" when omitted (routers/feed.py). */
+  audience?: PostAudience;
 }
 
 export interface PostUpdate {
@@ -14,9 +20,6 @@ export interface PostUpdate {
 
 /** DESIGN §7 FYP: drives which MediaPostCard layout a post renders as. */
 export type PostType = "text" | "photo" | "video";
-
-/** DESIGN §7 filter pills: which feed tab a post surfaces under. */
-export type PostSource = "forYou" | "campus" | "org";
 
 export interface PostOut {
   id: string;
@@ -30,8 +33,22 @@ export interface PostOut {
   post_type?: PostType;
   /** Video posts only. */
   duration_sec?: number | null;
-  /** Optional; absent = "org" (chapter-scoped, the pre-FYP default). */
-  source?: PostSource;
+  /** Who can see this post — always present on rows the backend returns. */
+  audience: PostAudience;
+}
+
+/**
+ * FeedPostOut: the shape both feed list endpoints actually return — a post
+ * row plus the author display fields and engagement counts pre-joined
+ * server-side, so screens never have to fan out to listLikes/listComments
+ * per post.
+ */
+export interface FeedPostOut extends PostOut {
+  display_name: string;
+  avatar_url: string | null;
+  like_count: number;
+  comment_count: number;
+  liked_by_me: boolean;
 }
 
 export interface PostLikeOut {
@@ -53,9 +70,29 @@ export interface PostCommentOut {
   deleted_at: string | null;
 }
 
-/** Reverse-chron chapter feed (v1). */
-export async function listPosts(chapterId: string): Promise<PostOut[]> {
-  return request<PostOut[]>(`/chapters/${chapterId}/posts`);
+export interface ListFeedOptions {
+  limit?: number;
+  /** created_at cursor — posts older than this. */
+  before?: string;
+  before_id?: string;
+}
+
+/**
+ * Public campus FYP (audience="campus" only — org-private posts never appear
+ * here, enforced server-side): GET /campuses/{campus_id}/feed.
+ */
+export async function listCampusFeed(
+  campusId: string,
+  opts: ListFeedOptions = {},
+): Promise<FeedPostOut[]> {
+  return request<FeedPostOut[]>(`/campuses/${campusId}/feed`, {
+    query: { limit: opts.limit, before: opts.before, before_id: opts.before_id },
+  });
+}
+
+/** Reverse-chron chapter/org feed (any audience) — the org's own posts, FeedPostOut shape. */
+export async function listPosts(chapterId: string): Promise<FeedPostOut[]> {
+  return request<FeedPostOut[]>(`/chapters/${chapterId}/posts`);
 }
 
 export async function createPost(chapterId: string, body: PostCreate): Promise<PostOut> {

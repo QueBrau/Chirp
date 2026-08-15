@@ -21,15 +21,13 @@ import { Image, Pressable, View, type ViewStyle } from "react-native";
 
 import {
   createInvite,
-  listMembers,
   type ChapterInviteOut,
   type ChapterOut,
-  type MemberOut,
   type MembershipOut,
   type RoleName,
 } from "@/api/chapters";
 import { createEvent, listEventsWithRsvps, type EventOut, type EventRsvpOut, type EventWithRsvpsOut } from "@/api/events";
-import { likePost, listComments, listLikes, listPosts, unlikePost, type PostOut } from "@/api/feed";
+import { likePost, listPosts, unlikePost, type FeedPostOut } from "@/api/feed";
 import { useSession, withInviteCode } from "@/auth";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import {
@@ -170,10 +168,11 @@ function OrgSegmentedControl({
   );
 }
 
+/** Local optimistic overlay on top of the server's batched counts — the server
+ * owns like_count/liked_by_me, this only carries the un-committed tap. */
 interface OrgFeedItem {
-  post: PostOut;
+  post: FeedPostOut;
   likeCount: number;
-  commentCount: number;
   likedByMe: boolean;
 }
 
@@ -184,40 +183,26 @@ interface OrgFeedItem {
  * no client-side chapter/source filtering belongs here.
  */
 function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: string }) {
-  const { user } = useSession();
-  const myUserId = user?.id;
   const [items, setItems] = useState<OrgFeedItem[] | null>(null);
-  // Roster is the only way to resolve author_id -> display_name/avatar (no
-  // GET /users/{id}); a member who's left/lost membership since posting just
-  // falls back to "Unknown" below rather than blocking the feed.
-  const [members, setMembers] = useState<MemberOut[] | null>(null);
 
   useEffect(() => {
-    // Fail soft: matches the roster-load pattern in chapter/members.tsx.
-    listMembers(chapterId)
-      .then(setMembers)
-      .catch(() => setMembers([]));
-  }, [chapterId]);
-
-  useEffect(() => {
-    const load = async () => {
-      const posts = await listPosts(chapterId);
-      const withCounts = await Promise.all(
-        posts.map(async (post) => {
-          const [likes, comments] = await Promise.all([listLikes(post.id), listComments(post.id)]);
-          return {
-            post,
-            likeCount: likes.length,
-            commentCount: comments.length,
-            likedByMe: myUserId !== undefined && likes.some((like) => like.user_id === myUserId),
-          };
-        }),
-      );
-      setItems(withCounts);
-    };
+    // ONE round trip: GET /chapters/{id}/posts returns FeedPostOut, which already
+    // carries the author's display identity and batched like/comment counts (c43).
+    // The old shape here fetched listLikes + listComments PER POST (2N queries)
+    // and resolved authors through a separate roster call.
     // Fail soft: a failed fetch must not crash the feed segment.
-    load().catch(() => setItems([]));
-  }, [chapterId, myUserId]);
+    listPosts(chapterId)
+      .then((posts) =>
+        setItems(
+          posts.map((post) => ({
+            post,
+            likeCount: post.like_count,
+            likedByMe: post.liked_by_me,
+          })),
+        ),
+      )
+      .catch(() => setItems([]));
+  }, [chapterId]);
 
   const toggleLike = async (item: OrgFeedItem) => {
     if (item.likedByMe) {
@@ -249,23 +234,19 @@ function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: st
 
   return (
     <View style={{ gap: spacing.md }}>
-      {(items ?? []).map((item) => {
-        const author = (members ?? []).find((member) => member.user_id === item.post.author_id);
-        const authorName = author !== undefined && author.display_name.length > 0 ? author.display_name : "Unknown";
-        return (
-          <MediaPostCard
-            key={item.post.id}
-            post={item.post}
-            authorName={authorName}
-            authorPhotoUrl={author?.avatar_url}
-            timeLabel={age(item.post.created_at)}
-            likeCount={item.likeCount}
-            commentCount={item.commentCount}
-            likedByMe={item.likedByMe}
-            onToggleLike={() => void toggleLike(item)}
-          />
-        );
-      })}
+      {(items ?? []).map((item) => (
+        <MediaPostCard
+          key={item.post.id}
+          post={item.post}
+          authorName={item.post.display_name}
+          authorPhotoUrl={item.post.avatar_url}
+          timeLabel={age(item.post.created_at)}
+          likeCount={item.likeCount}
+          commentCount={item.post.comment_count}
+          likedByMe={item.likedByMe}
+          onToggleLike={() => void toggleLike(item)}
+        />
+      ))}
     </View>
   );
 }
