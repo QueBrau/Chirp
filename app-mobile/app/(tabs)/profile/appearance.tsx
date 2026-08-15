@@ -7,10 +7,12 @@
  */
 
 import { Feather } from "@expo/vector-icons";
+import { useEffect, useState } from "react";
 import { Pressable, useColorScheme, View } from "react-native";
 
+import { getCampus, type CampusOut } from "@/api/auth";
+import { useSession } from "@/auth";
 import { AppText, Button, Card, GradientAvatar, ListRow, Screen } from "@/components";
-import { MOCK_CAMPUS, MOCK_CURRENT_USER } from "@/mocks/data";
 import {
   radii,
   resolvePalette,
@@ -28,10 +30,19 @@ const ACCENT_OPTIONS: readonly { source: AccentSource; label: string }[] = [
   { source: "chirp", label: "Chirp violet" },
 ];
 
-const BACKGROUND_OPTIONS: readonly { style: BackgroundStyle; label: string; caption: string }[] = [
-  { style: "system", label: "System", caption: "Default light/dark, neutral canvas" },
-  { style: "campusTint", label: "Campus tint", caption: `A subtle wash of ${MOCK_CAMPUS.name}'s color` },
-];
+/** Falls back to a campus-agnostic caption while the real campus name is loading/absent. */
+function backgroundOptions(
+  campus: CampusOut | null,
+): readonly { style: BackgroundStyle; label: string; caption: string }[] {
+  return [
+    { style: "system", label: "System", caption: "Default light/dark, neutral canvas" },
+    {
+      style: "campusTint",
+      label: "Campus tint",
+      caption: campus !== null ? `A subtle wash of ${campus.name}'s color` : "A subtle wash of your campus's color",
+    },
+  ];
+}
 
 /** Tappable color circle for the Accent color section — Feather check on the active one. */
 function AccentSwatch({
@@ -147,11 +158,26 @@ export default function AppearanceScreen() {
   const scheme = useColorScheme();
   const mode: "light" | "dark" = scheme === "dark" ? "dark" : "light";
   const { prefs, setPrefs, campusColors } = useAppearance();
+  // Screen is nested under (tabs), which only lets a resolved session through
+  // (see app/(tabs)/_layout.tsx) — same real-identity source as profile/index.tsx.
+  const { user } = useSession();
+  const [campus, setCampus] = useState<CampusOut | null>(null);
+
+  useEffect(() => {
+    if (user?.campus_id == null) {
+      setCampus(null);
+      return;
+    }
+    getCampus(user.campus_id)
+      .then(setCampus)
+      .catch(() => setCampus(null));
+  }, [user?.campus_id]);
 
   const selectAccent = (source: AccentSource) =>
     setPrefs((current) => ({ ...current, accentSource: source }));
   const selectBackground = (style: BackgroundStyle) =>
     setPrefs((current) => ({ ...current, backgroundStyle: style }));
+  const backgroundOptionsList = backgroundOptions(campus);
 
   return (
     <Screen title="Appearance" subtitle="Your campus colors, your call">
@@ -162,15 +188,15 @@ export default function AppearanceScreen() {
         </AppText>
         <View style={{ gap: spacing.md }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
-            <GradientAvatar name={MOCK_CURRENT_USER.display_name} size={40} />
+            <GradientAvatar name={user?.display_name ?? ""} size={40} photoUrl={user?.avatar_url ?? null} />
             <View style={{ gap: spacing.xs }}>
-              <AppText variant="headline">{MOCK_CURRENT_USER.display_name}</AppText>
+              <AppText variant="headline">{user?.display_name ?? ""}</AppText>
               <AppText variant="caption" tone="tertiary">
                 just now
               </AppText>
             </View>
           </View>
-          <AppText>New colors, who dis? Go {MOCK_CAMPUS.name.split(" ")[0]}.</AppText>
+          <AppText>New colors, who dis? Go {campus !== null ? campus.name.split(" ")[0] : "team"}.</AppText>
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
             <PreviewActionChip name="heart" active />
             <PreviewActionChip name="message-circle" active={false} />
@@ -205,7 +231,7 @@ export default function AppearanceScreen() {
           Background
         </AppText>
         <View>
-          {BACKGROUND_OPTIONS.map((option, index) => {
+          {backgroundOptionsList.map((option, index) => {
             const swatch = resolvePalette(
               mode,
               { ...prefs, backgroundStyle: option.style },
@@ -219,7 +245,7 @@ export default function AppearanceScreen() {
                 caption={option.caption}
                 active={prefs.backgroundStyle === option.style}
                 onPress={() => selectBackground(option.style)}
-                divider={index < BACKGROUND_OPTIONS.length - 1}
+                divider={index < backgroundOptionsList.length - 1}
               />
             );
           })}

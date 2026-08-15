@@ -27,8 +27,8 @@ import {
   type RoleName,
 } from "@/api/chapters";
 import { createEvent, listEventsWithRsvps, type EventOut, type EventRsvpOut, type EventWithRsvpsOut } from "@/api/events";
-import { likePost, listComments, listLikes, unlikePost, type PostOut } from "@/api/feed";
-import { withInviteCode } from "@/auth";
+import { likePost, listPosts, unlikePost, type FeedPostOut } from "@/api/feed";
+import { useSession, withInviteCode } from "@/auth";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import {
   AppText,
@@ -46,7 +46,9 @@ import {
   SectionHeader,
   type CreateEventInput,
 } from "@/components";
-import { MOCK_CAMPUS, MOCK_CURRENT_USER, MOCK_ORG_POSTS, MOCK_POSTS, mockUserById } from "@/mocks/data";
+// MOCK_CAMPUS/mockUserById remain: campus name display and the Events segment's
+// host/RSVP lookups are outside this task's scope (cosmetic/pre-existing, per c44 split).
+import { MOCK_CAMPUS, mockUserById } from "@/mocks/data";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -166,47 +168,40 @@ function OrgSegmentedControl({
   );
 }
 
+/** Local optimistic overlay on top of the server's batched counts — the server
+ * owns like_count/liked_by_me, this only carries the un-committed tap. */
 interface OrgFeedItem {
-  post: PostOut;
+  post: FeedPostOut;
   likeCount: number;
-  commentCount: number;
   likedByMe: boolean;
 }
 
 /**
- * Feed segment (§8.7): chapter-only posts, never on the FYP. Reads BOTH the
- * legacy `source: "org"` rows in MOCK_POSTS and the dedicated MOCK_ORG_POSTS
- * (data.ts keeps them separate; this is the one place that reads both), both
- * filtered to the real chapterId so a different org never sees Sigma Chi's
- * mock posts.
+ * Feed segment (§8.7): chapter-only posts, never on the FYP. GET
+ * /chapters/{id}/posts already scopes to this chapter, newest first, and
+ * excludes soft-deleted rows server-side (backend/app/routers/feed.py), so
+ * no client-side chapter/source filtering belongs here.
  */
 function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: string }) {
   const [items, setItems] = useState<OrgFeedItem[] | null>(null);
 
   useEffect(() => {
-    const load = async () => {
-      const posts = [
-        ...MOCK_POSTS.filter(
-          (post) => post.chapter_id === chapterId && post.audience === "org" && post.deleted_at === null,
-        ),
-        ...MOCK_ORG_POSTS.filter((post) => post.chapter_id === chapterId),
-      ].sort((a, b) => b.created_at.localeCompare(a.created_at));
-
-      const withCounts = await Promise.all(
-        posts.map(async (post) => {
-          const [likes, comments] = await Promise.all([listLikes(post.id), listComments(post.id)]);
-          return {
+    // ONE round trip: GET /chapters/{id}/posts returns FeedPostOut, which already
+    // carries the author's display identity and batched like/comment counts (c43).
+    // The old shape here fetched listLikes + listComments PER POST (2N queries)
+    // and resolved authors through a separate roster call.
+    // Fail soft: a failed fetch must not crash the feed segment.
+    listPosts(chapterId)
+      .then((posts) =>
+        setItems(
+          posts.map((post) => ({
             post,
-            likeCount: likes.length,
-            commentCount: comments.length,
-            likedByMe: likes.some((like) => like.user_id === MOCK_CURRENT_USER.id),
-          };
-        }),
-      );
-      setItems(withCounts);
-    };
-    // Fail soft: mock ids 422 against the live API until wiring lands.
-    load().catch(() => setItems([]));
+            likeCount: post.like_count,
+            likedByMe: post.liked_by_me,
+          })),
+        ),
+      )
+      .catch(() => setItems([]));
   }, [chapterId]);
 
   const toggleLike = async (item: OrgFeedItem) => {
@@ -239,22 +234,19 @@ function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: st
 
   return (
     <View style={{ gap: spacing.md }}>
-      {(items ?? []).map((item) => {
-        const author = mockUserById(item.post.author_id);
-        return (
-          <MediaPostCard
-            key={item.post.id}
-            post={item.post}
-            authorName={author?.display_name ?? "Unknown"}
-            authorPhotoUrl={author?.avatar_url}
-            timeLabel={age(item.post.created_at)}
-            likeCount={item.likeCount}
-            commentCount={item.commentCount}
-            likedByMe={item.likedByMe}
-            onToggleLike={() => void toggleLike(item)}
-          />
-        );
-      })}
+      {(items ?? []).map((item) => (
+        <MediaPostCard
+          key={item.post.id}
+          post={item.post}
+          authorName={item.post.display_name}
+          authorPhotoUrl={item.post.avatar_url}
+          timeLabel={age(item.post.created_at)}
+          likeCount={item.likeCount}
+          commentCount={item.post.comment_count}
+          likedByMe={item.likedByMe}
+          onToggleLike={() => void toggleLike(item)}
+        />
+      ))}
     </View>
   );
 }
