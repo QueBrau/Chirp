@@ -29,12 +29,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Native build output (dev builds are generated, not committed)
-app-mobile/ios/build/
-app-mobile/ios/Pods/
-app-mobile/android/build/
-app-mobile/android/app/build/
-app-mobile/android/.gradle/
+# Native projects are GENERATED, not committed (Expo CNG — `expo prebuild`
+# recreates ios/ and android/ from app.json + config plugins). These previously
+# only ignored the build OUTPUT inside them, so anyone running prebuild locally
+# got a few thousand untracked files staring at them.
+app-mobile/ios/
+app-mobile/android/
 
 # OS
 .DS_Store
