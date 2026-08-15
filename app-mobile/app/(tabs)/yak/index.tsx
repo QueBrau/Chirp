@@ -23,9 +23,8 @@ import { Alert, Modal, Pressable, TextInput, View } from "react-native";
 import { ApiError } from "@/api/client";
 import { createReport, blockYakAuthor } from "@/api/moderation";
 import { createYak, listYaks, voteYak, type YakFeedOut, type YakVoteValue } from "@/api/yaks";
-import { useSession } from "@/auth";
+import { useCampus, useSession } from "@/auth";
 import { AppText, EmptyState, Screen, VotePill } from "@/components";
-import { MOCK_CAMPUS } from "@/mocks/data";
 import {
   campusNightWash,
   elevation,
@@ -76,6 +75,7 @@ export default function YakScreen() {
   const { user } = useSession();
   const campusId = user?.campus_id ?? null;
 
+  const campus = useCampus();
   const [yaks, setYaks] = useState<YakFeedOut[] | null>(null);
   const [myVotes, setMyVotes] = useState<Record<string, YakVoteValue>>({});
   const [composerText, setComposerText] = useState("");
@@ -97,6 +97,7 @@ export default function YakScreen() {
     if (campusId === null) return; // alumni/off-campus: nothing to load
     void loadYaks(campusId).catch((error: unknown) => showApiError(error, "Couldn't load the board"));
   }, [campusId, loadYaks]);
+
 
   const vote = async (yak: YakFeedOut, value: YakVoteValue) => {
     const previous: number = myVotes[yak.id] ?? 0;
@@ -205,11 +206,16 @@ export default function YakScreen() {
           regardless of system scheme, so header text is pinned to onAccent (white)
           rather than the system-following ink/inkSecondary tones. */}
       <View style={{ marginBottom: spacing.xl, gap: spacing.xs }}>
-        <AppText variant="micro" tone="onAccent">
-          {/* TODO: no campus-detail endpoint exists yet; only campus_id is available
-              from /auth/me. The name is cosmetic; campusId (below) drives every API call. */}
-          {MOCK_CAMPUS.name.toUpperCase()} · SPARTANS
-        </AppText>
+        {/* Real campus name via GET /campuses/{id} (c46). Rendered only once it
+            resolves — an absent eyebrow beats a wrong one. The old value was
+            MOCK_CAMPUS plus a hardcoded "· SPARTANS", which is UNCG's mascot:
+            wrong for every other campus, and CampusOut has no mascot field to
+            replace it with. */}
+        {campus !== null ? (
+          <AppText variant="micro" tone="onAccent">
+            {campus.name.toUpperCase()}
+          </AppText>
+        ) : null}
         <AppText variant="display" tone="onAccent">
           Yak
         </AppText>

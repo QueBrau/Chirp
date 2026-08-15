@@ -30,7 +30,7 @@ import {
 } from "@/api/chapters";
 import { createEvent, listEventsWithRsvps, type EventOut, type EventRsvpOut, type EventWithRsvpsOut } from "@/api/events";
 import { likePost, listPosts, unlikePost, type FeedPostOut } from "@/api/feed";
-import { useSession, withInviteCode } from "@/auth";
+import { inviteShareUrl, useCampus, useSession } from "@/auth";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import {
   AppText,
@@ -48,9 +48,6 @@ import {
   SectionHeader,
   type CreateEventInput,
 } from "@/components";
-// MOCK_CAMPUS is cosmetic only (campus label); there is no campus-name source on
-// this screen's data. All identity now comes from the roster via listMembers().
-import { MOCK_CAMPUS } from "@/mocks/data";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -496,8 +493,11 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
             <AppText variant="stat" selectable>
               {invite.code}
             </AppText>
+            {/* Shared as https, not chirp://: a custom scheme arrives as dead
+                text in Messages and most DM apps, which is exactly where invites
+                get sent. The web page bounces it back into the app. */}
             <AppText variant="caption" tone="tertiary" selectable>
-              {withInviteCode("chirp://join-chapter", invite.code)}
+              {inviteShareUrl(invite.code)}
             </AppText>
           </View>
         ) : null}
@@ -577,6 +577,9 @@ function MemberOrgHub({
   segment: OrgSegment;
   onSegmentChange: (segment: OrgSegment) => void;
 }) {
+  // Called before the early return below: hooks cannot run conditionally.
+  const campus = useCampus();
+
   if (chapter === null) {
     return <EmptyState title="Couldn't load your org" message="Check your connection and try again." />;
   }
@@ -594,7 +597,10 @@ function MemberOrgHub({
             {chapter.org_name}
           </AppText>
           <AppText variant="caption" tone="onAccent">
-            {chapter.chapter_name !== null ? `${chapter.chapter_name} · ${MOCK_CAMPUS.name}` : MOCK_CAMPUS.name}
+            {/* Real campus name (GET /campuses/{id}, c46). Until it resolves the
+                chapter name stands alone rather than being paired with a wrong
+                campus — this used to be a hardcoded MOCK_CAMPUS. */}
+            {[chapter.chapter_name, campus?.name].filter(Boolean).join(" · ")}
           </AppText>
           <Chip label={ROLE_LABELS[role]} variant="accent" style={{ marginTop: spacing.xs }} />
         </View>
@@ -652,6 +658,7 @@ function FindYourOrg() {
 export default function OrgsScreen() {
   const { campusColors } = useAppearance();
   const { sessionStatus, membership, chapter, chapterLoading } = useOwnChapter();
+  const campus = useCampus();
   const [segment, setSegment] = useState<OrgSegment>("feed");
 
   // Session-status gating (PR #6 review): a real member must never flash the
@@ -663,14 +670,20 @@ export default function OrgsScreen() {
     <View style={{ flex: 1 }}>
       <Screen
         title="Orgs"
-        eyebrow={`${MOCK_CAMPUS.name.toUpperCase()} · SPARTANS`}
+        // Real campus name (c46), absent until it resolves — an absent eyebrow
+        // beats a wrong one. Was MOCK_CAMPUS plus a hardcoded "· SPARTANS",
+        // which is UNCG's mascot and wrong for every other campus; CampusOut has
+        // no mascot field to replace it with.
+        eyebrow={campus ? campus.name.toUpperCase() : undefined}
         accentBarColor={campusColors.secondary}
         subtitle={
           loading
             ? undefined
             : membership !== null
               ? "Your chapter, your tools."
-              : `Find your org at ${MOCK_CAMPUS.name}`
+              : campus
+                ? `Find your org at ${campus.name}`
+                : "Find your org"
         }
       >
         {loading ? (
