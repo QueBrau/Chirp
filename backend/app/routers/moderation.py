@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -191,17 +192,17 @@ async def block_yak_author(
     if yak.author_id == user.id:
         raise forbidden("cannot_block_self")
 
-    existing = await session.get(models.UserBlock, (user.id, yak.author_id))
-    if existing is not None:
-        return None
-    block = models.UserBlock(blocker_id=user.id, blocked_id=yak.author_id)
-    session.add(block)
-    try:
-        await session.commit()
-    except IntegrityError:
-        # Concurrent duplicate insert race on the (blocker_id, blocked_id) PK — same
-        # idempotent-success reasoning as above, not a 409.
-        await session.rollback()
+    # Unconditional idempotent upsert, deliberately: the earlier read-then-maybe-insert
+    # returned the same 204 either way, but an already-blocked author short-circuited on
+    # the read while a new block paid for an INSERT plus a commit. That latency gap is
+    # itself the one-bit oracle the 204 was chosen to close — timing the response still
+    # answered "do these two yaks share an author". Every call now does the same work.
+    await session.execute(
+        pg_insert(models.UserBlock)
+        .values(blocker_id=user.id, blocked_id=yak.author_id)
+        .on_conflict_do_nothing(index_elements=["blocker_id", "blocked_id"])
+    )
+    await session.commit()
     return None
 
 

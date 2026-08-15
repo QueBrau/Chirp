@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 
 from httpx import AsyncClient
+from sqlalchemy import text
 
 from tests.conftest import ApiUser, MakeCampus
 
@@ -280,3 +281,44 @@ async def test_yak_endpoints_never_expose_author_id(
     blocked = await client.post(f"/moderation/blocks/by-yak/{yak_id}", headers=voter.headers)
     assert blocked.status_code == 204, blocked.text
     assert blocked.content == b""
+
+
+async def test_block_by_yak_is_idempotent_and_does_the_same_work_each_time(
+    client: AsyncClient, make_campus: MakeCampus
+) -> None:
+    """Blocking the same author twice must be indistinguishable from blocking once.
+
+    Both calls return 204 and exactly one UserBlock row exists. The endpoint is an
+    unconditional upsert rather than read-then-maybe-insert so the two outcomes are
+    also latency-equivalent — an attacker timing the response must not be able to
+    tell whether a block already existed, which would reveal that two yaks share an
+    author (SPEC 8.3).
+    """
+    campus_id = await make_campus()
+    author = await _make_campus_user(client, campus_id, "Yak Author")
+    blocker = await _make_campus_user(client, campus_id, "Yak Blocker")
+
+    created = await client.post(
+        f"/campuses/{campus_id}/yaks", json={"body": "same author, twice"}, headers=author.headers
+    )
+    assert created.status_code == 201, created.text
+    yak_id = created.json()["id"]
+
+    first = await client.post(
+        f"/moderation/blocks/by-yak/{yak_id}", headers=blocker.headers
+    )
+    second = await client.post(
+        f"/moderation/blocks/by-yak/{yak_id}", headers=blocker.headers
+    )
+
+    assert first.status_code == 204, first.text
+    assert second.status_code == 204, second.text
+
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        count = await session.execute(
+            text("SELECT count(*) FROM user_blocks WHERE blocker_id = :b"),
+            {"b": blocker.id},
+        )
+        assert int(count.scalar_one()) == 1

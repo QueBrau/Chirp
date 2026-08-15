@@ -31,12 +31,15 @@ function dueDate(isoDay: string): string {
 export default function DuesScreen() {
   const [membership, setMembership] = useState<MyMembershipOut | null | undefined>(undefined);
   const [cycles, setCycles] = useState<DuesCycleOut[]>([]);
+  const [cyclesFailed, setCyclesFailed] = useState(false);
   const [paidCycleIds, setPaidCycleIds] = useState<Set<string>>(new Set());
   const [acceptsPayments, setAcceptsPayments] = useState(false);
 
   const load = useCallback(async (chapterId: string, userId: string) => {
     const [duesCycles, ledger, status] = await Promise.all([
-      listDuesCycles(chapterId),
+      // null, not [] — a failed load must stay distinguishable from a genuinely
+      // empty cycle list, or a member who owes money is told "Nothing due".
+      listDuesCycles(chapterId).catch(() => null),
       listLedger(chapterId).catch(() => []),
       getChapterPaymentsStatus(chapterId).catch(() => ({
         onboarded: false,
@@ -44,7 +47,8 @@ export default function DuesScreen() {
         details_submitted: false,
       })),
     ]);
-    setCycles(duesCycles);
+    setCyclesFailed(duesCycles === null);
+    setCycles(duesCycles ?? []);
     setAcceptsPayments(status.onboarded);
     setPaidCycleIds(
       new Set(
@@ -95,7 +99,12 @@ export default function DuesScreen() {
   return (
     <Screen title="Dues" subtitle="Pay your chapter, not the app">
       <View style={{ gap: spacing.xl }}>
-        {cycles.length === 0 ? (
+        {cyclesFailed ? (
+          <EmptyState
+            title="Couldn't load your dues"
+            message="Check your connection and try again — this isn't a statement that you owe nothing."
+          />
+        ) : cycles.length === 0 ? (
           <EmptyState
             title="Nothing due"
             message="Your treasurer hasn't opened a dues cycle yet."
