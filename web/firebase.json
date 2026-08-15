@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "public": "public",
+    "public": "dist",
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -10,16 +10,8 @@
     "trailingSlash": false,
     "rewrites": [
       {
-        "source": "/stripe/connect/return",
-        "destination": "/stripe/connect/return/index.html"
-      },
-      {
-        "source": "/stripe/connect/refresh",
-        "destination": "/stripe/connect/refresh/index.html"
-      },
-      {
-        "source": "/join-chapter",
-        "destination": "/join-chapter/index.html"
+        "source": "**",
+        "destination": "/index.html"
       }
     ],
     "headers": [
@@ -36,9 +28,15 @@
         ]
       },
       {
-        "source": "/css/**",
+        "source": "/assets/**",
         "headers": [
-          { "key": "Cache-Control", "value": "public, max-age=3600" }
+          { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+        ]
+      },
+      {
+        "source": "/index.html",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache" }
         ]
       },
       {

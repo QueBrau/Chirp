@@ -404,6 +404,12 @@ a:hover { text-decoration: underline; }
 .page-head .display { max-width: 20ch; }
 .page-head .lede { margin-top: var(--space-5); }
 
+/* The header zone already ends on 32px of padding; a section's own 64px on top
+   of that leaves ~96px of dead space between a page title and its first line of
+   content. The gap between zones should read as deliberate, not as a gap. */
+.page-head + .section,
+.page-head + .section--tight { padding-block-start: 0; }
+
 /* ----------------------------------------------------------------- prose --- */
 /* Legal pages. Long-form reading, so measure is capped and rhythm is looser. */
 

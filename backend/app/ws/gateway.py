@@ -14,7 +14,16 @@ from app.db import get_session
 from app.middleware.auth import get_user_by_uid
 from app.ws.pubsub import get_redis
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["ws"])
+
+# Application close codes live in 4000-4999. 4401 mirrors HTTP 401 and already
+# means "your credentials did not resolve to a user"; this one mirrors 503 and
+# means "you are authenticated, but the realtime backend is unavailable". The
+# split matters to the client: 4401 should send the user to sign-in, while this
+# should back off and retry, since nothing about the session is wrong.
+WS_REALTIME_UNAVAILABLE = 4503
 
 _TOKEN_QS_RE = re.compile(r"([?&]token=)[^&\s]+")
 
@@ -102,7 +111,28 @@ async def websocket_gateway(
     await websocket.accept()
     channel = f"user:{user.id}"
     pubsub = get_redis().pubsub()
-    await pubsub.subscribe(channel)
+
+    # Subscribe is the first thing here that touches the network, and it runs
+    # AFTER accept(), so an unreachable Redis used to surface as a socket that
+    # opened and then died on an unhandled ConnectionError — indistinguishable
+    # from a flaky client, with no server-side signal that the cause was missing
+    # infrastructure (board c62). Redis was in fact never provisioned in prod
+    # (c61), so this was every connection, not an edge case.
+    #
+    # Closing with a distinct application code lets the client tell "the realtime
+    # backend is down, back off" apart from "your token is bad" (4401) and from
+    # an ordinary network drop, which it would otherwise reconnect against in a
+    # tight loop.
+    try:
+        await pubsub.subscribe(channel)
+    except Exception:
+        # user_id only, never ciphertext or token material (SPEC 8.1), and the
+        # same warning shape messages.py already uses on the publish side.
+        logger.error("ws subscribe failed, realtime unavailable user_id=%s", user.id)
+        with contextlib.suppress(Exception):
+            await pubsub.aclose()
+        await websocket.close(code=WS_REALTIME_UNAVAILABLE)
+        return
 
     async def _forward() -> None:
         async for item in pubsub.listen():
@@ -120,5 +150,10 @@ async def websocket_gateway(
         forward_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await forward_task
-        await pubsub.unsubscribe(channel)
-        await pubsub.aclose()
+        # Teardown is best-effort: if Redis died mid-connection these raise, and
+        # an exception in `finally` would mask whatever actually ended the
+        # connection.
+        with contextlib.suppress(Exception):
+            await pubsub.unsubscribe(channel)
+        with contextlib.suppress(Exception):
+            await pubsub.aclose()
