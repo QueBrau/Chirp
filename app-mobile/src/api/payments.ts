@@ -4,7 +4,7 @@
  * params the Stripe SDK needs; the PaymentSheet flow lives in src/payments/dues.tsx.
  */
 
-import { mocked, request, USE_MOCKS } from "./client";
+import { request } from "./client";
 
 /**
  * Which rail the member is paying on. Chosen BEFORE the intent exists because
@@ -46,12 +46,6 @@ export function platformFeeCents(amountCents: number, rail: PaymentRail): number
 }
 
 export async function createOnboardingLink(chapterId: string): Promise<OnboardingLinkOut> {
-  if (USE_MOCKS) {
-    return mocked({
-      url: "https://connect.stripe.com/setup/mock-onboarding",
-      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
-    });
-  }
   return request<OnboardingLinkOut>("/payments/connect/onboarding-link", {
     method: "POST",
     body: { chapter_id: chapterId },
@@ -61,9 +55,6 @@ export async function createOnboardingLink(chapterId: string): Promise<Onboardin
 export async function getChapterPaymentsStatus(
   chapterId: string,
 ): Promise<ChapterPaymentsStatus> {
-  if (USE_MOCKS) {
-    return mocked({ onboarded: false, charges_enabled: false, details_submitted: false });
-  }
   return request<ChapterPaymentsStatus>(`/chapters/${chapterId}/payments/status`);
 }
 
@@ -72,18 +63,6 @@ export async function createDuesPaymentIntent(
   rail: PaymentRail,
   amountCents = 0,
 ): Promise<DuesIntentOut> {
-  if (USE_MOCKS) {
-    return mocked({
-      payment_intent_client_secret: "pi_mock_secret_not_a_real_stripe_secret",
-      customer_session_client_secret: "cuss_mock_secret",
-      customer_id: "cus_mock",
-      publishable_key: "pk_test_mock",
-      stripe_account_id: "acct_mock",
-      amount_cents: amountCents,
-      application_fee_cents: platformFeeCents(amountCents, rail),
-      rail,
-    });
-  }
   return request<DuesIntentOut>(`/payments/dues/${cycleId}/intent`, {
     method: "POST",
     body: { rail },

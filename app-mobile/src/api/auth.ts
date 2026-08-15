@@ -1,7 +1,6 @@
 /** Auth API: account bootstrap (POST /auth/bootstrap) + identity types mirroring backend schemas. */
 
-import { mocked, request, USE_MOCKS } from "./client";
-import { MOCK_CURRENT_MEMBERSHIP, MOCK_CURRENT_USER } from "../mocks/data";
+import { request } from "./client";
 import type { MembershipOut } from "./chapters";
 
 export type AccountType = "greek" | "non_greek" | "alumni";
@@ -35,8 +34,13 @@ export interface CampusOut {
 
 /** Create the users row for an authenticated-but-unregistered Firebase identity. */
 export async function bootstrap(body: UserCreate): Promise<UserOut> {
-  if (USE_MOCKS) return mocked(MOCK_CURRENT_USER);
   return request<UserOut>("/auth/bootstrap", { method: "POST", body });
+}
+
+/** Resolve a campus id to its real name/slug (GET /campuses/{id}, c46). This is how
+ * screens show the caller's actual campus instead of a hardcoded mock one. */
+export async function getCampus(campusId: string): Promise<CampusOut> {
+  return request<CampusOut>(`/campuses/${campusId}`);
 }
 
 /**
@@ -46,6 +50,5 @@ export async function bootstrap(body: UserCreate): Promise<UserOut> {
  * an error.
  */
 export async function fetchMe(): Promise<{ user: UserOut; memberships: MembershipOut[] }> {
-  if (USE_MOCKS) return mocked({ user: MOCK_CURRENT_USER, memberships: [MOCK_CURRENT_MEMBERSHIP] });
   return request<{ user: UserOut; memberships: MembershipOut[] }>("/auth/me");
 }

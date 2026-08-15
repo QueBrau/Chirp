@@ -12,9 +12,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Image, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { listEvents, listRsvps, setRsvp, type EventOut, type EventRsvpOut, type RsvpStatus } from "@/api/events";
+import { listMembers, type MemberOut } from "@/api/chapters";
+import { listEventsWithRsvps, listRsvps, setRsvp, type EventOut, type EventRsvpOut, type RsvpStatus } from "@/api/events";
+import { useSession } from "@/auth";
+import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { AppText, Button, Card, EmptyState, GradientAvatar, ListRow, SectionHeader } from "@/components";
-import { MOCK_CHAPTER, MOCK_CURRENT_USER, mockUserById } from "@/mocks/data";
 import { light, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 const COVER_HEIGHT = 260;
@@ -31,26 +33,49 @@ const GUEST_GROUP_TITLES: Record<RsvpStatus, string> = {
   cant: "Can't go",
 };
 
+/** Resolve a user id to their roster row. There is no GET /users/{id} — the
+ * member list of the caller's own chapter is the only name/photo source, so a
+ * host or guest who has since left the roster falls back to "Unknown"/"Guest". */
+function findMember(members: MemberOut[], userId: string): MemberOut | undefined {
+  return members.find((member) => member.user_id === userId);
+}
+
 export default function EventDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const palette = useTheme();
+  const { user } = useSession();
+  const { sessionStatus, membership, chapterLoading } = useOwnChapter();
+  const chapterId = membership?.chapter_id ?? null;
 
   const [event, setEvent] = useState<EventOut | null | undefined>(undefined);
   const [rsvps, setRsvps] = useState<EventRsvpOut[]>([]);
+  const [members, setMembers] = useState<MemberOut[]>([]);
 
   const load = useCallback(async () => {
-    const events = await listEvents(MOCK_CHAPTER.id);
-    const found = events.find((candidate) => candidate.id === id) ?? null;
-    setEvent(found);
-    if (found) setRsvps(await listRsvps(found.id));
-  }, [id]);
+    if (chapterId === null) {
+      setEvent(null);
+      return;
+    }
+    // One round trip for events + RSVPs (c43); roster fetched alongside it to
+    // resolve host/guest display names (no GET /users/{id} exists).
+    const [rows, roster] = await Promise.all([listEventsWithRsvps(chapterId), listMembers(chapterId)]);
+    setMembers(roster);
+    const found = rows.find((row) => row.event.id === id) ?? null;
+    setEvent(found ? found.event : null);
+    setRsvps(found ? found.rsvps : []);
+  }, [chapterId, id]);
 
   useEffect(() => {
-    // Fail soft: mock ids 422 against the live API until wiring lands.
+    // Session-status gating (matches members.tsx): don't fetch — and don't
+    // fall through to "Event not found" — while the session/chapter are
+    // still resolving.
+    if (sessionStatus === "loading" || (membership !== null && chapterLoading)) return;
+    // Fail soft: an errored fetch never leaves the screen hanging — it falls
+    // through to "Event not found" instead.
     load().catch(() => setEvent(null));
-  }, [load]);
+  }, [load, sessionStatus, membership, chapterLoading]);
 
   const handleRsvp = async (status: RsvpStatus) => {
     if (!event) return;
@@ -70,8 +95,8 @@ export default function EventDetailScreen() {
     );
   }
 
-  const host = mockUserById(event.host_id);
-  const myStatus = rsvps.find((rsvp) => rsvp.user_id === MOCK_CURRENT_USER.id)?.status ?? null;
+  const host = findMember(members, event.host_id);
+  const myStatus = user ? rsvps.find((rsvp) => rsvp.user_id === user.id)?.status ?? null : null;
 
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg }}>
@@ -189,7 +214,7 @@ export default function EventDetailScreen() {
                   />
                   <Card>
                     {guests.map((rsvp, index) => {
-                      const guest = mockUserById(rsvp.user_id);
+                      const guest = findMember(members, rsvp.user_id);
                       return (
                         <ListRow
                           key={rsvp.user_id}
