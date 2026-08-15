@@ -448,10 +448,10 @@
     },
     {
       "id": "c50",
-      "col": "backlog",
+      "col": "done",
       "owner": "",
       "tag": "m5",
-      "title": "[shared] PRODUCT DECISION: 'For You' and 'Campus' pills on Home currently show IDENTICAL content. Per the Aug 14 decision For You is a ranking over campus posts rather than a stored value, and no ranking exists \u2014 both pills read the same reverse-chron feed. Shipped honestly in PR #9 rather than inventing an algorithm. Decide: build ranking, drop a pill, or relabel. This is the first screen every signed-in user sees."
+      "title": "[shared] REVIEW DEBT \u2014 REVIEW RUN Aug 15 (42d8e35..HEAD = PRs #2/#3/#7/#8, 66 files / ~5.3k added lines, none previously reviewed). 5 lenses (money, authz, anonymity, data-integrity, mobile), every finding double-refuted before reporting: 6 raised, 6 SURVIVED, 0 refuted. Filed as c51-c55. Authz lens found NOTHING \u2014 org/campus scoping held up across every new route, which is the reassuring half of this. SECURITY-REVIEW.md is still dated Aug 13 and should be refreshed once c51 lands."
     },
     {
       "id": "c51",
@@ -462,10 +462,38 @@
     },
     {
       "id": "c50",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "review",
-      "title": "[shared] REVIEW DEBT \u2014 nothing merged since PR #6 has been code-reviewed. Absorbed reviews exist for PR #4 (aa2c846), #5 (6cdcfe8) and #6 (2db5ac7); PRs #2, #3, #7 and #8 have NONE, and zero GitHub-side reviews exist on any PR (reviews were run locally and absorbed as fix commits). Worse, SECURITY-REVIEW.md was last touched Aug 13 (ef7d27f) \u2014 it PREDATES the entire Stripe money path (PR #3), CSV export, Yak/moderation (PR #2), and every endpoint added since. Running a multi-lens review of 42d8e35..HEAD now, adversarially verified, with a security lens on the money path."
+      "title": "[shared] REVIEW DEBT \u2014 REVIEW RUN Aug 15 (42d8e35..HEAD = PRs #2/#3/#7/#8, 66 files / ~5.3k added lines, none previously reviewed). 5 lenses (money, authz, anonymity, data-integrity, mobile), every finding double-refuted before reporting: 6 raised, 6 SURVIVED, 0 refuted. Filed as c51-c55. Authz lens found NOTHING \u2014 org/campus scoping held up across every new route, which is the reassuring half of this. SECURITY-REVIEW.md is still dated Aug 13 and should be refreshed once c51 lands."
+    },
+    {
+      "id": "c52",
+      "col": "next",
+      "owner": "J",
+      "tag": "vert:auth-orgs",
+      "title": "[A/Jose] HIGH \u2014 Dues screen shows 'Nothing due' to a member who genuinely owes money. dues.tsx:37: listDuesCycles() is the ONE call in load() without a fail-soft .catch() (listLedger and getChapterPaymentsStatus both have one), so a transient network blip rejects the whole chain and the screen renders its empty state. A member reasonably concludes they owe nothing. Fix: .catch(() => []) plus a visible error state, matching the pattern secretary.tsx already uses."
+    },
+    {
+      "id": "c53",
+      "col": "next",
+      "owner": "Q",
+      "tag": "security",
+      "title": "[B/Q] MEDIUM \u2014 block-by-yak TIMING side channel reopens the anonymity oracle the 204-vs-409 fix closed. moderation.py:194: the endpoint correctly always returns 204, but the two paths differ in latency \u2014 an already-blocked author short-circuits on a session.get, while a new block does an INSERT + commit. Measuring response time still answers 'do these two yaks share an author'. Fix: make both paths latency-equivalent with a single unconditional INSERT ... ON CONFLICT DO NOTHING so every call does the same work."
+    },
+    {
+      "id": "c54",
+      "col": "next",
+      "owner": "J",
+      "tag": "money",
+      "title": "[shared] MEDIUM \u2014 unhandled IntegrityError on the ChapterStripeCustomer race (payments.py:117). Two concurrent 'Pay' taps both miss the session.get, both insert, the loser gets a raw 500 AND leaves an orphaned Stripe Customer on the connected account. Every other race in this same PR is handled (webhook dedup, RSVP upsert, join); this one was missed. Fix: try/except IntegrityError -> rollback + re-fetch, or INSERT ... ON CONFLICT DO NOTHING RETURNING."
+    },
+    {
+      "id": "c55",
+      "col": "next",
+      "owner": "J",
+      "tag": "vert:auth-orgs",
+      "title": "[A/Jose] MEDIUM \u2014 Orgs tab Events segment still shows 'Hosted by Unknown' for every event. chapter/index.tsx:284 EventCard resolves host_id and rsvp.user_id through mockUserById() against real UUIDs, so it never matches. Missed by the c46 sweep because that pass fixed OrgFeedSegment and event/[id].tsx but not EventCard. Fix: fetch the roster once via listMembers(chapterId) and pass it into EventCard, same as the findMember helper already in event/[id].tsx."
     }
   ],
   "decisions": [
