@@ -26,7 +26,10 @@ DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://chirp:chirp@localhost:5432/chi
 
 @pytest.fixture(scope="session")
 def database_url() -> str:
-    """Test DB URL from TEST_DATABASE_URL (or the chirp_test default); skip if unreachable."""
+    """Test DB URL from TEST_DATABASE_URL (or the chirp_test default).
+
+    Unreachable DB skips locally and FAILS under CHIRP_REQUIRE_DB=1 (board card c103).
+    """
     url = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
 
     async def _probe() -> None:
@@ -39,7 +42,23 @@ def database_url() -> str:
 
     try:
         asyncio.run(_probe())
-    except Exception:
+    except Exception as exc:
+        # Skipping is the right call on a laptop with no DB — that is why this
+        # is here, and it stays. It is the WRONG call in CI, where nobody reads
+        # the skip count: a postgres service that fails to come up would let the
+        # entire DB-backed suite skip and still exit 0, so CI posts a green check
+        # having proved nothing. Measured on main before this landed, with the
+        # URL pointed at a dead port: 22 passed, 157 skipped, exit code 0. Every
+        # readiness claim we have made ("168 pass", "176 pass") is exactly the
+        # evidence that failure mode fabricates. Same family as c41 — the silent
+        # skip that reads as a pass.
+        if os.environ.get("CHIRP_REQUIRE_DB") == "1":
+            pytest.fail(
+                f"CHIRP_REQUIRE_DB=1 but the test database is unreachable at {url}: "
+                f"{type(exc).__name__}: {exc}. Refusing to skip the suite and "
+                f"report success — fix the database service, do not unset the flag.",
+                pytrace=False,
+            )
         pytest.skip("postgres not available — docker compose up db")
     return url
 
