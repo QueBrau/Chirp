@@ -49,9 +49,16 @@ campus problem" further down.
 4. **c87 → c86 → c88** — transactional email, then `.edu` verification, then the gate.
    Strictly in that order. Previously "hold until after alpha" — **c96 challenges that**.
 
-**PR #21 (`jose/c94-signin-navigation`) is open and holds c94, c93, c98, c95, c97, c99 and c100.**
-Until it merges, `DEPLOY.md` on main **still carries the `--set-env-vars` line that wipes
-`CORS_ORIGINS`** — do not redeploy off main's copy; deploy with no env flags at all.
+**PR #21 IS MERGED** (Jose authorized it directly) — c94, c93, c98, c95, c97, c99, c100, c66,
+c96 and c58's walk are all on main. `DEPLOY.md`'s `--set-env-vars` trap is fixed on main now.
+Follow-up fixes from review are on `jose/c94-review-fixes`, unmerged.
+
+> **DO NOT DEPLOY THE BACKEND RIGHT NOW WITHOUT READING c104.** main carries c96, which
+> grants `users.campus_id` on chapter join — and `feed.py:130` / `yaks.py:30` gate campus
+> content on *nothing but that column*. Jose's c88 ruling (same day, after c96 was written)
+> says campus content stays strictly `.edu`-gated. So deploying c96 alone ships a bypass of
+> a policy decided after the code. It is safe today **only because prod is un-migrated and
+> un-redeployed.** c88's gate lands first or in the same deploy.
 
 Done this session, all verified live against prod, not by reading code:
 **c94** (the sign-in bounce was a *race* — the app navigated on the Firebase credential
@@ -113,12 +120,18 @@ features work. Resolve in favour of main.
 - **Jose's zsh has `interactive_comments` off.** A `#` in a pasted command runs as a
   command, and a trailing comment gets fed to the program as an argument. Hand over
   commands with no inline comments.
+- **CI GREEN MEANS ALMOST NOTHING RIGHT NOW** (c103). The backend job goes green with 157
+  of 179 tests silently skipped — a fixture-level skip when it cannot reach Postgres, so the
+  job exits 0 having run almost nothing. And mobile CI is `tsc` only; there is no mobile test
+  harness at all, so it means "it compiles", never "it works". **Run the suite locally before
+  trusting a merge.**
 - **`/healthz` is unreachable** — Google's frontend answers it. The route is `/_health`.
 - **The firebase CLI is logged in as `madden25boss1@gmail.com`**, which cannot see
   `chirps-prod`. Website deploys go through the gcloud ADC; runbook in `web/README.md`.
 - **Card ids and migration numbers are shared resources.** Take the next one from
-  *origin's current* board, not the copy you started editing. Taken: 0011 (c76), 0013
-  (c71, on Q's branch). **0012 was claimed for c69 and released unused.** Next free: 0014.
+  *origin's current* board, not the copy you started editing. Taken: 0011 (c76), **0014 (c96, MERGED)**,
+  0013 (c71, on Q's branch), **0015 (c86, claimed by the email session)**. **0012 was claimed for
+  c69 and released unused.** Next free: **0016**.
 - **`q/campus-posts` carries TWO hazards, not one** (c101). Besides the heads problem
   below, it predates c85 and still sets `campus_id` from the request body — the merge will
   conflict on those lines and the branch's side looks like the fix. Take main's.
