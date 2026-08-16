@@ -39,14 +39,28 @@ spot: the QA accounts' codes are live and revoking them silently in a migration
 would look exactly like a bug on the next walk-through.
 
 Revision ID: 0016
-Revises: 0014
+Revises: 0017
+
+PARENTED ON 0017, NOT 0014, AND THE NUMBERS ARE OUT OF ORDER ON PURPOSE. Alembic
+walks down_revision and never reads the filename, so 0016-after-0017 is cosmetic.
+This file was written when 0014 was the head; 0017 (c91) landed on main in the
+meantime, and leaving the original parent in place would have put a SECOND head on
+main the moment this merged, at which point `alembic upgrade head` fails outright
+for everyone. Re-pointed rather than renumbered — renumbering rewrites a revision
+id other branches may already reference, and the number was never the problem.
+
+The rule this taught us, now in HANDOFF: the board reserves a migration NUMBER and
+nothing reserves a PARENT. Three sessions took three different numbers exactly as
+the convention requires and still collided, because each read the head at a
+different moment. Run `alembic heads` against current main immediately before
+writing the file, and if you lose the race, the unmerged side re-points.
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 revision = "0016"
-down_revision = "0014"
+down_revision = "0017"
 branch_labels = None
 depends_on = None
 
