@@ -188,7 +188,7 @@ footer{color:var(--ink-3);font-size:12.5px;border-top:1px solid var(--border);pa
   </div>
 
   <section class="panel">
-    <div class="head"><h2>Landed on main today</h2></div>
+    <div class="head"><h2>Landed on main</h2></div>
     <p class="note">Counted in units of shipped work: pull requests merged, cards moved to Done,
       and migrations that reached <code>main</code>. Ranked by the total. Two members sit at zero
       here on purpose — the security session writes no code by design, and Q&rsquo;s two pull
@@ -202,10 +202,11 @@ footer{color:var(--ink-3);font-size:12.5px;border-top:1px solid var(--border);pa
   </section>
 
   <section class="panel">
-    <div class="head"><h2>Problems found and verified today</h2></div>
+    <div class="head"><h2>Problems found and verified</h2></div>
     <p class="note">A separate chart rather than a fourth colour on the first one: findings and
-      rulings are not the same unit as merged pull requests, and stacking them would invent a
-      total that means nothing. Counts only issues that were confirmed, not raised and dropped.</p>
+      rulings are not the same unit as merged pull requests, and stacking them would invent a total
+      that means nothing. Counts only issues that were confirmed &mdash; reproduced, or verified
+      against the live system &mdash; not raised and dropped.</p>
     <div class="chart" id="chart2"></div>
     <details>
       <summary>Table view — exact numbers</summary>
@@ -244,47 +245,47 @@ var SERIES = [
 ];
 
 var CREW = [
-  { name:'Officer surfaces', kind:'agent', role:'auth, orgs, moderation',
-    shipped:{prs:4,cards:10,migs:1}, found:3,
-    stats:['PRs #21 #23 #25 #27','10 cards done','migration 0017'],
-    catch:'Walked the real app against real prod and closed c58 — the biggest unverified surface on the project for two days. Found the sign-in bounce was a race, not a redirect bug, and proved it by reproducing on the pre-fix code first.' },
-
-  { name:'Email & campus gate', kind:'agent', role:'verification, transactional email',
-    shipped:{prs:1,cards:3,migs:1}, found:3,
-    stats:['PR #26 merged','migration 0015','216 tests','first real email sent'],
-    catch:'Went looking for two copies of the campus check and found four — including a third inline copy in vote_yak and a campus-wide WRITE with no campus check at all. Neither was in the two files the card named.' },
-
-  { name:'Invite tokens', kind:'agent', role:'invite hardening, board integrity',
-    shipped:{prs:1,cards:2,migs:1}, found:8,
-    stats:['PR #24 merged','migration 0016','14 tests','7 cards un-hidden'],
-    catch:'Noticed the board was lying by omission: seven cards carried the column TITLE where its id belonged, so they parsed fine and rendered nowhere — including alpha gate one and a do-not-deploy warning.' },
-
-  { name:'CI & review', kind:'agent', role:'the gates nobody else was watching',
-    shipped:{prs:1,cards:2,migs:0}, found:5,
-    stats:['PR #22 merged','c103 + c106','4 defects self-found','1 HIGH in own code'],
-    catch:'Ran an adversarial review against its own merged work, found a HIGH it had written, and fixed it. Then caught PR #24 sitting green-and-mergeable while unsafe to merge — its check had run against a main that no longer existed.' },
-
-  { name:'Roll-up / point of contact', kind:'agent', role:'reporting up, verifying sideways',
-    shipped:{prs:0,cards:2,migs:0}, found:4,
-    stats:['c107 + c112','3 PRs merged for Jose','2 stranded commits recovered','1 own error caught'],
-    catch:'Caught migration 0014 opening the c104 bypass on prod before anyone ran it — then had to withdraw an approval it had no standing to give, which is where the scope rule came from.' },
-
-  { name:'Jose', kind:'human', role:'founder — every call that unblocked a lane',
-    shipped:{prs:0,cards:0,migs:0}, found:4,
-    stats:['4 rulings','prod CORS fixed live','Resend key','3 merges authorized'],
+  { name:'Jose', kind:'human', role:'founder \u2014 vertical A, and every call that unblocks a lane',
+    shipped:{prs:17,cards:55,migs:11}, found:4,
+    stats:['241 commits','17 PRs merged','11 migrations','55 cards to Done'],
     catchLabel:'Call of the day: ',
-    catch:'Took the STRICTER option on c108 — campus moderation requires verified .edu — against the recommendation to leave it at officer-role. Cheap now because it is three endpoints through one function; expensive later.' },
+    catch:'Took the STRICTER option on c108 \u2014 campus moderation requires verified .edu \u2014 against the recommendation to leave it at officer-role. Cheap now because it is three endpoints through one function; expensive later.' },
 
-  { name:'Security audit', kind:'agent', role:'read-only review of main and prod',
-    shipped:{prs:0,cards:0,migs:0}, found:16,
-    stats:['16 findings ranked','6 of 9 lenses','0 files written','2 scope expansions declined'],
-    catch:'Turned down its own scope expansion twice, including from this session, on the grounds that part of what makes an audit worth reading is that the auditor did not touch the code it reviewed.' },
+  { name:'james', kind:'agent', role:'auth, orgs, officer surfaces, moderation',
+    shipped:{prs:4,cards:12,migs:1}, found:3,
+    stats:['PRs #21 #23 #25 #27','12 cards done','migration 0017'],
+    catch:'Walked the real app against real prod and closed c58 \u2014 the biggest unverified surface on the project for two days. Found the sign-in bounce was a race, not a redirect bug, and proved it by reproducing on the pre-fix code first.' },
 
-  { name:'Q (Braulio)', kind:'human', role:'vertical B — social, messaging, payments',
-    shipped:{prs:0,cards:0,migs:0}, found:0,
-    stats:['8 PRs merged all-time','53 commits','2 in flight','Stripe + WS/Redis'],
+  { name:'Q (Braulio)', kind:'human', role:'vertical B \u2014 social, messaging, payments',
+    shipped:{prs:8,cards:7,migs:2}, found:0,
+    stats:['53 commits','8 PRs merged','migrations 0004 + 0009','Stripe + WS/Redis'],
     catchLabel:'Still owed: ',
-    catch:'c39, the EAS dev build — alpha gate one and step four of the payment chain. Nothing on anyone else’s list moves it, which makes it the single most blocking item on the project.' }
+    catch:'c39, the EAS dev build \u2014 alpha gate one and step four of the payment chain. Nothing on anyone else\u2019s list moves it, which makes it the single most blocking item on the project. Branch protection also needs him: he owns the repo.' },
+
+  { name:'jon', kind:'agent', role:'verification, transactional email, campus gate',
+    shipped:{prs:2,cards:5,migs:1}, found:3,
+    stats:['PR #26 merged','PR #28 open','migration 0015','first real email sent'],
+    catch:'Went looking for two copies of the campus check and found four \u2014 including a third inline copy in vote_yak and a campus-wide WRITE with no campus check at all. Neither was in the two files the card named. Also rebuilt the shared virtualenv after it destroyed itself.' },
+
+  { name:'braul', kind:'agent', role:'invite hardening, board integrity',
+    shipped:{prs:1,cards:3,migs:1}, found:8,
+    stats:['PR #24 merged','migration 0016','7 cards un-hidden','board guard shipped'],
+    catch:'Noticed the board was lying by omission: seven cards carried the column TITLE where its id belonged, so they parsed fine and rendered nowhere \u2014 including alpha gate one and a do-not-deploy warning. Then built the guard so it cannot happen again.' },
+
+  { name:'sally', kind:'agent', role:'CI, review, and the prod deploy',
+    shipped:{prs:1,cards:2,migs:0}, found:5,
+    stats:['PR #22 merged','4 defects self-found','1 HIGH in own code','ran the prod migration'],
+    catch:'Ran an adversarial review against its own merged work, found a HIGH it had written, and fixed it. Then caught PR #24 sitting green-and-mergeable while unsafe to merge \u2014 its check had run against a main that no longer existed.' },
+
+  { name:'court', kind:'agent', role:'point of contact \u2014 reporting up, verifying sideways',
+    shipped:{prs:0,cards:3,migs:0}, found:4,
+    stats:['c107 + c112','4 PRs merged for Jose','2 stranded commits recovered','1 own error caught'],
+    catch:'Caught migration 0014 opening the c104 bypass before anyone ran it \u2014 then had to withdraw an approval it had no standing to give, which is where the scope rule came from.' },
+
+  { name:'security', kind:'agent', role:'read-only review of main and prod',
+    shipped:{prs:0,cards:0,migs:0}, found:16,
+    stats:['16 findings ranked','0 files written','2 scope expansions declined','found the key exposure'],
+    catch:'Cleared the container image, then asked a different question \u2014 what does the build UPLOAD? The archive is staged before Docker runs, so a clean image was never the protection. A live API key had been in it. The finding came from correcting itself.' }
 ];
 
 var total   = function (m) { return m.shipped.prs + m.shipped.cards + m.shipped.migs; };
