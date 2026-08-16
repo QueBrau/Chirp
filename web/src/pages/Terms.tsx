@@ -1,21 +1,39 @@
 import { Link } from "react-router-dom";
 
 import { usePageMeta } from "../components/usePageMeta";
+import {
+  CONTACT_EMAIL,
+  GOVERNING_COUNTY,
+  GOVERNING_STATE,
+  LAUNCH_CAMPUS,
+  LEGAL_LAST_UPDATED,
+  MIN_AGE,
+} from "../siteConfig";
 
 /*
-  JOSE — THIS DOCUMENT IS NOT READY TO PUBLISH AS-IS.
+  JOSE — status of this document, Aug 2026.
 
-  Sections 1-7 describe how the product actually works and are safe: each is a
-  factual statement traceable to the backend. Sections 8, 9 and 10 are the
-  legally-loaded ones (liability, disputes, governing law) and are deliberately
-  left as marked placeholders rather than drafted here. An arbitration or
-  limitation-of-liability clause written by an agent is worse than none: it reads
-  as enforceable and is not tailored to your entity, your state, or your risk.
+  Sections 1-7 describe how the product actually works; each is traceable to the
+  backend. Sections 8-10 are now written too, in plain English and scoped to
+  North Carolina, on your call to launch at UNCG without a lawyer first.
 
-  Get a lawyer to fill 8-10 and to review 1-7. Also needed before launch:
-   - the legal entity name, if Chirp is incorporated
-   - the minimum age (there is no age gate in the code today)
-   - replacing every CONTACT_EMAIL_PLACEHOLDER
+  What that means honestly: this is a clear, good-faith agreement, NOT a
+  lawyer-reviewed one. Deliberate choices worth knowing:
+
+  - NO arbitration clause and NO class-action waiver. Those are the clauses that
+    most need real drafting, are most often thrown out when drafted badly, and
+    buy a single-campus app almost nothing. Silence is safer than a bad one.
+  - Liability is capped at what the user actually paid Chirp, which for almost
+    everyone is nothing. Simple and defensible.
+  - Governing law is North Carolina, venue Guilford County, which is where UNCG
+    is. That matches the launch and avoids claiming a jurisdiction unrelated to
+    the only users we have.
+  - No legal entity is named, because Chirp is not incorporated yet. When it is,
+    that name goes in sections 8-10 and 12.
+
+  Get these reviewed before the first campus outside NC onboards. That is the
+  point where fifty-state hedging starts to matter and this document stops being
+  adequate.
 */
 export function Terms() {
   usePageMeta(
@@ -34,8 +52,9 @@ export function Terms() {
           where money is involved.
         </p>
         <div className="legal-meta">
-          <span className="chip">Last updated August 2026</span>
-          <span className="chip chip--accent">Applies to the Chirp app</span>
+          <span className="chip">Last updated {LEGAL_LAST_UPDATED}</span>
+          <span className="chip chip--accent">{LAUNCH_CAMPUS}</span>
+          <span className="chip">{GOVERNING_STATE}</span>
         </div>
       </section>
 
@@ -57,11 +76,10 @@ export function Terms() {
             responsible for those being accurate. We do not currently verify school
             affiliation.
           </p>
-          {/* NEEDS LEGAL: minimum age. There is no age gate in the code today, so
-              this sentence must be written to match whatever you decide to enforce,
-              and the app has to enforce it. */}
           <p>
-            You must meet the minimum age stated in this section to hold an account.
+            <strong>You must be at least {MIN_AGE} years old to hold a Chirp account.</strong> There
+            is no age check at sign-up today, so this is a rule you agree to rather than one the app
+            enforces for you. If we learn an account belongs to someone younger, we will remove it.
           </p>
 
           <h2>2. Your account</h2>
@@ -146,27 +164,57 @@ export function Terms() {
             the org&rsquo;s books.
           </p>
 
-          {/* NEEDS LEGAL — DO NOT SHIP WITHOUT A LAWYER FILLING THIS IN.
-              Deliberately not drafted here. */}
           <h2>8. Disclaimers and limitation of liability</h2>
           <p>
-            This section has not been finalised and requires legal review before
-            launch.
+            Chirp is provided as it is. We work to keep it running and accurate, but we do not
+            promise it will always be available, error-free, or that it will never lose data. Use it
+            accordingly &mdash; do not make Chirp the only copy of something that matters.
+          </p>
+          <p>
+            Chirp is a tool your org uses to run itself. We are not responsible for what your org
+            decides, what its officers write in minutes, what dues it sets, how it treats its
+            members, or what any user posts. Those are between you and your org.
+          </p>
+          <p>
+            <strong>To the extent the law allows, our total liability to you for any claim relating
+            to Chirp is limited to the amount you have actually paid Chirp in platform fees in the
+            twelve months before the claim.</strong> For nearly every user that is zero, because
+            the platform fee is charged to your chapter, not to you.
+          </p>
+          <p>
+            Nothing here limits liability that cannot legally be limited, including liability for
+            fraud or for death or personal injury caused by negligence.
           </p>
 
-          {/* NEEDS LEGAL — arbitration, class-action waiver, dispute process.
-              Deliberately not drafted here. */}
           <h2>9. Disputes</h2>
           <p>
-            This section has not been finalised and requires legal review before
-            launch.
+            If you have a problem with Chirp, email us first at{" "}
+            <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. Most things are a
+            misunderstanding or a bug, and we would rather fix it than argue about it. We will
+            respond within 30 days.
+          </p>
+          <p>
+            <strong>We are not asking you to give up your right to go to court, and there is no
+            arbitration requirement and no class-action waiver in these terms.</strong> If we cannot
+            resolve something between us, either of us can bring a claim in the courts described in
+            section 10. Small claims court remains available to you for claims that qualify.
+          </p>
+          <p>
+            Disputes about dues themselves are between you and your chapter, which is the merchant
+            for those payments &mdash; see section 6.
           </p>
 
-          {/* NEEDS LEGAL — governing law and jurisdiction; depends on the entity. */}
           <h2>10. Governing law</h2>
           <p>
-            This section has not been finalised and requires legal review before
-            launch.
+            These terms are governed by the laws of the State of {GOVERNING_STATE}, without regard
+            to its conflict-of-laws rules. Any claim relating to Chirp that is not resolved between
+            us may be brought in the state or federal courts located in {GOVERNING_COUNTY}, and we
+            each agree those courts may hear it.
+          </p>
+          <p>
+            Chirp is operated from {GOVERNING_STATE} and is currently offered only at{" "}
+            {LAUNCH_CAMPUS}. If a court decides part of these terms cannot be enforced, the rest
+            still applies.
           </p>
 
           <h2>11. Changes to these terms</h2>
@@ -176,7 +224,11 @@ export function Terms() {
           </p>
 
           <h2>12. Contact</h2>
-          <p>Questions about these terms: CONTACT_EMAIL_PLACEHOLDER.</p>
+          <p>
+            Questions about these terms:{" "}
+            <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. Chirp is operated from{" "}
+            {GOVERNING_STATE}.
+          </p>
 
         </div>
       </section>
