@@ -599,10 +599,26 @@
     },
     {
       "id": "c49",
-      "col": "next",
+      "col": "progress",
       "owner": "Q",
       "tag": "vert:social-msg",
-      "title": "[B/Q] NO COMPOSE FLOW EXISTS — found while wiring c34. src/components/CreateSheet.tsx is a pure mock: its Photo/Video/Text rows just call onClose, and createPost() is never called anywhere in the app (grep confirms only its own definition). So nothing can create a post from the client at all, and the Aug 14 'author picks audience at compose time' decision has no UI to exercise — the backend accepts audience, nothing sends it. Until this lands the campus feed can only be populated by direct API calls. Needs a real compose screen + an org-vs-campus picker defaulting to org.",
+      "title": "[B/Q] CLAIMED Aug 15, in progress on q/compose. SCOPE DECIDED: text compose ships now, media does NOT — there is no upload pipeline anywhere in the repo (no expo-image-picker, no storage/presign code, every media_urls value today is a picsum placeholder), and adding a picker is a native module that would owe a SECOND EAS dev build on top of c39. So Photo/Video render as visibly disabled 'Soon' rows instead of silently closing, which is the actual bug in the card. Media pipeline carded separately as c70. Original finding: CreateSheet.tsx is a pure mock: its Photo/Video/Text rows just call onClose, and createPost() is never called anywhere in the app (grep confirms only its own definition). So nothing can create a post from the client at all, and the Aug 14 'author picks audience at compose time' decision has no UI to exercise — the backend accepts audience, nothing sends it. Until this lands the campus feed can only be populated by direct API calls. Needs a real compose screen + an org-vs-campus picker defaulting to org.",
+      "area": "fyp"
+    },
+    {
+      "id": "c70",
+      "col": "backlog",
+      "owner": "",
+      "tag": "m5",
+      "title": "[shared] NO MEDIA UPLOAD PIPELINE EXISTS — split out of c49 so text compose could ship. posts.media_urls is a TEXT[] the backend happily stores and MediaPostCard happily renders, but nothing anywhere can PRODUCE a url: no expo-image-picker dependency, no camera permission in app.json, no storage bucket wired, no presign or upload endpoint, and grep finds no upload code at all. Every media_urls value in the app today is a picsum.photos placeholder from the mocks, which is exactly why this looked done. Needs a real decision first: Firebase Storage (chirps-prod already has a storageBucket in its config and the JS SDK is already a dependency) vs GCS signed URLs from the backend. Note the cost: expo-image-picker is a NATIVE module, so this owes an EAS dev build of its own, on top of c39's.",
+      "area": "fyp"
+    },
+    {
+      "id": "c71",
+      "col": "next",
+      "owner": "",
+      "tag": "m5",
+      "title": "[shared] A CAMPUS-ONLY USER CANNOT POST AT ALL — found while wiring c49. The only create-post route is POST /chapters/{chapter_id}/posts and it requires an active membership, so chapter_id is mandatory even for a campus-audience post. But Home shows the create FAB to anyone with a campus_id, and Chirp's whole Aug 11 premise is that it is for ALL students, with greek orgs as an optional thing you join. So a student in no org sees a create button that cannot work. c49 handles it honestly (the FAB is hidden when the caller has no active membership) rather than opening a composer that dead-ends, but that is containment, not a fix. The real question is a product one: can a campus post exist without a chapter (posts.chapter_id is NOT NULL today), or is posting genuinely org-gated and the FYP is read-only for unaffiliated students? Needs Jose + Q to decide before TestFlight, because it silently makes the FYP look broken for exactly the users the product claims to serve.",
       "area": "fyp"
     },
     {
