@@ -141,3 +141,34 @@ jobs:
       - name: Type-check
         working-directory: app-mobile
         run: npx tsc --noEmit
+
+  web:
+    # Board card c113. web/ is the PUBLIC MARKETING SITE and it had no gate at
+    # all, so a break merged silently and surfaced at the next manual deploy.
+    # That is worse than it sounds: web/ also carries the Stripe Connect return
+    # and refresh bounce pages that payments.py depends on, and it deploys to
+    # Firebase Hosting by hand rather than from this pipeline, so the gap between
+    # "merged broken" and "someone notices" is however long it is until the next
+    # deploy.
+    #
+    # Runs `build`, not just `typecheck`. tsc --noEmit alone would miss a broken
+    # vite build - a bad import path, a missing asset, a failing plugin - which is
+    # exactly the class of thing that only bites at deploy time.
+    name: web build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        working-directory: web
+        run: npm ci
+      - name: Type-check
+        working-directory: web
+        run: npm run typecheck
+      - name: Build
+        working-directory: web
+        run: npm run build
