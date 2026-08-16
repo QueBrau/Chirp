@@ -39,15 +39,20 @@ spot: the QA accounts' codes are live and revoking them silently in a migration
 would look exactly like a bug on the next walk-through.
 
 Revision ID: 0016
-Revises: 0017
+Revises: 0015
 
-PARENTED ON 0017, NOT 0014, AND THE NUMBERS ARE OUT OF ORDER ON PURPOSE. Alembic
-walks down_revision and never reads the filename, so 0016-after-0017 is cosmetic.
-This file was written when 0014 was the head; 0017 (c91) landed on main in the
-meantime, and leaving the original parent in place would have put a SECOND head on
-main the moment this merged, at which point `alembic upgrade head` fails outright
-for everyone. Re-pointed rather than renumbered — renumbering rewrites a revision
-id other branches may already reference, and the number was never the problem.
+PARENTED ON 0015, AND THE NUMBERS ARE OUT OF ORDER ON PURPOSE. Alembic
+walks down_revision and never reads the filename, so 0016-after-0015-after-0017 is
+cosmetic.
+This file has now been re-pointed TWICE for the same reason. It was written when
+0014 was the head; 0017 (c91) landed first, so it moved to 0017; then 0015 (c86/c88,
+itself parented on 0017) merged in PR #26, so it moved to 0015. Each time, leaving
+the old parent in place would have put a SECOND head on main the moment this merged,
+at which point `alembic upgrade head` fails outright for everyone. Re-pointed rather
+than renumbered every time — renumbering rewrites a revision id other branches may
+already reference, and the number was never the problem.
+
+Chain as merged: 0011 -> 0014 -> 0017 -> 0015 -> 0016.
 
 The rule this taught us, now in HANDOFF: the board reserves a migration NUMBER and
 nothing reserves a PARENT. Three sessions took three different numbers exactly as
@@ -60,7 +65,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "0016"
-down_revision = "0017"
+down_revision = "0015"
 branch_labels = None
 depends_on = None
 
