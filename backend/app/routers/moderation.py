@@ -16,6 +16,7 @@ from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.schemas.moderation import (
     ContentRemoveRequest,
+    ReportResolveRequest,
     SuspendUserRequest,
     SuspensionStateOut,
 )
@@ -177,6 +178,59 @@ async def list_reports(
         .order_by(models.ContentReport.created_at.desc())
     )
     return [ContentReportOut.model_validate(r) for r in result.scalars().all()]
+
+
+@router.patch("/moderation/reports/{report_id}")
+async def resolve_report(
+    report_id: uuid.UUID,
+    body: ReportResolveRequest,
+    moderator: models.User = Depends(_require_any_eboard),
+    session: AsyncSession = Depends(get_session),
+) -> ContentReportOut:
+    """Close a report as actioned or dismissed (board card c91).
+
+    content_reports has carried a status column since it was created, and
+    GET /moderation/reports has always returned it, but nothing could ever CHANGE it.
+    So the moderation queue shipped in c35 could remove a reported yak and still not
+    mark the report handled — it faked the transition client-side for the session and
+    every handled item came back as open on the next reload. A queue that cannot be
+    emptied is not a workflow, and this is the route that makes it one.
+
+    SCOPING IS THE WHOLE RISK HERE, so it reuses _require_eboard_for_campus rather than
+    rolling its own: reports carry campus_id, and SECURITY-REVIEW finding 1 was exactly
+    an e-board member of one chapter being able to see reports from every campus. Being
+    able to CLOSE another campus's report is the same defect with a write attached —
+    worse, because dismissing a report is how a bad actor makes a complaint disappear.
+    _require_any_eboard only proves the caller is e-board SOMEWHERE; the per-campus
+    check below is what proves they moderate THIS report's campus.
+
+    Idempotency: re-resolving an already-closed report is a 409, not a silent success.
+    Two moderators working the same queue is the normal case, not an edge case, and the
+    second one needs to know their decision did not land rather than believing it did.
+    """
+    report = await session.get(models.ContentReport, report_id)
+    if report is None:
+        raise not_found("report_not_found")
+    await _require_eboard_for_campus(session, moderator, report.campus_id)
+    if report.status != "open":
+        raise conflict("report_already_resolved")
+
+    report.status = body.status
+    # Mutable state lives on the row, history lives in the append-only log — the same
+    # split c76 chose for suspensions, and the reason "who dismissed this, and why" can
+    # still be answered after a later moderator actions the same target.
+    session.add(
+        models.ModerationAction(
+            actor_id=moderator.id,
+            action="resolve_report",
+            target_type="report",
+            target_id=report.id,
+            reason=body.reason,
+        )
+    )
+    await session.commit()
+    await session.refresh(report)
+    return ContentReportOut.model_validate(report)
 
 
 @router.post("/moderation/blocks", status_code=201)

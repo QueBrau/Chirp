@@ -125,10 +125,15 @@ features work. Resolve in favour of main.
   concurrent runs tear down each other's tables mid-suite. This produced **76 failed** on a
   tree that was genuinely green, and it corrupts the other direction too: a run can *pass*
   against tables someone else's fixtures populated. **Give yourself your own DB:**
-  `createdb -U chirp -h localhost chirp_test_<lane>` then
-  `psql -h localhost -d chirp_test_<lane> -c "ALTER SCHEMA public OWNER TO chirp;"` — that
-  second line is not optional, without it every DB test errors with
-  `must be owner of schema public`. Then pass `TEST_DATABASE_URL=...` to pytest.
+  `createdb -U chirp -h localhost chirp_test_<lane>`, then hand the schema over **as the
+  local superuser, not as `chirp`** (as `chirp` it fails with the very error you are
+  trying to fix): `psql -h localhost -d postgres -c "ALTER DATABASE chirp_test_<lane>
+  OWNER TO chirp;"` followed by `psql -h localhost -d chirp_test_<lane> -c "ALTER SCHEMA
+  public OWNER TO chirp;"`. Without it every DB test errors with `must be owner of schema
+  public`. Then pass `TEST_DATABASE_URL=...` to pytest.
+  **This whole recipe is temporary.** PR #22 (c106) gives every run its own
+  `chirp_test_p<pid>` database and drops it at the end, so once that merges the answer is
+  just "run pytest" — no createdb, no ownership grant. Delete this bullet then.
 - **CI is honest today but has no floor** (c103). The backend job runs postgres:16 + redis:7
   services and a healthy run is **179 passed, 0 skipped** — that is why CI shows 179 where a
   laptop shows 176 pass / 3 skip. The trap is that conftest's postgres probe *skips* rather
@@ -138,6 +143,17 @@ features work. Resolve in favour of main.
 - **`/healthz` is unreachable** — Google's frontend answers it. The route is `/_health`.
 - **The firebase CLI is logged in as `madden25boss1@gmail.com`**, which cannot see
   `chirps-prod`. Website deploys go through the gcloud ADC; runbook in `web/README.md`.
+- **CLAIMING A MIGRATION NUMBER DOES NOT CLAIM A PARENT, and that is the gap that
+  actually bites.** The board reserves numbers, which prevents duplicate revision ids —
+  it does not stop two people writing different numbers that both set
+  `down_revision` to the same head. That happened Aug 16: 0017 (c91) and 0015 (c86) both
+  parented on 0014, so `alembic upgrade head` failed with two heads. **Before you write a
+  migration, run `alembic heads` against main and parent on what it actually prints** —
+  not on the highest number on disk, which is no longer the same thing. The chain is now
+  0011 -> 0014 -> 0017 -> 0015, so 0015 sits numerically after 0017 on purpose; alembic
+  walks `down_revision`, not filenames, so do not "fix" it. The rule when two migrations
+  collide is the one c71's 0013 already set: **the side that has not merged re-points at
+  the current head**, because renumbering a revision id breaks anything that recorded it.
 - **Card ids and migration numbers are shared resources.** Take the next one from
   *origin's current* board, not the copy you started editing. Taken: 0011 (c76), **0014 (c96, MERGED)**,
   0013 (c71, on Q's branch), **0015 (c86, claimed by the email session)**. **0012 was claimed for
