@@ -22,6 +22,7 @@ import { Pressable, TextInput, View } from "react-native";
 import {
   hasFirebaseConfig,
   signInWithEmail,
+  signOutUser,
   signUpWithEmail,
   useSession,
   withInviteCode,
@@ -53,9 +54,27 @@ export default function SignInScreen() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // True between "Firebase accepted the credential" and "the session resolved".
-  // Navigation is deferred across that window — see awaitSession below.
-  const [awaitingSession, setAwaitingSession] = useState(false);
+  /**
+   * Non-null between "Firebase accepted the credential" and "the session
+   * resolved" — navigation is deferred across that window — and it holds the
+   * mode the user actually SUBMITTED with, not the mode the toggle happens to
+   * be showing when the session lands.
+   *
+   * Those came apart in review. The toggle underneath the submit button stayed
+   * live during the wait, so a user who read "Please wait..." as stuck could tap
+   * "Need an account? Sign up", flip authMode, and have the routing decision
+   * read the flipped value once /auth/me returned — sending a fully registered
+   * returning user to /account-type to answer "who are you?" again, which is
+   * precisely the c45 regression the routing comment claims to prevent. With an
+   * invite code in tow they lost /join-chapter too. The window is ~1s normally
+   * but the budget is 15s, so a cold Cloud Run start makes it very reachable.
+   *
+   * The toggle is disabled while submitting as well, but this is the fix that
+   * matters: the decision is now carried from the moment of submit instead of
+   * re-read from mutable UI state, so it cannot depend on the toggle being
+   * unreachable.
+   */
+  const [submittedMode, setSubmittedMode] = useState<EmailAuthMode | null>(null);
 
   // New identities keep the invite code in tow through account-type, which
   // forwards it to join-chapter after bootstrap.
@@ -70,12 +89,12 @@ export default function SignInScreen() {
    * brand-new Firebase identity that still needs account-type regardless of any
    * code. Demo mode (no Firebase project) keeps the mock onboarding walk.
    */
-  const continueAfterAuth = () => {
-    if (authMode === "signin" && inviteCode) {
+  const routeAfterAuth = (mode: EmailAuthMode) => {
+    if (mode === "signin" && inviteCode) {
       router.push(withInviteCode("/join-chapter", inviteCode));
       return;
     }
-    if (authMode === "signin" && hasFirebaseConfig()) {
+    if (mode === "signin" && hasFirebaseConfig()) {
       router.replace("/(tabs)/feed");
       return;
     }
@@ -100,22 +119,23 @@ export default function SignInScreen() {
    * hold here until the session is a settled fact.
    */
   useEffect(() => {
-    if (!awaitingSession) return;
+    if (submittedMode === null) return;
     if (status === "ready") {
-      setAwaitingSession(false);
+      setSubmittedMode(null);
       setSubmitting(false);
-      continueAfterAuth();
+      routeAfterAuth(submittedMode);
     } else if (status === "unregistered") {
       // Signed in but bootstrap never finished (app killed mid-onboarding).
       // account-type is where the tabs guard would send them anyway.
-      setAwaitingSession(false);
+      setSubmittedMode(null);
       setSubmitting(false);
       continueToOnboarding();
     }
-    // continueAfterAuth/continueToOnboarding close over router + inviteCode +
-    // authMode, none of which change while a submit is in flight.
+    // routeAfterAuth/continueToOnboarding close over router and inviteCode only,
+    // and the mode is passed in explicitly rather than read from state — see
+    // submittedMode's declaration for why that distinction is load-bearing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [awaitingSession, status]);
+  }, [submittedMode, status]);
 
   /**
    * The session never settling is a real outcome, not an impossible one: a
@@ -125,32 +145,49 @@ export default function SignInScreen() {
    * message must not blame their password.
    */
   useEffect(() => {
-    if (!awaitingSession) return;
+    if (submittedMode === null) return;
     const timer = setTimeout(() => {
-      setAwaitingSession(false);
+      setSubmittedMode(null);
       setSubmitting(false);
       setError("You're signed in, but we couldn't load your account. Check your connection and try again.");
     }, SESSION_SETTLE_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [awaitingSession]);
+  }, [submittedMode]);
 
+  /**
+   * "Back" out of the email form. If the credential has already landed and we
+   * are only waiting on the session, backing out must also SIGN OUT: otherwise
+   * the user sits on the signed-out provider screen while genuinely
+   * authenticated, the 15s timer is cancelled so no error ever appears, and the
+   * Apple/Google buttons then walk a registered user through onboarding again.
+   * Found in review alongside the toggle bug; same c45 family, lower frequency.
+   */
   const resetEmailForm = () => {
+    if (submittedMode !== null && hasFirebaseConfig()) {
+      void signOutUser().catch(() => {
+        // Nothing useful to tell the user — they asked to go back and they are
+        // going back. SessionProvider's listener owns the state either way.
+      });
+    }
     setShowEmailForm(false);
     setError(null);
     setSubmitting(false);
-    setAwaitingSession(false);
+    setSubmittedMode(null);
   };
 
   const submitEmailForm = async () => {
+    // Captured now, deliberately: everything downstream routes off THIS value,
+    // not off `authMode`, which the user can still change later.
+    const mode = authMode;
     setSubmitting(true);
     setError(null);
     try {
       if (hasFirebaseConfig()) {
-        if (authMode === "signin") {
+        if (mode === "signin") {
           await signInWithEmail(email.trim(), password);
           // Stay put, still "submitting", until the session resolves. The
           // effect above owns the navigation from here.
-          setAwaitingSession(true);
+          setSubmittedMode(mode);
           return;
         }
         await signUpWithEmail(email.trim(), password);
@@ -159,7 +196,7 @@ export default function SignInScreen() {
       // as does a brand-new sign-up: account-type is unguarded, and its
       // applyBootstrap() settles the session before anything guarded mounts.
       setSubmitting(false);
-      continueAfterAuth();
+      routeAfterAuth(mode);
     } catch {
       setError("Couldn't sign you in. Check your email and password and try again.");
       setSubmitting(false);
@@ -247,8 +284,9 @@ export default function SignInScreen() {
 
             <Pressable
               accessibilityRole="button"
+              disabled={submitting}
               onPress={() => setAuthMode(authMode === "signin" ? "signup" : "signin")}
-              style={{ alignItems: "center", paddingVertical: spacing.xs }}
+              style={{ alignItems: "center", paddingVertical: spacing.xs, opacity: submitting ? 0.4 : 1 }}
             >
               <AppText variant="caption" tone="accent">
                 {authMode === "signin"
