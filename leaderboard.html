@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chirp Crew Leaderboard</title>
+<style>
+/* Tokens lifted from board.html so this page and the board read as one system.
+   The three chart hues are NOT the board's semantic colours: --success and
+   --warn already mean "done" and "at risk" there, and reusing them as series
+   identity would make a bar look like a status. These are a categorical set,
+   validated for colour-blind separation against each surface. */
+:root{
+  --bg:#F6F7FB; --surface:#FFFFFF; --surface-alt:#EFF1F7; --ink:#101223;
+  --ink-2:#575B75; --ink-3:#9BA0B8; --border:rgba(16,18,35,.08);
+  --accent:#5B5BF6; --accent-soft:#ECECFE;
+  --cat-1:#5B5BF6;  /* PRs merged   */
+  --cat-2:#17A673;  /* cards done   */
+  --cat-3:#B87503;  /* migrations   */
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0C0D14; --surface:#15161F; --surface-alt:#1D1E2A; --ink:#F2F3FA;
+    --ink-2:#A6AAC4; --ink-3:#666B85; --border:rgba(242,243,250,.09);
+    --accent:#7C7CFF; --accent-soft:rgba(124,124,255,.16);
+    --cat-1:#6A6AEE; --cat-2:#0F9E86; --cat-3:#C4632A;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0C0D14; --surface:#15161F; --surface-alt:#1D1E2A; --ink:#F2F3FA;
+  --ink-2:#A6AAC4; --ink-3:#666B85; --border:rgba(242,243,250,.09);
+  --accent:#7C7CFF; --accent-soft:rgba(124,124,255,.16);
+  --cat-1:#6A6AEE; --cat-2:#0F9E86; --cat-3:#C4632A;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);padding:20px;
+  font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin-inline:auto;display:flex;flex-direction:column;gap:22px}
+h1{font-size:22px;margin:0;letter-spacing:-.02em}
+h1 span{color:var(--accent)}
+h2{font-size:15px;margin:0}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:6px}
+.mono,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+header .sub{font-size:12.5px;color:var(--ink-3);flex:1;min-width:220px}
+.back{font-size:12.5px;text-decoration:none;border:1px solid var(--border);
+  border-radius:8px;padding:5px 10px;color:var(--ink-2)}
+.back:hover{background:var(--surface-alt)}
+
+.panel{border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:16px 18px}
+.panel > .head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:3px}
+.panel .note{font-size:12.5px;color:var(--ink-3);margin:0 0 14px;max-width:74ch}
+
+/* ---- legend: identity is never colour alone, so every key is labelled ---- */
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-2);margin-bottom:12px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+
+/* ---- chart: horizontal bars. Labels sit outside the plot so a short bar is
+        still readable, and totals are direct-labelled rather than every segment. ---- */
+.chart{display:flex;flex-direction:column;gap:9px}
+.row{display:grid;grid-template-columns:minmax(96px,168px) 1fr auto;gap:12px;align-items:center}
+.row__name{font-size:13px;color:var(--ink-2);text-align:right;overflow-wrap:anywhere}
+.row__name b{color:var(--ink);font-weight:650}
+.track{position:relative;height:16px;background:var(--surface-alt);border-radius:5px;overflow:hidden;display:flex}
+.seg{height:100%;position:relative;transition:filter .12s ease}
+/* 2px surface-coloured spacer between stacked segments, so adjacent fills never
+   touch and a colour-blind reader still sees the boundary */
+.seg + .seg{box-shadow:-2px 0 0 0 var(--surface)}
+.seg:first-child{border-radius:5px 0 0 5px}
+.seg:last-child{border-radius:0 5px 5px 0}
+.seg:only-child{border-radius:5px}
+.s1{background:var(--cat-1)} .s2{background:var(--cat-2)} .s3{background:var(--cat-3)}
+.row:hover .seg{filter:saturate(1.15)}
+.row__total{font-size:12.5px;color:var(--ink-2);min-width:2.2em;text-align:right}
+.row--zero .track{border:1px dashed var(--border);background:transparent}
+.row__none{font-size:11.5px;color:var(--ink-3);padding-left:2px;align-self:center}
+
+/* hover tooltip */
+.track{cursor:default}
+.tip{position:fixed;z-index:20;pointer-events:none;opacity:0;transform:translateY(-4px);
+  transition:opacity .1s ease;background:var(--surface);color:var(--ink);
+  border:1px solid var(--border);border-radius:9px;padding:8px 10px;font-size:12.5px;
+  box-shadow:0 6px 24px rgba(16,18,35,.14);max-width:260px}
+.tip.on{opacity:1}
+.tip b{display:block;margin-bottom:3px}
+.tip .line{display:flex;align-items:center;gap:7px;color:var(--ink-2)}
+.tip .line i{width:9px;height:9px;border-radius:2px;display:inline-block}
+
+/* ---- ranked crew cards ---- */
+.crew-grid{display:flex;flex-direction:column;gap:8px}
+.crew{display:grid;grid-template-columns:30px 1fr;gap:12px;align-items:start;
+  border:1px solid var(--border);border-radius:11px;padding:11px 13px;background:var(--surface-alt)}
+.crew--human{background:var(--accent-soft);border-color:transparent}
+.crew__rank{font-size:15px;font-weight:800;color:var(--ink-3);text-align:center;
+  font-variant-numeric:tabular-nums;line-height:1.5}
+.crew--human .crew__rank{color:var(--accent)}
+.crew__body{min-width:0;display:flex;flex-direction:column;gap:5px}
+.crew__top{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.crew__name{font-weight:700;font-size:14px}
+.crew__role{font-size:12px;color:var(--ink-2)}
+.crew__kind{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+  padding:2px 6px;border-radius:999px;background:var(--surface);color:var(--ink-3)}
+.crew--human .crew__kind{background:var(--accent);color:#fff}
+.crew__stats{display:flex;gap:6px;flex-wrap:wrap}
+.stat{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;
+  background:var(--surface);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.crew--human .stat{background:rgba(255,255,255,.6)}
+.crew__catch{font-size:12.5px;color:var(--ink-2)}
+.crew__catch b{color:var(--ink);font-weight:650}
+
+/* ---- table view: the accessible fallback, and the exact numbers ---- */
+details{border-top:1px solid var(--border);margin-top:14px;padding-top:10px}
+summary{cursor:pointer;font-size:12.5px;color:var(--ink-2)}
+table{border-collapse:collapse;width:100%;margin-top:10px;font-size:12.5px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+th{color:var(--ink-3);font-weight:600}
+td.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.tablewrap{overflow-x:auto}
+
+/* ---- controls row: filters live in ONE row above the charts ---- */
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+  border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:10px 12px}
+.ctl{display:flex;align-items:center;gap:6px}
+.ctl__lab{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.seg-ctl{display:flex;background:var(--surface-alt);border-radius:9px;padding:2px;gap:2px}
+.seg-ctl button{font:inherit;font-size:12.5px;border:0;background:transparent;color:var(--ink-2);
+  padding:5px 10px;border-radius:7px;cursor:pointer;white-space:nowrap}
+.seg-ctl button:hover{color:var(--ink)}
+.seg-ctl button[aria-pressed="true"]{background:var(--surface);color:var(--ink);font-weight:650;
+  box-shadow:0 1px 2px rgba(16,18,35,.06)}
+.ctl-spacer{flex:1}
+.icon-btn{font:inherit;font-size:12.5px;border:1px solid var(--border);background:var(--surface);
+  color:var(--ink-2);padding:6px 11px;border-radius:9px;cursor:pointer}
+.icon-btn:hover{background:var(--surface-alt);color:var(--ink)}
+.empty{font-size:13px;color:var(--ink-3);padding:10px 2px}
+/* per-member detail, opened from the ranked list */
+.crew{cursor:pointer}
+.crew__more{display:none;font-size:12.5px;color:var(--ink-2);border-top:1px solid var(--border);
+  margin-top:7px;padding-top:7px;gap:4px;flex-direction:column}
+.crew.is-open .crew__more{display:flex}
+.crew__more .kv{display:flex;gap:8px}
+.crew__more .kv span:first-child{color:var(--ink-3);min-width:104px}
+.crew__chev{font-size:11px;color:var(--ink-3);margin-left:auto}
+footer{color:var(--ink-3);font-size:12.5px;border-top:1px solid var(--border);padding-top:14px}
+
+@media (max-width:640px){
+  body{padding:14px}
+  .row{grid-template-columns:1fr;gap:4px}
+  .row__name{text-align:left}
+  .row__total{text-align:left}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Chirp <span>Crew</span></h1>
+    <p class="sub">Who shipped what on 16 Aug 2026 — five agent sessions, plus Jose and Q.</p>
+    <a class="back" href="board.html">&larr; Board</a>
+  </header>
+
+  <div class="controls">
+    <div class="ctl">
+      <span class="ctl__lab">Rank by</span>
+      <div class="seg-ctl" id="metric" role="group" aria-label="Ranking metric">
+        <button data-metric="shipped" aria-pressed="true">Shipped</button>
+        <button data-metric="found" aria-pressed="false">Found</button>
+        <button data-metric="both" aria-pressed="false">Both</button>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="ctl__lab">Show</span>
+      <div class="seg-ctl" id="who" role="group" aria-label="Who to show">
+        <button data-who="all" aria-pressed="true">Everyone</button>
+        <button data-who="agent" aria-pressed="false">Agents</button>
+        <button data-who="human" aria-pressed="false">Humans</button>
+      </div>
+    </div>
+    <div class="ctl-spacer"></div>
+    <button class="icon-btn" id="theme" aria-label="Toggle colour theme">Dark</button>
+  </div>
+
+  <section class="panel">
+    <div class="head"><h2>Landed on main</h2></div>
+    <p class="note">Counted in units of shipped work: pull requests merged, cards moved to Done,
+      and migrations that reached <code>main</code>. Ranked by the total. Two members sit at zero
+      here on purpose — the security session writes no code by design, and Q&rsquo;s two pull
+      requests are still drafts — so the second chart is where their work shows up.</p>
+    <div class="legend" id="legend1"></div>
+    <div class="chart" id="chart1"></div>
+    <details>
+      <summary>Table view — exact numbers</summary>
+      <div class="tablewrap"><table id="table1"></table></div>
+    </details>
+  </section>
+
+  <section class="panel">
+    <div class="head"><h2>Problems found and verified</h2></div>
+    <p class="note">A separate chart rather than a fourth colour on the first one: findings and
+      rulings are not the same unit as merged pull requests, and stacking them would invent a total
+      that means nothing. Counts only issues that were confirmed &mdash; reproduced, or verified
+      against the live system &mdash; not raised and dropped.</p>
+    <div class="chart" id="chart2"></div>
+    <details>
+      <summary>Table view — exact numbers</summary>
+      <div class="tablewrap"><table id="table2"></table></div>
+    </details>
+  </section>
+
+  <section class="panel">
+    <div class="head"><h2>The crew</h2></div>
+    <p class="note">Ranked by work that reached main, not by commit count — a session that lands
+      one migration outranks one that pushes ten board edits. Every stat is checkable from
+      <code>git</code>, <code>gh</code> or <code>board.html</code>.</p>
+    <div class="crew-grid" id="crew"></div>
+  </section>
+
+  <footer>
+    Sources: <code>gh pr list</code> against QueBrau/Chirp, <code>git log</code> on
+    <code>origin/main</code>, and <code>board.html</code>. Chart hues are a categorical set
+    validated for colour-vision separation against both the light and dark surfaces; they carry
+    identity only and never status.
+  </footer>
+</div>
+
+<div class="tip" id="tip" role="status" aria-live="polite"></div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Data. Kept as one literal so the page is the record, editable by hand.
+// "shipped" is [PRs merged, cards done, migrations] — same unit, three kinds.
+// "found" is a single count of confirmed issues, deliberately a separate chart.
+// ---------------------------------------------------------------------------
+var SERIES = [
+  { key:'prs',  label:'PRs merged', cls:'s1', varname:'--cat-1' },
+  { key:'cards',label:'Cards done', cls:'s2', varname:'--cat-2' },
+  { key:'migs', label:'Migrations', cls:'s3', varname:'--cat-3' }
+];
+
+var CREW = [
+  { name:'Jose', kind:'human', role:'founder \u2014 vertical A, and every call that unblocks a lane',
+    shipped:{prs:17,cards:55,migs:11}, found:4,
+    stats:['241 commits','17 PRs merged','11 migrations','55 cards to Done'],
+    catchLabel:'Call of the day: ',
+    catch:'Took the STRICTER option on c108 \u2014 campus moderation requires verified .edu \u2014 against the recommendation to leave it at officer-role. Cheap now because it is three endpoints through one function; expensive later.' },
+
+  { name:'james', kind:'agent', role:'auth, orgs, officer surfaces, moderation',
+    shipped:{prs:4,cards:12,migs:1}, found:3,
+    stats:['PRs #21 #23 #25 #27','12 cards done','migration 0017'],
+    catch:'Walked the real app against real prod and closed c58 \u2014 the biggest unverified surface on the project for two days. Found the sign-in bounce was a race, not a redirect bug, and proved it by reproducing on the pre-fix code first.' },
+
+  { name:'Q (Braulio)', kind:'human', role:'vertical B \u2014 social, messaging, payments',
+    shipped:{prs:8,cards:7,migs:2}, found:0,
+    stats:['53 commits','8 PRs merged','migrations 0004 + 0009','Stripe + WS/Redis'],
+    catchLabel:'Still owed: ',
+    catch:'c39, the EAS dev build \u2014 alpha gate one and step four of the payment chain. Nothing on anyone else\u2019s list moves it, which makes it the single most blocking item on the project. Branch protection also needs him: he owns the repo.' },
+
+  { name:'jon', kind:'agent', role:'verification, transactional email, campus gate',
+    shipped:{prs:2,cards:5,migs:1}, found:3,
+    stats:['PR #26 merged','PR #28 open','migration 0015','first real email sent'],
+    catch:'Went looking for two copies of the campus check and found four \u2014 including a third inline copy in vote_yak and a campus-wide WRITE with no campus check at all. Neither was in the two files the card named. Also rebuilt the shared virtualenv after it destroyed itself.' },
+
+  { name:'braul', kind:'agent', role:'invite hardening, board integrity',
+    shipped:{prs:1,cards:3,migs:1}, found:8,
+    stats:['PR #24 merged','migration 0016','7 cards un-hidden','board guard shipped'],
+    catch:'Noticed the board was lying by omission: seven cards carried the column TITLE where its id belonged, so they parsed fine and rendered nowhere \u2014 including alpha gate one and a do-not-deploy warning. Then built the guard so it cannot happen again.' },
+
+  { name:'sally', kind:'agent', role:'CI, review, and the prod deploy',
+    shipped:{prs:1,cards:2,migs:0}, found:5,
+    stats:['PR #22 merged','4 defects self-found','1 HIGH in own code','ran the prod migration'],
+    catch:'Ran an adversarial review against its own merged work, found a HIGH it had written, and fixed it. Then caught PR #24 sitting green-and-mergeable while unsafe to merge \u2014 its check had run against a main that no longer existed.' },
+
+  { name:'court', kind:'agent', role:'point of contact \u2014 reporting up, verifying sideways',
+    shipped:{prs:0,cards:3,migs:0}, found:4,
+    stats:['c107 + c112','4 PRs merged for Jose','2 stranded commits recovered','1 own error caught'],
+    catch:'Caught migration 0014 opening the c104 bypass before anyone ran it \u2014 then had to withdraw an approval it had no standing to give, which is where the scope rule came from.' },
+
+  { name:'security', kind:'agent', role:'read-only review of main and prod',
+    shipped:{prs:0,cards:0,migs:0}, found:16,
+    stats:['16 findings ranked','0 files written','2 scope expansions declined','found the key exposure'],
+    catch:'Cleared the container image, then asked a different question \u2014 what does the build UPLOAD? The archive is staged before Docker runs, so a clean image was never the protection. A live API key had been in it. The finding came from correcting itself.' }
+];
+
+var total   = function (m) { return m.shipped.prs + m.shipped.cards + m.shipped.migs; };
+var scoreOf = function (m) {
+  if (STATE.metric === 'found') return m.found;
+  if (STATE.metric === 'both')  return total(m) + m.found;
+  return total(m);
+};
+
+var STATE = { metric: 'shipped', who: 'all' };
+var tip = document.getElementById('tip');
+
+function hideTip() { tip.classList.remove('on'); }
+function showTip(e, html) {
+  tip.innerHTML = html;
+  tip.classList.add('on');
+  var pad = 14, r = tip.getBoundingClientRect();
+  tip.style.left = Math.min(e.clientX + pad, innerWidth - r.width - 8) + 'px';
+  tip.style.top  = Math.max(8, e.clientY - r.height - pad) + 'px';
+}
+
+// ---- legend ----------------------------------------------------------------
+(function () {
+  var legend = document.getElementById('legend1');
+  SERIES.forEach(function (s) {
+    var el = document.createElement('span');
+    var sw = document.createElement('i');
+    sw.style.background = 'var(' + s.varname + ')';
+    el.appendChild(sw);
+    el.appendChild(document.createTextNode(s.label));
+    legend.appendChild(el);
+  });
+})();
+
+function visible() {
+  return CREW.filter(function (m) { return STATE.who === 'all' || m.kind === STATE.who; });
+}
+function rankedList() {
+  return visible().slice().sort(function (a, b) {
+    var d = scoreOf(b) - scoreOf(a);
+    return d !== 0 ? d : a.name.localeCompare(b.name);
+  });
+}
+function el(tag, cls, text) {
+  var n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+function emptyNote(host, msg) { host.appendChild(el('div', 'empty', msg)); }
+
+// ---- chart 1: shipped, stacked ---------------------------------------------
+function renderChart1() {
+  var host = document.getElementById('chart1');
+  host.textContent = '';
+  var rows = rankedList();
+  if (!rows.length) { emptyNote(host, 'Nobody matches this filter.'); return; }
+  var max = Math.max.apply(null, rows.map(total)) || 1;
+
+  rows.forEach(function (m) {
+    var t = total(m);
+    var row = el('div', 'row' + (t === 0 ? ' row--zero' : ''));
+    var name = el('div', 'row__name');
+    name.appendChild(el('b', null, m.name));
+    row.appendChild(name);
+
+    var track = el('div', 'track');
+    track.style.width = t === 0 ? '100%' : (100 * t / max) + '%';
+    track.setAttribute('role', 'img');
+    track.setAttribute('aria-label', m.name + ': ' + m.shipped.prs + ' PRs merged, ' +
+      m.shipped.cards + ' cards done, ' + m.shipped.migs + ' migrations');
+
+    if (t === 0) {
+      row.appendChild(track);
+      row.appendChild(el('span', 'row__none',
+        m.kind === 'human' ? 'nothing merged today' : 'writes no code by design'));
+    } else {
+      SERIES.forEach(function (s) {
+        var v = m.shipped[s.key];
+        if (!v) return;
+        var seg = el('div', 'seg ' + s.cls);
+        seg.style.width = (100 * v / t) + '%';
+        track.appendChild(seg);
+      });
+      row.appendChild(track);
+      row.appendChild(el('div', 'row__total num', String(t)));
+    }
+
+    var html = '<b>' + m.name + '</b>' + SERIES.map(function (s) {
+      return '<div class="line"><i style="background:var(' + s.varname + ')"></i>' +
+             s.label + ' · ' + m.shipped[s.key] + '</div>';
+    }).join('') + '<div class="line" style="margin-top:4px">Total · ' + t + '</div>';
+    track.addEventListener('mousemove', function (e) { showTip(e, html); });
+    track.addEventListener('mouseleave', hideTip);
+    host.appendChild(row);
+  });
+}
+
+// ---- chart 2: findings, single series --------------------------------------
+function renderChart2() {
+  var host = document.getElementById('chart2');
+  host.textContent = '';
+  var rows = visible().filter(function (m) { return m.found > 0; })
+                      .sort(function (a, b) { return b.found - a.found; });
+  if (!rows.length) { emptyNote(host, 'Nobody matching this filter logged a confirmed finding.'); return; }
+  var max = Math.max.apply(null, rows.map(function (m) { return m.found; })) || 1;
+
+  rows.forEach(function (m) {
+    var row = el('div', 'row');
+    var name = el('div', 'row__name');
+    name.appendChild(el('b', null, m.name));
+    row.appendChild(name);
+
+    var track = el('div', 'track');
+    track.style.width = (100 * m.found / max) + '%';
+    track.setAttribute('role', 'img');
+    track.setAttribute('aria-label', m.name + ': ' + m.found + ' confirmed findings');
+    var seg = el('div', 'seg s1'); seg.style.width = '100%';
+    track.appendChild(seg);
+    row.appendChild(track);
+    row.appendChild(el('div', 'row__total num', String(m.found)));
+
+    track.addEventListener('mousemove', function (e) {
+      showTip(e, '<b>' + m.name + '</b><div class="line">' + m.found + ' confirmed findings</div>');
+    });
+    track.addEventListener('mouseleave', hideTip);
+    host.appendChild(row);
+  });
+}
+
+// ---- tables ----------------------------------------------------------------
+function buildTable(node, cols, rows) {
+  var thead = '<thead><tr>' + cols.map(function (c, i) {
+    return '<th' + (i ? ' style="text-align:right"' : '') + '>' + c + '</th>';
+  }).join('') + '</tr></thead>';
+  var tbody = '<tbody>' + rows.map(function (r) {
+    return '<tr>' + r.map(function (v, i) {
+      return i ? '<td class="n">' + v + '</td>' : '<td>' + v + '</td>';
+    }).join('') + '</tr>';
+  }).join('') + '</tbody>';
+  node.innerHTML = thead + tbody;
+}
+function renderTables() {
+  buildTable(document.getElementById('table1'),
+    ['Member', 'PRs merged', 'Cards done', 'Migrations', 'Total'],
+    rankedList().map(function (m) {
+      return [m.name, m.shipped.prs, m.shipped.cards, m.shipped.migs, total(m)];
+    }));
+  buildTable(document.getElementById('table2'),
+    ['Member', 'Confirmed findings'],
+    visible().slice().sort(function (a, b) { return b.found - a.found; })
+             .map(function (m) { return [m.name, m.found]; }));
+}
+
+// ---- ranked crew cards, expandable -----------------------------------------
+function renderCrew() {
+  var host = document.getElementById('crew');
+  host.textContent = '';
+  var rows = rankedList();
+  if (!rows.length) { emptyNote(host, 'Nobody matches this filter.'); return; }
+
+  rows.forEach(function (m, i) {
+    var row = el('div', 'crew' + (m.kind === 'human' ? ' crew--human' : ''));
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.setAttribute('aria-expanded', 'false');
+    row.appendChild(el('div', 'crew__rank', String(i + 1)));
+
+    var body = el('div', 'crew__body');
+    var top = el('div', 'crew__top');
+    top.appendChild(el('span', 'crew__name', m.name));
+    top.appendChild(el('span', 'crew__kind', m.kind === 'human' ? 'human' : 'agent'));
+    top.appendChild(el('span', 'crew__role', m.role));
+    top.appendChild(el('span', 'crew__chev', 'details'));
+    body.appendChild(top);
+
+    var stats = el('div', 'crew__stats');
+    m.stats.forEach(function (t) { stats.appendChild(el('span', 'stat', t)); });
+    body.appendChild(stats);
+
+    var c = el('div', 'crew__catch');
+    c.appendChild(el('b', null, m.catchLabel || 'Signature catch: '));
+    c.appendChild(document.createTextNode(m.catch));
+    body.appendChild(c);
+
+    var more = el('div', 'crew__more');
+    [['PRs merged', m.shipped.prs], ['Cards done', m.shipped.cards],
+     ['Migrations', m.shipped.migs], ['Shipped total', total(m)],
+     ['Confirmed findings', m.found], ['Shipped + found', total(m) + m.found]
+    ].forEach(function (kv) {
+      var line = el('div', 'kv');
+      line.appendChild(el('span', null, kv[0]));
+      line.appendChild(el('span', 'num', String(kv[1])));
+      more.appendChild(line);
+    });
+    body.appendChild(more);
+
+    row.appendChild(body);
+    function toggle() {
+      var open = row.classList.toggle('is-open');
+      row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      row.querySelector('.crew__chev').textContent = open ? 'hide' : 'details';
+    }
+    row.addEventListener('click', toggle);
+    row.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
+    host.appendChild(row);
+  });
+}
+
+function renderAll() { renderChart1(); renderChart2(); renderTables(); renderCrew(); }
+
+// ---- controls --------------------------------------------------------------
+function wireSeg(id, key) {
+  var group = document.getElementById(id);
+  group.addEventListener('click', function (e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    STATE[key] = btn.dataset[key === 'metric' ? 'metric' : 'who'];
+    Array.prototype.forEach.call(group.querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+    });
+    renderAll();
+  });
+}
+wireSeg('metric', 'metric');
+wireSeg('who', 'who');
+
+(function () {
+  var btn = document.getElementById('theme');
+  var root = document.documentElement;
+  function label() {
+    var dark = root.getAttribute('data-theme') === 'dark' ||
+      (!root.getAttribute('data-theme') && matchMedia('(prefers-color-scheme:dark)').matches);
+    btn.textContent = dark ? 'Light' : 'Dark';
+  }
+  btn.addEventListener('click', function () {
+    var dark = root.getAttribute('data-theme') === 'dark' ||
+      (!root.getAttribute('data-theme') && matchMedia('(prefers-color-scheme:dark)').matches);
+    root.setAttribute('data-theme', dark ? 'light' : 'dark');
+    label();
+  });
+  label();
+})();
+
+renderAll();
+</script>
+</body>
+</html>

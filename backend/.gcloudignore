@@ -1,0 +1,39 @@
+# What `gcloud run deploy --source .` must NOT upload from backend/.
+#
+# WHY THIS FILE EXISTS, because its absence is not obvious and the failure is silent:
+# gcloud tars up the current directory and uploads it to the Cloud Build staging
+# bucket BEFORE Docker ever runs. It looks for an ignore file in the directory it is
+# uploading and does NOT walk up to a parent's .gitignore, so the repo-root
+# Chirp/.gitignore -- which does list .env -- has no effect here. With no file at
+# this path, `gcloud meta list-files-for-upload` run from backend/ lists `.env`
+# literally, alongside the whole .venv/ and tests/ trees.
+#
+# The container image was never the problem: backend/Dockerfile uses explicit COPY
+# statements (pyproject.toml, alembic.ini, alembic/, app/) rather than `COPY . .`,
+# so .env cannot reach the image. But that protection only applies AFTER Cloud Build
+# already holds the raw source archive, in cleartext, in GCS. .env carries a live
+# RESEND_API_KEY and the Stripe keys.
+#
+# If you add a build step that needs one of these paths, remove that line rather
+# than deleting the file.
+
+# Secrets. The whole reason this file exists.
+.env
+.env.*
+*.pem
+*-service-account*.json
+
+# The virtualenv: thousands of files, none of them used by the image build.
+.venv/
+venv/
+
+# Test and build artifacts the Dockerfile does not COPY.
+tests/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+htmlcov/
+.coverage

@@ -13,6 +13,8 @@ is how you make a complaint disappear.
 
 from __future__ import annotations
 
+import uuid
+
 from httpx import AsyncClient
 
 from tests.conftest import MakeChapterWith, verify_campus
@@ -182,3 +184,27 @@ async def test_reopening_is_rejected_by_the_schema(
         headers=setup.president.headers,
     )
     assert attempt.status_code == 422, attempt.text
+
+
+# NO CONCURRENCY TEST HERE, DELIBERATELY — and the reason is worth more than the test
+# would have been.
+#
+# The race is real: resolve_report originally did read-check-then-write, so two
+# moderators could both read "open", both pass the guard, and both write. The fix is a
+# guarded UPDATE ... WHERE status = 'open' with a rowcount check, so the database picks
+# the winner. That is correct by construction and is the third time this codebase has
+# needed the same shape (c51's dues reservation, c105's invite seat claim).
+#
+# Two attempts to PROVE it here both failed, in opposite and instructive ways:
+#   1. asyncio.gather over two PATCHes through the ASGI test client PASSED against a
+#      deliberately sabotaged read-check-then-write build. The test client does not
+#      interleave the two handlers inside the critical section, so it could not fail.
+#   2. Two live sessions each running the guarded UPDATE deadlocked instead: the second
+#      blocks on the row lock the first holds, and neither had committed yet.
+#
+# A test that cannot fail is worse than no test, because it reads as coverage. Rather
+# than ship either one, this is recorded honestly: the SEQUENTIAL double-resolve is
+# covered above by test_double_resolve_is_a_conflict_not_a_silent_success; the
+# concurrent case rests on the guarded UPDATE being correct by construction, and is
+# NOT covered by a test. If it ever needs real coverage it wants two processes and a
+# lock-wait timeout, not two coroutines on one event loop.
