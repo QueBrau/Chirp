@@ -19,7 +19,7 @@ import uuid
 
 from httpx import AsyncClient
 
-from tests.conftest import ApiUser, MakeChapterWith, MakeUser
+from tests.conftest import ApiUser, MakeChapterWith, MakeUser, set_campus
 
 
 async def _campus_id_of(client: AsyncClient, chapter_id: str, headers: dict[str, str]) -> str:
@@ -55,8 +55,14 @@ async def _invite_and_join(
 async def _make_campus_user(
     client: AsyncClient, campus_id: str, display_name: str = "Campus User"
 ) -> ApiUser:
-    """Bootstrap a user pinned to `campus_id` (make_user doesn't expose campus_id).
-    Matches the helper in test_feed_audience.py / test_blocks.py."""
+    """Bootstrap a user, then pin them to `campus_id` directly.
+
+    c85 made campus SERVER-OWNED: POST /auth/bootstrap no longer accepts campus_id
+    in the body, so passing it there is silently ignored and the user ends up with
+    no campus at all — which the campus-feed guard then correctly 403s. Matches the
+    helper in test_feed_audience.py; set_campus writes the column the way tests
+    already set is_platform_admin, until the .edu redemption (c86) is the real writer.
+    """
     uid = f"uid-{uuid.uuid4().hex}"
     headers = {"X-Debug-Firebase-Uid": uid}
     email = f"{uid}@example.edu"
@@ -66,12 +72,13 @@ async def _make_campus_user(
             "email": email,
             "display_name": display_name,
             "account_type": "non_greek",
-            "campus_id": campus_id,
         },
         headers=headers,
     )
     assert response.status_code == 201, response.text
-    return ApiUser(id=response.json()["id"], firebase_uid=uid, email=email, headers=headers)
+    user = ApiUser(id=response.json()["id"], firebase_uid=uid, email=email, headers=headers)
+    await set_campus(user.id, campus_id)
+    return user
 
 
 async def _block(client: AsyncClient, blocker_headers: dict[str, str], blocked_id: str) -> None:
