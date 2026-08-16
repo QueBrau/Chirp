@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -20,6 +21,13 @@ DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://chirp:chirp@localhost:5432/chi
 # Connected to for CREATE/DROP DATABASE only. Always present on both the official
 # postgres image and a Homebrew install.
 MAINTENANCE_DB = "postgres"
+# Written as a COMMENT ON DATABASE the moment a run database is created. The sweep
+# drops ONLY databases carrying it, so a name that merely looks like ours is never
+# touched. Second field is the creation time in epoch seconds.
+RUN_DB_MARKER = "chirp-pytest-run"
+# A run that outlives this is not running any more, whatever the pid says. Guards
+# against pid reuse making an abandoned database permanently un-sweepable.
+RUN_DB_MAX_AGE_SECONDS = 12 * 60 * 60
 
 
 def _run_db_name(base: str) -> str:
@@ -34,9 +42,16 @@ def _run_db_name(base: str) -> str:
 
 
 def _swap_database(url: str, database: str) -> str:
-    """Return `url` pointing at a different database on the same server."""
-    head, _, _ = url.rpartition("/")
-    return f"{head}/{database}"
+    """Return `url` pointing at a different database on the same server.
+
+    The query string is preserved. Dropping it would quietly discard sslmode,
+    application_name and friends, which a hosted or staging Postgres may require —
+    and the resulting connection failure would surface as "postgres not available"
+    rather than as the misconfiguration it is.
+    """
+    head, _, tail = url.rpartition("/")
+    _, sep, query = tail.partition("?")
+    return f"{head}/{database}{sep}{query}"
 
 
 def _database_of(url: str) -> str:
@@ -93,26 +108,47 @@ async def _maintenance_execute(admin_url: str, statements: list[str]) -> None:
 
 
 async def _drop_stale_run_databases(admin_url: str, base: str) -> None:
-    """Drop per-run databases whose owning process is gone.
+    """Drop abandoned run databases — and ONLY ones this fixture provably created.
 
-    Without this, every crashed or killed run leaks a database. Liveness is
-    decided by the pid embedded in the name: if that process is not running,
-    nothing can still be using it. Unparseable names are left alone, and so is
-    the shared base database — this only ever removes what it created.
+    Without this, every crashed or killed run leaks a database on a long-lived
+    machine like Jose's. But the sweep runs on the hot path of every `pytest`
+    invocation and force-drops, which disconnects live sessions, so it has to be
+    certain about what it is deleting. Two independent guards, both required:
+
+    1. PROVENANCE. Only databases carrying the RUN_DB_MARKER comment are even
+       considered. Matching the name shape is deliberately NOT enough: a human
+       scratch database that happened to be called `chirp_test_p9` would parse as
+       "pid 9, not running, therefore abandoned" and be destroyed underneath
+       someone. Name shape is a hint; the comment is the proof.
+    2. ABANDONMENT. Either the pid is gone, or the database is older than
+       RUN_DB_MAX_AGE_SECONDS. The age check exists because pids are reused: a
+       crashed run's pid can be reassigned to some long-lived process, and from
+       then on `os.kill(pid, 0)` succeeds forever and the database would never be
+       reclaimed. No test run lasts twelve hours, so age settles it.
     """
     engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
     try:
         async with engine.connect() as conn:
             result = await conn.execute(
-                text("SELECT datname FROM pg_database WHERE datname LIKE :pattern"),
+                text(
+                    "SELECT datname, shobj_description(oid, 'pg_database') "
+                    "FROM pg_database WHERE datname LIKE :pattern"
+                ),
                 {"pattern": f"{base}\\_p%"},
             )
-            names = [row[0] for row in result]
+            candidates = [(row[0], row[1]) for row in result]
     finally:
         await engine.dispose()
 
+    now = time.time()
     stale = []
-    for name in names:
+    for name, comment in candidates:
+        if not comment or not comment.startswith(RUN_DB_MARKER):
+            continue  # not ours, whatever it is called
+        created_at = comment[len(RUN_DB_MARKER) :].strip()
+        if created_at.isdigit() and now - int(created_at) > RUN_DB_MAX_AGE_SECONDS:
+            stale.append(name)
+            continue
         pid_part = name[len(base) + 2 :].partition("_")[0]
         if not pid_part.isdigit():
             continue
@@ -192,12 +228,32 @@ def database_url() -> AsyncIterator[str]:
         pytest.skip("postgres not available — docker compose up db")
 
     asyncio.run(_drop_stale_run_databases(admin_url, base))
-    asyncio.run(
-        _maintenance_execute(
-            admin_url,
-            [f'DROP DATABASE IF EXISTS "{run_db}" WITH (FORCE)', f'CREATE DATABASE "{run_db}"'],
+    try:
+        asyncio.run(
+            _maintenance_execute(
+                admin_url,
+                [
+                    f'DROP DATABASE IF EXISTS "{run_db}" WITH (FORCE)',
+                    f'CREATE DATABASE "{run_db}"',
+                    # Stamped immediately after creation so the sweep can tell this
+                    # database apart from anything else sharing the name shape.
+                    f"COMMENT ON DATABASE \"{run_db}\" IS '{RUN_DB_MARKER} {int(time.time())}'",
+                ],
+            )
         )
-    )
+    except Exception as exc:
+        # The probe above only proves the server accepts a CONNECT. Creating the
+        # run database additionally needs CREATEDB, and a role that has one but
+        # not the other would otherwise surface as a raw traceback out of a
+        # fixture rather than as the configuration problem it is.
+        message = (
+            f"Connected to the postgres server but could not create the per-run test "
+            f"database {run_db}: {type(exc).__name__}: {exc}. The role in "
+            f"TEST_DATABASE_URL needs CREATEDB (board card c106)."
+        )
+        if os.environ.get("CHIRP_REQUIRE_DB") == "1":
+            pytest.fail(message, pytrace=False)
+        pytest.skip(message)
     try:
         yield url
     finally:
