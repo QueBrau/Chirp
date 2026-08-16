@@ -1,11 +1,11 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 16 2026, after the c94/c93 session. **Prod is current and verified.**
+_Last updated: Aug 16 2026, after the c94/c93/c58/c66/c95/c96 session. **Prod is current and verified.**
 Migration 0011 is applied, revision `chirp-api-00013-rbg` is serving it, and a real
 signed-in request was confirmed returning 200. Alpha readiness is **50%** — 10 of 20
 named gates. Nothing has been deployed since; c94 is a mobile-only change._
 
-**board.html is the source of truth for tasks** — 97 cards, 61 decisions. It now has an
+**board.html is the source of truth for tasks** — 101 cards, 62 decisions. It now has an
 **alpha readiness bar** that recomputes from the cards on every render, and cards are
 **headlines with the detail behind a click** (a right-hand drawer). Open a card before
 acting on it; the headline is deliberately short and the reasoning lives in the drawer.
@@ -37,37 +37,61 @@ that must return 409.
 
 Ordered by what I'd actually do first:
 
-1. **c58 — live browser QA.** Partly done: full signup → bootstrap → feed, and now the
-   whole sign-in/sign-out round trip (c94), verified against real prod on a phone
-   viewport. Yak, Messages, compose, moderation and the invite path are still unproven.
-2. **c66** — the runbook's DB password is literally the string `REDACTED`.
+**Answer c96's scope question first — it may reorder everything below.** See "The
+campus problem" further down.
+
+1. **c58 — live browser QA.** Jose's auth/orgs half is **walked** against real prod.
+   Q's vertical (Yak content, campus feed, messaging, treasurer/secretary dashboards,
+   CSV export) is still unproven, which is the only reason the card isn't Done.
+2. **c99 / c100 / c97** — the fake-content trio, all cheap: every profile hardcodes
+   "Sophomore · Business" as the user's *own* bio, the alumni empty state says
+   "brothers", and `MOCK_MOMENTS` still ships seven invented people to every Home.
 3. **c74** — `chirp.shared@gmail.com` is published on the live site *and* owns GCP,
-   Firebase and Stripe. Wants a forwarding alias; coupled to c73's domain purchase.
-4. **c73** — marketing site to `about.<domain>`. Blocked on buying a domain.
+   Firebase and Stripe. Wants a forwarding alias; **blocked on c73's domain purchase**.
+4. **c73** — marketing site to `about.<domain>`. **Blocked on buying a domain** (yours).
 5. **c87 → c86 → c88** — transactional email, then `.edu` verification, then the gate.
-   Strictly in that order. **Hold these until after alpha**: the two-tier decision means
-   chapter membership grants org content with no email at all, so alpha runs without them.
+   Strictly in that order. Previously "hold until after alpha" — **c96 challenges that**.
 
-**c94 and c93 are done, on PR #21 (`jose/c94-signin-navigation`), not yet merged.**
-c94's sign-in bounce was a *race*, not a missing navigate call: the app navigated on the
-Firebase credential while SessionProvider was still resolving `/auth/me`, so the
-destination guard read a stale `"signedOut"` and redirected straight back. It now waits
-for the settled session. Reproduced on the pre-fix code against prod first, then
-re-verified: sign out and back in lands on `/feed` in ~1s.
+**PR #21 (`jose/c94-signin-navigation`) is open and holds c94, c93, c98 and c95.**
+Until it merges, `DEPLOY.md` on main **still carries the `--set-env-vars` line that wipes
+`CORS_ORIGINS`** — do not redeploy off main's copy; deploy with no env flags at all.
 
-**Until PR #21 merges, `DEPLOY.md` on main still carries the `--set-env-vars` line that
-wipes `CORS_ORIGINS`.** Do not redeploy off main's copy — use the branch, or just deploy
-with no env flags at all.
+Done this session, all verified live against prod, not by reading code:
+**c94** (the sign-in bounce was a *race* — the app navigated on the Firebase credential
+while SessionProvider was still resolving `/auth/me`, so the destination guard read a
+stale `"signedOut"` and redirected straight back; reproduced on the pre-fix code first,
+then re-verified: sign out and back in lands on `/feed` in ~1s) · **c93** (+ four more
+paste-traps of the same family across three docs) · **c98** (Family Tree drew a blank box
+in the state *every* chapter starts in) · **c95** (zero 401s now, on both sign-in and cold
+reload) · **c66** (seven paste-traps fixed in the private runbook; inline password kept,
+your call).
 
-Three new cards came out of that live run: **c95** (every sign-in burns a 401 on
-`/auth/me` before the 200, spending one of loadMe's three retries on a self-inflicted
-failure), **c96** (the QA account has no `campus_id`, so Home/Campus is a dead end with
-no way forward — check whether a *fresh* signup lands there too before assuming it is
-stale fixture data), and **c97** (`MOCK_MOMENTS` — Tyler, Maria, Priya and four more
-invented people — still ship in every user's "Your story" row).
+Still open from the walk: **c99**, **c100**, **c97**, and **c101** (below).
 
 Also open and unowned: **c84** (a chapter-less author cannot delete their own post) and
 **c91** (no endpoint to resolve a report).
+
+## The campus problem (c96) — decide this before alpha
+
+**Nothing in the backend writes `users.campus_id`. Anywhere.** Every `campus_id=`
+assignment in `backend/app` is a `Chapter`, `ContentReport` or `Yak`; every other
+reference is a read, mostly a 403 comparison. Bootstrap says so in its own comment,
+added by c85: *"The .edu redemption in c86 is the only writer of this column."*
+
+So "hold c87 → c86 → c88 until after alpha" does not defer email. It means **every alpha
+user permanently has no campus**, which darkens **Home's Campus tab and the entire Yak
+tab** (both confirmed live on prod), and makes alpha gate **c71** — *"a campus-only
+student can post"* — unreachable by construction.
+
+The org half of the two-tier reasoning is genuinely fine: Orgs, events, members, dues and
+invites all work perfectly with `campus_id` null. That's why this went unnoticed.
+
+Either alpha ships with two of five tabs dark and c71 dropped from the gate list, or c86
+moves ahead of alpha. **Do not "fix" it by writing a campus assignment into bootstrap** —
+that is exactly the hole c85 closed, and see c101: `q/campus-posts` predates c85, still
+has `campus_id=body.campus_id`, and will conflict on those very lines. Its side is the
+*tempting* resolution, because it is the only code in either branch that makes campus
+features work. Resolve in favour of main.
 
 ## Things that will bite you
 
@@ -92,6 +116,9 @@ Also open and unowned: **c84** (a chapter-less author cannot delete their own po
 - **Card ids and migration numbers are shared resources.** Take the next one from
   *origin's current* board, not the copy you started editing. Taken: 0011 (c76), 0013
   (c71, on Q's branch). **0012 was claimed for c69 and released unused.** Next free: 0014.
+- **`q/campus-posts` carries TWO hazards, not one** (c101). Besides the heads problem
+  below, it predates c85 and still sets `campus_id` from the request body — the merge will
+  conflict on those lines and the branch's side looks like the fix. Take main's.
 - **A multiple-heads hazard is pending.** Q's `0013_campus_posts.py` has
   `down_revision = "0010"`, and `0011` is now on main with the same parent. Main is
   single-head today; the moment `q/campus-posts` merges there will be **two heads** and
