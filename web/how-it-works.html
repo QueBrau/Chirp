@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works — Chirp</title>
+<meta name="description" content="How Chirp works: create an account, find your campus, join your chapter with an invite code, and — if you're a treasurer — how dues actually move through Stripe Connect.">
+<link rel="canonical" href="https://chirps-prod.web.app/how-it-works">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Chirp">
+<meta property="og:title" content="How it works — Chirp">
+<meta property="og:description" content="From signing up to collecting dues — how Chirp actually works, step by step.">
+<meta property="og:url" content="https://chirps-prod.web.app/how-it-works">
+<meta property="og:image" content="https://chirps-prod.web.app/assets/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How it works — Chirp">
+<meta name="twitter:description" content="From signing up to collecting dues — how Chirp actually works.">
+<meta name="twitter:image" content="https://chirps-prod.web.app/assets/og-image.png">
+<meta name="theme-color" content="#5B5BF6">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="icon" type="image/x-icon" href="/assets/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<a class="skip-link sr-only" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="/">
+      <img class="brand-mark" src="/assets/favicon.svg" alt="" width="32" height="32">
+      <span class="brand-name">Chirp</span>
+    </a>
+    <nav class="site-nav" id="site-nav">
+      <a href="/features">Features</a>
+      <a href="/how-it-works" aria-current="page">How it works</a>
+      <a href="/about">About</a>
+      <a href="/contact">Contact</a>
+    </nav>
+    <div class="header-actions">
+      <a class="btn btn-ghost" href="/contact">Bring Chirp to your chapter</a>
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="section-tight">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">How it works</p>
+        <h1 class="fs-h1">From sign-up to dues, step by step</h1>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div>
+            <h3 class="fs-headline">Create your account</h3>
+            <p class="body">Sign up with your email. During setup you tell Chirp who you are: a student, someone in a fraternity or sorority, or an alum.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div>
+            <h3 class="fs-headline">Land on your campus</h3>
+            <p class="body">Your Home feed and Yak are scoped to your campus from the start — no setup required beyond picking your school.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div>
+            <h3 class="fs-headline">Join your chapter (optional)</h3>
+            <p class="body">An officer shares an invite link — the kind this site hands off at <a href="/join-chapter">/join-chapter</a> — or you paste the invite code directly in the app. Joining adds your chapter to your Orgs tab.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div>
+            <h3 class="fs-headline">Get the tools your role needs</h3>
+            <p class="body">Every member sees the chapter feed, events, and member directory. Treasurers and presidents additionally see the dues dashboard; secretaries and presidents see meeting minutes and attendance.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt-bg" id="dues">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">Dues</p>
+        <h2 class="fs-h1">How dues actually move</h2>
+        <p class="body-lg" style="margin-top: var(--space-4)">This is the part worth being precise about, because it's real money.</p>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div>
+            <h3 class="fs-headline">The chapter connects its own Stripe account</h3>
+            <p class="body">A treasurer or president starts Stripe Connect onboarding — a Stripe-hosted Express account for the chapter, not for Chirp.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div>
+            <h3 class="fs-headline">Stripe verifies the chapter</h3>
+            <p class="body">Once Stripe confirms the account can accept charges, the chapter's dues cycles become payable to members.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div>
+            <h3 class="fs-headline">Members pay by card or bank transfer</h3>
+            <p class="body">Each payment is a Stripe PaymentIntent created directly on the chapter's connected account — a direct charge, not a transfer through Chirp.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div>
+            <h3 class="fs-headline">Money settles to the chapter, not to Chirp</h3>
+            <p class="body">Funds land in the chapter's own Stripe balance. Chirp takes a platform fee — 1% on card payments, 2% on bank transfers — and never takes custody of the money at any point.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">5</div>
+          <div>
+            <h3 class="fs-headline">Every payment hits an append-only ledger</h3>
+            <p class="body">Dues payments, expenses, and any corrections are recorded as new entries, never edits — so the chapter's financial record can't be quietly rewritten.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout" style="margin-top: var(--space-8)">
+        <p class="body"><strong>Card data never touches Chirp's servers.</strong> Payment details go straight from your device to Stripe.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <div class="section-head center">
+        <h2 class="fs-h1">Questions before you bring this to your chapter?</h2>
+      </div>
+      <div style="display:flex; justify-content:center; gap: var(--space-3); flex-wrap: wrap;">
+        <a class="btn btn-primary btn-lg" href="/contact">Contact us</a>
+        <a class="btn btn-ghost btn-lg" href="/features">Back to features</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-top">
+      <div>
+        <div class="footer-brand">
+          <img class="brand-mark" src="/assets/favicon.svg" alt="" width="26" height="26">
+          <span>Chirp</span>
+        </div>
+        <p class="footer-tagline">One app for your chapter's feed, dues, and e-board tools — plus Yak, the anonymous board for your whole campus.</p>
+      </div>
+      <div class="footer-cols">
+        <div class="footer-col">
+          <h4>Product</h4>
+          <a href="/features">Features</a>
+          <a href="/how-it-works">How it works</a>
+          <a href="/join-chapter">Join a chapter</a>
+        </div>
+        <div class="footer-col">
+          <h4>Company</h4>
+          <a href="/about">About</a>
+          <a href="/contact">Contact</a>
+        </div>
+        <div class="footer-col">
+          <h4>Legal</h4>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; 2026 Chirp. Currently in development — not yet available on the App Store or Google Play.</span>
+      <span>Built for every student, not just Greek life.</span>
+    </div>
+  </div>
+</footer>
+
+<script src="/js/main.js"></script>
+</body>
+</html>

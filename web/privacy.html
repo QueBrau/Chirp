@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Chirp</title>
+<meta name="description" content="What Chirp actually collects, why, and what parts of this policy still need legal review before launch.">
+<link rel="canonical" href="https://chirps-prod.web.app/privacy">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Chirp">
+<meta property="og:title" content="Privacy Policy — Chirp">
+<meta property="og:description" content="What Chirp actually collects, why, and what still needs legal review.">
+<meta property="og:url" content="https://chirps-prod.web.app/privacy">
+<meta property="og:image" content="https://chirps-prod.web.app/assets/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Privacy Policy — Chirp">
+<meta name="twitter:description" content="What Chirp actually collects, why, and what still needs legal review.">
+<meta name="twitter:image" content="https://chirps-prod.web.app/assets/og-image.png">
+<meta name="theme-color" content="#5B5BF6">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="icon" type="image/x-icon" href="/assets/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<a class="skip-link sr-only" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="/">
+      <img class="brand-mark" src="/assets/favicon.svg" alt="" width="32" height="32">
+      <span class="brand-name">Chirp</span>
+    </a>
+    <nav class="site-nav" id="site-nav">
+      <a href="/features">Features</a>
+      <a href="/how-it-works">How it works</a>
+      <a href="/about">About</a>
+      <a href="/contact">Contact</a>
+    </nav>
+    <div class="header-actions">
+      <a class="btn btn-ghost" href="/contact">Bring Chirp to your chapter</a>
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="section-tight">
+    <div class="container doc">
+      <p class="eyebrow">Legal</p>
+      <h1 class="fs-h1" style="margin-bottom: var(--space-5)">Privacy Policy</h1>
+      <p class="caption updated">Last updated: August 2026. Draft — see "Not yet reviewed" below.</p>
+
+      <div class="callout warning" style="margin-bottom: var(--space-8)">
+        <p class="body" style="color: var(--ink)"><strong>This policy has not been reviewed by a lawyer.</strong> It honestly describes what Chirp's product does today. It is a plain description, not a legally binding privacy policy, and Chirp should not launch publicly or process real user data in production against it until a real legal review happens. See "What still needs legal review" near the bottom of this page for the specific gaps.</p>
+      </div>
+
+      <h2>What this page covers</h2>
+      <p>This describes the information the Chirp app and its backend actually handle as of the date above. Chirp is a social and operations app for college students, built around Firebase Authentication, a PostgreSQL database, and — for chapters that turn on dues — Stripe.</p>
+
+      <h2>Information we collect</h2>
+      <ul>
+        <li><strong>Account information.</strong> Your email address and a display name, managed through Firebase Authentication. Sign-up currently works by email and password; Google and Apple sign-in are planned but not yet functional. We also store which of three account types you picked — student, someone in a fraternity or sorority, or an alum — and your campus.</li>
+        <li><strong>Chapter membership.</strong> If you join a chapter or student org, we store that membership, your role (e.g. member, treasurer, president), and pledge class if applicable.</li>
+        <li><strong>Content you post.</strong> Posts, comments, and likes on the Home feed. Posts and votes on Yak, Chirp's anonymous campus board.</li>
+        <li><strong>Yak anonymity, specifically.</strong> Yak posts do not show your identity to other students, and Chirp's API never returns the author of a Yak post to other users. Internally, the account that created a Yak post is still linked to it, used only to act on reports and enforce bans. Anonymous to other students; not anonymous to Chirp.</li>
+        <li><strong>Chapter operations data.</strong> If your chapter uses these tools: dues cycles and ledger entries (including which member paid which amount), meeting minutes and attendance, and family-tree / lineage records (big/little relationships, pledge class, family groupings).</li>
+        <li><strong>Alumni profile data, if you provide it.</strong> Graduation year, employer, job title, industry, and a LinkedIn URL, plus any job posts you create.</li>
+        <li><strong>Payment information, indirectly.</strong> If you pay dues, Stripe collects and processes your card or bank account details directly — that data never transits Chirp's own servers. Chirp's backend receives limited payment metadata (amount, payment status, and Stripe-assigned identifiers) so it can record the transaction in your chapter's ledger.</li>
+        <li><strong>Standard operational logs.</strong> Like most web services, the infrastructure Chirp runs on (Google Cloud Run, Cloud SQL) may generate ordinary request and error logs. We have not yet documented a specific retention policy for these.</li>
+      </ul>
+
+      <h2>How we use this information</h2>
+      <ul>
+        <li>To operate the app: authenticate you, show your feed and your chapter's content, and enforce role-based access to chapter tools.</li>
+        <li>To run chapter operations features you or your chapter's officers use: dues collection and the ledger, meeting minutes, lineage records.</li>
+        <li>To respond to content reports and enforce blocks or bans, including on Yak where identity is otherwise hidden from other students.</li>
+        <li>To communicate with you about your account when necessary.</li>
+      </ul>
+
+      <h2>Who we share it with</h2>
+      <p>Chirp relies on a small number of infrastructure providers to operate:</p>
+      <ul>
+        <li><strong>Firebase (Google)</strong> — authentication.</li>
+        <li><strong>Google Cloud (Cloud Run, Cloud SQL, Secret Manager)</strong> — hosting the backend and database.</li>
+        <li><strong>Stripe</strong> — payment processing for chapters that enable dues collection. Your chapter's connected Stripe account, not Chirp, is the merchant of record for dues payments.</li>
+        <li><strong>Firebase Hosting</strong> — hosts this website.</li>
+      </ul>
+      <p>We do not have a data-sale or ad-network relationship to disclose, because we don't have one — this product has no advertising and no third-party data broker integrations today.</p>
+
+      <h2>Dues and payment records</h2>
+      <p>Dues payments are recorded in an append-only ledger tied to your chapter and, for a dues payment, to your account. Corrections are added as new entries rather than edits, so chapter treasurers and presidents can see a full history. This ledger is visible to your chapter's treasurer and president, not to Chirp staff as a matter of routine operation.</p>
+
+      <h2>What still needs legal review</h2>
+      <p>Being direct about this is more useful than pretending it's settled:</p>
+      <ul>
+        <li>We have not defined data retention periods for any of the categories above.</li>
+        <li>We do not yet have a formal data access, correction, or deletion request process. If you want your account data reviewed or deleted, email us (see Contact) and we'll handle it manually while that process gets built.</li>
+        <li>This page does not make GDPR, CCPA, COPPA, or any other regional privacy-law compliance claims — those determinations haven't been made yet.</li>
+        <li>There is no Data Processing Agreement in place with chapters, schools, or Chirp's infrastructure providers beyond their own standard terms.</li>
+        <li>There is no formal security-incident or breach-notification process documented yet.</li>
+      </ul>
+
+      <h2>Changes to this page</h2>
+      <p>We'll update this page as the product and how it handles data change. There isn't a formal versioning or notification process for changes yet — that's part of the legal review above.</p>
+
+      <h2>Contact</h2>
+      <p>Questions about this policy or your data: see <a href="/contact">/contact</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-top">
+      <div>
+        <div class="footer-brand">
+          <img class="brand-mark" src="/assets/favicon.svg" alt="" width="26" height="26">
+          <span>Chirp</span>
+        </div>
+        <p class="footer-tagline">One app for your chapter's feed, dues, and e-board tools — plus Yak, the anonymous board for your whole campus.</p>
+      </div>
+      <div class="footer-cols">
+        <div class="footer-col">
+          <h4>Product</h4>
+          <a href="/features">Features</a>
+          <a href="/how-it-works">How it works</a>
+          <a href="/join-chapter">Join a chapter</a>
+        </div>
+        <div class="footer-col">
+          <h4>Company</h4>
+          <a href="/about">About</a>
+          <a href="/contact">Contact</a>
+        </div>
+        <div class="footer-col">
+          <h4>Legal</h4>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; 2026 Chirp. Currently in development — not yet available on the App Store or Google Play.</span>
+      <span>Built for every student, not just Greek life.</span>
+    </div>
+  </div>
+</footer>
+
+<script src="/js/main.js"></script>
+</body>
+</html>

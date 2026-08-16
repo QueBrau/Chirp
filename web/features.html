@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Features — Chirp</title>
+<meta name="description" content="What Chirp does today: a campus feed, the anonymous Yak board, chapter tools for dues and lineage, and an alumni network — plus what's still in progress.">
+<link rel="canonical" href="https://chirps-prod.web.app/features">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Chirp">
+<meta property="og:title" content="Features — Chirp">
+<meta property="og:description" content="What Chirp does today, feature by feature — and what's still being built.">
+<meta property="og:url" content="https://chirps-prod.web.app/features">
+<meta property="og:image" content="https://chirps-prod.web.app/assets/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Features — Chirp">
+<meta name="twitter:description" content="What Chirp does today, feature by feature.">
+<meta name="twitter:image" content="https://chirps-prod.web.app/assets/og-image.png">
+<meta name="theme-color" content="#5B5BF6">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="icon" type="image/x-icon" href="/assets/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<a class="skip-link sr-only" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="/">
+      <img class="brand-mark" src="/assets/favicon.svg" alt="" width="32" height="32">
+      <span class="brand-name">Chirp</span>
+    </a>
+    <nav class="site-nav" id="site-nav">
+      <a href="/features" aria-current="page">Features</a>
+      <a href="/how-it-works">How it works</a>
+      <a href="/about">About</a>
+      <a href="/contact">Contact</a>
+    </nav>
+    <div class="header-actions">
+      <a class="btn btn-ghost" href="/contact">Bring Chirp to your chapter</a>
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="section-tight">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">Features</p>
+        <h1 class="fs-h1">What Chirp does today</h1>
+        <p class="body-lg" style="margin-top: var(--space-4)">Chirp serves every student, not just Greek life. Everyone gets the campus feed and Yak; chapters and student orgs get tools to actually run themselves underneath.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section-tight alt-bg">
+    <div class="container">
+      <h2 class="fs-h2" style="margin-bottom: var(--space-6)">For every student</h2>
+      <div class="grid grid-2">
+        <div class="card feature-card">
+          <div class="icon-mark"><span class="mark mark-circle"></span></div>
+          <h3 class="fs-title">Home feed</h3>
+          <p class="body">Post text, photos, or video. Filter between <strong>For You</strong> and <strong>Campus</strong> to see a mix of what's relevant to you or everything happening at your school. Like and comment on posts.</p>
+        </div>
+        <div class="card feature-card">
+          <div class="icon-mark"><span class="mark mark-bars"><span style="height:40%"></span><span style="height:70%"></span><span style="height:100%"></span></span></div>
+          <h3 class="fs-title">Yak — the anonymous board</h3>
+          <p class="body">A campus-wide board where posts don't carry your name to other students. Upvote and downvote what resonates. Reports and moderation run behind the scenes so the board stays usable — your identity is never shown to other students, though Chirp retains the ability to act on reports and enforce bans.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section-tight">
+    <div class="container">
+      <h2 class="fs-h2" style="margin-bottom: var(--space-2)">For chapters and student orgs</h2>
+      <p class="body-lg" style="margin-bottom: var(--space-6); max-width: 60ch;">If you're in a fraternity, sorority, or another student org, your org gets its own space inside Chirp with role-gated tools for the people running it.</p>
+      <div class="grid grid-3">
+        <div class="card feature-card">
+          <div class="icon-mark"><span class="mark mark-square"></span></div>
+          <h3 class="fs-title">Members &amp; roles</h3>
+          <p class="body">A member directory with roles — president, vice president, treasurer, secretary, historian, and more. Tools show up for the people who hold the relevant role.</p>
+        </div>
+        <div class="card feature-card">
+          <div class="icon-mark"><span class="mark mark-dot"></span></div>
+          <h3 class="fs-title">Treasurer &amp; dues</h3>
+          <p class="body">Dues cycles, an append-only ledger (corrections instead of edits, so the record stays honest), and dues collection by card or bank transfer through Stripe Connect. Your chapter is the merchant of record — see <a href="/how-it-works#dues">how dues work</a>.</p>
+        </div>
+        <div class="card feature-card">
+          <div class="icon-mark"><span class="mark mark-square"></span></div>
+          <h3 class="fs-title">Secretary</h3>
+          <p class="body">Meeting minutes and attendance tracking, kept with the rest of your chapter's records.</p>
+        </div>
+      </div>
+      <div class="grid grid-2" style="margin-top: var(--space-5)">
+        <div class="card feature-card">
+          <div class="icon-mark"><span class="mark mark-circle"></span></div>
+          <h3 class="fs-title">Invite-code joining</h3>
+          <p class="body">Officers generate an invite link; new members open it and join the chapter roster directly — no paperwork.</p>
+        </div>
+        <div class="card feature-card">
+          <div class="icon-mark"><span class="mark mark-bars"><span style="height:100%"></span><span style="height:60%"></span><span style="height:80%"></span></span></div>
+          <h3 class="fs-title">Alumni network &amp; jobs</h3>
+          <p class="body">Alumni profiles (grad year, company, industry) and a job board — posts can come from a specific chapter or the wider network.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt-bg">
+    <div class="container">
+      <div class="card" style="padding: var(--space-8)">
+        <p class="eyebrow">In progress</p>
+        <h2 class="fs-h2" style="margin-bottom: var(--space-4)">What's still being built</h2>
+        <p class="body-lg" style="margin-bottom: var(--space-5); max-width: 64ch;">We'd rather tell you what isn't finished than let the app oversell itself.</p>
+        <ul class="list-plain">
+          <li>
+            <span class="tick">&#8226;</span>
+            <span class="body"><strong class="fs-headline" style="display:block; margin-bottom:2px;">Family tree</strong>Big/little lineage, pledge classes, and family colors already exist as data. The interactive tree visualization is still being built.</span>
+          </li>
+          <li>
+            <span class="tick">&#8226;</span>
+            <span class="body"><strong class="fs-headline" style="display:block; margin-bottom:2px;">Direct messaging</strong>One-to-one and group chat between members is still in development and not yet available in the app.</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <div class="section-head center">
+        <h2 class="fs-h1">See it in action</h2>
+        <p class="body-lg" style="margin: var(--space-4) auto 0;">Read how the pieces fit together, or reach out if you want to pilot Chirp with your chapter.</p>
+      </div>
+      <div style="display:flex; justify-content:center; gap: var(--space-3); flex-wrap: wrap;">
+        <a class="btn btn-primary btn-lg" href="/how-it-works">How it works</a>
+        <a class="btn btn-ghost btn-lg" href="/contact">Contact us</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-top">
+      <div>
+        <div class="footer-brand">
+          <img class="brand-mark" src="/assets/favicon.svg" alt="" width="26" height="26">
+          <span>Chirp</span>
+        </div>
+        <p class="footer-tagline">One app for your chapter's feed, dues, and e-board tools — plus Yak, the anonymous board for your whole campus.</p>
+      </div>
+      <div class="footer-cols">
+        <div class="footer-col">
+          <h4>Product</h4>
+          <a href="/features">Features</a>
+          <a href="/how-it-works">How it works</a>
+          <a href="/join-chapter">Join a chapter</a>
+        </div>
+        <div class="footer-col">
+          <h4>Company</h4>
+          <a href="/about">About</a>
+          <a href="/contact">Contact</a>
+        </div>
+        <div class="footer-col">
+          <h4>Legal</h4>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; 2026 Chirp. Currently in development — not yet available on the App Store or Google Play.</span>
+      <span>Built for every student, not just Greek life.</span>
+    </div>
+  </div>
+</footer>
+
+<script src="/js/main.js"></script>
+</body>
+</html>

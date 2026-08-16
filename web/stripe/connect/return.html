@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>You're back from Stripe — Chirp</title>
+<meta name="description" content="You've returned from Stripe Connect onboarding. Open Chirp to continue.">
+<meta name="robots" content="noindex">
+<link rel="canonical" href="https://chirps-prod.web.app/stripe/connect/return">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Chirp">
+<meta property="og:title" content="You're back from Stripe — Chirp">
+<meta property="og:description" content="Open Chirp to continue.">
+<meta property="og:url" content="https://chirps-prod.web.app/stripe/connect/return">
+<meta name="theme-color" content="#5B5BF6">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="icon" type="image/x-icon" href="/assets/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<a class="skip-link sr-only" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="/">
+      <img class="brand-mark" src="/assets/favicon.svg" alt="" width="32" height="32">
+      <span class="brand-name">Chirp</span>
+    </a>
+    <nav class="site-nav" id="site-nav">
+      <a href="/features">Features</a>
+      <a href="/how-it-works">How it works</a>
+      <a href="/about">About</a>
+      <a href="/contact">Contact</a>
+    </nav>
+    <div class="header-actions">
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="center-page">
+    <div class="container">
+      <div class="center-card" style="margin: 0 auto;">
+        <div class="icon-mark"><span class="mark mark-circle"></span></div>
+        <h1>You're back from Stripe</h1>
+        <p class="body-lg">Stripe's onboarding flow has finished for now. Open Chirp to continue — we can't check your chapter's payment setup status from this page, so the app will show you exactly where things stand.</p>
+        <a class="btn btn-primary btn-lg btn-block" id="open-chirp-btn" href="chirp://">Open Chirp</a>
+        <p class="caption">If tapping the button doesn't do anything, Chirp may not be installed on this device yet.</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-bottom">
+      <span>&copy; 2026 Chirp. Currently in development — not yet available on the App Store or Google Play.</span>
+      <span><a href="/privacy">Privacy</a> &middot; <a href="/terms">Terms</a> &middot; <a href="/contact">Contact</a></span>
+    </div>
+  </div>
+</footer>
+
+<script src="/js/main.js"></script>
+<script>
+  // Best-effort automatic hand-off. Silently does nothing if Chirp isn't
+  // installed — the manual button above is never optional, per design.
+  window.setTimeout(function () {
+    window.location.href = "chirp://";
+  }, 50);
+</script>
+</body>
+</html>

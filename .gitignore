@@ -39,3 +39,7 @@ app-mobile/android/
 # OS
 .DS_Store
 .gstack/
+
+# Firebase CLI
+firebase-debug.log
+.firebase/
