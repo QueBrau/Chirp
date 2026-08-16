@@ -40,6 +40,10 @@
   .col h2 .count { color:var(--ink-3); }
   .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow); padding:10px 12px; margin-bottom:8px; cursor:grab; }
   .card.dragging { opacity:.4; }
+  /* Card id line — monospace and muted so it reads as a label, not a heading.
+     Selectable so an id can be copied straight out of the board. */
+  .card .card-id { font:600 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.6px;
+    text-transform:uppercase; color:var(--accent); margin-bottom:4px; user-select:text; }
   .card .title { font-weight:600; font-size:14px; }
   .card .meta { display:flex; gap:6px; margin-top:8px; align-items:center; }
   .chip { font-size:11px; font-weight:600; letter-spacing:.3px; border-radius:999px; padding:3px 10px; background:var(--surface-alt); color:var(--ink-2); border:0; cursor:pointer; }
@@ -1052,6 +1056,13 @@
       cards.forEach(function (c) {
         var el = document.createElement('div');
         el.className = 'card'; el.draggable = true; el.dataset.id = c.id;
+        // Card id, rendered as its own line above the title. It exists in the data
+        // and is how everyone refers to cards in commits, PRs and conversation
+        // ("c36", "c61") — but it was never on screen, so a card's name was
+        // unreadable from the board itself.
+        var idLine = document.createElement('div');
+        idLine.className = 'card-id';
+        idLine.textContent = c.id;
         var t = document.createElement('div'); t.className = 'title'; t.textContent = c.title;
         var meta = document.createElement('div'); meta.className = 'meta';
         var owner = document.createElement('button');
@@ -1069,7 +1080,7 @@
         del.onclick = function () { if (confirm('Delete card?')) { state.cards = state.cards.filter(function (x) { return x.id !== c.id; }); persist(); } };
         meta.appendChild(del);
         t.ondblclick = function () { var v = prompt('Edit card', c.title); if (v) { c.title = v; persist(); } };
-        el.appendChild(t); el.appendChild(meta);
+        el.appendChild(idLine); el.appendChild(t); el.appendChild(meta);
         el.addEventListener('dragstart', function (ev) { ev.dataTransfer.setData('text/plain', c.id); el.classList.add('dragging'); });
         el.addEventListener('dragend', function () { el.classList.remove('dragging'); });
         colEl.appendChild(el);
