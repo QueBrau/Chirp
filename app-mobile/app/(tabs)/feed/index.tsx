@@ -10,16 +10,32 @@
  * excluded by construction, no client-side filtering needed. "For You" is a
  * ranking that doesn't exist on the backend yet, so both tabs currently show
  * the identical reverse-chron list; see the `visibleItems` comment below.
+ *
+ * Moderation (board c35, App Store Guideline 1.2): MediaPostCard owns the
+ * report/block overflow menu UI; this screen owns the actual API calls
+ * (createReport, blockUser) and the post-block cleanup — dropping the
+ * blocked author's posts locally, then refetching, since GET
+ * /campuses/{campus_id}/feed now filters blocked authors server-side.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Pressable, View } from "react-native";
+import { Alert, Pressable, View } from "react-native";
 
+import { ApiError } from "@/api/client";
 import { likePost, listCampusFeed, unlikePost, type FeedPostOut } from "@/api/feed";
+import { blockUser, createReport } from "@/api/moderation";
+// useCampus (not a local getCampus fetch) — main moved campus resolution into
+// SessionProvider (c67) precisely to kill the per-screen duplicate requests.
 import { useCampus, useSession } from "@/auth";
 import { AppText, EmptyState, Fab, MediaPostCard, MomentsRow, Screen } from "@/components";
 import { MOCK_MOMENTS, mockUserById } from "@/mocks/data";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
+
+/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
+function showApiError(error: unknown, title: string): void {
+  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
+  Alert.alert(title, message);
+}
 
 type FeedFilter = "forYou" | "campus";
 
@@ -106,6 +122,29 @@ export default function FeedScreen() {
             : entry,
         ),
       );
+    }
+  };
+
+  const reportPost = async (item: FeedPostOut, reason: string) => {
+    try {
+      await createReport({ target_type: "post", target_id: item.id, reason });
+      Alert.alert("Reported", "Thanks for letting us know.");
+    } catch (error) {
+      showApiError(error, "Couldn't send that report");
+    }
+  };
+
+  const blockAuthor = async (item: FeedPostOut) => {
+    try {
+      await blockUser(item.author_id);
+      // Drop every post by this author immediately so the UI reacts at once...
+      setItems((current) => current.filter((entry) => entry.author_id !== item.author_id));
+      // ...then refetch, since GET /campuses/{campus_id}/feed now filters this
+      // author's posts server-side (c35) — without this a later paginate/reload
+      // would be the only place the block actually took effect.
+      await load();
+    } catch (error) {
+      showApiError(error, "Couldn't block that person");
     }
   };
 
@@ -197,6 +236,9 @@ export default function FeedScreen() {
                 commentCount={item.comment_count}
                 likedByMe={item.liked_by_me}
                 onToggleLike={() => void toggleLike(item)}
+                onReport={(reason) => void reportPost(item, reason)}
+                onBlock={() => void blockAuthor(item)}
+                canBlock={user !== null && item.author_id !== user.id}
               />
             ))}
           </View>
