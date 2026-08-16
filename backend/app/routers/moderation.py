@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.campus_access import require_verified_campus
 from app.core.errors import conflict, forbidden, not_found
 from app.core.permissions import EBOARD, require_platform_admin
 from app.db import get_session
@@ -221,8 +222,12 @@ async def block_yak_author(
     yak = await session.get(models.Yak, yak_id)
     if yak is None or yak.removed_at is not None:
         raise not_found("yak_not_found")
-    if user.campus_id != yak.campus_id:
-        raise forbidden("not_your_campus")
+    # A FOURTH copy of the old `user.campus_id != yak.campus_id` comparison lived here
+    # (c88). It was invisible to the dependency swap that fixed feed.py and yaks.py,
+    # because it is hand-rolled inside the handler — which is precisely the failure mode
+    # the shared module exists to end. Routing it through the same check keeps this
+    # endpoint honest when the rule changes again.
+    require_verified_campus(user, yak.campus_id)
     if yak.author_id == user.id:
         raise forbidden("cannot_block_self")
 
