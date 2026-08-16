@@ -143,6 +143,17 @@ features work. Resolve in favour of main.
 - **`/healthz` is unreachable** — Google's frontend answers it. The route is `/_health`.
 - **The firebase CLI is logged in as `madden25boss1@gmail.com`**, which cannot see
   `chirps-prod`. Website deploys go through the gcloud ADC; runbook in `web/README.md`.
+- **CLAIMING A MIGRATION NUMBER DOES NOT CLAIM A PARENT, and that is the gap that
+  actually bites.** The board reserves numbers, which prevents duplicate revision ids —
+  it does not stop two people writing different numbers that both set
+  `down_revision` to the same head. That happened Aug 16: 0017 (c91) and 0015 (c86) both
+  parented on 0014, so `alembic upgrade head` failed with two heads. **Before you write a
+  migration, run `alembic heads` against main and parent on what it actually prints** —
+  not on the highest number on disk, which is no longer the same thing. The chain is now
+  0011 -> 0014 -> 0017 -> 0015, so 0015 sits numerically after 0017 on purpose; alembic
+  walks `down_revision`, not filenames, so do not "fix" it. The rule when two migrations
+  collide is the one c71's 0013 already set: **the side that has not merged re-points at
+  the current head**, because renumbering a revision id breaks anything that recorded it.
 - **Card ids and migration numbers are shared resources.** Take the next one from
   *origin's current* board, not the copy you started editing. Taken: 0011 (c76), **0014 (c96, MERGED)**,
   0013 (c71, on Q's branch), **0015 (c86, claimed by the email session)**. **0012 was claimed for
