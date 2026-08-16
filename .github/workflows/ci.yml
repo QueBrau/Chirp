@@ -48,7 +48,82 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+asyncpg://chirp:chirp@localhost:5432/chirp_test
           REDIS_URL: redis://localhost:6379/0
+          # Board card c103. conftest's database_url fixture skips when the DB is
+          # unreachable, which is right on a laptop and dangerous here: skips are
+          # not failures, so a postgres service that never came up would let the
+          # whole DB-backed suite skip and pytest would still exit 0 — a green
+          # check proving nothing. Measured against a dead port before this
+          # landed: 22 passed, 157 skipped, exit 0. This flag turns that skip
+          # into a hard failure. If it ever fires, fix the service; do not
+          # unset the flag.
+          CHIRP_REQUIRE_DB: "1"
         run: python -m pytest -q
+
+  migrations:
+    # Board cards c41 and c101. Two branches parented on the same revision give
+    # alembic two heads, and then `alembic upgrade head` either refuses outright
+    # or runs one branch and silently never creates the other's tables — which is
+    # how c41 reached prod. The backend job would eventually catch it, but only as
+    # an opaque fixture error a minute and a half in, and not at all if the DB
+    # probe had bailed first.
+    #
+    # This runs on the PULL REQUEST MERGE COMMIT, which is the property that
+    # makes it actually solve c101: for a pull_request event GITHUB_SHA is
+    # GitHub's merge of the head into the base, and actions/checkout defaults to
+    # GITHUB_SHA. So this sees the branch's migrations AND main's together and
+    # fails the PR *before* the merge, rather than passing on each side
+    # separately and breaking main the moment they meet.
+    #
+    # No database and no app install — alembic reads the versions directory
+    # offline, so this is the fastest gate in the file and fails first.
+    name: alembic single head
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install alembic
+        run: pip install alembic
+      - name: Assert exactly one migration head
+        working-directory: backend
+        run: |
+          heads="$(python -m alembic -c alembic.ini heads)"
+          count="$(printf '%s\n' "$heads" | grep -c . || true)"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::alembic has $count heads, expected exactly 1."
+            echo "Heads found:"
+            printf '%s\n' "$heads"
+            echo ""
+            # Two heads is the symptom; a duplicated down_revision is the cause,
+            # and naming the two files beats alembic's generic complaint. This
+            # runs ONLY after the head count has already failed, deliberately:
+            # sharing a parent is legitimate when an alembic merge revision joins
+            # the branches back together, and that case is single-head and must
+            # not be blocked.
+            python - <<'PY'
+          import collections, pathlib, re
+          parents = collections.defaultdict(list)
+          for path in sorted(pathlib.Path("alembic/versions").glob("*.py")):
+              text = path.read_text()
+              rev = re.search(r'^revision = ["\'](.+?)["\']', text, re.M)
+              down = re.search(r'^down_revision = ["\'](.+?)["\']', text, re.M)
+              if rev and down:
+                  parents[down.group(1)].append(f"{rev.group(1)} ({path.name})")
+          for parent, children in sorted(parents.items()):
+              if len(children) > 1:
+                  print(f"CAUSE: {len(children)} migrations all declare down_revision={parent}:")
+                  for child in children:
+                      print(f"  - {child}")
+          PY
+            echo ""
+            echo "Two migrations share a parent. RE-POINT the newer one's"
+            echo "down_revision at the real head - do NOT renumber it, the number"
+            echo "is validly claimed on the board. See board cards c41 and c101."
+            exit 1
+          fi
+          echo "single head: $heads"
 
   mobile:
     name: mobile tsc
