@@ -139,20 +139,49 @@ async def websocket_gateway(
             if item.get("type") == "message":
                 await websocket.send_text(item["data"])
 
-    forward_task = asyncio.create_task(_forward())
-    try:
+    async def _drain() -> None:
         while True:
             # Drain client frames purely to detect disconnect; the stream is server -> client.
             await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
+
+    forward_task = asyncio.create_task(_forward(), name="ws-forward")
+    drain_task = asyncio.create_task(_drain(), name="ws-drain")
+
+    try:
+        # Race the two: whichever ends first ends the connection. Awaiting only
+        # the client-drain (the previous shape) meant a forwarder that died —
+        # Redis restarting, the VPC connector dropping — was never observed. The
+        # socket stayed open delivering nothing, with no log and no close frame,
+        # which is the same "looks like a flaky client" symptom c62 exists to
+        # kill, just moved from connect time to steady state.
+        done, _ = await asyncio.wait(
+            {forward_task, drain_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+
+        if forward_task in done:
+            # _forward only returns if the pubsub stream ended, so reaching here
+            # at all means realtime is gone for this connection.
+            error = forward_task.exception()
+            logger.error(
+                "ws forward ended mid-connection, realtime lost user_id=%s (%s)",
+                user.id,
+                type(error).__name__ if error else "stream closed",
+            )
+            with contextlib.suppress(Exception):
+                await websocket.close(code=WS_REALTIME_UNAVAILABLE)
     finally:
-        forward_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await forward_task
+        for task in (forward_task, drain_task):
+            task.cancel()
+        for task in (forward_task, drain_task):
+            # Both Exception and CancelledError, deliberately. Awaiting a task
+            # re-raises whatever it stored, and CancelledError is a
+            # BaseException — suppressing only one of them lets the other escape
+            # the finally block and skip the teardown below it.
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await task
+
         # Teardown is best-effort: if Redis died mid-connection these raise, and
-        # an exception in `finally` would mask whatever actually ended the
-        # connection.
+        # an exception here would mask whatever actually ended the connection.
         with contextlib.suppress(Exception):
             await pubsub.unsubscribe(channel)
         with contextlib.suppress(Exception):

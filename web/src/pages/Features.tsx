@@ -27,7 +27,7 @@ export function Features() {
       {/* Home feed. Text-left, card-right. */}
       <section className="section">
         <div className="wrap">
-          <div className="grid grid--2" style={{ gap: "var(--space-10)", alignItems: "center" }}>
+          <div className="grid grid--2" style={{ gap: "var(--space-48)", alignItems: "center" }}>
             <div>
               <p className="eyebrow">Home feed</p>
               <h2 className="title" style={{ fontSize: "clamp(22px, 2.6vw, 30px)" }}>For You and Campus, side by side.</h2>
@@ -66,7 +66,7 @@ export function Features() {
             appears on the campus feed.
           </p>
 
-          <div className="grid grid--3" style={{ marginTop: "var(--space-10)" }}>
+          <div className="grid grid--3" style={{ marginTop: "var(--space-48)" }}>
             <article className="card">
               <div className="card__icon" aria-hidden="true">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -113,7 +113,7 @@ export function Features() {
       {/* Yak. Card-left, text-right — the reverse of the Home feed row above, for rhythm. */}
       <section className="section">
         <div className="wrap">
-          <div className="grid grid--2" style={{ gap: "var(--space-10)", alignItems: "center" }}>
+          <div className="grid grid--2" style={{ gap: "var(--space-48)", alignItems: "center" }}>
             <div className="card">
               <span className="chip chip--accent">Anonymous to other students</span>
               <p className="caption" style={{ marginTop: "var(--space-5)", lineHeight: "1.7" }}>
@@ -146,7 +146,7 @@ export function Features() {
       {/* Messages. Compact, tight section — the smallest feature on the page. */}
       <section className="section section--tight">
         <div className="wrap">
-          <div className="grid grid--2" style={{ gap: "var(--space-10)", alignItems: "center" }}>
+          <div className="grid grid--2" style={{ gap: "var(--space-48)", alignItems: "center" }}>
             <div>
               <p className="eyebrow">Messages</p>
               <h2 className="title" style={{ fontSize: "clamp(22px, 2.6vw, 30px)" }}>Direct messages, kept private.</h2>
@@ -180,7 +180,7 @@ export function Features() {
           <h2 className="display" style={{ fontSize: "clamp(26px, 3.4vw, 38px)" }}>The tools that make an org runnable from a phone.</h2>
           <div className="accent-bar" aria-hidden="true"></div>
 
-          <div className="grid grid--3" style={{ marginTop: "var(--space-10)" }}>
+          <div className="grid grid--3" style={{ marginTop: "var(--space-48)" }}>
             <article className="card">
               <div className="card__icon card__icon--warm" aria-hidden="true">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

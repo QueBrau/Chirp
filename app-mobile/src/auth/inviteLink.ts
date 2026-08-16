@@ -13,8 +13,12 @@ export function withInviteCode(path: string, code?: string | null): string {
  * pattern in src/api/client.ts: env-overridable, with the deployed default baked
  * in so a build with no .env still produces working links.
  */
-export const WEB_BASE_URL: string =
-  process.env.EXPO_PUBLIC_WEB_URL ?? "https://chirps-prod.web.app";
+export const WEB_BASE_URL: string = (
+  process.env.EXPO_PUBLIC_WEB_URL ?? "https://chirps-prod.web.app"
+  // Trailing slash stripped for the same reason payments.py:39 does it on
+  // APP_PUBLIC_BASE_URL: an origin pasted from a browser bar carries one, and
+  // both halves of this URL contract have to agree.
+).replace(/\/+$/, "");
 
 /**
  * The link an officer actually SHARES with a prospective member.
@@ -22,7 +26,7 @@ export const WEB_BASE_URL: string =
  * Deliberately https and not `chirp://`: a custom scheme is not linkified by
  * Messages, WhatsApp, Instagram DMs or most mail clients, so a raw chirp:// URL
  * arrives as dead text exactly where invites get sent. The https page at
- * web/public/join-chapter/index.html reads the same `code` param and hands off
+ * web/src/pages/JoinChapter.tsx reads the same `code` param and hands off
  * to chirp://join-chapter?code=..., so the in-app chain is unchanged — this only
  * changes what survives the trip through a text message.
  *

@@ -23,7 +23,9 @@ export function Layout() {
   // A client-side route change does not reset scroll the way a document
   // navigation does, so without this you land halfway down a new page.
   useEffect(() => {
-    window.scrollTo(0, 0);
+    // "instant" explicitly, so this can never be turned into an animated slide
+    // by a stylesheet setting scroll-behavior on html.
+    window.scrollTo({ top: 0, behavior: "instant" });
   }, [pathname]);
 
   return (

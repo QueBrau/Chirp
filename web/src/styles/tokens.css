@@ -59,6 +59,7 @@
   --radius-card: 20px;
   --radius-pill: 999px;
   --radius-input: 14px;
+  --radius-avatar: 16px;
   --radius-thumb: 12px;
 
   /* Spacing, 4-base scale. 20 is the screen gutter. */
@@ -69,9 +70,11 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
-  --space-10: 48px;
-  --space-12: 64px;
-  --space-16: 96px;
+  /* The 4-base arithmetic above stops here: these are named for their values,
+     because --space-64 meaning 48px would be a trap. */
+  --space-48: 48px;
+  --space-64: 64px;
+  --space-96: 96px;
 
   --shadow-card: 0 2px 16px rgba(16, 18, 35, 0.06);
   --shadow-lift: 0 12px 40px rgba(16, 18, 35, 0.10);

@@ -17,11 +17,29 @@ import { usePageMeta } from "../components/usePageMeta";
  * links are wired this same URL opens the app directly and this page never
  * renders at all.
  */
+/**
+ * Invite codes are minted server-side by `secrets.token_urlsafe(9)`
+ * (backend/app/routers/chapters.py), which yields 12 URL-safe base64 characters.
+ * Anything else came from a hand-crafted URL, not from Chirp.
+ *
+ * This is not an XSS guard — React escapes the value either way. It stops the
+ * page being a text-reflection surface: without it,
+ * /join-chapter?code=SUSPENDED-CALL-1-800-555-0100 renders attacker-chosen text
+ * large and bold under Chirp's brand, on the one URL this whole feature exists
+ * to get people tapping from a text message. An unrecognisable code falls back
+ * to the generic invite copy rather than echoing it.
+ */
+const CODE_SHAPE = /^[A-Za-z0-9_-]{6,24}$/;
+
+function validCode(raw: string | null): string | null {
+  return raw !== null && CODE_SHAPE.test(raw) ? raw : null;
+}
+
 export function JoinChapter() {
   usePageMeta("Join your org on Chirp");
 
   const [params] = useSearchParams();
-  const code = params.get("code");
+  const code = validCode(params.get("code"));
 
   // ?code= comes from a URL anyone can craft, so it is untrusted. React escapes
   // it on render by default, and encodeURIComponent matches what

@@ -54,7 +54,7 @@ export function Home() {
           </h2>
           <div className="accent-bar" aria-hidden="true" />
 
-          <div className="grid grid--3" style={{ marginTop: "var(--space-10)" }}>
+          <div className="grid grid--3" style={{ marginTop: "var(--space-48)" }}>
             <article className="card">
               <div className="card__icon" aria-hidden="true">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -110,7 +110,7 @@ export function Home() {
       {/* The honest bit. Worth its own zone rather than a footnote. */}
       <section className="section section--tight">
         <div className="wrap">
-          <div className="grid grid--2" style={{ gap: "var(--space-10)", alignItems: "center" }}>
+          <div className="grid grid--2" style={{ gap: "var(--space-48)", alignItems: "center" }}>
             <div>
               <p className="eyebrow">On the money</p>
               <h2 className="title" style={{ fontSize: "clamp(22px, 2.6vw, 30px)" }}>

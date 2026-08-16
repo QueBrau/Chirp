@@ -11,6 +11,29 @@
       name="description"
       content="Chirp is where students post, where student orgs run themselves, and where chapter dues get paid without a spreadsheet."
     />
+
+    <!--
+      Static link-preview tags, and they have to be static.
+
+      usePageMeta() sets per-route titles at runtime, but iMessage, WhatsApp and
+      Instagram fetch a URL WITHOUT executing JavaScript — so whatever is in this
+      shell is the entire preview they get. The point of moving invites from
+      chirp:// to https was surviving the trip through a text message; the link
+      survives, but a link with no preview is the one people do not tap.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Chirp" />
+    <meta property="og:title" content="Chirp — your campus, your chapter, one app" />
+    <meta
+      property="og:description"
+      content="Where students post, where student orgs run themselves, and where chapter dues get paid without a spreadsheet."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Chirp — your campus, your chapter, one app" />
+    <meta
+      name="twitter:description"
+      content="Where students post, where student orgs run themselves, and where chapter dues get paid without a spreadsheet."
+    />
   </head>
   <body>
     <div id="root"></div>

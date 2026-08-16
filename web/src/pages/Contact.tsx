@@ -31,7 +31,7 @@ export function Contact() {
               <h2 className="title">Chapters &amp; student orgs</h2>
               <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
                 Run a fraternity, sorority, club, or intramural team and want
-                early access for your org? Email
+                early access for your org? Email{" "}
                 <strong>CONTACT_EMAIL_PLACEHOLDER</strong>.
               </p>
             </article>
@@ -39,7 +39,7 @@ export function Contact() {
             <article className="card">
               <h2 className="title">Press</h2>
               <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
-                Working on a story about Chirp? Reach us at
+                Working on a story about Chirp? Reach us at{" "}
                 <strong>CONTACT_EMAIL_PLACEHOLDER</strong>.
               </p>
             </article>
@@ -56,7 +56,7 @@ export function Contact() {
             <article className="card">
               <h2 className="title">Security reports</h2>
               <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
-                Found a security issue? Report it to
+                Found a security issue? Report it to{" "}
                 <strong>CONTACT_EMAIL_PLACEHOLDER</strong>.
               </p>
             </article>

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 import { Outlet } from "react-router-dom";
 
 /**
@@ -17,7 +17,12 @@ import { Outlet } from "react-router-dom";
  * the card follows the system theme and the card floats on the wrong colour.
  */
 export function Bare() {
-  useEffect(() => {
+  // useLayoutEffect, not useEffect: this runs BEFORE the browser paints, so the
+  // dark canvas is in place for the first frame. With useEffect a user landing
+  // here straight from Stripe's KYC flow saw the light background flash behind
+  // the already-dark card before the class landed — most visible on a phone
+  // over cellular, which is exactly this page's audience.
+  useLayoutEffect(() => {
     document.body.classList.add("on-brand");
     return () => document.body.classList.remove("on-brand");
   }, []);

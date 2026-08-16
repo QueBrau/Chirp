@@ -16,10 +16,13 @@
 *::before,
 *::after { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+/* No global smooth scrolling: Layout.tsx calls window.scrollTo(0,0) on every
+   route change, and `smooth` turns that into an animated slide, so a new page
+   paints at the OLD scroll offset and then crawls upward. Anchor links can opt
+   in locally if they ever need it. */
+html { -webkit-text-size-adjust: 100%; }
 
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
@@ -74,8 +77,8 @@ a:hover { text-decoration: underline; }
   padding-inline: var(--space-5);
 }
 
-.section { padding-block: var(--space-16); }
-.section--tight { padding-block: var(--space-12); }
+.section { padding-block: var(--space-96); }
+.section--tight { padding-block: var(--space-64); }
 
 .section + .section { border-top: 1px solid var(--border); }
 
@@ -283,7 +286,7 @@ a:hover { text-decoration: underline; }
 .hero {
   position: relative;
   overflow: hidden;
-  padding-block: var(--space-16);
+  padding-block: var(--space-96);
 }
 .hero::before {
   content: "";
@@ -300,11 +303,11 @@ a:hover { text-decoration: underline; }
 .hero__grid {
   display: grid;
   grid-template-columns: 1.05fr 0.95fr;
-  gap: var(--space-12);
+  gap: var(--space-64);
   align-items: center;
 }
 @media (max-width: 940px) {
-  .hero__grid { grid-template-columns: 1fr; gap: var(--space-10); }
+  .hero__grid { grid-template-columns: 1fr; gap: var(--space-48); }
 }
 
 .hero__actions {
@@ -363,7 +366,7 @@ a:hover { text-decoration: underline; }
 .post__head { display: flex; align-items: center; gap: var(--space-3); }
 
 .avatar {
-  width: 36px; height: 36px; border-radius: var(--radius-avatar, 12px);
+  width: 36px; height: 36px; border-radius: var(--radius-avatar);
   background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
   display: grid; place-items: center; flex: none;
   color: var(--on-accent); font-weight: 800; font-size: 13px;
@@ -400,7 +403,7 @@ a:hover { text-decoration: underline; }
 
 /* ---------------------------------------------------------- page header --- */
 
-.page-head { padding-block: var(--space-12) var(--space-8); }
+.page-head { padding-block: var(--space-64) var(--space-8); }
 .page-head .display { max-width: 20ch; }
 .page-head .lede { margin-top: var(--space-5); }
 
@@ -417,7 +420,7 @@ a:hover { text-decoration: underline; }
 .prose h2 {
   font-size: var(--title); font-weight: var(--title-weight);
   letter-spacing: var(--title-tracking);
-  margin-top: var(--space-10); margin-bottom: var(--space-3);
+  margin-top: var(--space-48); margin-bottom: var(--space-3);
 }
 .prose h3 {
   font-size: var(--headline); font-weight: var(--headline-weight);
@@ -506,7 +509,7 @@ a:hover { text-decoration: underline; }
 
 .site-footer {
   border-top: 1px solid var(--border);
-  padding-block: var(--space-12) var(--space-8);
+  padding-block: var(--space-64) var(--space-8);
   background: var(--surface);
 }
 
@@ -530,7 +533,7 @@ a:hover { text-decoration: underline; }
 .footer__col a:hover { color: var(--ink); }
 
 .footer__base {
-  margin-top: var(--space-10);
+  margin-top: var(--space-48);
   padding-top: var(--space-5);
   border-top: 1px solid var(--border);
   display: flex; flex-wrap: wrap; gap: var(--space-3);

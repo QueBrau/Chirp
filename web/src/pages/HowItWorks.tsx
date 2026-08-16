@@ -79,7 +79,7 @@ export function HowItWorks() {
       {/* Closing zone for officers, on the specific mechanic of how roles get set. */}
       <section className="section">
         <div className="wrap">
-          <div className="grid grid--2" style={{ gap: "var(--space-10)", alignItems: "center" }}>
+          <div className="grid grid--2" style={{ gap: "var(--space-48)", alignItems: "center" }}>
             <div>
               <p className="eyebrow">For officers</p>
               <h2 className="title" style={{ fontSize: "clamp(22px, 2.6vw, 30px)" }}>Invite codes are how roles get set.</h2>

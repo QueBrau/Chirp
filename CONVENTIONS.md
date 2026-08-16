@@ -80,7 +80,7 @@ UUID PKs: `server_default=text("gen_random_uuid()")`.
 | `routers/payments.py` | `POST /payments/connect/onboarding-link` (stub), `POST /payments/dues/{cycle_id}/intent` (stub), `POST /webhooks/stripe` (signature-check stub ONLY per §9) |
 
 Each router module defines `router = APIRouter(tags=[...])` (prefixes in the paths themselves for
-clarity). `app.main.create_app()` includes all twelve + `ws.gateway.router` + `GET /healthz`.
+clarity). `app.main.create_app()` includes all twelve + `ws.gateway.router` + `GET /_health`.
 
 ### Schemas
 

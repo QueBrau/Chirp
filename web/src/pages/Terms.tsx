@@ -105,7 +105,7 @@ export function Terms() {
             <li>break into, scrape, overload, or probe our systems or anyone&rsquo;s account.</li>
           </ul>
           <p>
-            Posting anonymously does not make you unaccountable. As our
+            Posting anonymously does not make you unaccountable. As our{" "}
             <Link to="/privacy">privacy policy</Link> explains plainly, we record who
             wrote each anonymous post so we can act on abuse and answer lawful
             requests.

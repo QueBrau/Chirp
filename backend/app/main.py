@@ -108,8 +108,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             firebase_admin.initialize_app(options=options)
 
-    await _probe_redis(settings)
+    # Fire-and-forget, NOT awaited. The probe's only deliverable is a log line,
+    # so gating readiness on it would add up to _REDIS_PROBE_TIMEOUT_S to every
+    # Cloud Run cold start — and c61 established that production's Redis is
+    # unreachable today, so that would be the full timeout on every scale-up.
+    # The handle is kept on app.state so the task is not garbage collected
+    # mid-flight, which is the trap with bare create_task().
+    app.state.redis_probe = asyncio.create_task(_probe_redis(settings))
+
     yield
+
+    app.state.redis_probe.cancel()
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        await app.state.redis_probe
 
 
 def create_app() -> FastAPI:
@@ -156,8 +167,13 @@ def create_app() -> FastAPI:
         app.include_router(module.router)
     app.include_router(gateway.router)
 
-    @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
+    # NOT /healthz. Google's frontend intercepts that exact path and answers it
+    # with its own HTML 404 before the request ever reaches Cloud Run, so the
+    # route existed, appeared in /openapi.json, and was still unreachable from
+    # the internet (board c65). An uptime check pointed at it would have
+    # reported the API down while it was perfectly healthy.
+    @app.get("/_health")
+    async def health() -> dict[str, str]:
         return {"status": "ok"}
 
     return app

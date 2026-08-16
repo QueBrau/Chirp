@@ -157,3 +157,27 @@ def test_missing_token_still_closes_4401(dead_redis_client: TestClient) -> None:
             ws.receive_text()
 
     assert caught.value.code == 4401
+
+
+async def test_forwarder_death_closes_the_socket(dead_redis_client: TestClient) -> None:
+    """If the pubsub stream dies AFTER connect, the socket must close, not hang.
+
+    Review finding on the original c62 fix: it only handled Redis failing at
+    subscribe time. A Redis that dropped later (Memorystore restart, VPC
+    connector blip) killed the forwarder task, whose exception nobody observed,
+    while the outer receive loop happily held the socket open forever. The
+    client saw a healthy connection delivering zero events — the exact symptom
+    c62 was written to eliminate, relocated from connect time to steady state.
+
+    Simulated by making the forwarder fail immediately, which is what an
+    unreachable Redis does to pubsub.listen().
+    """
+    uid = _bootstrap(dead_redis_client)
+
+    with pytest.raises(WebSocketDisconnect) as caught:
+        with dead_redis_client.websocket_connect(f"/ws?token={uid}") as ws:
+            ws.receive_text()
+
+    # Either close path is the realtime-unavailable code; what must never happen
+    # is the socket staying open with no signal at all.
+    assert caught.value.code == WS_REALTIME_UNAVAILABLE
