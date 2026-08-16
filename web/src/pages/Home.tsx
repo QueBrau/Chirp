@@ -65,7 +65,7 @@ export function Home() {
                 </svg>
               </div>
               <h3 className="title">For every student, not just Greek life</h3>
-              <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: 1.6 }}>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: 1.6 }}>
                 Everyone lands on the campus feed. Fraternities, sororities, clubs and intramural
                 teams are orgs you join on top of that, by invite code. You are never asked to be
                 Greek to use the app.
@@ -82,7 +82,7 @@ export function Home() {
                 </svg>
               </div>
               <h3 className="title">Org tools that replace three spreadsheets</h3>
-              <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: 1.6 }}>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: 1.6 }}>
                 A private feed only your chapter sees, events with real RSVPs, the family tree, the
                 member roster, meeting minutes and attendance. All of it role-gated, so officers get
                 officer tools and nobody else does.
@@ -97,7 +97,7 @@ export function Home() {
                 </svg>
               </div>
               <h3 className="title">Dues that never touch a paper check</h3>
-              <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: 1.6 }}>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: 1.6 }}>
                 Members pay by card or bank transfer. The money lands in your chapter&apos;s own
                 account, not ours, and the ledger is append-only so the books cannot be quietly
                 rewritten.
@@ -117,7 +117,7 @@ export function Home() {
                 Your chapter is the merchant, not Chirp.
               </h2>
               <div className="accent-bar accent-bar--warm" aria-hidden="true" />
-              <p className="lede" style={{ marginTop: "var(--space-5)", fontSize: 16 }}>
+              <p className="lede" style={{ marginTop: "var(--space-5)", fontSize: "var(--reading)" }}>
                 Dues are processed by Stripe into an account your chapter owns. Chirp never takes
                 custody of your money and never stores a card or bank number. We charge a small
                 platform fee on each payment; everything else is between your chapter and its
@@ -134,7 +134,7 @@ export function Home() {
                 <span className="chip chip--accent">Card or bank</span>
                 <span className="chip">Officer-gated</span>
               </div>
-              <p className="caption" style={{ marginTop: "var(--space-5)", lineHeight: 1.7 }}>
+              <p className="copy" style={{ marginTop: "var(--space-5)", lineHeight: 1.7 }}>
                 Every dues payment writes one line to a ledger that can be added to but never edited
                 or deleted. When a treasurer hands the books to next year&apos;s treasurer, the
                 history comes with them.

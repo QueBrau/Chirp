@@ -35,8 +35,8 @@ body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: var(--body);
-  line-height: var(--body-line);
+  font-size: var(--reading);
+  line-height: var(--reading-line);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -74,11 +74,15 @@ a:hover { text-decoration: underline; }
   width: 100%;
   max-width: 1120px;
   margin-inline: auto;
-  padding-inline: var(--space-5);
+  /* env() is 0 wherever there is no notch, so this is a no-op on desktop and is
+     the difference between a line of text sitting under the rounded corner and
+     beside it on a landscape iPhone. */
+  padding-left: calc(var(--space-5) + env(safe-area-inset-left));
+  padding-right: calc(var(--space-5) + env(safe-area-inset-right));
 }
 
-.section { padding-block: var(--space-96); }
-.section--tight { padding-block: var(--space-64); }
+.section { padding-block: var(--rhythm-section); }
+.section--tight { padding-block: var(--rhythm-section-tight); }
 
 .section + .section { border-top: 1px solid var(--border); }
 
@@ -119,10 +123,27 @@ a:hover { text-decoration: underline; }
 .headline { font-size: var(--headline); font-weight: var(--headline-weight); }
 
 .lede {
-  font-size: clamp(16px, 1.6vw, 19px);
+  /* Floor raised from 16 to 17 so a lede is never SMALLER than the running copy
+     beneath it once --reading grows at phone width. */
+  font-size: clamp(17px, 1.6vw, 19px);
   line-height: 1.6;
   color: var(--ink-secondary);
   max-width: 54ch;
+}
+
+/*
+ * Running copy inside cards and steps.
+ *
+ * Deliberately not .caption. .caption is the app's 12.5px metadata size and is
+ * right for a timestamp or a footer line, but twenty-odd paragraphs across the
+ * site were using it for the sentences people actually read — every one of them
+ * overriding line-height inline, which was the tell. Those are .copy now and
+ * follow the reading scale (board c72).
+ */
+.copy {
+  font-size: var(--reading);
+  line-height: 1.6;
+  color: var(--ink-secondary);
 }
 
 .caption {
@@ -179,7 +200,14 @@ a:hover { text-decoration: underline; }
 
 @media (max-width: 720px) {
   .site-nav ul { gap: 0; }
-  .site-nav a { padding: var(--space-2); font-size: 13px; }
+
+  /* 13px on 8px of padding was a ~37px tap target, under the 44px minimum. The
+     header's 64px min-height already has the room, so this costs no layout. */
+  .site-nav a {
+    display: inline-flex; align-items: center;
+    min-height: 44px;
+    padding: 0 var(--space-3); font-size: 13px;
+  }
 
   /*
    * Four links do not fit beside the wordmark on a phone. Hide the two longest
@@ -271,6 +299,7 @@ a:hover { text-decoration: underline; }
 }
 .on-brand .eyebrow,
 .on-brand .lede,
+.on-brand .copy,
 .on-brand .caption { color: var(--brand-ink-secondary); }
 .on-brand a { color: var(--brand-accent); }
 .on-brand .card {
@@ -286,7 +315,7 @@ a:hover { text-decoration: underline; }
 .hero {
   position: relative;
   overflow: hidden;
-  padding-block: var(--space-96);
+  padding-block: var(--rhythm-hero);
 }
 .hero::before {
   content: "";
@@ -403,7 +432,7 @@ a:hover { text-decoration: underline; }
 
 /* ---------------------------------------------------------- page header --- */
 
-.page-head { padding-block: var(--space-64) var(--space-8); }
+.page-head { padding-block: var(--rhythm-head) var(--space-8); }
 .page-head .display { max-width: 20ch; }
 .page-head .lede { margin-top: var(--space-5); }
 
@@ -509,7 +538,7 @@ a:hover { text-decoration: underline; }
 
 .site-footer {
   border-top: 1px solid var(--border);
-  padding-block: var(--space-64) var(--space-8);
+  padding-block: var(--rhythm-head) var(--space-8);
   background: var(--surface);
 }
 
@@ -538,4 +567,62 @@ a:hover { text-decoration: underline; }
   border-top: 1px solid var(--border);
   display: flex; flex-wrap: wrap; gap: var(--space-3);
   justify-content: space-between; align-items: center;
+}
+
+/* ------------------------------------------------------ phone tuning --- */
+/*
+ * Board c72, and the diagnosis is narrower than it looks: the site does NOT
+ * break at phone width. Measured live at 390x844 on all six pages, scrollWidth
+ * equals innerWidth everywhere and nothing overflows. It was simply SPACED like
+ * a desktop.
+ *
+ * Most of that fix is the four --rhythm-* tokens in tokens.css, which this file
+ * already consumes. What is left here is the part a scale token cannot express:
+ * how wide the mockup is, where a tap target ends, and which grid cell goes
+ * full-bleed. Kept in one block, at the bottom, so the phone story is readable
+ * in one place rather than scattered across five breakpoints.
+ *
+ * 640px rather than 480px: every phone in portrait is under it, and the small
+ * end of tablet portrait wants the same compression.
+ */
+@media (max-width: 640px) {
+  /* Was 320px inside a 350px content box — inside the gutter by the numbers and
+     edge-to-edge to the eye. Narrower reads as a deliberate inset. Nothing
+     inside shrinks with it: the mockup's own type is fixed-size. */
+  .phone { max-width: 268px; }
+
+  /* Side by side, the two hero pills leave a ragged tail at 390px. Stacked full
+     width they also become two unambiguous 52px targets. */
+  .hero__actions .btn { flex: 1 1 100%; }
+
+  /* 48px between the hero copy and the mockup is a desktop COLUMN gap doing
+     duty as a vertical one. */
+  .hero__grid { gap: var(--space-8); }
+
+  /* The legal pages are long enough to need a scrollbar already; 48px above
+     every h2 is most of a phone screen spent on nothing. */
+  .prose h2 { margin-top: var(--space-8); }
+
+  .footer__base { margin-top: var(--space-8); }
+
+  /* The wordmark column takes the full width and the three link columns pair up
+     beneath it, rather than all four being squeezed into two. */
+  .footer__col:first-child { grid-column: 1 / -1; }
+
+  /* A 14px line with no vertical padding is an ~18px tap target in a stack of
+     them. min-height rather than padding alone, because padding that happened to
+     reach 44px at one font size would quietly stop reaching it at another; the
+     list gap goes to 0 because the target height now supplies the rhythm. */
+  .footer__col ul { gap: 0; }
+  .footer__col a {
+    display: inline-flex; align-items: center;
+    min-height: 44px;
+  }
+
+  /* A lede should still read as a lede once running copy is 17px. */
+  .lede { font-size: 18px; }
+
+  /* The bounce pages are the ones a user hits mid-flow on a phone. 100dvh
+     already handles the URL bar; this handles the home indicator. */
+  .bounce { padding-block: calc(var(--space-6) + env(safe-area-inset-bottom)); }
 }

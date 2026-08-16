@@ -72,7 +72,7 @@ export function JoinChapter() {
         </div>
 
         <h1 className="title">You've been invited to an org on Chirp</h1>
-        <p className="lede" style={{ margin: "var(--space-4) auto 0", fontSize: 15 }}>
+        <p className="lede" style={{ margin: "var(--space-4) auto 0", fontSize: "var(--reading)" }}>
           Open Chirp to join. Your role is already set by whoever invited you.
         </p>
 
@@ -87,7 +87,7 @@ export function JoinChapter() {
           Open Chirp
         </a>
 
-        <p className="caption" style={{ marginTop: "var(--space-5)" }}>
+        <p className="copy" style={{ marginTop: "var(--space-5)" }}>
           Don't have Chirp yet? <Link to="/">Find out what it is</Link>, then come back to this link.
         </p>
       </div>
