@@ -302,6 +302,61 @@ async def delete_post(
     await session.commit()
 
 
+@router.delete("/posts/{post_id}", status_code=204)
+async def delete_own_post(
+    post_id: uuid.UUID,
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Soft-delete a post you authored, without going through a chapter (board c84).
+
+    The existing route is DELETE /chapters/{chapter_id}/posts/{post_id} and it matches
+    on post.chapter_id == the path chapter. That is fine for org posts and impossible
+    to satisfy for a post that has no chapter: there is no chapter_id to put in the URL,
+    so the author can publish and then cannot take it back.
+
+    WHY THIS LANDS BEFORE THE BUG DOES. On main today posts.chapter_id is NOT NULL, so
+    the broken state is unreachable and this route is merely a nicer alias. It becomes
+    load-bearing the moment c71 merges: q/campus-posts changes the column to
+    `Mapped[uuid.UUID | None]` and still ships only the chapter-scoped delete, so a
+    campus post by a student with no chapter is undeletable by the person who wrote it.
+    Verified by reading that branch rather than assuming. Building it now means c71 does
+    not have to carry the fix as well, and there is no window where the bug is live.
+
+    It also matters more than an ordinary gap because the promise is already in writing:
+    /privacy is live and commits to deleting your content, and c69's purge job is built
+    against the same promise. A delete the user cannot reach makes both untrue.
+
+    AUTHORIZATION: the author always. A president may also delete, but only for a post
+    that HAS a chapter — no chapter means no president, and inventing one would be the
+    c85 mistake in a new place. Campus-wide removal is deliberately NOT here: that is
+    moderation, it belongs behind POST /moderation/content/remove with its audit row and
+    its own scoping, and folding it in would let a chapter officer quietly delete campus
+    content with no record.
+    """
+    post = await session.get(models.Post, post_id)
+    if post is None or post.deleted_at is not None:
+        raise not_found("post_not_found")
+
+    if post.author_id != user.id:
+        if post.chapter_id is None:
+            # Unreachable until c71; the branch exists so c71 does not have to add it.
+            raise forbidden("not_author")
+        result = await session.execute(
+            select(models.Membership).where(
+                models.Membership.chapter_id == post.chapter_id,
+                models.Membership.user_id == user.id,
+                models.Membership.status == "active",
+            )
+        )
+        membership = result.scalar_one_or_none()
+        if membership is None or membership.role != Role.president.value:
+            raise forbidden("not_author_or_president")
+
+    post.deleted_at = datetime.now(timezone.utc)
+    await session.commit()
+
+
 @router.put("/posts/{post_id}/likes")
 async def like_post(
     post_id: uuid.UUID,
