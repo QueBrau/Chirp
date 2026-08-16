@@ -24,6 +24,39 @@ DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://chirp:chirp@localhost:5432/chi
 # ---------------------------------------------------------------------------
 
 
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Under CHIRP_REQUIRE_DB=1, refuse to exit green on a collapsed run (board card c103).
+
+    The fail-closed probe below covers the cause we actually measured — an
+    unreachable database. This covers the SHAPE of the failure regardless of
+    cause: any drift that turns tests into skips instead of results.
+
+    Zero is the right ceiling rather than a guess, because CI runs BOTH services
+    and every skip in this suite is conditional on a missing one. The observed CI
+    run for PR #21 was '179 passed' with nothing skipped. If a legitimate skip is
+    ever added, raise CHIRP_MAX_SKIPS deliberately — a number someone had to
+    change on purpose is the point, not a chore.
+    """
+    if os.environ.get("CHIRP_REQUIRE_DB") != "1":
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        return
+    skipped = len(reporter.stats.get("skipped", []))
+    allowed = int(os.environ.get("CHIRP_MAX_SKIPS", "0"))
+    if skipped > allowed:
+        reporter.write_line("")
+        reporter.write_line(
+            f"CHIRP_REQUIRE_DB=1 and {skipped} test(s) skipped, ceiling is {allowed}. "
+            "A skip is not a pass: this run is being failed so it cannot be read "
+            "as evidence. Find what went missing (a service, a fixture, a path) "
+            "rather than raising the ceiling to make it quiet.",
+            red=True,
+            bold=True,
+        )
+        session.exitstatus = 1
+
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
     """Test DB URL from TEST_DATABASE_URL (or the chirp_test default).
