@@ -60,6 +60,12 @@ async def create_chapter(
             role=Role.president.value,
         )
     )
+    # c96, same rule as join_chapter: the founding president belongs to the
+    # campus they just created a chapter on. Safe here for the stronger reason
+    # that this route is platform-admin-only.
+    if user.campus_id is None:
+        user.campus_id = chapter.campus_id
+        session.add(user)
     await session.commit()
     await session.refresh(chapter)
     return ChapterOut.model_validate(chapter)
@@ -217,6 +223,29 @@ async def join_chapter(
         role=invite.role,
     )
     session.add(membership)
+
+    # c96 — a chapter you were INVITED to is proof of a campus, so inherit it.
+    #
+    # Before this, nothing anywhere wrote users.campus_id: c85 correctly stopped
+    # trusting the client to assert one at bootstrap, and named c86's .edu
+    # redemption as the only writer. But c86 is deferred, so every user sat at
+    # campus_id NULL forever, which dead-ends Home's Campus tab AND the whole Yak
+    # tab and makes board gate c71 unreachable.
+    #
+    # This is NOT a rollback of c85. The value is read off the CHAPTER, which
+    # only a platform admin can create and which carries a server-set campus_id;
+    # the client supplies an invite code and nothing else. An e-board member
+    # deliberately minting a code for you is a human vouching for you, which is
+    # the same kind of evidence .edu verification gathers, arriving earlier.
+    #
+    # Only fills a NULL. Once c86 ships, a verified .edu is the stronger claim
+    # and must win, so this must never overwrite a campus the user already has.
+    if user.campus_id is None:
+        chapter = await session.get(models.Chapter, invite.chapter_id)
+        if chapter is not None:
+            user.campus_id = chapter.campus_id
+            session.add(user)
+
     try:
         await session.commit()
     except IntegrityError:

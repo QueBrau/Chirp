@@ -204,9 +204,13 @@ export default function FeedScreen() {
         </View>
 
         {campusId === null ? (
+          // c96: this used to be a flat dead end — it stated a fact and offered
+          // nothing, because at the time there was genuinely no way to get a
+          // campus. Joining an org now grants one (server-derived from the
+          // chapter), so the copy can finally name a way out.
           <EmptyState
             title="No campus feed"
-            message="Your account isn't linked to a campus, so there's nothing to show here."
+            message="Join your org from the Orgs tab and your campus feed unlocks with it."
           />
         ) : loadState === "error" ? (
           <EmptyState
