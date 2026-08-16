@@ -3,13 +3,14 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.errors import conflict, forbidden, not_found
+from app.core.invites import clamp_invite_expiry
 from app.core.permissions import EBOARD, Role, require_role
 from app.db import get_session
 from app.middleware.auth import get_current_user
@@ -18,6 +19,7 @@ from app.schemas.identity import (
     ChapterCreate,
     ChapterInviteCreate,
     ChapterInviteOut,
+    ChapterInviteRevokeRequest,
     ChapterJoinRequest,
     ChapterOut,
     MemberOut,
@@ -173,24 +175,75 @@ async def create_invite(
     actor: models.Membership = Depends(require_role(*EBOARD)),
     session: AsyncSession = Depends(get_session),
 ) -> ChapterInviteOut:
-    """Create a deep-link invite code; e-board only. Optional expiry.
+    """Create a deep-link invite code; e-board only. Bounded expiry, bounded uses.
 
     SECURITY-REVIEW finding 2: minting an EBOARD-role invite (e.g. a historian
     inviting a future president) requires the creator to already be president —
     any e-board role may still mint non-eboard invites (member/pledge/alumni).
+
+    c105: this endpoint used to hand back a bearer token. `expires_at` was optional
+    and passed straight through, so the documented, default way to call it produced
+    a code that worked forever for anyone who ever saw the string. Every code now
+    gets an expiry whether or not one was asked for, and a redemption budget.
     """
     if body.role in _EBOARD_ROLE_VALUES and actor.role != Role.president.value:
         raise forbidden("insufficient_role")
+    now = datetime.now(timezone.utc)
+    if body.expires_at is not None:
+        requested = body.expires_at
+        if requested.tzinfo is None:
+            requested = requested.replace(tzinfo=timezone.utc)
+        if requested <= now:
+            raise HTTPException(status_code=422, detail="invite_expiry_in_past")
     invite = models.ChapterInvite(
         chapter_id=chapter_id,
         code=secrets.token_urlsafe(9),
         role=body.role,
-        expires_at=body.expires_at,
+        expires_at=clamp_invite_expiry(body.expires_at, now),
+        max_uses=body.max_uses,
         created_by=actor.user_id,
     )
     session.add(invite)
     await session.commit()
     await session.refresh(invite)
+    return ChapterInviteOut.model_validate(invite)
+
+
+@router.post("/chapters/{chapter_id}/invites/revoke", status_code=200)
+async def revoke_invite(
+    chapter_id: uuid.UUID,
+    body: ChapterInviteRevokeRequest,
+    actor: models.Membership = Depends(require_role(*EBOARD)),
+    session: AsyncSession = Depends(get_session),
+) -> ChapterInviteOut:
+    """Kill a leaked invite code. E-board only, and only for their own chapter.
+
+    c105: before this there was NO way to withdraw a code short of an edit against
+    the prod database. Revoking is idempotent — a second call on an already-revoked
+    code returns the same row rather than 409, because the caller's intent ("this
+    code must not work") is already satisfied and an error would only push them to
+    go looking for something else to do.
+
+    Scoped by chapter_id in the WHERE clause, not just by the role dependency: the
+    dependency proves you are e-board SOMEWHERE, and looking the code up globally
+    would let one chapter's president revoke another chapter's invites.
+    """
+    result = await session.execute(
+        select(models.ChapterInvite).where(
+            models.ChapterInvite.code == body.code,
+            models.ChapterInvite.chapter_id == chapter_id,
+        )
+    )
+    invite = result.scalar_one_or_none()
+    if invite is None:
+        raise not_found("invite_not_found")
+    if invite.role in _EBOARD_ROLE_VALUES and actor.role != Role.president.value:
+        raise forbidden("insufficient_role")
+    if invite.revoked_at is None:
+        invite.revoked_at = datetime.now(timezone.utc)
+        session.add(invite)
+        await session.commit()
+        await session.refresh(invite)
     return ChapterInviteOut.model_validate(invite)
 
 
@@ -200,15 +253,29 @@ async def join_chapter(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> MembershipOut:
-    """Redeem an invite code: validates expiry, 409 if already a member."""
+    """Redeem an invite code: validates expiry, revocation and the redemption
+    budget, 409 if already a member.
+
+    c105: this used to be the whole check — does the row exist, has it expired —
+    which made a code an unlimited-use bearer token. It now also has to be
+    un-revoked and have a seat left, and the seat is CLAIMED rather than counted.
+    """
     result = await session.execute(
         select(models.ChapterInvite).where(models.ChapterInvite.code == body.code)
     )
     invite = result.scalar_one_or_none()
     if invite is None:
         raise not_found("invite_not_found")
-    if invite.expires_at is not None and invite.expires_at <= datetime.now(timezone.utc):
+    now = datetime.now(timezone.utc)
+    # These three read the row we just loaded and exist to give the caller a
+    # specific reason. They are NOT the enforcement — the conditional UPDATE below
+    # is, because between this read and that write another redemption can land.
+    if invite.revoked_at is not None:
+        raise forbidden("invite_revoked")
+    if invite.expires_at <= now:
         raise forbidden("invite_expired")
+    if invite.uses >= invite.max_uses:
+        raise forbidden("invite_exhausted")
     existing = await session.execute(
         select(models.Membership.id).where(
             models.Membership.user_id == user.id,
@@ -217,6 +284,29 @@ async def join_chapter(
     )
     if existing.scalar_one_or_none() is not None:
         raise conflict("already_member")
+    # c105 — CLAIM a seat, do not count one.
+    #
+    # Read-check-then-write on `uses` is the dues double-charge bug wearing a
+    # different hat: two people redeeming the last seat both read uses=24, both
+    # decide there is room, and both write 25. A single conditional UPDATE makes
+    # the database do the deciding, and it re-tests expiry and revocation in the
+    # same statement so a code revoked one millisecond ago cannot slip through the
+    # gap between the SELECT above and this write.
+    claimed = await session.execute(
+        update(models.ChapterInvite)
+        .where(
+            models.ChapterInvite.id == invite.id,
+            models.ChapterInvite.uses < models.ChapterInvite.max_uses,
+            models.ChapterInvite.revoked_at.is_(None),
+            models.ChapterInvite.expires_at > now,
+        )
+        .values(uses=models.ChapterInvite.uses + 1)
+        .returning(models.ChapterInvite.id)
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.scalar_one_or_none() is None:
+        raise forbidden("invite_exhausted")
+
     membership = models.Membership(
         user_id=user.id,
         chapter_id=invite.chapter_id,

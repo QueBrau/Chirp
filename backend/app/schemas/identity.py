@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.invites import INVITE_DEFAULT_MAX_USES, INVITE_MAX_USES_CAP
+
 AccountType = Literal["greek", "non_greek", "alumni"]
 RoleName = Literal[
     "president",
@@ -168,8 +170,16 @@ class MeOut(_Schema):
 
 
 class ChapterInviteCreate(_Schema):
+    """Body for minting an invite (c105).
+
+    expires_at stays optional on the WIRE and is no longer optional in the SYSTEM:
+    omit it and the router picks the default window. A caller cannot ask for a code
+    that never expires, because there is no longer a value that means that.
+    """
+
     role: RoleName = "member"
     expires_at: datetime | None = None
+    max_uses: int = Field(default=INVITE_DEFAULT_MAX_USES, ge=1, le=INVITE_MAX_USES_CAP)
 
 
 class ChapterInviteOut(_Schema):
@@ -177,8 +187,22 @@ class ChapterInviteOut(_Schema):
     chapter_id: uuid.UUID
     code: str
     role: RoleName
-    expires_at: datetime | None = None
+    expires_at: datetime
+    max_uses: int
+    uses: int
+    revoked_at: datetime | None = None
     created_by: uuid.UUID
+
+
+class ChapterInviteRevokeRequest(_Schema):
+    """Body for POST /chapters/{id}/invites/revoke.
+
+    By CODE, not by invite id, and that is the whole point: the thing that leaks is
+    the string in a group chat. A president holding it should not first have to find
+    the row it came from.
+    """
+
+    code: str = Field(min_length=1)
 
 
 class ChapterJoinRequest(_Schema):

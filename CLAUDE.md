@@ -26,6 +26,16 @@ see what is going on. Update it at EVERY step, not just at the end of a task:
 - Record product/process decisions in the board's Decisions log the day they happen.
 - Surface blockers as their own card, including ones you created. A problem only you
   know about is the same as no board at all.
+- **Run `scripts/board-check` before you commit board.html, and
+  `scripts/board-check --pushed` after you push.** Not optional with several
+  sessions on this repo. Four board changes vanished silently in one day and a
+  JSON-parse check caught none of them: a card whose `col` was the column TITLE
+  ("next") instead of its id ("backlog") rendered nowhere — seven at once, twice
+  more after that, two of them DO-NOT-DEPLOY warnings; a stale copy reverted
+  someone else's card with no conflict; and commits landed on whatever branch the
+  shared tree happened to be checked out to and never reached origin. The script
+  checks all of it. board.html also shows a red banner for unrenderable cards now,
+  but that only helps whoever is looking at the page.
 
 ## Shared resources — claim on the board BEFORE you use them
 

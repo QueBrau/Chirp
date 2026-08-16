@@ -63,7 +63,10 @@ export interface MemberOut extends MembershipOut {
 
 export interface ChapterInviteCreate {
   role?: RoleName;
+  /** Omit for the server default. There is no value meaning "never" (c105). */
   expires_at?: string | null;
+  /** Redemptions the code is good for; server default 25, hard cap 200 (c105). */
+  max_uses?: number;
 }
 
 export interface ChapterInviteOut {
@@ -71,7 +74,11 @@ export interface ChapterInviteOut {
   chapter_id: string;
   code: string;
   role: RoleName;
-  expires_at: string | null;
+  /** Never null since c105 — every code expires. */
+  expires_at: string;
+  max_uses: number;
+  uses: number;
+  revoked_at: string | null;
   created_by: string;
 }
 
