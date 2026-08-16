@@ -21,6 +21,16 @@ class Post(Base):
             "post_type IN ('text', 'photo', 'video')",
             name="ck_posts_post_type",
         ),
+        # An 'org' post is BY DEFINITION private to a chapter, so it cannot exist
+        # without one. Enforced here rather than only in the router because it is
+        # the load-bearing half of the c71 privacy argument: chapter_id had to go
+        # nullable so a chapter-less student can post to their campus, and this is
+        # what stops that nullability from also inventing an org post belonging to
+        # no org (which no membership check could then scope).
+        CheckConstraint(
+            "audience = 'campus' OR chapter_id IS NOT NULL",
+            name="ck_posts_org_requires_chapter",
+        ),
         Index(
             "idx_posts_chapter_time",
             "chapter_id",
@@ -32,13 +42,32 @@ class Post(Base):
             text("created_at DESC"),
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Serves the campus feed's exact predicate (campus + audience + live),
+        # which since c71 filters posts.campus_id directly instead of joining
+        # chapters, so the old chapter-shaped indexes no longer cover it.
+        Index(
+            "idx_posts_campus_time",
+            "campus_id",
+            text("created_at DESC"),
+            postgresql_where=text("deleted_at IS NULL AND audience = 'campus'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    chapter_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False
+    # NULL for a post by a student who belongs to no chapter (c71). Present on
+    # every org post, and also on a campus post made from inside a chapter, where
+    # it stays as provenance so the post still shows in that chapter's own feed.
+    chapter_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chapters.id")
+    )
+    # Always set, including for org posts. The campus feed reads this instead of
+    # joining through chapters, so a chapter-less post is reachable at all; it also
+    # pins the post to the campus it was made on, which deriving campus from the
+    # author would not do once that author transfers campuses.
+    campus_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("campuses.id"), nullable=False
     )
     author_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False

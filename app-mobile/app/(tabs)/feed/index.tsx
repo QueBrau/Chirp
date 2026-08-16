@@ -214,7 +214,12 @@ export default function FeedScreen() {
       </Screen>
       {/* org-audience posts never appear here — GET /campuses/{id}/feed is campus-only, so onPosted refreshing with no new row is correct. */}
       {campusId !== null ? (
-        <Fab chapterId={chapterId} campusName={campus?.name ?? null} onPosted={() => void load()} />
+        <Fab
+          chapterId={chapterId}
+          campusId={campusId}
+          campusName={campus?.name ?? null}
+          onPosted={() => void load()}
+        />
       ) : null}
     </View>
   );

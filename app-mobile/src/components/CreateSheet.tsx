@@ -5,8 +5,13 @@
  * on the post model, but no endpoint, storage bucket, or presign flow exists
  * to turn a picked photo/video into a URL), so faking a picker would just
  * silently drop the media. Text opens a real composer — body + an audience
- * picker (org/campus, board Decisions log Aug 14) — wired to the real
- * POST /chapters/{chapter_id}/posts.
+ * picker (org/campus, board Decisions log Aug 14).
+ *
+ * Two create routes sit behind that picker (c71). A member posting to their org,
+ * or to campus from inside their org, goes to POST /chapters/{chapter_id}/posts.
+ * A student who belongs to no chapter goes to POST /campuses/{campus_id}/posts,
+ * which only makes campus posts — so for that student the picker is not a choice
+ * at all and renders as a single statement of where the post is going.
  */
 
 import { Feather } from "@expo/vector-icons";
@@ -16,7 +21,7 @@ import { Alert, Modal, Pressable, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ApiError } from "@/api/client";
-import { createPost, type PostAudience } from "@/api/feed";
+import { createCampusPost, createPost, type PostAudience } from "@/api/feed";
 import { light, radii, spacing, typography, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
@@ -31,13 +36,18 @@ export interface CreateSheetProps {
   visible: boolean;
   onClose: () => void;
   /**
-   * Chapter to post into — posts always belong to a chapter (posts.chapter_id
-   * is NOT NULL, routers/feed.py); `audience` only controls who can see it.
-   * null means the caller has no active chapter membership. Fab already keeps
-   * the sheet from being opened in that case (there is no chapter to post
-   * into), but submit() guards against it again rather than trusting the caller.
+   * Chapter to post into, or null when the caller belongs to no chapter (c71).
+   * null is a supported state, not a broken one: the composer switches to the
+   * campus route and drops the audience choice, because 'org' is meaningless
+   * without an org.
    */
   chapterId: string | null;
+  /**
+   * The caller's campus. Required for a chapter-less author, since it is the
+   * only thing identifying where their post goes; a member can still post
+   * without it by using their chapter's route.
+   */
+  campusId: string | null;
   /**
    * Real campus name for the audience picker's "everyone" copy, when the
    * caller already has it on hand (Home resolves one via getCampus()).
@@ -131,7 +141,14 @@ function AudienceChoice({
   );
 }
 
-export function CreateSheet({ visible, onClose, chapterId, campusName, onPosted }: CreateSheetProps) {
+export function CreateSheet({
+  visible,
+  onClose,
+  chapterId,
+  campusId,
+  campusName,
+  onPosted,
+}: CreateSheetProps) {
   const palette = useTheme();
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState<Step>("options");
@@ -140,6 +157,10 @@ export function CreateSheet({ visible, onClose, chapterId, campusName, onPosted 
   // server-side PostCreate.audience default): a user who never touches this
   // control must not accidentally broadcast a chapter post campus-wide.
   const [audience, setAudience] = useState<PostAudience>("org");
+  // A chapter-less author has exactly one destination, so there is no choice to
+  // offer and no way for the org default above to apply to them (c71).
+  const canChooseAudience = chapterId !== null;
+  const effectiveAudience: PostAudience = canChooseAudience ? audience : "campus";
   const [posting, setPosting] = useState(false);
   // Belt-and-suspenders alongside `posting` state: a ref is read/written
   // synchronously, so two taps that both land before the first setState
@@ -158,14 +179,23 @@ export function CreateSheet({ visible, onClose, chapterId, campusName, onPosted 
     onClose();
   };
 
-  const canSubmit = body.trim().length > 0 && chapterId !== null && !posting;
+  // Somewhere to post is either a chapter or a campus; without both there is no
+  // route at all, and Fab already declines to render in that case.
+  const canSubmit =
+    body.trim().length > 0 && (chapterId !== null || campusId !== null) && !posting;
 
   const submit = async () => {
-    if (!canSubmit || chapterId === null || postingRef.current) return;
+    if (!canSubmit || postingRef.current) return;
     postingRef.current = true;
     setPosting(true);
     try {
-      await createPost(chapterId, { body: body.trim(), audience });
+      if (chapterId !== null) {
+        await createPost(chapterId, { body: body.trim(), audience: effectiveAudience });
+      } else if (campusId !== null) {
+        // No chapter: the campus route is the only one that will accept this, and
+        // it sets audience itself, so nothing about org can be requested here.
+        await createCampusPost(campusId, { body: body.trim() });
+      }
     } catch (error) {
       // Body/audience deliberately survive a failure so the user can just retry.
       showApiError(error, "Couldn't post that");
@@ -277,18 +307,49 @@ export function CreateSheet({ visible, onClose, chapterId, campusName, onPosted 
                 <AppText variant="micro" tone="secondary">
                   Who can see this?
                 </AppText>
-                <AudienceChoice
-                  title="My chapter only"
-                  description="Private — only your chapter's members can see it."
-                  selected={audience === "org"}
-                  onPress={() => setAudience("org")}
-                />
-                <AudienceChoice
-                  title={`Everyone at ${campusLabel}`}
-                  description="Public to your whole campus — people outside your chapter can see it too."
-                  selected={audience === "campus"}
-                  onPress={() => setAudience("campus")}
-                />
+                {!canChooseAudience ? (
+                  // Stated, not offered. The chapter option would 403 for someone
+                  // with no chapter, and a disabled control the user cannot ever
+                  // enable reads as a locked feature rather than as what it is:
+                  // there is one audience because they are posting as a student,
+                  // not on behalf of an org.
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: spacing.md,
+                      padding: spacing.md,
+                      borderRadius: radii.input,
+                      backgroundColor: palette.surfaceAlt,
+                      borderWidth: 1,
+                      borderColor: palette.border,
+                    }}
+                  >
+                    <Feather name="globe" size={20} color={palette.accent} />
+                    <View style={{ flex: 1, gap: spacing.xs }}>
+                      <AppText variant="bodyBold">{`Everyone at ${campusLabel}`}</AppText>
+                      <AppText variant="caption" tone="secondary">
+                        Join an org to also post privately to your chapter.
+                      </AppText>
+                    </View>
+                  </View>
+                ) : null}
+                {canChooseAudience ? (
+                  <AudienceChoice
+                    title="My chapter only"
+                    description="Private — only your chapter's members can see it."
+                    selected={audience === "org"}
+                    onPress={() => setAudience("org")}
+                  />
+                ) : null}
+                {canChooseAudience ? (
+                  <AudienceChoice
+                    title={`Everyone at ${campusLabel}`}
+                    description="Public to your whole campus — people outside your chapter can see it too."
+                    selected={audience === "campus"}
+                    onPress={() => setAudience("campus")}
+                  />
+                ) : null}
               </View>
 
               <Button

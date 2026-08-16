@@ -257,12 +257,15 @@ async def test_campus_feed_pagination_lossless_across_tied_timestamp(
         for i in range(5):
             result = await session.execute(
                 text(
-                    "INSERT INTO posts (chapter_id, author_id, body, audience, created_at)"
-                    " VALUES (:chapter_id, :author_id, :body, 'campus', :created_at)"
+                    "INSERT INTO posts"
+                    " (chapter_id, campus_id, author_id, body, audience, created_at)"
+                    " VALUES (:chapter_id, :campus_id, :author_id, :body, 'campus',"
+                    " :created_at)"
                     " RETURNING id"
                 ),
                 {
                     "chapter_id": uuid.UUID(setup.chapter_id),
+                    "campus_id": uuid.UUID(campus_id),
                     "author_id": uuid.UUID(setup.president.id),
                     "body": f"tied {i}",
                     "created_at": tied_at,

@@ -61,9 +61,14 @@ async def _resolve_report_campus_id(
 ) -> uuid.UUID | None:
     """Resolve the campus a report belongs to, server-side (SECURITY-REVIEW finding 1).
 
-    yak -> yak.campus_id; post/comment -> the post's chapter -> chapter.campus_id;
+    yak -> yak.campus_id; post/comment -> the post's own campus_id;
     anything else (message_forward, user, or a missing/unresolvable target) falls back
     to the reporter's own users.campus_id, best-effort. Never trusts the client.
+
+    Reads posts.campus_id rather than hopping through the post's chapter (c71). The
+    hop is no longer reliable: a post by a chapter-less student has no chapter, so
+    it would have fallen through to the reporter's campus — which silently files a
+    report on the wrong campus's moderation queue if the reporter ever differs.
     """
     if target_id is not None and target_type == "yak":
         yak = await session.get(models.Yak, target_id)
@@ -72,17 +77,13 @@ async def _resolve_report_campus_id(
     elif target_id is not None and target_type == "post":
         post = await session.get(models.Post, target_id)
         if post is not None:
-            chapter = await session.get(models.Chapter, post.chapter_id)
-            if chapter is not None:
-                return chapter.campus_id
+            return post.campus_id
     elif target_id is not None and target_type == "comment":
         comment = await session.get(models.PostComment, target_id)
         if comment is not None:
             post = await session.get(models.Post, comment.post_id)
             if post is not None:
-                chapter = await session.get(models.Chapter, post.chapter_id)
-                if chapter is not None:
-                    return chapter.campus_id
+                return post.campus_id
     return reporter.campus_id
 
 

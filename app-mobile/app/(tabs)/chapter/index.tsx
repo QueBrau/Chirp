@@ -717,6 +717,7 @@ export default function OrgsScreen() {
       {!loading && membership !== null && segment === "feed" ? (
         <Fab
           chapterId={membership.chapter_id}
+          campusId={campus?.id ?? null}
           campusName={campus?.name ?? null}
           onPosted={() => setFeedRefreshKey((key) => key + 1)}
         />
