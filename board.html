@@ -40,6 +40,10 @@
   .col h2 .count { color:var(--ink-3); }
   .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow); padding:10px 12px; margin-bottom:8px; cursor:grab; }
   .card.dragging { opacity:.4; }
+  /* Card id line — monospace and muted so it reads as a label, not a heading.
+     Selectable so an id can be copied straight out of the board. */
+  .card .card-id { font:600 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.6px;
+    text-transform:uppercase; color:var(--accent); margin-bottom:4px; user-select:text; }
   .card .title { font-weight:600; font-size:14px; }
   .card .meta { display:flex; gap:6px; margin-top:8px; align-items:center; }
   .chip { font-size:11px; font-weight:600; letter-spacing:.3px; border-radius:999px; padding:3px 10px; background:var(--surface-alt); color:var(--ink-2); border:0; cursor:pointer; }
@@ -78,6 +82,21 @@
   .area__h { display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }
   .area__h h3 { font-size:15px; font-weight:700; }
   .area__n { margin-left:auto; font-size:12px; font-weight:600; color:var(--ink-3); font-variant-numeric:tabular-nums; }
+  /* Alpha readiness. Recomputed from the cards on every render, never typed in
+     by hand — a hardcoded percentage is a number that starts lying the moment
+     someone moves a card. */
+  #alpha { border:1px solid var(--line); border-radius:14px; background:var(--surface); padding:14px 16px; margin-bottom:12px; }
+  .alpha__h { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  .alpha__h h2 { font-size:14px; font-weight:800; letter-spacing:-.01em; }
+  .alpha__pct { margin-left:auto; font-size:20px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .alpha__sub { font-size:12.5px; color:var(--ink-3); margin-top:2px; }
+  .alpha__key { display:flex; gap:14px; flex-wrap:wrap; font-size:11.5px; color:var(--ink-3); margin-top:2px; }
+  .alpha__key i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; vertical-align:middle; }
+  .alpha__gates { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:2px 14px; margin-top:10px; }
+  .alpha__gate { display:grid; grid-template-columns:auto 1fr; gap:8px; align-items:baseline; font-size:12.5px; padding:3px 0; }
+  .alpha__gate .st { font-size:9.5px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; border-radius:999px; padding:2px 7px; white-space:nowrap; }
+  .alpha__gate.is-shipped { color:var(--ink-3); }
+
   .bar { height:5px; border-radius:999px; background:var(--surface-alt); overflow:hidden; margin:8px 0 12px; display:flex; }
   .bar i { display:block; height:100%; }
   .bar .b-done { background:var(--success); }
@@ -107,6 +126,7 @@
   <button class="btn-ghost" id="reset">Reset to committed</button>
   <button class="btn-primary" id="export">Export board.html</button>
 </header>
+<section id="alpha"></section>
 <main id="board"></main>
 <main id="areas" hidden></main>
 <section id="decisions">
@@ -121,7 +141,34 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1786850866644,
+  "updated": 1786851969526,
+  "alpha": {
+    "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
+    "shipped": [
+      "Sign in and onboarding on real Firebase",
+      "Join a chapter by invite code, roles, invite minting",
+      "Org private feed, events with RSVPs, roster",
+      "Treasurer ledger and CSV export",
+      "Secretary minutes and attendance",
+      "Public site and legal pages (the App Store gate)",
+      "Stripe armed on prod, dues backend with the double-charge guard"
+    ],
+    "gates": [
+      { "id": "c39", "label": "Install it on a real phone (EAS dev build)" },
+      { "id": "c49", "label": "Create a post at all (compose flow)" },
+      { "id": "c71", "label": "A campus-only student can post" },
+      { "id": "c70", "label": "Attach a photo (media pipeline)" },
+      { "id": "c11", "label": "A dues payment actually clears, card and ACH" },
+      { "id": "c81", "label": "A treasurer can open a dues cycle in the app" },
+      { "id": "c77", "label": "The president has a screen" },
+      { "id": "c58", "label": "Someone has driven the real app against prod" },
+      { "id": "c64", "label": "Device QA is not blocked by CORS" },
+      { "id": "c76", "label": "Removal and suspension exist on the server" },
+      { "id": "c35", "label": "Moderation UI (the other App Store gate)" },
+      { "id": "c69", "label": "Deleted means deleted (purge job)" },
+      { "id": "c63", "label": "Messaging is actually live (websockets)" }
+    ]
+  },
   "columns": [
     {
       "id": "backlog",
@@ -618,7 +665,15 @@
       "col": "progress",
       "owner": "",
       "tag": "m5",
-      "title": "[B/Q] ANSWERED AND IN PROGRESS Aug 15 — the user's product call is that a chapter-less student CAN post, so the Aug 11 'Chirp is for ALL students' premise wins and hiding the FAB is off the table. CLAIMING MIGRATION 0013 for it — 0011 and 0012 went to Jose (c76, c69) in a push that landed roughly a minute before mine, and I had 0011 written down as free when I started, so the board rule caught a genuine collision in real time rather than in prod — posts.campus_id added NOT NULL and backfilled from chapters.campus_id, posts.chapter_id relaxed to NULLABLE, plus CHECK (audience = 'campus' OR chapter_id IS NOT NULL) so an org post without a chapter is impossible at the DB level and not merely by convention. New route POST /campuses/{campus_id}/posts hard-codes audience='campus' and chapter_id=NULL, so org audience stays structurally unreachable without a membership. Campus feed stops JOINing chapters and filters posts.campus_id directly, which a NULL chapter_id would otherwise drop from the feed entirely. Two adjacent breakages this exposes and must fix to ship coherently: likes/comments authorize through the post's chapter membership, which 403s every cross-chapter campus post TODAY (pre-existing, not introduced here), and moderation resolves a report's campus by post -> chapter. Left: tests, mobile, PR. Original finding: c49 hid the FAB as containment. The only create-post route is POST /chapters/{chapter_id}/posts and it requires an acti The only create-post route is POST /chapters/{chapter_id}/posts and it requires an active membership, so chapter_id is mandatory even for a campus-audience post. But Home shows the create FAB to anyone with a campus_id, and Chirp's whole Aug 11 premise is that it is for ALL students, with greek orgs as an optional thing you join. So a student in no org sees a create button that cannot work. c49 handles it honestly (the FAB is hidden when the caller has no active membership) rather than opening a composer that dead-ends, but that is containment, not a fix. The real question is a product one: can a campus post exist without a chapter (posts.chapter_id is NOT NULL today), or is posting genuinely org-gated and the FYP is read-only for unaffiliated students? Needs Jose + Q to decide before TestFlight, because it silently makes the FYP look broken for exactly the users the product claims to serve.",
+      "title": "[B/Q] CODE COMPLETE Aug 15 — PR #16 (draft, commit 9bdf361, stacked on PR #14 so that one stays independently mergeable). 163 backend tests pass, 8 of them new and each FALSIFIED first; tsc clean. A chapter-less student can now post to their campus. LEFT, in order: (1) merge PR #14, (2) re-point 0013's down_revision if 0011/0012 have landed by then, (3) apply 0013 to prod and REDEPLOY Cloud Run — the route 404s until that happens, so no device test can pass before it, (4) device pass against the PR checklist, since the mobile half is typechecked and has never been run. Best single result: when I deliberately broke the router to honour a body audience, the DB CHECK caught it, so the defense-in-depth is real rather than decorative. Known gap left as c84: a chapter-less author cannot DELETE their own post, because edit/delete are chapter-scoped routes. Was: ANSWERED AND IN PROGRESS Aug 15 — the user's product call is that a chapter-less student CAN post, so the Aug 11 'Chirp is for ALL students' premise wins and hiding the FAB is off the table. CLAIMING MIGRATION 0013 for it — 0011 and 0012 went to Jose (c76, c69) in a push that landed roughly a minute before mine, and I had 0011 written down as free when I started, so the board rule caught a genuine collision in real time rather than in prod — posts.campus_id added NOT NULL and backfilled from chapters.campus_id, posts.chapter_id relaxed to NULLABLE, plus CHECK (audience = 'campus' OR chapter_id IS NOT NULL) so an org post without a chapter is impossible at the DB level and not merely by convention. New route POST /campuses/{campus_id}/posts hard-codes audience='campus' and chapter_id=NULL, so org audience stays structurally unreachable without a membership. Campus feed stops JOINing chapters and filters posts.campus_id directly, which a NULL chapter_id would otherwise drop from the feed entirely. Two adjacent breakages this exposes and must fix to ship coherently: likes/comments authorize through the post's chapter membership, which 403s every cross-chapter campus post TODAY (pre-existing, not introduced here), and moderation resolves a report's campus by post -> chapter. Left: tests, mobile, PR. Original finding: c49 hid the FAB as containment. The only create-post route is POST /chapters/{chapter_id}/posts and it requires an acti The only create-post route is POST /chapters/{chapter_id}/posts and it requires an active membership, so chapter_id is mandatory even for a campus-audience post. But Home shows the create FAB to anyone with a campus_id, and Chirp's whole Aug 11 premise is that it is for ALL students, with greek orgs as an optional thing you join. So a student in no org sees a create button that cannot work. c49 handles it honestly (the FAB is hidden when the caller has no active membership) rather than opening a composer that dead-ends, but that is containment, not a fix. The real question is a product one: can a campus post exist without a chapter (posts.chapter_id is NOT NULL today), or is posting genuinely org-gated and the FYP is read-only for unaffiliated students? Needs Jose + Q to decide before TestFlight, because it silently makes the FYP look broken for exactly the users the product claims to serve.",
+      "area": "fyp"
+    },
+    {
+      "id": "c84",
+      "col": "next",
+      "owner": "",
+      "tag": "vert:social-msg",
+      "title": "[shared] A CHAPTER-LESS AUTHOR CANNOT DELETE THEIR OWN POST - found while building c71, left out of PR #16 deliberately rather than scope-creeping it. Edit and delete live on chapter-scoped routes (PATCH/DELETE /chapters/{chapter_id}/posts/{post_id}) and both compare post.chapter_id to the path chapter, so a post with chapter_id NULL can never match one. The student can post and then cannot take it back. This matters more than a normal gap because /privacy is now live and makes written commitments about deleting your content, and because c69's purge job is being built against the same promise. Fix is probably DELETE /posts/{post_id} authorized by author-or-president via the post itself, which is the same shape _readable_post already uses for likes and comments after c71.",
       "area": "fyp"
     },
     {
@@ -928,7 +983,8 @@
     "Aug 15 — Product: the marketing and legal site moves off the apex domain to a subdomain (about.<domain>), with the apex reserved for sign-in / the app, following Instagram's shape. Jose's call. Recorded now even though it is blocked on buying a domain, because it invalidates an assumption three places already encode: APP_PUBLIC_BASE_URL on Cloud Run, WEB_BASE_URL in the mobile invite helper, and app.json's universal-link config. The c40 lesson applies again — whichever host serves /stripe/connect/return and /stripe/connect/refresh IS what APP_PUBLIC_BASE_URL must equal, because payments.py builds those URLs by string concatenation.",
     "Aug 15 — Process: CARD IDS ARE A SHARED RESOURCE, exactly like migration numbers (c41). Jose and Q both minted c70 and c71 within minutes of each other for completely different work — Q for the media pipeline and the campus-only-user posting gap, Jose for mobile responsiveness and the subdomain move. Caught only because git rejected the push as non-fast-forward; had both been committed from the same base, the board would have silently ended up with two different c70s, which is precisely the duplicate-c50 mess already cleaned up once. Jose renumbered to c72/c73. Same rule as migrations: take the next id from the board's CURRENT state on origin, not from the copy you started editing ten minutes ago.",
     "Aug 15 — Product/scope (c49): the compose flow ships TEXT ONLY, and Photo/Video ship as visibly disabled 'Soon' rows. Worth recording because the tempting move was to add expo-image-picker and call it done. Two reasons not to. First, a picker produces a local file URI, and there is nothing in this repo that can turn that into a URL: no storage bucket wired, no presign, no upload endpoint. Every media_urls value in the app today is a picsum placeholder, which is precisely why the media path looked finished. Second, expo-image-picker is a native module, so it owes an EAS dev build of its own on top of the one c39 already owes — media would have been untestable on arrival. Disabled rows that say so beat a picker that silently drops the photo. Pipeline is c70. Related and more important: the only create-post route requires an active chapter membership, so a student in no org cannot post at all, which directly contradicts the Aug 11 'Chirp is for ALL students' premise. c49 hides the FAB for those users rather than opening a composer that dead-ends, but that is containment; the product decision is c71 and it needs both devs before TestFlight.",
-    "Aug 15 — Process: the migration-number rule caught a REAL collision in real time, not in hindsight. Q read the board, saw 0010 as head, and started writing 0011 for c71; Jose pushed claims for 0011 (c76) and 0012 (c69) about a minute earlier, and the only reason the two did not both ship an 0011 is that git rejected the non-fast-forward push and the rebase forced a re-read of the board. Q moved to 0013. Note what did NOT save us: reading the board at the start of the task. The board was accurate when read and stale by the time the file was written, which is the same shape as the c41 failure. The rule that actually works is re-checking the CURRENT state on origin immediately before writing the file, and treating a rejected push as a signal to re-read rather than an obstacle to retry past."
+    "Aug 15 — Process: the migration-number rule caught a REAL collision in real time, not in hindsight. Q read the board, saw 0010 as head, and started writing 0011 for c71; Jose pushed claims for 0011 (c76) and 0012 (c69) about a minute earlier, and the only reason the two did not both ship an 0011 is that git rejected the non-fast-forward push and the rebase forced a re-read of the board. Q moved to 0013. Note what did NOT save us: reading the board at the start of the task. The board was accurate when read and stale by the time the file was written, which is the same shape as the c41 failure. The rule that actually works is re-checking the CURRENT state on origin immediately before writing the file, and treating a rejected push as a signal to re-read rather than an obstacle to retry past.",
+    "Aug 15 — Product (c71): a student who belongs to no chapter CAN post, to their campus. The user's call, and it resolves a contradiction that had been sitting in the schema since the start: the Aug 11 premise is that Chirp is for all students with orgs as an optional thing you join, while posts.chapter_id was NOT NULL and the only create route sat behind a membership check. Shape: posts.campus_id NOT NULL and backfilled, chapter_id relaxed to nullable, and CHECK (audience = 'campus' OR chapter_id IS NOT NULL) so an org post with no org is impossible in the database rather than merely discouraged. Campus was NOT derived from the author on purpose - a transferring student would drag their old posts onto their new campus feed; the post belongs where it was made. The new route hard-codes audience and its request schema has no audience field, so 'org without a membership' is unreachable by construction instead of by validation. Two pre-existing bugs surfaced on the way and had to be fixed to ship coherently: likes and comments were authorized through the post's chapter, which 403'd every cross-chapter campus post the feed was already showing people, and moderation resolved a report's campus by hopping post -> chapter, which would have filed chapter-less reports on the reporter's campus queue. Both were invisible while every post had a chapter."
   ]
 }
 </script>
@@ -994,6 +1050,10 @@
   }
 
   function render() {
+    // The alpha bar reads the same cards the columns do, so it repaints with
+    // them rather than on its own schedule — otherwise dragging a gate card
+    // leaves a stale percentage sitting above the board that looks authoritative.
+    renderAlpha();
     boardEl.innerHTML = '';
     state.columns.forEach(function (col) {
       var colEl = document.createElement('div');
@@ -1005,6 +1065,13 @@
       cards.forEach(function (c) {
         var el = document.createElement('div');
         el.className = 'card'; el.draggable = true; el.dataset.id = c.id;
+        // Card id, rendered as its own line above the title. It exists in the data
+        // and is how everyone refers to cards in commits, PRs and conversation
+        // ("c36", "c61") — but it was never on screen, so a card's name was
+        // unreadable from the board itself.
+        var idLine = document.createElement('div');
+        idLine.className = 'card-id';
+        idLine.textContent = c.id;
         var t = document.createElement('div'); t.className = 'title'; t.textContent = c.title;
         var meta = document.createElement('div'); meta.className = 'meta';
         var owner = document.createElement('button');
@@ -1022,7 +1089,7 @@
         del.onclick = function () { if (confirm('Delete card?')) { state.cards = state.cards.filter(function (x) { return x.id !== c.id; }); persist(); } };
         meta.appendChild(del);
         t.ondblclick = function () { var v = prompt('Edit card', c.title); if (v) { c.title = v; persist(); } };
-        el.appendChild(t); el.appendChild(meta);
+        el.appendChild(idLine); el.appendChild(t); el.appendChild(meta);
         el.addEventListener('dragstart', function (ev) { ev.dataTransfer.setData('text/plain', c.id); el.classList.add('dragging'); });
         el.addEventListener('dragend', function () { el.classList.remove('dragging'); });
         colEl.appendChild(el);
@@ -1083,6 +1150,109 @@
      depth. The bar is stacked done / in-progress / next because "8 of 11
      done" hides whether the rest is moving or untouched.
      --------------------------------------------------------------- */
+  /**
+   * Alpha readiness.
+   *
+   * The denominator is a NAMED LIST, not a card count: "% of the board done" is
+   * a meaningless number because the board carries plenty of work alpha does not
+   * need, and is missing plenty of foundation work that was never carded. So the
+   * gates are declared in state.alpha and every card-backed one reads its status
+   * from the card itself — move a card, the bar moves. Nothing here is typed in.
+   *
+   * A gate whose card id no longer exists renders as unknown rather than being
+   * silently dropped, because a vanished gate should be loud.
+   */
+  function renderAlpha() {
+    var host = document.getElementById('alpha');
+    var a = state.alpha;
+    if (!host || !a) { if (host) host.hidden = true; return; }
+    host.hidden = false;
+    host.textContent = '';
+
+    var shipped = (a.shipped || []).length;
+    var gates = (a.gates || []).map(function (g) {
+      var card = cardById(g.id);
+      return { id: g.id, label: g.label, col: card ? card.col : 'unknown' };
+    });
+    var n = { done: shipped, progress: 0, open: 0 };
+    gates.forEach(function (g) {
+      if (g.col === 'done') n.done += 1;
+      else if (g.col === 'progress') n.progress += 1;
+      else n.open += 1;
+    });
+    var total = shipped + gates.length;
+    var pct = total ? Math.round((100 * n.done) / total) : 0;
+
+    var head = document.createElement('div');
+    head.className = 'alpha__h';
+    var h2 = document.createElement('h2');
+    h2.textContent = 'Alpha readiness';
+    var pctEl = document.createElement('span');
+    pctEl.className = 'alpha__pct';
+    pctEl.textContent = pct + '%';
+    head.appendChild(h2); head.appendChild(pctEl);
+    host.appendChild(head);
+
+    var sub = document.createElement('p');
+    sub.className = 'alpha__sub';
+    sub.textContent = a.goal;
+    host.appendChild(sub);
+
+    var bar = document.createElement('div');
+    bar.className = 'bar';
+    [['b-done', n.done], ['b-prog', n.progress], ['b-next', n.open]].forEach(function (pair) {
+      if (!pair[1]) return;
+      var i = document.createElement('i');
+      i.className = pair[0];
+      i.style.width = (100 * pair[1]) / total + '%';
+      bar.appendChild(i);
+    });
+    host.appendChild(bar);
+
+    var key = document.createElement('div');
+    key.className = 'alpha__key';
+    [['var(--success)', n.done + ' done'],
+     ['var(--accent)', n.progress + ' in flight'],
+     ['var(--warn)', n.open + ' not started']].forEach(function (pair) {
+      var span = document.createElement('span');
+      var sw = document.createElement('i');
+      sw.style.background = pair[0];
+      span.appendChild(sw);
+      span.appendChild(document.createTextNode(pair[1]));
+      key.appendChild(span);
+    });
+    var foot = document.createElement('span');
+    foot.textContent = shipped + ' shipped foundations counted, ' + gates.length + ' gates remaining to check';
+    key.appendChild(foot);
+    host.appendChild(key);
+
+    var grid = document.createElement('div');
+    grid.className = 'alpha__gates';
+    (a.shipped || []).forEach(function (label) {
+      var row = document.createElement('div');
+      row.className = 'alpha__gate is-shipped';
+      var st = document.createElement('span');
+      st.className = 'st st-done';
+      st.textContent = 'shipped';
+      var t = document.createElement('span');
+      t.textContent = label;
+      row.appendChild(st); row.appendChild(t);
+      grid.appendChild(row);
+    });
+    gates.forEach(function (g) {
+      var row = document.createElement('div');
+      row.className = 'alpha__gate';
+      var st = document.createElement('span');
+      st.className = 'st st-' + (g.col === 'unknown' ? 'backlog' : g.col);
+      st.textContent = g.col === 'unknown' ? g.id + '?' : g.id;
+      var t = document.createElement('span');
+      t.textContent = g.label;
+      row.appendChild(st); row.appendChild(t);
+      grid.appendChild(row);
+    });
+    host.appendChild(grid);
+  }
+
   var COL_ORDER = { done: 0, progress: 1, next: 2, backlog: 3 };
 
   function colTitle(id) {
