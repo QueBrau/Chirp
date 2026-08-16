@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # rejects custom schemes, so a chirp:// deep link cannot be used directly.
     app_public_base_url: str | None = None
     cors_origins: list[str] = ["*"]
+    # Soft-deleted posts/comments/yaks are hard-deleted by app.jobs.purge once this many
+    # days have passed since deleted_at/removed_at. Matches the 30-day response window
+    # /privacy section 14 already commits to (board c69) — do not let these drift apart.
+    purge_retention_days: int = 30
 
 
 @lru_cache
