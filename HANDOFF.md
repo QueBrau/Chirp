@@ -120,11 +120,26 @@ features work. Resolve in favour of main.
 - **Jose's zsh has `interactive_comments` off.** A `#` in a pasted command runs as a
   command, and a trailing comment gets fed to the program as an argument. Hand over
   commands with no inline comments.
-- **CI GREEN MEANS ALMOST NOTHING RIGHT NOW** (c103). The backend job goes green with 157
-  of 179 tests silently skipped — a fixture-level skip when it cannot reach Postgres, so the
-  job exits 0 having run almost nothing. And mobile CI is `tsc` only; there is no mobile test
-  harness at all, so it means "it compiles", never "it works". **Run the suite locally before
-  trusting a merge.**
+- **THE LOCAL TEST DB IS SHARED, AND IT LIES TO YOU INSTEAD OF ERRORING.** Every session
+  points at `chirp_test` on 5432, and conftest drops and recreates the schema per run — so
+  concurrent runs tear down each other's tables mid-suite. This produced **76 failed** on a
+  tree that was genuinely green, and it corrupts the other direction too: a run can *pass*
+  against tables someone else's fixtures populated. **Give yourself your own DB:**
+  `createdb -U chirp -h localhost chirp_test_<lane>`, then hand the schema over **as the
+  local superuser, not as `chirp`** (as `chirp` it fails with the very error you are
+  trying to fix): `psql -h localhost -d postgres -c "ALTER DATABASE chirp_test_<lane>
+  OWNER TO chirp;"` followed by `psql -h localhost -d chirp_test_<lane> -c "ALTER SCHEMA
+  public OWNER TO chirp;"`. Without it every DB test errors with `must be owner of schema
+  public`. Then pass `TEST_DATABASE_URL=...` to pytest.
+  **This whole recipe is temporary.** PR #22 (c106) gives every run its own
+  `chirp_test_p<pid>` database and drops it at the end, so once that merges the answer is
+  just "run pytest" — no createdb, no ownership grant. Delete this bullet then.
+- **CI is honest today but has no floor** (c103). The backend job runs postgres:16 + redis:7
+  services and a healthy run is **179 passed, 0 skipped** — that is why CI shows 179 where a
+  laptop shows 176 pass / 3 skip. The trap is that conftest's postgres probe *skips* rather
+  than fails, so if the service ever fails to come up the suite skips and still exits 0.
+  Latent, not live. Mobile CI is `tsc` only — there is no mobile test harness at all, so it
+  means "it compiles", never "it works".
 - **`/healthz` is unreachable** — Google's frontend answers it. The route is `/_health`.
 - **The firebase CLI is logged in as `madden25boss1@gmail.com`**, which cannot see
   `chirps-prod`. Website deploys go through the gcloud ADC; runbook in `web/README.md`.

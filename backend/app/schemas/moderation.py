@@ -6,8 +6,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ModerationActionName = Literal["suspend_user", "unsuspend_user", "remove_content"]
-ModerationTargetType = Literal["user", "yak", "post", "comment"]
+ModerationActionName = Literal[
+    "suspend_user", "unsuspend_user", "remove_content", "resolve_report"
+]
+ModerationTargetType = Literal["user", "yak", "post", "comment", "report"]
 # Yaks have their own dedicated removal route (POST /moderation/yaks/{yak_id}/remove,
 # anonymous-content shaped); this generic endpoint covers the named-author content
 # types instead of a third near-identical route.
@@ -45,6 +47,28 @@ class ContentRemoveRequest(_Schema):
 
     target_type: RemovableContentType
     target_id: uuid.UUID
+    reason: str = Field(min_length=1)
+
+
+# ---- report resolution ----
+
+# 'open' is deliberately NOT resolvable-to: this endpoint closes a report, it does not
+# reopen one. Reopening would need its own rule about who may undo another moderator's
+# decision, and there is no product answer for that yet (board c91).
+ReportResolution = Literal["actioned", "dismissed"]
+
+
+class ReportResolveRequest(_Schema):
+    """Body for PATCH /moderation/reports/{report_id}.
+
+    `reason` is required for the same reason it is on every other route in this file:
+    the moderation_actions row must always carry a 'why', so the audit trail is worth
+    reading later. "actioned" means the report was acted on (content removed, user
+    suspended); "dismissed" means it was reviewed and no action was warranted. Both are
+    a moderator having LOOKED at it, which is the distinction the queue needs.
+    """
+
+    status: ReportResolution
     reason: str = Field(min_length=1)
 
 
