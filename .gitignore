@@ -39,3 +39,6 @@ app-mobile/android/
 # OS
 .DS_Store
 .gstack/
+
+# Agent worktrees are local scratch, never committed
+.claude/worktrees/
