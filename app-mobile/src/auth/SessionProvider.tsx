@@ -33,7 +33,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { fetchMe, type UserOut } from "@/api/auth";
+import { fetchMe, getCampus, type CampusOut, type UserOut } from "@/api/auth";
 import { ApiError } from "@/api/client";
 import type { MembershipOut } from "@/api/chapters";
 
@@ -47,6 +47,18 @@ export interface SessionContextValue {
   status: SessionStatus;
   user: UserOut | null;
   memberships: MembershipOut[];
+  /**
+   * The signed-in user's campus (GET /campuses/{id}, resolved once here from
+   * user.campus_id — c67: campus is a property of the session, not a
+   * per-screen fetch. Every screen that used to call the hook independently
+   * now reads the same value, so one Orgs mount no longer fires N identical
+   * requests. Fails soft to null on a failed lookup for the same reason the
+   * old per-screen hook did: campus name is a cosmetic label everywhere it's
+   * used, so an absent eyebrow beats a wrong one or a crashed screen. Also
+   * null while resolving — callers cannot and should not distinguish
+   * "still fetching" from "failed"; both mean "do not render a name yet".
+   */
+  campus: CampusOut | null;
   /**
    * Re-run fetchMe() for the current Firebase user. Resolves true when the
    * session state was settled by a server answer (200 or 404), false when the
@@ -74,6 +86,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SessionStatus>(hasFirebaseConfig() ? "loading" : "ready");
   const [user, setUser] = useState<UserOut | null>(null);
   const [memberships, setMemberships] = useState<MembershipOut[]>([]);
+  const [campus, setCampus] = useState<CampusOut | null>(null);
   // Bumped on every auth event / seed / load start; a load only applies its
   // result while its generation is still current.
   const genRef = useRef(0);
@@ -119,6 +132,32 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return false;
     }
   }, []);
+
+  // Resolve campus ONCE per campus_id, here, instead of in every screen that
+  // wants the name (c67). Keyed on campusId rather than re-running per mount:
+  // any number of useCampus() readers below share this single fetch/result.
+  const campusId = user?.campus_id ?? null;
+  useEffect(() => {
+    if (campusId === null) {
+      setCampus(null);
+      return;
+    }
+
+    // Guards a stale response landing after campusId has already moved on
+    // (sign-out/sign-in as a different user mid-flight).
+    let active = true;
+    getCampus(campusId)
+      .then((value) => {
+        if (active) setCampus(value);
+      })
+      .catch(() => {
+        if (active) setCampus(null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [campusId]);
 
   const refresh = useCallback(async (): Promise<boolean> => {
     if (!hasFirebaseConfig() || !getFirebaseAuth().currentUser) return false;
@@ -168,8 +207,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [loadMe]);
 
   const value = useMemo<SessionContextValue>(
-    () => ({ status, user, memberships, refresh, applyBootstrap }),
-    [status, user, memberships, refresh, applyBootstrap],
+    () => ({ status, user, memberships, campus, refresh, applyBootstrap }),
+    [status, user, memberships, campus, refresh, applyBootstrap],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

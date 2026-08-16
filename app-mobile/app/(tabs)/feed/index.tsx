@@ -15,9 +15,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 
-import { getCampus, type CampusOut } from "@/api/auth";
 import { likePost, listCampusFeed, unlikePost, type FeedPostOut } from "@/api/feed";
-import { useSession } from "@/auth";
+import { useCampus, useSession } from "@/auth";
 import { AppText, EmptyState, Fab, MediaPostCard, MomentsRow, Screen } from "@/components";
 import { MOCK_MOMENTS, mockUserById } from "@/mocks/data";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
@@ -52,7 +51,7 @@ export default function FeedScreen() {
   const [items, setItems] = useState<FeedPostOut[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [filter, setFilter] = useState<FeedFilter>("forYou");
-  const [campus, setCampus] = useState<CampusOut | null>(null);
+  const campus = useCampus();
 
   // Alumni / non-campus accounts have no campus_id — there's no campus feed to
   // call the endpoint with, so that's handled as its own EmptyState below
@@ -75,18 +74,12 @@ export default function FeedScreen() {
     void load();
   }, [load]);
 
-  // Real campus name for the header eyebrow (GET /campuses/{id}, added with c46).
-  // Fails soft to null: a missing campus name is cosmetic and must never blank
-  // out the feed itself, which is driven by campusId.
-  useEffect(() => {
-    if (campusId === null) {
-      setCampus(null);
-      return;
-    }
-    getCampus(campusId)
-      .then(setCampus)
-      .catch(() => setCampus(null));
-  }, [campusId]);
+  // Real campus name for the header eyebrow: resolved once in SessionProvider
+  // (c67) rather than fetched here — this screen used to run its own
+  // independent GET /campuses/{id}, which was one of the redundant fetches
+  // the card exists to kill. Still fails soft to null the same way: a missing
+  // campus name is cosmetic and must never blank out the feed itself, which
+  // is driven by campusId.
 
   const toggleLike = async (item: FeedPostOut) => {
     const wasLiked = item.liked_by_me;

@@ -25,10 +25,11 @@ import {
      author_id. Saying otherwise would be a lie we could not keep.
   2. Reporting a private message forwards that message's text to us. That is
      what forwarded_plaintext on content_reports is.
-  3. Deleted content is hidden immediately but NOT purged, because no purge job
-     exists yet (grep: there is no DELETE FROM anywhere in the app). The page
-     says what is true and offers a manual route. Do not upgrade that wording to
-     "permanently deleted" until a job actually does it — that is board c69.
+  3. Deleted content is hidden immediately, and erased for good 30 days later by
+     app.jobs.purge.purge_expired_soft_deletes (board c69). That function is the
+     only place that runs DELETE FROM on posts/comments/yaks — grep it before
+     changing the retention number below, which reads Settings.purge_retention_days
+     (backend/app/config.py) so the two can never drift apart silently.
 
   Written for North Carolina and UNCG only, deliberately, rather than hedged
   across fifty states. Revisit when the first campus outside NC onboards.
@@ -298,19 +299,26 @@ export function Privacy() {
 
           <h2>14. How long we keep things</h2>
           <p>
-            When you delete a post or comment in the app, it is hidden from everyone immediately.
-            <strong> We do not currently run an automatic job that erases it from the database
-            afterwards</strong>, so a hidden copy remains until we remove it. We would rather tell
-            you that than claim a deletion we do not perform.
+            When you delete a post or comment, or remove a yak, it is hidden from everyone
+            immediately. <strong>An automated job then erases it from the database for good 30
+            days later</strong> &mdash; a hard delete, not another layer of hiding. That 30-day
+            number is a setting in our backend, not a guess, and it will not quietly change
+            without this page changing with it.
           </p>
           <p>
-            If you want content actually erased rather than hidden, email{" "}
-            <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> and we will do it by hand. We are
-            building automatic purging, and this section will change when it ships.
+            Purging a post also erases anything that only makes sense attached to it &mdash; its
+            likes, and every comment on it &mdash; once that post&rsquo;s own 30 days is up, even
+            if a particular comment is more recent than that. A comment you delete on its own,
+            without deleting the post underneath it, is erased 30 days from when you deleted it.
+          </p>
+          <p>
+            If you do not want to wait 30 days, email{" "}
+            <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> and we will erase it by hand
+            sooner.
           </p>
           <p>
             Backups of the database are retained by our hosting provider on a rolling basis, so
-            deleted content can persist in a backup for a period after removal.
+            deleted content can persist in a backup for a period after the purge job has run.
           </p>
 
           <h2>15. Security</h2>

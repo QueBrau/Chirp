@@ -91,6 +91,12 @@
 
   --shadow-card: 0 2px 16px rgba(16, 18, 35, 0.06);
   --shadow-lift: 0 12px 40px rgba(16, 18, 35, 0.10);
+  /* Deliberately NOT redefined under prefers-color-scheme/[data-theme] below,
+     unlike the two shadows above: .phone sits on the pinned-dark brand canvas
+     in both colour schemes (see --brand-* above), so it needs to keep casting
+     a shadow in dark mode, where --shadow-card/--shadow-lift correctly go to
+     "none". */
+  --shadow-phone: 0 30px 80px rgba(0, 0, 0, 0.45);
 
   /* System font, matching the app. No webfont: nothing to download, nothing to
      block first paint. */
@@ -126,6 +132,17 @@
    */
   --reading: 16px;
   --reading-line: 25px;
+
+  /*
+   * Second site-only divergence, alongside --reading above. Compact UI labels
+   * — nav links, the mobile menu toggle, footer links, names inside the phone
+   * mockup — were six separate literal 14px font-sizes in site.css, a value
+   * with no home in the app's scale (typography.ts has no 14px step: 11,
+   * 12.5, 15, 16, 17, 20, 30). That is web chrome, not app content, so it gets
+   * its own site-only step rather than being forced onto an app value that
+   * means something else.
+   */
+  --label: 14px;
 
   --caption: 12.5px;
   --caption-weight: 500;
