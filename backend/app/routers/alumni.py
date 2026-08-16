@@ -168,10 +168,19 @@ async def list_job_posts(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[JobPostOut]:
-    """List network-wide jobs plus jobs scoped to the caller's chapters; no expired."""
+    """List network-wide jobs plus jobs scoped to the caller's chapters; no expired.
+
+    Joins users so each row carries the poster's display name. Without it the
+    client gets a bare UUID and there is no GET /users/{id} to resolve it, which
+    is exactly why the Jobs screen used to render every poster as "Alumni".
+    Inner join, not outer: JobPost.posted_by is a non-null FK to users, so a job
+    with no matching user cannot exist and an outer join would only add a null
+    branch that can never be taken.
+    """
     now = datetime.now(timezone.utc)
     result = await session.execute(
-        select(models.JobPost)
+        select(models.JobPost, models.User.display_name)
+        .join(models.User, models.User.id == models.JobPost.posted_by)
         .where(
             or_(
                 models.JobPost.chapter_id.is_(None),
@@ -184,7 +193,12 @@ async def list_job_posts(
         )
         .order_by(models.JobPost.created_at.desc())
     )
-    return [JobPostOut.model_validate(j) for j in result.scalars().all()]
+    entries: list[JobPostOut] = []
+    for job, display_name in result.all():
+        out = JobPostOut.model_validate(job)
+        out.posted_by_name = display_name
+        entries.append(out)
+    return entries
 
 
 @router.delete("/jobs/{job_id}", status_code=204)

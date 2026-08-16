@@ -6,7 +6,6 @@ import { useFocusEffect, useRouter } from "expo-router";
 
 import { getAlumniDirectory, listJobs, type AlumniProfileOut, type JobPostOut } from "@/api/alumni";
 import { AppText, Avatar, Badge, Button, Card, EmptyState, Screen } from "@/components";
-import { mockUserById } from "@/mocks/data";
 import { radii, spacing, useTheme } from "@/theme";
 
 type Segment = "directory" | "jobs";
@@ -61,8 +60,10 @@ function AlumniCard({ profile }: { profile: AlumniProfileOut }) {
 }
 
 function JobCard({ job }: { job: JobPostOut }) {
-  const poster = mockUserById(job.posted_by);
-  const posterName = poster?.display_name ?? "Alumni";
+  // Server-joined name (GET /jobs). This used to be mockUserById(job.posted_by),
+  // which resolved a REAL uuid against the mock table, never matched, and so
+  // rendered "Alumni" for every job ever posted.
+  const posterName = job.posted_by_name ?? "A member";
 
   return (
     <Card>

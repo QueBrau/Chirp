@@ -1,0 +1,143 @@
+/*
+ * Chirp design tokens, web edition.
+ *
+ * Mirrors app-mobile/src/theme (colors.ts / typography.ts / spacing.ts / radii.ts),
+ * which DESIGN.md calls the binding contract. Values are copied from there, not
+ * re-derived: if a token changes in the app it must change here too, or the site
+ * and the product drift apart.
+ *
+ * Same discipline as the app: pages consume ONLY these custom properties. No
+ * hardcoded hex anywhere in site.css or in any page.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Canvas and surfaces (light, default) */
+  --bg: #F6F7FB;
+  --surface: #FFFFFF;
+  --surface-alt: #EFF1F7;
+
+  /* Ink */
+  --ink: #101223;
+  --ink-secondary: #575B75;
+  --ink-faint: #9BA0B8;
+
+  --border: rgba(16, 18, 35, 0.08);
+
+  /* Accent. One confident violet-indigo, used sparingly (DESIGN.md 1). */
+  --accent: #5B5BF6;
+  --accent-soft: #ECECFE;
+  --gradient-start: #6366F1;
+  --gradient-end: #8B5CF6;
+  --on-accent: #FFFFFF;
+
+  /* Semantic */
+  --success: #17A673;
+  --success-soft: #E3F6EE;
+  --danger: #E5484D;
+  --danger-soft: #FDECEC;
+  --warning: #F5A623;
+  --warning-soft: #FDF3E1;
+
+  /*
+   * The dark brand canvas. DESIGN.md 7 treats sign-in as a "brand moment"; the
+   * landing hero and the two Stripe bounce pages are the web equivalent, so they
+   * stay dark in BOTH schemes rather than following the system. These are the
+   * dark palette's values, pinned.
+   */
+  --brand-canvas: #0C0D14;
+  --brand-surface: #15161F;
+  --brand-surface-alt: #1D1E2A;
+  --brand-ink: #F2F3FA;
+  --brand-ink-secondary: #A6AAC4;
+  --brand-ink-faint: #666B85;
+  --brand-border: rgba(242, 243, 250, 0.09);
+  --brand-accent: #7C7CFF;
+
+  /* Shape (DESIGN.md 4) */
+  --radius-card: 20px;
+  --radius-pill: 999px;
+  --radius-input: 14px;
+  --radius-avatar: 16px;
+  --radius-thumb: 12px;
+
+  /* Spacing, 4-base scale. 20 is the screen gutter. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  /* The 4-base arithmetic above stops here: these are named for their values,
+     because --space-64 meaning 48px would be a trap. */
+  --space-48: 48px;
+  --space-64: 64px;
+  --space-96: 96px;
+
+  --shadow-card: 0 2px 16px rgba(16, 18, 35, 0.06);
+  --shadow-lift: 0 12px 40px rgba(16, 18, 35, 0.10);
+
+  /* System font, matching the app. No webfont: nothing to download, nothing to
+     block first paint. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, "Helvetica Neue", sans-serif;
+  --font-tabular: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  /*
+   * Type scale (DESIGN.md 3). The app's `display` is 30px because it lives on a
+   * phone; on a wide viewport that reads undersized, so display scales fluidly
+   * and bottoms out at the app's value. Every other step matches the app exactly.
+   */
+  --display: clamp(30px, 5.2vw, 56px);
+  --display-weight: 800;
+  --display-tracking: -0.5px;
+
+  --title: 20px;
+  --title-weight: 700;
+  --title-tracking: -0.3px;
+
+  --headline: 16px;
+  --headline-weight: 700;
+
+  --body: 15px;
+  --body-line: 21px;
+
+  --caption: 12.5px;
+  --caption-weight: 500;
+
+  --micro: 11px;
+  --micro-weight: 600;
+  --micro-tracking: 0.4px;
+
+  --measure: 62ch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0C0D14;
+    --surface: #15161F;
+    --surface-alt: #1D1E2A;
+
+    --ink: #F2F3FA;
+    --ink-secondary: #A6AAC4;
+    --ink-faint: #666B85;
+
+    --border: rgba(242, 243, 250, 0.09);
+
+    --accent: #7C7CFF;
+    --accent-soft: rgba(124, 124, 255, 0.16);
+
+    --success: #2BD597;
+    --success-soft: rgba(43, 213, 151, 0.16);
+    --danger: #FF6369;
+    --danger-soft: rgba(255, 99, 105, 0.16);
+    --warning: #FFB84D;
+    --warning-soft: rgba(255, 184, 77, 0.16);
+
+    /* Cards drop the shadow in dark and carry the border alone (DESIGN.md 4). */
+    --shadow-card: none;
+    --shadow-lift: none;
+  }
+}
