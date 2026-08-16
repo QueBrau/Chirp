@@ -9,12 +9,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.campus_access import require_campus_member, require_verified_campus
 from app.core.errors import forbidden, not_found
 from app.core.permissions import Role
 from app.db import get_session
@@ -119,19 +120,6 @@ def _feed_post_out(row: Any) -> FeedPostOut:
     )
 
 
-async def _require_campus_user(
-    campus_id: uuid.UUID = Path(...),
-    user: models.User = Depends(get_current_user),
-) -> models.User:
-    """403 unless the caller belongs to the campus in the path (users.campus_id).
-
-    Matches routers/yaks.py `_require_campus_user`.
-    """
-    if user.campus_id != campus_id:
-        raise forbidden("not_your_campus")
-    return user
-
-
 async def _post_with_membership(
     post_id: uuid.UUID,
     user: models.User,
@@ -189,13 +177,32 @@ async def create_post(
     chapter_id: uuid.UUID,
     body: PostCreate,
     membership: models.Membership = Depends(get_current_membership),
+    user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> PostOut:
     """Create a post authored by the caller.
 
     `audience` defaults to 'org' (PostCreate schema default) so a client that
     omits it can never accidentally broadcast a chapter post campus-wide.
+
+    THE CAMPUS GATE APPLIES HERE TOO, and this is the route it was missing (c88). The
+    path is chapter-scoped, so it never went through `require_campus_member` and read
+    as an org endpoint — but `audience='campus'` makes the post appear on
+    GET /campuses/{id}/feed, so this is a campus-wide WRITE wearing a chapter URL.
+    Gating the read alone would have left the door open facing the other way: an
+    unverified member could not READ the campus feed but could still PUBLISH to it,
+    which is the worse half of the pair.
+
+    The campus is taken from the CHAPTER, never from the caller's own campus_id — the
+    post lands on the chapter's campus feed, so that is the campus whose gate must be
+    satisfied, and reading it off the user would let a mismatched pair through.
     """
+    if body.audience == "campus":
+        chapter = await session.get(models.Chapter, chapter_id)
+        if chapter is None:
+            raise not_found("chapter_not_found")
+        require_verified_campus(user, chapter.campus_id)
+
     post = models.Post(
         chapter_id=chapter_id,
         author_id=membership.user_id,
@@ -217,7 +224,7 @@ async def list_campus_feed(
     before: datetime | None = None,
     before_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
-    user: models.User = Depends(_require_campus_user),
+    user: models.User = Depends(require_campus_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[FeedPostOut]:
     """Campus-wide feed: only `audience = 'campus'` posts from chapters on this

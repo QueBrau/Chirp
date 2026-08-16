@@ -19,7 +19,7 @@ import uuid
 
 from httpx import AsyncClient
 
-from tests.conftest import ApiUser, MakeChapterWith, MakeUser, set_campus
+from tests.conftest import ApiUser, MakeChapterWith, MakeUser, set_campus, verify_campus
 
 
 async def _campus_id_of(client: AsyncClient, chapter_id: str, headers: dict[str, str]) -> str:
@@ -175,6 +175,8 @@ async def test_blocked_authors_campus_posts_hidden_from_blocker_visible_to_bysta
 ) -> None:
     setup = await make_chapter_with("president")
     campus_id = await _campus_id_of(client, setup.chapter_id, setup.president.headers)
+    # c88: a campus-audience post needs a proved .edu, not just a chapter campus.
+    await verify_campus(setup.president.id)
 
     post = await client.post(
         f"/chapters/{setup.chapter_id}/posts",
@@ -211,6 +213,8 @@ async def test_blocking_one_author_does_not_hide_another_authors_campus_posts(
     campus_id = await _campus_id_of(client, setup.chapter_id, setup.president.headers)
     author_a = setup.president
     author_b = setup.member
+    await verify_campus(author_a.id)
+    await verify_campus(author_b.id)
 
     post_a = await client.post(
         f"/chapters/{setup.chapter_id}/posts",
