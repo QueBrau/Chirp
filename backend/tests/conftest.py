@@ -433,8 +433,17 @@ async def _grant_platform_admin(user_id: str) -> None:
         await session.commit()
 
 
-async def set_campus(user_id: str, campus_id: str) -> None:
-    """Pin a user to a campus directly in the DB.
+async def set_campus(user_id: str, campus_id: str, *, verified: bool = True) -> None:
+    """Pin a user to a campus directly in the DB, verified by default.
+
+    `verified=True` also stamps campus_verified_at, because since c88 a campus_id alone
+    no longer opens the campus feed or Yak — the gate keys on the verification
+    timestamp. Almost every caller here is testing a campus FEATURE and wants a fully
+    entitled user, so that is the default and those tests read unchanged.
+
+    PASS verified=False TO BUILD THE USER THE GATE EXISTS TO REFUSE: someone with a
+    campus derived from a chapter invite (c96) who has never proved an .edu. That is
+    the exact shape of the c104/c105 bypass, and test_campus_gate.py uses it.
 
     Board c85: campus_id used to be accepted in the POST /auth/bootstrap body, and
     that was the ONLY way anything — including this suite — assigned a campus. It was
@@ -450,8 +459,35 @@ async def set_campus(user_id: str, campus_id: str) -> None:
 
     async with get_session_factory()() as session:
         await session.execute(
-            text("UPDATE users SET campus_id = :campus WHERE id = :id"),
-            {"campus": campus_id, "id": user_id},
+            text(
+                "UPDATE users SET campus_id = :campus, "
+                "campus_verified_at = CASE WHEN :verified THEN now() ELSE NULL END "
+                "WHERE id = :id"
+            ),
+            {"campus": campus_id, "id": user_id, "verified": verified},
+        )
+        await session.commit()
+
+
+async def verify_campus(user_id: str) -> None:
+    """Stamp campus_verified_at without touching campus_id.
+
+    For tests whose subject is campus feed CONTENT rather than the gate: since c88 a
+    campus-audience post requires the author to have proved an .edu, and a user built by
+    make_chapter_with has a campus derived from their chapter (c96) but no verification.
+    That is the c104/c105 bypass shape by construction, so those authors are refused —
+    correctly. Call this to make such an author a legitimate campus poster.
+
+    Deliberately NOT folded into make_chapter_with: chapter members must keep arriving
+    unverified by default, because that is the state test_campus_gate.py asserts against.
+    Verifying there would quietly disarm the tripwire for every test in the suite.
+    """
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text("UPDATE users SET campus_verified_at = now() WHERE id = :id"),
+            {"id": user_id},
         )
         await session.commit()
 

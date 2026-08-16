@@ -18,6 +18,10 @@ dependencies = [
     "redis>=5",
     "greenlet",
     "stripe>=12",
+    # Async HTTP for the Resend adapter (c87). It was already installed as a dev
+    # dependency via the test client, which is exactly how a runtime import ends up
+    # working locally and failing in the Cloud Run image — so it is declared here.
+    "httpx",
 ]
 
 [project.optional-dependencies]

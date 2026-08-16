@@ -11,7 +11,14 @@ from app.models.finance import (
     ProcessedStripeEvent,
     SpendApproval,
 )
-from app.models.identity import Campus, Chapter, ChapterInvite, Membership, User
+from app.models.identity import (
+    Campus,
+    CampusVerification,
+    Chapter,
+    ChapterInvite,
+    Membership,
+    User,
+)
 from app.models.lineage import Family, LineageEdge
 from app.models.meetings import Meeting, MeetingAttendance
 from app.models.messaging import (
@@ -27,6 +34,7 @@ from app.models.yak import ContentReport, UserBlock, Yak, YakVote
 __all__ = [
     "AlumniProfile",
     "Campus",
+    "CampusVerification",
     "Chapter",
     "ChapterInvite",
     "ChapterStripeCustomer",

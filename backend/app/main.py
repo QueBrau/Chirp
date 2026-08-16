@@ -12,6 +12,7 @@ from app.config import Settings, get_settings
 from app.routers import (
     alumni,
     auth,
+    campus_verification,
     chapters,
     events,
     feed,
@@ -151,6 +152,7 @@ def create_app() -> FastAPI:
 
     for module in (
         auth,
+        campus_verification,
         chapters,
         keys,
         messages,
