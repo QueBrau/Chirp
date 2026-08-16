@@ -198,30 +198,77 @@ a:hover { text-decoration: underline; }
 .site-nav a:hover { background: var(--surface-alt); color: var(--ink); text-decoration: none; }
 .site-nav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
 
+/* ----------------------------------------------------------- phone menu --- */
+/*
+ * Four links do not fit beside the wordmark on a phone.
+ *
+ * The previous answer hid the two longest (How it works, About) and let the
+ * footer carry them. That is worse than it sounds: reaching two of the four
+ * pages meant scrolling to the bottom of the page you were already on, and the
+ * only hint they existed was down there too. This is the menu instead.
+ *
+ * The toggle is a labelled pill rather than a bare hamburger. It costs about
+ * forty pixels of header, and "Menu" is unambiguous in a way three stacked
+ * lines are not.
+ */
+
+.nav-toggle {
+  display: none;
+  margin-left: auto;
+  align-items: center; gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit; font-size: 14px; font-weight: 600;
+  cursor: pointer;
+}
+.nav-toggle:hover { background: var(--surface-alt); }
+
+/* Two bars, not three: they cross into an X when open, and two lines make a
+   cleaner X than three (the third has nowhere to go but a fade). */
+.nav-toggle__mark { display: grid; gap: 5px; width: 15px; }
+.nav-toggle__mark span {
+  display: block; height: 1.5px; border-radius: 1px;
+  background: currentColor;
+  transition: transform 160ms ease;
+}
+.nav-toggle[aria-expanded="true"] .nav-toggle__mark span:first-child {
+  transform: translateY(3.25px) rotate(45deg);
+}
+.nav-toggle[aria-expanded="true"] .nav-toggle__mark span:last-child {
+  transform: translateY(-3.25px) rotate(-45deg);
+}
+
+.site-menu { border-top: 1px solid var(--border); }
+.site-menu[hidden] { display: none; }
+.site-menu ul { display: grid; padding-block: var(--space-2); }
+.site-menu a {
+  display: flex; align-items: center;
+  min-height: 52px;
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-input);
+  color: var(--ink); font-weight: 600;
+}
+.site-menu a:hover { background: var(--surface-alt); text-decoration: none; }
+.site-menu a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+
+/* The footer carries these too, but the footer is a long scroll away on a
+   phone and this is the one place a reader is already looking for a link. */
+.site-menu__legal { border-top: 1px solid var(--border); }
+.site-menu__legal a {
+  min-height: 46px;
+  font-size: 14px; font-weight: 500;
+  color: var(--ink-secondary);
+}
+
+@media (min-width: 721px) { .site-menu { display: none; } }
+
 @media (max-width: 720px) {
-  .site-nav ul { gap: 0; }
-
-  /* 13px on 8px of padding was a ~37px tap target, under the 44px minimum. The
-     header's 64px min-height already has the room, so this costs no layout. */
-  .site-nav a {
-    display: inline-flex; align-items: center;
-    min-height: 44px;
-    padding: 0 var(--space-3); font-size: 13px;
-  }
-
-  /*
-   * Four links do not fit beside the wordmark on a phone. Hide the two longest
-   * (How it works, About) and let the footer carry the full set — the hero's
-   * primary CTA already points at How it works, so it stays one tap away.
-   *
-   * Hiding by position rather than by class because every page shares this
-   * header markup verbatim, so one rule covers all of them. The `.site-nav a`
-   * qualifier is load-bearing: a bare .site-nav__hide-sm (0,1,0) loses to
-   * .site-nav a (0,1,1) on specificity and silently does nothing.
-   */
-  .site-nav li:nth-child(2) a,
-  .site-nav li:nth-child(3) a,
-  .site-nav a.site-nav__hide-sm { display: none; }
+  .site-nav { display: none; }
+  .nav-toggle { display: inline-flex; }
 }
 
 /* -------------------------------------------------------------- buttons --- */
