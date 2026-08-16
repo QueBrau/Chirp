@@ -17,6 +17,30 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://chirp:chirp@localhost:5432/chirp_test"
+# Connected to for CREATE/DROP DATABASE only. Always present on both the official
+# postgres image and a Homebrew install.
+MAINTENANCE_DB = "postgres"
+
+
+def _run_db_name(base: str) -> str:
+    """Per-run database name: base + this process, plus the xdist worker if any.
+
+    The pid is not decoration — _drop_stale_run_databases uses it to tell a
+    database abandoned by a crashed run from one a live run is still using.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    suffix = f"_p{os.getpid()}" + (f"_{worker}" if worker else "")
+    return f"{base}{suffix}"
+
+
+def _swap_database(url: str, database: str) -> str:
+    """Return `url` pointing at a different database on the same server."""
+    head, _, _ = url.rpartition("/")
+    return f"{head}/{database}"
+
+
+def _database_of(url: str) -> str:
+    return url.rpartition("/")[2].partition("?")[0]
 
 
 # ---------------------------------------------------------------------------
@@ -57,16 +81,89 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         session.exitstatus = 1
 
 
-@pytest.fixture(scope="session")
-def database_url() -> str:
-    """Test DB URL from TEST_DATABASE_URL (or the chirp_test default).
+async def _maintenance_execute(admin_url: str, statements: list[str]) -> None:
+    """Run CREATE/DROP DATABASE, which cannot execute inside a transaction."""
+    engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    try:
+        async with engine.connect() as conn:
+            for statement in statements:
+                await conn.execute(text(statement))
+    finally:
+        await engine.dispose()
 
-    Unreachable DB skips locally and FAILS under CHIRP_REQUIRE_DB=1 (board card c103).
+
+async def _drop_stale_run_databases(admin_url: str, base: str) -> None:
+    """Drop per-run databases whose owning process is gone.
+
+    Without this, every crashed or killed run leaks a database. Liveness is
+    decided by the pid embedded in the name: if that process is not running,
+    nothing can still be using it. Unparseable names are left alone, and so is
+    the shared base database — this only ever removes what it created.
     """
-    url = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
+    engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text("SELECT datname FROM pg_database WHERE datname LIKE :pattern"),
+                {"pattern": f"{base}\\_p%"},
+            )
+            names = [row[0] for row in result]
+    finally:
+        await engine.dispose()
+
+    stale = []
+    for name in names:
+        pid_part = name[len(base) + 2 :].partition("_")[0]
+        if not pid_part.isdigit():
+            continue
+        pid = int(pid_part)
+        if pid == os.getpid():
+            stale.append(name)  # our own leftover from a previous run, same pid
+            continue
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            stale.append(name)
+        except PermissionError:
+            pass  # alive, owned by someone else
+
+    for name in stale:
+        try:
+            await _maintenance_execute(admin_url, [f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'])
+        except Exception:
+            pass  # a concurrent run may have cleaned it up first; not our problem
+
+
+@pytest.fixture(scope="session")
+def database_url() -> AsyncIterator[str]:
+    """A PRIVATE database for this test run, created here and dropped at the end.
+
+    Board card c106. Every test truncates the whole table set (see the `client`
+    fixture), and TRUNCATE takes an AccessExclusiveLock. Two pytest runs sharing
+    one database therefore deadlock each other — one waiting on AccessExclusiveLock
+    while the other holds RowShareLock and waits back. Observed on this machine
+    with several sessions active: 72 failed, 65 passed, 39 errors, all of them
+    `asyncpg.exceptions.DeadlockDetectedError` on the TRUNCATE. That wall of red
+    looks exactly like a broken branch, which makes it the more expensive twin of
+    c103's false green: someone "fixes" code that was never broken, or shrugs off
+    a real failure as "probably just the collision".
+
+    So each run gets `chirp_test_p<pid>` instead of sharing `chirp_test`. Runs
+    stop being able to see each other at all, rather than being asked to take
+    turns, and `-n auto` becomes available later for free.
+
+    TEST_DATABASE_URL still selects the SERVER and the base name; only the
+    database is swapped. Unreachable server skips locally and FAILS under
+    CHIRP_REQUIRE_DB=1 (board card c103).
+    """
+    requested = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
+    base = _database_of(requested)
+    admin_url = _swap_database(requested, MAINTENANCE_DB)
+    run_db = _run_db_name(base)
+    url = _swap_database(requested, run_db)
 
     async def _probe() -> None:
-        engine = create_async_engine(url)
+        engine = create_async_engine(admin_url)
         try:
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
@@ -87,21 +184,50 @@ def database_url() -> str:
         # skip that reads as a pass.
         if os.environ.get("CHIRP_REQUIRE_DB") == "1":
             pytest.fail(
-                f"CHIRP_REQUIRE_DB=1 but the test database is unreachable at {url}: "
+                f"CHIRP_REQUIRE_DB=1 but the postgres server is unreachable at {admin_url}: "
                 f"{type(exc).__name__}: {exc}. Refusing to skip the suite and "
                 f"report success — fix the database service, do not unset the flag.",
                 pytrace=False,
             )
         pytest.skip("postgres not available — docker compose up db")
-    return url
+
+    asyncio.run(_drop_stale_run_databases(admin_url, base))
+    asyncio.run(
+        _maintenance_execute(
+            admin_url,
+            [f'DROP DATABASE IF EXISTS "{run_db}" WITH (FORCE)', f'CREATE DATABASE "{run_db}"'],
+        )
+    )
+    try:
+        yield url
+    finally:
+        # Best effort: a failed drop leaks one database, and the stale sweep above
+        # reclaims it on the next run. Failing teardown here would turn a green
+        # suite red for a housekeeping problem, which is not worth it.
+        try:
+            asyncio.run(
+                _maintenance_execute(admin_url, [f'DROP DATABASE IF EXISTS "{run_db}" WITH (FORCE)'])
+            )
+        except Exception:
+            pass
 
 
 @pytest.fixture(scope="session")
 def migrated_db(database_url: str) -> str:
-    """Point app settings at the test DB and build a fresh schema via alembic upgrade head.
+    """Point app settings at this run's database and build its schema with alembic.
 
     Runs the real migration so the ledger_append_only trigger is installed
     (defense-in-depth under test, per SPEC §8.2).
+
+    There is deliberately no DROP SCHEMA public / CREATE SCHEMA public here any
+    more. That existed to reset a database shared across runs, and c106 made the
+    database private and brand new, so it is redundant — and it could not work
+    anyway: a database created by `chirp` inherits its public schema from
+    template1, where the schema is owned by the bootstrap superuser, so the drop
+    fails with `must be owner of schema public` for every non-superuser. That is
+    exactly what it did on Jose's Homebrew PG14 (154 errors) while passing in CI,
+    where the container's POSTGRES_USER is a superuser and owns everything — a
+    works-in-CI-fails-locally split that would have cost somebody an afternoon.
     """
     os.environ["DATABASE_URL"] = database_url
     os.environ["AUTH_MODE"] = "emulated"
@@ -109,17 +235,6 @@ def migrated_db(database_url: str) -> str:
     from app.config import get_settings
 
     get_settings.cache_clear()
-
-    async def _reset_schema() -> None:
-        engine = create_async_engine(database_url, isolation_level="AUTOCOMMIT")
-        try:
-            async with engine.connect() as conn:
-                await conn.execute(text("DROP SCHEMA public CASCADE"))
-                await conn.execute(text("CREATE SCHEMA public"))
-        finally:
-            await engine.dispose()
-
-    asyncio.run(_reset_schema())
 
     from alembic import command
     from alembic.config import Config as AlembicConfig
@@ -143,7 +258,22 @@ async def client(migrated_db: str) -> AsyncIterator[AsyncClient]:
     table_names = ", ".join(t.name for t in app_db.Base.metadata.sorted_tables)
     async with engine.begin() as conn:
         # Row-level triggers (ledger_append_only) do not fire on TRUNCATE.
-        await conn.execute(text(f"TRUNCATE TABLE {table_names} CASCADE"))
+        try:
+            await conn.execute(text(f"TRUNCATE TABLE {table_names} CASCADE"))
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            if "deadlock" not in str(exc).lower():
+                raise
+            # Cannot happen once every run has its own database (c106), but if
+            # someone points two runs at one database again, this is the single
+            # most misread error in the suite: it looks like a broken branch and
+            # is not. Name the cause here rather than leave 39 identical
+            # DeadlockDetectedError tracebacks to be interpreted.
+            raise RuntimeError(
+                f"Deadlock while truncating {_database_of(str(engine.url))}. This is almost "
+                "certainly two pytest runs sharing one database, not a bug in the code under "
+                "test: TRUNCATE takes an AccessExclusiveLock and the runs block each other. "
+                "Check with `ps aux | grep [p]ytest`. Board card c106."
+            ) from exc
 
     transport = ASGITransport(app=create_app())
     async with AsyncClient(transport=transport, base_url="http://testserver") as http_client:
