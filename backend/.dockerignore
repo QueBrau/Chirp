@@ -1,0 +1,31 @@
+# Belt and braces for the Docker build context.
+#
+# backend/Dockerfile currently uses explicit COPY statements (pyproject.toml,
+# alembic.ini, alembic/, app/), so .env cannot reach the image today. This file
+# exists so that stays true if anyone ever simplifies those to `COPY . .` -- a
+# one-line change that would otherwise bake a live RESEND_API_KEY into every layer
+# of a published image, where deleting the file in a later layer does not remove it.
+#
+# The upload-side equivalent is .gcloudignore, which is the one that actually
+# matters for `gcloud run deploy --source .`. Keep the two in sync.
+
+.env
+.env.*
+*.pem
+*-service-account*.json
+
+.venv/
+venv/
+
+tests/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+htmlcov/
+.coverage
+
+.git/
+.gitignore

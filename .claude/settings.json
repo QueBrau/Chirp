@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gcloud run services describe *)",
+      "Bash(gcloud run revisions describe *)",
+      "Bash(gcloud run revisions list *)",
+      "Bash(gcloud sql instances describe *)",
+      "Bash(gcloud sql instances list *)",
+      "Bash(gcloud sql users list *)",
+      "Bash(gcloud secrets list *)",
+      "Bash(gcloud secrets describe *)",
+      "Bash(gcloud projects get-iam-policy *)",
+      "Bash(gcloud iam service-accounts list *)",
+      "Bash(gcloud services list *)",
+      "Bash(gcloud redis instances list *)",
+      "Bash(gcloud logging read *)",
+      "Bash(gcloud auth list*)",
+      "Bash(gcloud config list*)",
+      "Bash(gcloud config get-value *)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(curl -sI *)",
+      "Bash(pg_isready*)",
+      "mcp__claude_ai_Gmail__search_threads"
+    ]
+  }
+}
