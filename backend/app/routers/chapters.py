@@ -209,6 +209,40 @@ async def create_invite(
     return ChapterInviteOut.model_validate(invite)
 
 
+@router.get("/chapters/{chapter_id}/invites")
+async def list_invites(
+    chapter_id: uuid.UUID,
+    actor: models.Membership = Depends(require_role(*EBOARD)),
+    session: AsyncSession = Depends(get_session),
+) -> list[ChapterInviteOut]:
+    """Every invite this chapter has minted; e-board only.
+
+    c111: c105 shipped revocation that took the CODE, which covers a president who
+    still has the string in front of them and nobody else. Minting was the only
+    place a code was ever returned, so a code posted three weeks ago and forwarded
+    twice could not be revoked at all — the route existed and could not be reached.
+
+    Returns revoked and expired codes too, deliberately. "Which of my codes are
+    still live" is answerable from this list, and hiding the dead ones would make a
+    leaked-but-expired code look like it was never minted, which is the question a
+    president is actually asking when they come here.
+
+    Ordered by expires_at descending, which is FURTHEST-FROM-EXPIRY first and not
+    the same thing as newest first. `chapter_invites` has no created_at column, so
+    minting order is not recoverable from this table at all — a code minted today
+    with the 7-day default sorts below one minted last week for 30 days. It is the
+    closest proxy available without a migration, and it does put live codes above
+    dead ones, which is the question the screen is for. A created_at is worth
+    adding the next time this table is touched.
+    """
+    result = await session.execute(
+        select(models.ChapterInvite)
+        .where(models.ChapterInvite.chapter_id == chapter_id)
+        .order_by(models.ChapterInvite.expires_at.desc())
+    )
+    return [ChapterInviteOut.model_validate(row) for row in result.scalars().all()]
+
+
 @router.post("/chapters/{chapter_id}/invites/revoke", status_code=200)
 async def revoke_invite(
     chapter_id: uuid.UUID,

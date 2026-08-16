@@ -21,7 +21,9 @@ import { Alert, Image, Pressable, View, type ViewStyle } from "react-native";
 
 import {
   createInvite,
+  listInvites,
   listMembers,
+  revokeInvite,
   type ChapterInviteOut,
   type ChapterOut,
   type MemberOut,
@@ -469,12 +471,43 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
  * expo-clipboard isn't a project dependency yet, so the code/link render as
  * selectable text instead of adding a copy button + new dependency.
  */
+/** What a code is right now, in the order that decides it (c111).
+ *
+ * Revoked beats expired beats spent: a president who turned a code off should see
+ * "Turned off" whatever else has since become true of it, because that is the fact
+ * they acted on. Only a code that is none of these can still let someone in, and
+ * only that one gets a revoke action — offering to turn off a dead code implies it
+ * was doing something. */
+function inviteStanding(invite: ChapterInviteOut): { deadReason: string | null } {
+  if (invite.revoked_at !== null) return { deadReason: "Turned off" };
+  if (new Date(invite.expires_at).getTime() <= Date.now()) return { deadReason: "Expired" };
+  if (invite.uses >= invite.max_uses) return { deadReason: "Used up" };
+  return { deadReason: null };
+}
+
 function InviteCard({ chapterId, options }: { chapterId: string; options: RoleName[] }) {
   const palette = useTheme();
   const [inviteRole, setInviteRole] = useState<RoleName>(options[0] ?? "member");
   const [creating, setCreating] = useState(false);
   const [invite, setInvite] = useState<ChapterInviteOut | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [existing, setExisting] = useState<ChapterInviteOut[] | null>(null);
+  const [revoking, setRevoking] = useState<string | null>(null);
+
+  // c111: the codes already out there. Fails soft to absent rather than showing a
+  // broken shell — the mint half of this card has to keep working if the list
+  // call dies, since minting is what an e-board came here to do.
+  const refreshExisting = useCallback(async () => {
+    try {
+      setExisting(await listInvites(chapterId));
+    } catch {
+      setExisting(null);
+    }
+  }, [chapterId]);
+
+  useEffect(() => {
+    void refreshExisting();
+  }, [refreshExisting]);
 
   const create = async () => {
     setCreating(true);
@@ -482,11 +515,41 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
     try {
       const created = await createInvite(chapterId, { role: inviteRole });
       setInvite(created);
+      void refreshExisting();
     } catch {
       setError("Couldn't create the invite. Try again.");
     } finally {
       setCreating(false);
     }
+  };
+
+  // Confirmed rather than instant: this is not undoable through any screen in the
+  // app, and the whole point of the code is that other people are holding it.
+  const confirmRevoke = (target: ChapterInviteOut) => {
+    Alert.alert(
+      "Turn off this code?",
+      `${target.code} stops working immediately. Anyone still holding it will need a new one.`,
+      [
+        { text: "Keep it", style: "cancel" },
+        {
+          text: "Turn it off",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              setRevoking(target.code);
+              try {
+                await revokeInvite(chapterId, target.code);
+                await refreshExisting();
+              } catch {
+                setError("Couldn't turn that code off. Try again.");
+              } finally {
+                setRevoking(null);
+              }
+            })();
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -549,6 +612,53 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
             <AppText variant="caption" tone="tertiary" selectable>
               {inviteShareUrl(invite.code)}
             </AppText>
+          </View>
+        ) : null}
+
+        {/* c111: codes already in circulation. Before this, revocation existed on
+            the server and could only be reached for a code you were still looking
+            at — which is never the one that leaked. */}
+        {existing !== null && existing.length > 0 ? (
+          <View style={{ gap: spacing.sm }}>
+            <AppText variant="caption" tone="secondary">
+              Codes you have made
+            </AppText>
+            {existing.map((row) => {
+              const standing = inviteStanding(row);
+              return (
+                <View
+                  key={row.id}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: spacing.sm,
+                    paddingVertical: spacing.xs,
+                  }}
+                >
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <AppText variant="body" selectable>
+                      {row.code}
+                    </AppText>
+                    <AppText variant="caption" tone="tertiary">
+                      {`${roleLabel(row.role)} · ${row.uses} of ${row.max_uses} used`}
+                    </AppText>
+                  </View>
+                  {standing.deadReason === null ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Turn off invite code ${row.code}`}
+                      disabled={revoking === row.code}
+                      onPress={() => confirmRevoke(row)}
+                      style={({ pressed }) => ({ opacity: pressed || revoking === row.code ? 0.5 : 1 })}
+                    >
+                      <Chip label={revoking === row.code ? "..." : "Turn off"} variant="neutral" />
+                    </Pressable>
+                  ) : (
+                    <Chip label={standing.deadReason} variant="neutral" />
+                  )}
+                </View>
+              );
+            })}
           </View>
         ) : null}
       </View>
