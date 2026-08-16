@@ -147,6 +147,21 @@ export async function createInvite(
   return request<ChapterInviteOut>(`/chapters/${chapterId}/invites`, { method: "POST", body });
 }
 
+/** Every code this chapter has minted, live and dead (c111). E-board only.
+ *  Dead ones are included on purpose: "is the code going around still live" is
+ *  the question the screen exists to answer. */
+export async function listInvites(chapterId: string): Promise<ChapterInviteOut[]> {
+  return request<ChapterInviteOut[]>(`/chapters/${chapterId}/invites`);
+}
+
+/** Kill a leaked code (c105). By code, not id — the string is what leaks. */
+export async function revokeInvite(chapterId: string, code: string): Promise<ChapterInviteOut> {
+  return request<ChapterInviteOut>(`/chapters/${chapterId}/invites/revoke`, {
+    method: "POST",
+    body: { code },
+  });
+}
+
 /** Redeem an invite code (deep link `chirp://join-chapter?code=...`). */
 export async function joinChapter(code: string): Promise<MembershipOut> {
   return request<MembershipOut>("/chapters/join", { method: "POST", body: { code } });
