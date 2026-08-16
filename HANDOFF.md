@@ -43,16 +43,13 @@ campus problem" further down.
 1. **c58 — live browser QA.** Jose's auth/orgs half is **walked** against real prod.
    Q's vertical (Yak content, campus feed, messaging, treasurer/secretary dashboards,
    CSV export) is still unproven, which is the only reason the card isn't Done.
-2. **c99 / c100 / c97** — the fake-content trio, all cheap: every profile hardcodes
-   "Sophomore · Business" as the user's *own* bio, the alumni empty state says
-   "brothers", and `MOCK_MOMENTS` still ships seven invented people to every Home.
-3. **c74** — `chirp.shared@gmail.com` is published on the live site *and* owns GCP,
+2. **c74** — `chirp.shared@gmail.com` is published on the live site *and* owns GCP,
    Firebase and Stripe. Wants a forwarding alias; **blocked on c73's domain purchase**.
-4. **c73** — marketing site to `about.<domain>`. **Blocked on buying a domain** (yours).
-5. **c87 → c86 → c88** — transactional email, then `.edu` verification, then the gate.
+3. **c73** — marketing site to `about.<domain>`. **Blocked on buying a domain** (yours).
+4. **c87 → c86 → c88** — transactional email, then `.edu` verification, then the gate.
    Strictly in that order. Previously "hold until after alpha" — **c96 challenges that**.
 
-**PR #21 (`jose/c94-signin-navigation`) is open and holds c94, c93, c98 and c95.**
+**PR #21 (`jose/c94-signin-navigation`) is open and holds c94, c93, c98, c95, c97, c99 and c100.**
 Until it merges, `DEPLOY.md` on main **still carries the `--set-env-vars` line that wipes
 `CORS_ORIGINS`** — do not redeploy off main's copy; deploy with no env flags at all.
 
@@ -64,9 +61,15 @@ then re-verified: sign out and back in lands on `/feed` in ~1s) · **c93** (+ fo
 paste-traps of the same family across three docs) · **c98** (Family Tree drew a blank box
 in the state *every* chapter starts in) · **c95** (zero 401s now, on both sign-in and cold
 reload) · **c66** (seven paste-traps fixed in the private runbook; inline password kept,
-your call).
+your call) · **c97 / c99 / c100** (the fake-content trio — the seven invented people are
+cut from Home, the hardcoded "Sophomore · Business" bio is gone from every profile, and
+"brothers" is gone from the two places it appeared; the rest of the app was already
+inclusive).
 
-Still open from the walk: **c99**, **c100**, **c97**, and **c101** (below).
+**No invented content ships to users any more**, with one exception worth knowing:
+Apple/Google sign-in are still visual stubs (c89).
+
+Still open from the walk: **c101** (below).
 
 Also open and unowned: **c84** (a chapter-less author cannot delete their own post) and
 **c91** (no endpoint to resolve a report).
