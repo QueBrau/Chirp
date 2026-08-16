@@ -48,6 +48,15 @@ class User(Base):
     is_platform_admin: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    # Account suspension (board card c76): NULL == not suspended. Checked on every
+    # request in middleware/auth.get_current_user, so a suspended account is rejected
+    # everywhere rather than per-route. Cleared back to NULL on unsuspend — the durable
+    # history of who/when/why lives in moderation_actions, not here.
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suspension_reason: Mapped[str | None] = mapped_column(Text)
+    suspended_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

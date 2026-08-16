@@ -20,6 +20,7 @@ from app.models.messaging import (
     Message,
     MessageReceipt,
 )
+from app.models.moderation import ModerationAction
 from app.models.social import Post, PostComment, PostLike
 from app.models.yak import ContentReport, UserBlock, Yak, YakVote
 
@@ -47,6 +48,7 @@ __all__ = [
     "Membership",
     "Message",
     "MessageReceipt",
+    "ModerationAction",
     "OneTimePrekey",
     "Post",
     "PostComment",
