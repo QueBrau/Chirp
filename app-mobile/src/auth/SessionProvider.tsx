@@ -34,7 +34,7 @@ import {
 } from "react";
 
 import { fetchMe, getCampus, type CampusOut, type UserOut } from "@/api/auth";
-import { ApiError } from "@/api/client";
+import { ApiError, setAuthToken } from "@/api/client";
 import type { MembershipOut } from "@/api/chapters";
 
 import { hasFirebaseConfig } from "./config";
@@ -194,9 +194,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setUser(null);
         setMemberships([]);
         setStatus("signedOut");
+        setAuthToken(null);
         return;
       }
-      void loadMe();
+      // c95: own the bearer token before firing our own request. This listener
+      // runs the moment Firebase resolves a user — on a cold start that is
+      // before anything has called setAuthToken, so fetchMe() used to go out
+      // with no Authorization header and come back 401 on EVERY sign-in and
+      // every reload. A 401 is not a 404, so loadMe treated it as transient and
+      // spent one of its three retries on a failure we caused ourselves,
+      // shrinking the budget that exists for real network trouble.
+      // signInWithEmail and the root layout's onIdTokenChanged both also set the
+      // token; this is not redundant with them, it is the only one ordered
+      // before the fetch that needs it.
+      void (async () => {
+        try {
+          setAuthToken(await firebaseUser.getIdToken());
+        } catch {
+          // Token fetch failed: fall through to loadMe anyway rather than
+          // stranding the session. If a token was already set it stays valid,
+          // and loadMe's retry path owns the recovery either way.
+        }
+        await loadMe();
+      })();
     });
 
     return () => {

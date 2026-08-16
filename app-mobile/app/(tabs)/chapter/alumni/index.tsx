@@ -158,7 +158,7 @@ export default function AlumniScreen() {
           ) : alumni.length === 0 ? (
             <EmptyState
               title="No alumni yet"
-              message="When brothers graduate and fill out a profile, they'll show up here."
+              message="When members graduate and fill out a profile, they'll show up here."
             />
           ) : (
             <View style={{ gap: spacing.md }}>

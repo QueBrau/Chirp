@@ -234,9 +234,12 @@ export default function YakScreen() {
       </View>
 
       {campusId === null ? (
+        // c96: same dead end as the campus feed, same fix. Joining an org
+        // grants a campus (derived from the chapter, never client-asserted),
+        // so there is now an actual next step to point at.
         <EmptyState
           title="Campus-only"
-          message="Yak is tied to a campus account — there's nothing to show without one."
+          message="Yak needs a campus. Join your org from the Orgs tab and it opens up."
         />
       ) : (
         <>

@@ -1,7 +1,10 @@
 /**
- * Home = the FYP (DESIGN §7): header zone (§10.1) → Moments row → filter
- * pills → mixed-media feed (MediaPostCard renders text/photo/video variants)
- * → floating create FAB.
+ * Home = the FYP (DESIGN §7): header zone (§10.1) → filter pills → mixed-media
+ * feed (MediaPostCard renders text/photo/video variants) → floating create FAB.
+ *
+ * The Moments row that used to sit above the pills was cut in c97: it rendered
+ * seven fabricated people to every real user and had no backend behind it. See
+ * the note further down for how to bring it back with a real endpoint.
  *
  * Filter pills are "For You" / "Campus" only (§8.6 — NOT "My Orgs": org posts
  * never surface on the public FYP, they live inside the org's own space,
@@ -27,8 +30,7 @@ import { blockUser, createReport } from "@/api/moderation";
 // useCampus (not a local getCampus fetch) — main moved campus resolution into
 // SessionProvider (c67) precisely to kill the per-screen duplicate requests.
 import { useCampus, useSession } from "@/auth";
-import { AppText, EmptyState, Fab, MediaPostCard, MomentsRow, Screen } from "@/components";
-import { MOCK_MOMENTS, mockUserById } from "@/mocks/data";
+import { AppText, EmptyState, Fab, MediaPostCard, Screen } from "@/components";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
 
 /** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
@@ -148,19 +150,17 @@ export default function FeedScreen() {
     }
   };
 
-  // Moments row: MOCK ONLY, always — there is no backend concept of "moments"
-  // anywhere in the contract. This is the last mock data rendered in the app
-  // (the USE_MOCKS layer itself was deleted in PR #8); it stays until either a
-  // moments endpoint exists or the row is cut. Left explicit rather than
-  // inventing an endpoint to hide it.
-  const moments = MOCK_MOMENTS.map((moment) => {
-    const momentUser = mockUserById(moment.userId);
-    return {
-      id: moment.id,
-      name: momentUser?.display_name.split(" ")[0] ?? "Friend",
-      photoUrl: momentUser?.avatar_url,
-    };
-  });
+  // c97: the row is CUT, which was always one of the two endings this comment
+  // offered. There is no backend concept of "moments" anywhere in the contract,
+  // so the row rendered seven invented people — Tyler, Maria, Priya, Devon, Sam,
+  // Ethan, Noah — at the top of every real user's Home, presented as their
+  // campus. Alpha is Q's chapter: people who know exactly who does and does not
+  // go there. Seven confident strangers is the fastest way to teach a first user
+  // that nothing else on the screen is real either, and that doubt does not stay
+  // contained to one row.
+  //
+  // Restore this by rendering a moments endpoint's response. The MOCK_MOMENTS
+  // fixture and MomentsRow component are both left in place for that.
 
   // Both pills render the same list — see file header. `filter` only drives
   // which pill looks active until a real "For You" ranking exists server-side.
@@ -178,10 +178,6 @@ export default function FeedScreen() {
         accentBarColor={campusColors.secondary}
         subtitle="Your campus, right now."
       >
-        <View style={{ marginBottom: spacing.lg }}>
-          <MomentsRow moments={moments} />
-        </View>
-
         <View style={{ flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg }}>
           {FILTERS.map((option) => {
             const active = option.key === filter;
@@ -208,9 +204,13 @@ export default function FeedScreen() {
         </View>
 
         {campusId === null ? (
+          // c96: this used to be a flat dead end — it stated a fact and offered
+          // nothing, because at the time there was genuinely no way to get a
+          // campus. Joining an org now grants one (server-derived from the
+          // chapter), so the copy can finally name a way out.
           <EmptyState
             title="No campus feed"
-            message="Your account isn't linked to a campus, so there's nothing to show here."
+            message="Join your org from the Orgs tab and your campus feed unlocks with it."
           />
         ) : loadState === "error" ? (
           <EmptyState

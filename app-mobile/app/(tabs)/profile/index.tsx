@@ -1,6 +1,8 @@
 /**
  * Profile per DESIGN.md §7: centered GradientAvatar 64 + name + role Chips, then
- * USER-ARRANGEABLE section cards (About, My Orgs, Activity, Alumni info, Settings).
+ * USER-ARRANGEABLE section cards (My Orgs, Activity, Alumni info, Settings).
+ * "About" is defined in SECTION_TITLES but filtered out of the layout — see c97's
+ * sibling c99 at the useState below; it comes back with users.bio.
  * "Edit layout" ghost toggle reveals Feather chevron-up/down (reorder) and
  * eye/eye-off (visibility) per card. Order + visibility live in local state seeded
  * from the additive mockProfileLayout — mock persistence for now.
@@ -154,7 +156,18 @@ export default function ProfileScreen() {
   const [postCount, setPostCount] = useState<number | null>(null);
   const [editing, setEditing] = useState(false);
   const [layout, setLayout] = useState<ProfileSectionLayout[]>(() =>
-    mockProfileLayout.map((section) => ({ ...section })),
+    mockProfileLayout
+      // c99: "About" rendered a hardcoded bio - "Sophomore, Business, here for
+      // the group chats and the intramural fields" - on EVERY profile, as if it
+      // were that user's own words. There is no bio field on the backend, so
+      // there was nothing real to show and no way to edit it. It also flatly
+      // contradicted the account type people pick at onboarding: an alum's own
+      // profile called them a sophomore. Dropped rather than replaced with an
+      // empty state plus an edit button, because an edit affordance over a
+      // column that does not exist is the same lie in a different shape.
+      // Restore this section in the commit that adds users.bio.
+      .filter((section) => section.key !== "about")
+      .map((section) => ({ ...section })),
   );
 
   useEffect(() => {
@@ -320,14 +333,6 @@ export default function ProfileScreen() {
                   </View>
                 ) : null}
               </View>
-
-              {section.key === "about" ? (
-                // Static placeholder copy: the backend has no user bio field yet,
-                // so there is no real value to source this from.
-                <AppText tone="secondary">
-                  Sophomore · Business · here for the group chats and the intramural fields.
-                </AppText>
-              ) : null}
 
               {section.key === "orgs" && membership !== null ? (
                 <ListRow
