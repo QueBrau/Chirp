@@ -66,6 +66,15 @@ def _post_counts_select(caller_id: uuid.UUID):
         .where(
             models.PostComment.post_id == models.Post.id,
             models.PostComment.deleted_at.is_(None),
+            # c109: the count has to agree with what list_comments will actually
+            # return, or a card reads "3 comments" and opens to show two. Blocked
+            # authors are excluded from both or from neither.
+            ~select(models.UserBlock.blocker_id)
+            .where(
+                models.UserBlock.blocker_id == caller_id,
+                models.UserBlock.blocked_id == models.PostComment.author_id,
+            )
+            .exists(),
         )
         .correlate(models.Post)
         .scalar_subquery()
@@ -403,13 +412,35 @@ async def list_comments(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[PostCommentOut]:
-    """List a post's comments, oldest first, excluding soft-deleted ones."""
+    """List a post's comments, oldest first, excluding soft-deleted and blocked ones.
+
+    c109: blocking was half-implemented. The block filter existed on the POST query
+    (_post_counts_select's outerjoin on Post.author_id) and on yaks, but not here — so
+    blocking someone hid their posts and left their comments sitting underneath
+    everyone else's. The app makes this promise in words: yak/index.tsx's confirm
+    dialog says "You won't see posts from this person again". Same family as c76, where
+    /terms claimed removal powers the server did not have, and the fix there was making
+    the claim true rather than softening the claim.
+
+    READER PATHS ONLY. This filter must never be copied onto a moderation surface: a
+    blocked author's reported comment is exactly the row a moderator needs to see, and
+    c91's resolve flow would start hiding the evidence it exists to act on. Blocking is
+    a reader preference; moderation is not. The moderation routes reach comments by id
+    (remove_content) and never through this query, so that separation holds today —
+    keep it that way.
+    """
     await _post_with_membership(post_id, user, session)
     result = await session.execute(
         select(models.PostComment)
+        .outerjoin(
+            models.UserBlock,
+            (models.UserBlock.blocked_id == models.PostComment.author_id)
+            & (models.UserBlock.blocker_id == user.id),
+        )
         .where(
             models.PostComment.post_id == post_id,
             models.PostComment.deleted_at.is_(None),
+            models.UserBlock.blocker_id.is_(None),
         )
         .order_by(models.PostComment.created_at)
     )
