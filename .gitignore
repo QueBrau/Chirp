@@ -7,10 +7,11 @@ build/
 dist/
 .venv
 venv/
-# NOTE: no trailing slash on .venv. With ".venv/" git matches a DIRECTORY only,
-# which is how a SYMLINK named .venv slipped past and got committed on Aug 16 -
-# it pointed at its own absolute path, so every checkout recreated a self-
-# referencing link and destroyed the environment.
+venv
+# NOTE: no trailing slash on .venv or venv. With ".venv/" git matches a DIRECTORY
+# only, which is how a SYMLINK named .venv slipped past and got committed on
+# Aug 16 - it pointed at its own absolute path, so every checkout recreated a
+# self-referencing link and destroyed the environment.
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
