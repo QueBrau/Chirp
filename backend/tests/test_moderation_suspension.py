@@ -8,7 +8,7 @@ import uuid
 from httpx import AsyncClient
 from sqlalchemy import text
 
-from tests.conftest import MakeChapterWith, MakeUser, set_campus
+from tests.conftest import MakeChapterWith, MakeUser, set_campus, verify_campus
 
 
 async def _moderation_action_rows(
@@ -180,6 +180,7 @@ async def test_remove_yak_writes_audit_row(
     """The pre-existing yak-removal route now leaves an audit trail too (it already
     marked removed_at/removed_reason; what was missing was WHO)."""
     chapter = await make_chapter_with("president")
+    await verify_campus(chapter.president.id)
 
     chapter_detail = await client.get(
         f"/chapters/{chapter.chapter_id}", headers=chapter.president.headers
@@ -232,6 +233,7 @@ async def test_remove_post_hides_it_from_the_feed_and_is_audited(
     (via the same deleted_at column feed.py filters on for self-delete) and is
     distinguishable from a self-delete via removed_reason, plus an audit row."""
     chapter = await make_chapter_with("president")
+    await verify_campus(chapter.president.id)
 
     post = await client.post(
         f"/chapters/{chapter.chapter_id}/posts",
@@ -275,6 +277,8 @@ async def test_remove_content_cross_campus_is_403(
     (mirrors test_remove_yak_cross_campus_is_403 for the new generic route)."""
     chapter_a = await make_chapter_with("president")
     chapter_b = await make_chapter_with("president")
+    await verify_campus(chapter_a.president.id)
+    await verify_campus(chapter_b.president.id)
 
     post = await client.post(
         f"/chapters/{chapter_a.chapter_id}/posts",

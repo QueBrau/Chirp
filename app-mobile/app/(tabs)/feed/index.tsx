@@ -29,7 +29,7 @@ import { likePost, listCampusFeed, unlikePost, type FeedPostOut } from "@/api/fe
 import { blockUser, createReport } from "@/api/moderation";
 // useCampus (not a local getCampus fetch) — main moved campus resolution into
 // SessionProvider (c67) precisely to kill the per-screen duplicate requests.
-import { useCampus, useSession } from "@/auth";
+import { useCampus, useCampusAccess, useSession } from "@/auth";
 import { AppText, EmptyState, Fab, MediaPostCard, Screen } from "@/components";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
 
@@ -75,9 +75,14 @@ export default function FeedScreen() {
   // call the endpoint with, so that's handled as its own EmptyState below
   // rather than firing a request with a null id.
   const campusId = user?.campus_id ?? null;
+  // c110: campus_id is NOT the question any more. Since c88 the campus feed is
+  // gated on a verified .edu, so a chapter-joined user has a campus AND is
+  // refused — branching on campusId alone walked them into a 403 that the catch
+  // below rendered as a generic error.
+  const access = useCampusAccess();
 
   const load = useCallback(async () => {
-    if (campusId === null) return;
+    if (campusId === null || access !== "ok") return;
     setLoadState("loading");
     try {
       const posts = await listCampusFeed(campusId);
@@ -86,7 +91,7 @@ export default function FeedScreen() {
     } catch {
       setLoadState("error");
     }
-  }, [campusId]);
+  }, [campusId, access]);
 
   useEffect(() => {
     void load();
@@ -203,7 +208,25 @@ export default function FeedScreen() {
           })}
         </View>
 
-        {campusId === null ? (
+        {access === "loading" ? (
+          // Never flash a verify prompt at someone who turns out to be verified.
+          <EmptyState title="Loading your feed..." />
+        ) : access === "unverified" || access === "lapsed" ? (
+          // The designed refusal c110 exists for. Distinct copy per state: a
+          // returning student whose yearly re-check lapsed must not be told they
+          // have never been here.
+          <EmptyState
+            title={access === "lapsed" ? "Confirm your school again" : "Confirm your school"}
+            message={
+              access === "lapsed"
+                ? "It's been a year since you last confirmed your .edu address. Verify again to reopen your campus feed."
+                : "Your campus feed is for students at your school. Confirm your .edu address to unlock it."
+            }
+            // No action button yet on purpose: c90 builds the verify screen and
+            // wires it here in the same change. A button that navigates nowhere
+            // is worse than honest copy with nothing to press.
+          />
+        ) : campusId === null ? (
           // c96: this used to be a flat dead end — it stated a fact and offered
           // nothing, because at the time there was genuinely no way to get a
           // campus. Joining an org now grants one (server-derived from the

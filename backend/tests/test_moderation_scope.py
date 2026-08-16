@@ -6,7 +6,7 @@ import uuid
 
 from httpx import AsyncClient
 
-from tests.conftest import ApiUser, MakeChapterWith, MakeUser, set_campus
+from tests.conftest import ApiUser, MakeChapterWith, MakeUser, set_campus, verify_campus
 
 
 async def _bootstrap_user_with_campus(
@@ -96,6 +96,9 @@ async def test_remove_yak_cross_campus_is_403(
     """
     chapter_a = await make_chapter_with("president")
     chapter_b = await make_chapter_with("president")
+    # c108: moderating campus content now needs a verified .edu, not just the role.
+    await verify_campus(chapter_a.president.id)
+    await verify_campus(chapter_b.president.id)
 
     chapter_a_detail = await client.get(
         f"/chapters/{chapter_a.chapter_id}", headers=chapter_a.president.headers
