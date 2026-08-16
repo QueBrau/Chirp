@@ -45,9 +45,23 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0015"
-down_revision = "0014"
+down_revision = "0017"
 branch_labels = None
 depends_on = None
+
+# THE PARENT IS DELIBERATELY NOT 0014, AND DELIBERATELY OUT OF NUMERIC ORDER.
+#
+# This file was written parented on 0014 while it was the head. c91's 0017 then merged
+# to main with the SAME parent, which is two migrations claiming 0014 as their base —
+# and `alembic upgrade head` does not pick one, it fails outright with multiple heads.
+#
+# Re-pointed rather than renumbered, following the rule this repo already set when
+# c71's 0013 hit the same collision: the side that has NOT merged re-points at the
+# current head, because renumbering a revision id breaks anything that already recorded
+# it. Numeric order is cosmetic; the down_revision chain is what alembic actually walks.
+#
+# If you land another migration after this one, take main's real head at that moment
+# rather than the highest number on disk — they are not the same thing any more.
 
 
 def upgrade() -> None:
