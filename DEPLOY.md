@@ -26,11 +26,17 @@ gcloud services enable run.googleapis.com sqladmin.googleapis.com \
 ```
 
 ## 1. Cloud SQL — Postgres 16
+
+The password is **generated, not typed**. A literal placeholder here is the worst
+kind of doc bug: pasting it succeeds, and prod is left with a guessable password
+that nothing ever complains about. Keep `$DBPASS` in this same shell — step 4
+needs it.
 ```bash
 gcloud sql instances create chirp-db --database-version=POSTGRES_16 \
   --tier=db-f1-micro --region=$REGION
 gcloud sql databases create chirp --instance=chirp-db
-gcloud sql users create chirp --instance=chirp-db --password='STRONG_PASSWORD'
+export DBPASS=$(openssl rand -base64 24 | tr -d '/+=')
+gcloud sql users create chirp --instance=chirp-db --password="$DBPASS"
 ```
 Note the **connection name** (`$PROJECT:$REGION:chirp-db`) — you need it below.
 
@@ -43,16 +49,16 @@ Note the **connection name** (`$PROJECT:$REGION:chirp-db`) — you need it below
 > `host:5432` URL will fail on Cloud Run.
 
 ## 2. Memorystore — Redis (needs a VPC connector)
-The `describe` prints the internal IP you need below, and Cloud Run reaches
-private Redis only through a Serverless VPC connector:
+Cloud Run reaches private Redis only through a Serverless VPC connector. Step 4
+reads the instance's internal IP back out, so there is nothing to copy down here:
 ```bash
 gcloud redis instances create chirp-redis --size=1 --region=$REGION --redis-version=redis_7_0
-gcloud redis instances describe chirp-redis --region=$REGION --format='value(host)'
 gcloud compute networks vpc-access connectors create chirp-vpc \
   --region=$REGION --range=10.8.0.0/28
 ```
-`REDIS_URL = redis://INTERNAL_IP:6379/0`. Redis is fan-out only (never storage) —
-the app already degrades gracefully if Redis is down, so this can come second.
+Redis is fan-out only (never storage) — the app already degrades gracefully if
+Redis is down, so this can come second. **Not provisioned on prod today** (board
+c61), which is why the three websocket fan-out tests skip locally (c92).
 
 ## 3. Firebase Auth
 Do `SETUP-FIREBASE.md` first (Email + Google + Apple). Use the SAME GCP project so
@@ -61,12 +67,19 @@ service account) — no service-account key file needed. You only need
 `FIREBASE_PROJECT_ID` set on the backend.
 
 ## 4. Secrets → Secret Manager
-Put anything with a credential in Secret Manager, not plain env:
+Put anything with a credential in Secret Manager, not plain env. Both values are
+built from variables, so the real password is typed exactly zero times and the
+Redis IP is captured rather than hand-copied — a literal `INTERNAL_IP` in this
+secret does not error, it just silently disables realtime fan-out.
 ```bash
-printf 'postgresql+asyncpg://chirp:STRONG_PASSWORD@/chirp?host=/cloudsql/%s:%s:chirp-db' "$PROJECT" "$REGION" \
+printf 'postgresql+asyncpg://chirp:%s@/chirp?host=/cloudsql/%s:%s:chirp-db' "$DBPASS" "$PROJECT" "$REGION" \
   | gcloud secrets create DATABASE_URL --data-file=-
-printf 'redis://INTERNAL_IP:6379/0' | gcloud secrets create REDIS_URL --data-file=-
+export REDIS_HOST=$(gcloud redis instances describe chirp-redis --region=$REGION --format='value(host)')
+printf 'redis://%s:6379/0' "$REDIS_HOST" | gcloud secrets create REDIS_URL --data-file=-
 ```
+If you are back in a fresh shell and `$DBPASS` is gone, recover it from the secret
+with the decompose recipe in section 5 rather than guessing.
+
 Stripe keys come later (milestone 8).
 
 ## 5. Run migrations against Cloud SQL

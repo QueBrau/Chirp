@@ -165,9 +165,13 @@ Credentials to do that — a service account key, not the web config from §4.
 
 ### Local sanity check before deploying
 
+Skip the install line if the extra is already present. It carries no inline
+comment on purpose: Jose's zsh has `interactive_comments` off, so a trailing `#`
+is passed to pip as arguments rather than ignored.
+
 ```bash
 cd backend
-.venv/bin/pip install -e ".[firebase]"   # if not already installed
+.venv/bin/pip install -e ".[firebase]"
 export AUTH_MODE=firebase
 export FIREBASE_PROJECT_ID=<your-project-id>
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/the-downloaded-key.json
