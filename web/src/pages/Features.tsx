@@ -45,7 +45,7 @@ export function Features() {
                 <span className="chip chip--accent">For You</span>
                 <span className="chip">Campus</span>
               </div>
-              <p className="caption" style={{ marginTop: "var(--space-5)", lineHeight: "1.7" }}>
+              <p className="copy" style={{ marginTop: "var(--space-5)", lineHeight: "1.7" }}>
                 Posts can be text, a photo, or a video. Comments and likes work the
                 way you&rsquo;d expect &mdash; no separate app for the social side of campus.
               </p>
@@ -74,7 +74,7 @@ export function Features() {
                 </svg>
               </div>
               <h3 className="title">Events with real RSVPs</h3>
-              <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
                 Officers post events with a cover, date, and location. Members RSVP
                 Going, Maybe, or Can&rsquo;t, and the guest list updates as they do.
               </p>
@@ -87,7 +87,7 @@ export function Features() {
                 </svg>
               </div>
               <h3 className="title">The family tree</h3>
-              <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
                 Big/little lineage lives here as an interactive tree, with families
                 in their own colors and a little confirming their big before the
                 pairing is official.
@@ -101,7 +101,7 @@ export function Features() {
                 </svg>
               </div>
               <h3 className="title">The member roster</h3>
-              <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
                 Every active member, their role, and their pledge class in one
                 list &mdash; the roster an officer actually needs, not a spreadsheet.
               </p>
@@ -116,7 +116,7 @@ export function Features() {
           <div className="grid grid--2" style={{ gap: "var(--space-48)", alignItems: "center" }}>
             <div className="card">
               <span className="chip chip--accent">Anonymous to other students</span>
-              <p className="caption" style={{ marginTop: "var(--space-5)", lineHeight: "1.7" }}>
+              <p className="copy" style={{ marginTop: "var(--space-5)", lineHeight: "1.7" }}>
                 Posts show no name and no photo. Everyone sees a vote score &mdash;
                 upvote or downvote, same as the rest of the board.
               </p>
@@ -164,7 +164,7 @@ export function Features() {
                   <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
                 </svg>
               </div>
-              <p className="caption" style={{ lineHeight: "1.7" }}>
+              <p className="copy" style={{ lineHeight: "1.7" }}>
                 Threads live under the Messages tab, separate from your org&rsquo;s feed
                 and separate from Yak.
               </p>
@@ -189,7 +189,7 @@ export function Features() {
               </div>
               <h3 className="title">Treasurer</h3>
               <p style={{ marginTop: "var(--space-2)" }}><span className="chip chip--success">Append-only</span></p>
-              <p className="caption" style={{ marginTop: "var(--space-3)", lineHeight: "1.6" }}>
+              <p className="copy" style={{ marginTop: "var(--space-3)", lineHeight: "1.6" }}>
                 Dues cycles, an append-only ledger &mdash; nothing is ever edited or
                 deleted, only corrected with a new entry &mdash; dues paid by card or
                 bank transfer, and a CSV export for handing the books to next
@@ -205,7 +205,7 @@ export function Features() {
               </div>
               <h3 className="title">Secretary</h3>
               <p style={{ marginTop: "var(--space-2)" }}><span className="chip">Role-gated</span></p>
-              <p className="caption" style={{ marginTop: "var(--space-3)", lineHeight: "1.6" }}>
+              <p className="copy" style={{ marginTop: "var(--space-3)", lineHeight: "1.6" }}>
                 Meetings with markdown minutes, and attendance tracked per member
                 as present, absent, or excused.
               </p>
@@ -219,7 +219,7 @@ export function Features() {
               </div>
               <h3 className="title">Alumni &amp; jobs</h3>
               <p style={{ marginTop: "var(--space-2)" }}><span className="chip chip--accent">Optional</span></p>
-              <p className="caption" style={{ marginTop: "var(--space-3)", lineHeight: "1.6" }}>
+              <p className="copy" style={{ marginTop: "var(--space-3)", lineHeight: "1.6" }}>
                 Alumni keep a profile &mdash; grad year, company, title, industry &mdash; and
                 can mark themselves open to mentoring. Job posts go out to a
                 chapter or the wider alumni network.

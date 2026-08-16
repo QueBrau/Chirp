@@ -29,7 +29,7 @@ export function HowItWorks() {
               <div className="step__num" aria-hidden="true"></div>
               <div>
                 <h2 className="headline">Sign up with your school email</h2>
-                <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
+                <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
                   Create an account with your school email and pick your campus.
                   That&rsquo;s what puts you on the right Home feed and the right Yak
                   board.
@@ -41,7 +41,7 @@ export function HowItWorks() {
               <div className="step__num" aria-hidden="true"></div>
               <div>
                 <h2 className="headline">Land on your campus feed &mdash; no org required</h2>
-                <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
+                <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
                   The moment you&rsquo;re signed in you&rsquo;re on Home, seeing For You and
                   Campus posts from your school. You do not need to belong to a
                   fraternity, sorority, club, or team to use Chirp.
@@ -53,7 +53,7 @@ export function HowItWorks() {
               <div className="step__num" aria-hidden="true"></div>
               <div>
                 <h2 className="headline">Join your org with an invite code</h2>
-                <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
+                <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
                   Get a code from an officer and enter it under Orgs. That code is
                   what puts you inside your chapter&rsquo;s private feed, its events, and
                   its family tree.
@@ -65,7 +65,7 @@ export function HowItWorks() {
               <div className="step__num" aria-hidden="true"></div>
               <div>
                 <h2 className="headline">Run the org from your phone</h2>
-                <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
+                <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
                   Dues, events, meetings, the tree &mdash; officers manage all of it from
                   the Orgs tab, role by role, without a separate spreadsheet or a
                   separate app.

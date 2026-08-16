@@ -27,7 +27,7 @@ export function StripeRefresh() {
         </div>
 
         <h1 className="title">That setup link expired</h1>
-        <p className="lede" style={{ margin: "var(--space-4) auto 0", fontSize: 15 }}>
+        <p className="lede" style={{ margin: "var(--space-4) auto 0", fontSize: "var(--reading)" }}>
           Stripe setup links are single-use and short-lived. Open Chirp and start payout setup
           again to get a fresh one.
         </p>
@@ -36,7 +36,7 @@ export function StripeRefresh() {
           Open Chirp
         </a>
 
-        <p className="caption" style={{ marginTop: "var(--space-5)" }}>
+        <p className="copy" style={{ marginTop: "var(--space-5)" }}>
           In the app: Treasurer, then Payments, then Set up payments.
         </p>
       </div>

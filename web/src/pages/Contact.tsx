@@ -29,7 +29,7 @@ export function Contact() {
           <div className="grid grid--2">
             <article className="card">
               <h2 className="title">Chapters &amp; student orgs</h2>
-              <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
                 Run a fraternity, sorority, club, or intramural team and want
                 early access for your org? Email{" "}
                 <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
@@ -38,7 +38,7 @@ export function Contact() {
 
             <article className="card">
               <h2 className="title">Press</h2>
-              <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
                 Working on a story about Chirp? Reach us at{" "}
                 <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
               </p>
@@ -46,7 +46,7 @@ export function Contact() {
 
             <article className="card">
               <h2 className="title">Privacy &amp; data requests</h2>
-              <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
                 For questions about your data, or to make a request under our
                 privacy policy, email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
                 The full policy is at <Link to="/privacy">/privacy</Link>.
@@ -55,7 +55,7 @@ export function Contact() {
 
             <article className="card">
               <h2 className="title">Security reports</h2>
-              <p className="caption" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
                 Found a security issue? Report it to{" "}
                 <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
               </p>
