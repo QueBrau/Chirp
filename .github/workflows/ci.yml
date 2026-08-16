@@ -22,6 +22,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # Redis is a REAL dependency of the test suite, not a convenience: the WS
+      # fan-out tests publish through it and assert the gateway forwards the
+      # event, so with no Redis here they fail on connection refused rather than
+      # on anything they are meant to prove.
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,6 +47,7 @@ jobs:
         working-directory: backend
         env:
           TEST_DATABASE_URL: postgresql+asyncpg://chirp:chirp@localhost:5432/chirp_test
+          REDIS_URL: redis://localhost:6379/0
         run: python -m pytest -q
 
   mobile:
