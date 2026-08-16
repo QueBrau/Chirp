@@ -34,12 +34,23 @@ router = APIRouter(tags=["feed"])
 
 
 def _post_counts_select(caller_id: uuid.UUID):
-    """Base SELECT for posts + author identity + batched like/comment counts (c43).
+    """Base SELECT for posts + author identity + batched like/comment counts (c43),
+    with blocked-author filtering (c35).
 
     Scalar subqueries (not a join-and-COUNT(DISTINCT)) so a post with many likes
     AND many comments doesn't fan out into a cartesian product of rows before
     counting — that would multiply rows (3 likes x 4 comments = 12 rows) and
     COUNT(DISTINCT) only masks the bug while making the query slow.
+
+    The UserBlock outerjoin/filter is folded in here rather than repeated in each
+    caller (list_posts, list_campus_feed) since both already thread `caller_id`
+    through for liked_by_me — same anti-join proven in routers/yaks.py list_yaks:
+    outerjoin on (blocked_id == Post.author_id) AND (blocker_id == caller_id), then
+    WHERE blocker_id IS NULL. The ON clause pins blocker_id to this one caller, so
+    it matches at most one UserBlock row per post — no fan-out. A blocked author's
+    posts are simply ABSENT: no tombstone, no count, nothing revealing a hide
+    happened (mirrors the yak anonymity invariant, SPEC §8.3, applied here to
+    known-author feed posts).
     """
     like_count = (
         select(func.count())
@@ -78,6 +89,12 @@ def _post_counts_select(caller_id: uuid.UUID):
         )
         # INNER JOIN: display_name is non-null on FeedPostOut (matches MemberOut).
         .join(models.User, models.User.id == models.Post.author_id)
+        .outerjoin(
+            models.UserBlock,
+            (models.UserBlock.blocked_id == models.Post.author_id)
+            & (models.UserBlock.blocker_id == caller_id),
+        )
+        .where(models.UserBlock.blocker_id.is_(None))
     )
 
 
@@ -152,6 +169,8 @@ async def list_posts(
 
     Includes author identity and batched like/comment counts in one round trip
     (c43) — see `_post_counts_select` for why this isn't a join-and-COUNT(DISTINCT).
+    Posts by an author the caller has blocked are silently absent (c35) — see
+    `_post_counts_select` for the anti-join.
     """
     stmt = (
         _post_counts_select(membership.user_id)
@@ -211,7 +230,8 @@ async def list_campus_feed(
     alone still works (legacy clients) but doesn't guarantee that tie-break.
 
     Also carries author identity and batched like/comment counts (c43), same
-    shape as GET /chapters/{id}/posts.
+    shape as GET /chapters/{id}/posts. Posts by an author the caller has blocked
+    are silently absent (c35) — see `_post_counts_select` for the anti-join.
     """
     stmt = (
         _post_counts_select(user.id)

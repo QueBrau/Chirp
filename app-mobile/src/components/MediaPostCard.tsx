@@ -12,11 +12,23 @@
  * Action row (photo/video only): 36 circular surfaceAlt chips (Feather heart /
  * message-circle / send) with a count Badge attached; active state =
  * accentSoft chip + accent icon.
+ *
+ * Overflow control (board c35, App Store Guideline 1.2): a discreet
+ * more-horizontal icon in the header row of every variant, offering Report
+ * and (unless `canBlock` is false) Block — mirrors the Yak board's own
+ * report/block affordance (app/(tabs)/yak/index.tsx), rolled locally into
+ * this component rather than the screen since every post here has a KNOWN
+ * author (`authorName`/`post.author_id`), unlike Yak where the client never
+ * learns who posted. The sheet/report-reasons Modal is only ever mounted
+ * while open for THIS card (`sheet !== null`), not one-per-card-always, so a
+ * long feed doesn't carry N idle Modals. The screen owns the actual API
+ * calls and any post-block local-state cleanup via `onReport`/`onBlock`.
  */
 
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
-import { Image, Pressable, View, type ViewStyle } from "react-native";
+import { useState } from "react";
+import { Alert, Image, Modal, Pressable, View, type ViewStyle } from "react-native";
 
 import type { PostOut } from "@/api/feed";
 import { cardShadow, light, radii, spacing, useTheme, withAlpha } from "@/theme";
@@ -32,6 +44,41 @@ const MEDIA_HEIGHT = 260;
 const PLAY_CIRCLE = 48;
 const ACTION_CHIP = 36;
 
+/** Preset report reasons (backend requires a non-empty `reason` string) — same
+ * three presets as the Yak board's report sheet. */
+const REPORT_REASONS = ["Spam", "Harassment", "Inappropriate"];
+
+/**
+ * One choice in the action sheet below. Rolled by hand instead of using
+ * `Alert` for the menus because Android's Alert supports AT MOST three
+ * buttons — the report-reason list (three reasons + Cancel) would silently
+ * lose an option there, the exact bug the Yak screen hit first. Alert is
+ * still fine for the block confirm/error dialogs below, which never exceed
+ * three buttons.
+ */
+interface SheetOption {
+  label: string;
+  destructive?: boolean;
+  onPress: () => void;
+}
+
+/** Discreet overflow trigger — as unobtrusive as the timestamp it sits next to. */
+function OverflowButton({ onPress, onScrim = false }: { onPress: () => void; onScrim?: boolean }) {
+  const palette = useTheme();
+  const color = onScrim ? withAlpha(palette.onAccent, 0.85) : palette.inkFaint;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="More options"
+      onPress={onPress}
+      hitSlop={spacing.sm}
+      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+    >
+      <Feather name="more-horizontal" size={16} color={color} />
+    </Pressable>
+  );
+}
+
 export interface MediaPostCardProps {
   post: PostOut;
   authorName: string;
@@ -43,6 +90,16 @@ export interface MediaPostCardProps {
   commentCount: number;
   likedByMe: boolean;
   onToggleLike: () => void;
+  /** Overflow menu -> Report -> reason picked. The screen performs the actual
+   * createReport({ target_type: "post", target_id: post.id, reason }) call. */
+  onReport: (reason: string) => void;
+  /** Overflow menu -> Block, after the caller confirms (this component owns
+   * that confirm, since it's the one that knows `authorName` to put in the
+   * copy). The screen performs blockUser(post.author_id) and the resulting
+   * local-state/refetch cleanup. */
+  onBlock: () => void;
+  /** False for the signed-in user's own posts — Block never applies to yourself. */
+  canBlock: boolean;
 }
 
 /** Deterministic cosmetic count for the "send" chip — mock only, no share tracking yet. */
@@ -196,10 +253,41 @@ export function MediaPostCard({
   commentCount,
   likedByMe,
   onToggleLike,
+  onReport,
+  onBlock,
+  canBlock,
 }: MediaPostCardProps) {
   const palette = useTheme();
   const mediaUrl = post.media_urls?.[0];
   const type = mediaUrl ? post.post_type ?? "text" : "text";
+  const [sheet, setSheet] = useState<{ title: string; options: SheetOption[] } | null>(null);
+
+  const openReportReasons = () => {
+    setSheet({
+      title: "What's wrong with it?",
+      options: REPORT_REASONS.map((reason) => ({
+        label: reason,
+        onPress: () => onReport(reason),
+      })),
+    });
+  };
+
+  const confirmBlock = () => {
+    // Unlike Yak (client genuinely doesn't know the author), a feed post carries
+    // a known author_id/display_name — the copy can and should name them.
+    Alert.alert(`Block ${authorName}?`, `You won't see posts from ${authorName} again.`, [
+      { text: "Block", style: "destructive", onPress: onBlock },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
+
+  const openMenu = () => {
+    const options: SheetOption[] = [{ label: "Report", onPress: openReportReasons }];
+    if (canBlock) {
+      options.push({ label: "Block", destructive: true, onPress: confirmBlock });
+    }
+    setSheet({ title: "More options", options });
+  };
 
   const cardBase: ViewStyle = {
     backgroundColor: palette.surface,
@@ -224,12 +312,79 @@ export function MediaPostCard({
     </View>
   );
 
+  // Action sheet Modal shared by every variant below — only mounted while
+  // THIS card's menu is actually open (`sheet !== null`), not one idle Modal
+  // per card in a long feed.
+  const sheetModal =
+    sheet !== null ? (
+      <Modal transparent visible animationType="fade" onRequestClose={() => setSheet(null)}>
+        <Pressable
+          onPress={() => setSheet(null)}
+          style={{
+            flex: 1,
+            justifyContent: "flex-end",
+            backgroundColor: "rgba(16,18,35,0.45)",
+            padding: spacing.md,
+          }}
+        >
+          <View style={{ backgroundColor: palette.surface, borderRadius: radii.card, overflow: "hidden" }}>
+            <AppText
+              variant="micro"
+              tone="tertiary"
+              style={{ padding: spacing.md, paddingBottom: spacing.sm }}
+            >
+              {sheet.title.toUpperCase()}
+            </AppText>
+            {sheet.options.map((option) => (
+              <Pressable
+                key={option.label}
+                accessibilityRole="button"
+                onPress={() => {
+                  // Close first; an option that opens a follow-up sheet (Report)
+                  // re-sets state in the same batch, so its sheet wins.
+                  setSheet(null);
+                  option.onPress();
+                }}
+                style={({ pressed }) => ({
+                  padding: spacing.md,
+                  borderTopWidth: 1,
+                  borderTopColor: palette.border,
+                  backgroundColor: pressed ? palette.surfaceAlt : "transparent",
+                })}
+              >
+                <AppText tone={option.destructive ? "danger" : "primary"}>{option.label}</AppText>
+              </Pressable>
+            ))}
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setSheet(null)}
+            style={({ pressed }) => ({
+              marginTop: spacing.sm,
+              padding: spacing.md,
+              alignItems: "center",
+              backgroundColor: palette.surface,
+              borderRadius: radii.card,
+              opacity: pressed ? 0.8 : 1,
+            })}
+          >
+            <AppText>Cancel</AppText>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    ) : null;
+
   if (type === "text") {
     // Compact/Twitter density (§10 rule 3): tight single-line header, body, inline counts —
     // deliberately less breathing room than the photo/video cards below.
     return (
       <View style={[cardBase, { padding: spacing.md, gap: spacing.sm }]}>
-        <CompactHeader name={authorName} time={timeLabel} photoUrl={authorPhotoUrl} />
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <View style={{ flexShrink: 1 }}>
+            <CompactHeader name={authorName} time={timeLabel} photoUrl={authorPhotoUrl} />
+          </View>
+          <OverflowButton onPress={openMenu} />
+        </View>
         <AppText>{post.body}</AppText>
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.lg }}>
           <InlineAction
@@ -242,6 +397,7 @@ export function MediaPostCard({
           <InlineAction icon="message-circle" count={commentCount} label="Comment" />
           <InlineAction icon="send" count={mockShareCount(post.id)} label="Send" />
         </View>
+        {sheetModal}
       </View>
     );
   }
@@ -272,8 +428,21 @@ export function MediaPostCard({
             backgroundColor: withAlpha(light.ink, 0.34),
           }}
         />
-        <View style={{ position: "absolute", left: spacing.lg, right: spacing.lg, bottom: spacing.lg }}>
-          <AuthorRow name={authorName} time={timeLabel} photoUrl={authorPhotoUrl} onScrim />
+        <View
+          style={{
+            position: "absolute",
+            left: spacing.lg,
+            right: spacing.lg,
+            bottom: spacing.lg,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <View style={{ flexShrink: 1 }}>
+            <AuthorRow name={authorName} time={timeLabel} photoUrl={authorPhotoUrl} onScrim />
+          </View>
+          <OverflowButton onPress={openMenu} onScrim />
         </View>
 
         {type === "video" ? (
@@ -308,6 +477,7 @@ export function MediaPostCard({
         <AppText>{post.body}</AppText>
         {actions}
       </View>
+      {sheetModal}
     </View>
   );
 }

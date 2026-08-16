@@ -17,7 +17,7 @@ import { useRouter, type Href } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
 import { useCallback, useEffect, useState } from "react";
-import { Image, Pressable, View, type ViewStyle } from "react-native";
+import { Alert, Image, Pressable, View, type ViewStyle } from "react-native";
 
 import {
   createInvite,
@@ -28,8 +28,10 @@ import {
   type MembershipOut,
   type RoleName,
 } from "@/api/chapters";
+import { ApiError } from "@/api/client";
 import { createEvent, listEventsWithRsvps, type EventOut, type EventRsvpOut, type EventWithRsvpsOut } from "@/api/events";
 import { likePost, listPosts, unlikePost, type FeedPostOut } from "@/api/feed";
+import { blockUser, createReport } from "@/api/moderation";
 import { inviteShareUrl, useCampus, useSession } from "@/auth";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import {
@@ -135,6 +137,12 @@ function age(iso: string): string {
   return `${Math.round(hours / 24)}d`;
 }
 
+/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
+function showApiError(error: unknown, title: string): void {
+  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
+  Alert.alert(title, message);
+}
+
 /** Pill segmented control under the org hero (§8.7): Feed · Events · Tools, org-accent active state. */
 function OrgSegmentedControl({
   segment,
@@ -186,28 +194,67 @@ interface OrgFeedItem {
  * /chapters/{id}/posts already scopes to this chapter, newest first, and
  * excludes soft-deleted rows server-side (backend/app/routers/feed.py), so
  * no client-side chapter/source filtering belongs here.
+ *
+ * Moderation (board c35): MediaPostCard owns the report/block overflow menu
+ * UI; this segment owns the actual API calls and the post-block cleanup —
+ * dropping the blocked author's posts locally, then refetching, since GET
+ * /chapters/{chapter_id}/posts now filters blocked authors server-side.
  */
 function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: string }) {
+  const { user } = useSession();
   const [items, setItems] = useState<OrgFeedItem[] | null>(null);
 
-  useEffect(() => {
-    // ONE round trip: GET /chapters/{id}/posts returns FeedPostOut, which already
-    // carries the author's display identity and batched like/comment counts (c43).
-    // The old shape here fetched listLikes + listComments PER POST (2N queries)
-    // and resolved authors through a separate roster call.
-    // Fail soft: a failed fetch must not crash the feed segment.
-    listPosts(chapterId)
-      .then((posts) =>
-        setItems(
-          posts.map((post) => ({
-            post,
-            likeCount: post.like_count,
-            likedByMe: post.liked_by_me,
-          })),
-        ),
-      )
-      .catch(() => setItems([]));
+  // ONE round trip: GET /chapters/{id}/posts returns FeedPostOut, which already
+  // carries the author's display identity and batched like/comment counts (c43).
+  // The old shape here fetched listLikes + listComments PER POST (2N queries)
+  // and resolved authors through a separate roster call.
+  // Fail soft (internally, not via a thrown rejection): a failed fetch must not
+  // crash the feed segment, and this needs to be safely re-awaitable from
+  // blockAuthor's refetch below without that refetch masquerading as a block failure.
+  const load = useCallback(async () => {
+    try {
+      const posts = await listPosts(chapterId);
+      setItems(
+        posts.map((post) => ({
+          post,
+          likeCount: post.like_count,
+          likedByMe: post.liked_by_me,
+        })),
+      );
+    } catch {
+      setItems([]);
+    }
   }, [chapterId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const reportPost = async (item: OrgFeedItem, reason: string) => {
+    try {
+      await createReport({ target_type: "post", target_id: item.post.id, reason });
+      Alert.alert("Reported", "Thanks for letting us know.");
+    } catch (error) {
+      showApiError(error, "Couldn't send that report");
+    }
+  };
+
+  const blockAuthor = async (item: OrgFeedItem) => {
+    try {
+      await blockUser(item.post.author_id);
+    } catch (error) {
+      showApiError(error, "Couldn't block that person");
+      return;
+    }
+    // Drop every post by this author immediately so the UI reacts at once...
+    setItems((current) =>
+      (current ?? []).filter((entry) => entry.post.author_id !== item.post.author_id),
+    );
+    // ...then refetch, since GET /chapters/{chapter_id}/posts now filters this
+    // author's posts server-side (c35). `load` fails soft internally, so this
+    // can't turn a successful block into a spurious error alert.
+    await load();
+  };
 
   const toggleLike = async (item: OrgFeedItem) => {
     if (item.likedByMe) {
@@ -250,6 +297,9 @@ function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: st
           commentCount={item.post.comment_count}
           likedByMe={item.likedByMe}
           onToggleLike={() => void toggleLike(item)}
+          onReport={(reason) => void reportPost(item, reason)}
+          onBlock={() => void blockAuthor(item)}
+          canBlock={user !== null && item.post.author_id !== user.id}
         />
       ))}
     </View>
@@ -511,7 +561,23 @@ function OrgToolsSegment({ chapterId, role }: { chapterId: string; role: RoleNam
   const router = useRouter();
   const palette = useTheme();
   const { roleMeta } = useOwnChapter();
-  const visible = TOOLS.filter((tool) => tool.roles === undefined || tool.roles.includes(role));
+  // Moderation (board c35): gated to e-board, same server-decided taxonomy the
+  // invite card uses below (never hand-mirror permissions.py's EBOARD set).
+  // While roleMeta is loading/errored, eboardRoles is [] and .includes(role) is
+  // false for everyone — fails CLOSED (tile absent) rather than flashing it
+  // open, matching the invite card's own fail-soft-to-absent posture.
+  const eboardRoles = roleMeta?.eboard ?? [];
+  const allTools: Tool[] = [
+    ...TOOLS,
+    {
+      href: "/chapter/moderation",
+      icon: "shield",
+      title: "Moderation",
+      description: "Open reports and yak removal",
+      roles: eboardRoles,
+    },
+  ];
+  const visible = allTools.filter((tool) => tool.roles === undefined || tool.roles.includes(role));
   // Server-decided (c44): a non-empty invitable set means this caller may mint
   // invites. Fail soft — while roleMeta is loading (or errored) the card is
   // simply absent, never shown to someone the backend would 403.
