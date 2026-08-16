@@ -663,10 +663,10 @@
     },
     {
       "id": "c57",
-      "col": "next",
+      "col": "done",
       "owner": "",
       "tag": "go-live",
-      "title": "[shared] BLOCKER CHAIN: the website (c56) gates Stripe (c40), not the other way round. backend/app/routers/payments.py:36-38 raises 503 app_public_base_url_not_configured when APP_PUBLIC_BASE_URL is unset, and Stripe REJECTS custom schemes so it can never be a chirp:// link — Connect onboarding needs a real https return/refresh URL. The App Store also requires a publicly reachable privacy-policy URL before submission (c10). AND the app already lies: app-mobile/app/(auth)/sign-in.tsx tells every user 'you agree to Chirp's Terms of Service and acknowledge our Privacy Policy' — neither document exists. Order: c56 web pages -> set APP_PUBLIC_BASE_URL -> c40 Stripe TEST keys -> c39 EAS build -> test-mode payment on card AND ACH.",
+      "title": "[shared] BLOCKER CHAIN — CLEARED Aug 15, end to end. The whole chain the card described is done: web pages built and deployed (c56) -> APP_PUBLIC_BASE_URL set to https://chirps-prod.web.app -> Stripe TEST keys and webhook live (c40). payments.py:36-38 no longer has an unset base URL to 503 on, and the App Store privacy-policy requirement is satisfied by a real /privacy that is publicly reachable. The sign-in screen's promise of Terms and a Privacy Policy is no longer a lie — both documents exist and say something true. WHAT IS ACTUALLY LEFT of the dues chain is now only two things, neither of them this card: the EAS dev build (c39, Q) and then a test-mode payment on card AND ACH (c11).",
       "area": "website"
     },
     {
@@ -687,10 +687,10 @@
     },
     {
       "id": "c59",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "vert:auth-orgs",
-      "title": "[A/Jose] FAKE DATA STILL ON SCREEN — FIXED, PR #13 OPEN. All three closed. Orgs (chapter/index.tsx) and Yak (yak/index.tsx) now resolve the real campus via a new useCampus() hook and render NOTHING until it does — an absent label beats a wrong one; the literal '. SPARTANS' is deleted outright rather than replaced, since CampusOut has no mascot field to source it from. The alumni job board's mockUserById(job.posted_by) is gone: GET /jobs now joins users and returns posted_by_name, mirroring what list_directory already did. Inner join not outer, because posted_by is a non-null FK so an outer join would only add a branch that cannot be taken. 3 new tests, and the third is the load-bearing one — it reads the list as a DIFFERENT member than the poster, the only way to catch the name being wired to the authenticated caller instead. Confirmed it catches exactly that by making the mistake on purpose and watching that one test fail while the other two passed. 142 backend tests green, tsc clean. NOT yet driven against real prod — that is c58. NOTE: feed/index.tsx still has its own inline copy of the campus effect; left alone deliberately because it is Q's active file for c49, and it should adopt useCampus() when he next touches it.",
+      "title": "[A/Jose] FAKE DATA STILL ON SCREEN — FIXED and MERGED via PR #13 (8103835). All three closed. Orgs (chapter/index.tsx) and Yak (yak/index.tsx) now resolve the real campus via a new useCampus() hook and render NOTHING until it does — an absent label beats a wrong one; the literal '. SPARTANS' is deleted outright rather than replaced, since CampusOut has no mascot field to source it from. The alumni job board's mockUserById(job.posted_by) is gone: GET /jobs now joins users and returns posted_by_name, mirroring what list_directory already did. Inner join not outer, because posted_by is a non-null FK so an outer join would only add a branch that cannot be taken. 3 new tests, and the third is the load-bearing one — it reads the list as a DIFFERENT member than the poster, the only way to catch the name being wired to the authenticated caller instead. Confirmed it catches exactly that by making the mistake on purpose and watching that one test fail while the other two passed. 142 backend tests green, tsc clean. NOT yet driven against real prod — that is c58. NOTE: feed/index.tsx still has its own inline copy of the campus effect; left alone deliberately because it is Q's active file for c49, and it should adopt useCampus() when he next touches it.",
       "area": "frontend"
     },
     {
