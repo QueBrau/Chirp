@@ -76,6 +76,19 @@
   --space-64: 64px;
   --space-96: 96px;
 
+  /*
+   * Vertical rhythm for page zones, named for their JOB rather than their value
+   * — which is precisely why these may change under a media query and the
+   * --space-* scale above may not. A 96px section gap is a considered pause in a
+   * 900px-tall browser window and a third of the screen on a 390x844 phone
+   * (board c72), so the phone block at the foot of this file restates these four
+   * and nothing else.
+   */
+  --rhythm-section: var(--space-96);
+  --rhythm-section-tight: var(--space-64);
+  --rhythm-hero: var(--space-96);
+  --rhythm-head: var(--space-64);
+
   --shadow-card: 0 2px 16px rgba(16, 18, 35, 0.06);
   --shadow-lift: 0 12px 40px rgba(16, 18, 35, 0.10);
 
@@ -103,6 +116,16 @@
 
   --body: 15px;
   --body-line: 21px;
+
+  /*
+   * Running text on the site, and the one deliberate divergence from the app's
+   * scale. --body stays 15px and keeps mirroring the app, because the chrome
+   * here — buttons, nav — is the app's chrome. A paragraph read in a browser sits
+   * further from the eye than a phone held in the hand, so prose gets its own
+   * step, and grows again at phone width where it is the whole page.
+   */
+  --reading: 16px;
+  --reading-line: 25px;
 
   --caption: 12.5px;
   --caption-weight: 500;
@@ -139,5 +162,45 @@
     /* Cards drop the shadow in dark and carry the border alone (DESIGN.md 4). */
     --shadow-card: none;
     --shadow-lift: none;
+  }
+}
+
+/*
+ * Phone rhythm (board c72).
+ *
+ * The diagnosis is narrower than it sounds: the site does NOT break at phone
+ * width. Measured live at 390x844 on all six pages, scrollWidth equals
+ * innerWidth everywhere and nothing overflows. It was simply spaced like a
+ * desktop — 96px of section padding on an 844px-tall screen means the hero owns
+ * the first screen and the reader scrolls a long way to reach a sentence.
+ *
+ * Only the two things that are genuinely a function of screen size change here:
+ * the zone rhythm compresses, and running text grows. Colour, shape and the
+ * --space-* scale are identical on every device.
+ *
+ * 640px rather than 480px: every phone in portrait is under it, and the small
+ * end of tablet portrait wants the same compression.
+ *
+ * The max-height arm is not redundant. Turn the same phone sideways and the
+ * viewport is 844x390 — width sails past 640 and the desktop rhythm comes back,
+ * putting 192px of the 390px screen into hero padding alone. That is the bug on
+ * the card, rotated. 520px separates phone-landscape (390-430 tall) from
+ * tablet-landscape (768+), and it catches a short desktop window too, which has
+ * the same problem for the same reason.
+ *
+ * The layout half of the fix — mockup width, tap targets, the footer's
+ * full-bleed first column — stays width-only at the foot of site.css. Those are
+ * answers to "how much room is there across", and rotating the phone does not
+ * change the answer.
+ */
+@media (max-width: 640px), (max-height: 520px) {
+  :root {
+    --rhythm-section: 56px;
+    --rhythm-section-tight: 44px;
+    --rhythm-hero: 48px;
+    --rhythm-head: 40px;
+
+    --reading: 17px;
+    --reading-line: 26px;
   }
 }

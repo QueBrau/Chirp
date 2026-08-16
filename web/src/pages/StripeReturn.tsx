@@ -29,7 +29,7 @@ export function StripeReturn() {
         </div>
 
         <h1 className="title">You're back from Stripe</h1>
-        <p className="lede" style={{ margin: "var(--space-4) auto 0", fontSize: 15 }}>
+        <p className="lede" style={{ margin: "var(--space-4) auto 0", fontSize: "var(--reading)" }}>
           We're checking your chapter's payout setup now. Verification can take a moment, and
           sometimes longer if Stripe needs another document.
         </p>
@@ -38,7 +38,7 @@ export function StripeReturn() {
           Open Chirp
         </a>
 
-        <p className="caption" style={{ marginTop: "var(--space-5)" }}>
+        <p className="copy" style={{ marginTop: "var(--space-5)" }}>
           If nothing happens, open the Chirp app and go to Treasurer, then Payments.
         </p>
       </div>
