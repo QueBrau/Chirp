@@ -73,19 +73,18 @@ text to us; and deleted content is hidden but **not erased**, because no purge j
 That last one is a written promise with a person behind it — **c69** builds the job, and
 section 14 of the policy changes in the same PR.
 
-## Current state
+## Repo state
 
 | Where | What's there | State |
 | --- | --- | --- |
-| `main` | Everything through **PR #10** (head `1aa19ba`): Yak on real API, dashboards + CSV export, Stripe dues + the reserve-before-charging fix, role-meta, events batch endpoint, sign-in UX, screens on real session data, `GET /campuses/{id}`, the campus FYP, EAS build blockers fixed, and NO `USE_MOCKS` layer. Migrations **0001-0010** | Canonical |
-| Cloud Run (prod) | `chirp-api-593616178468.us-central1.run.app`, rev **00008-4sw** | `alembic_version` **0008** — **TWO BEHIND main**. `/campuses/{id}/feed` 404s live. Migrate + redeploy, board c60 |
-| `q/feed`, `jose/auth-orgs`, `q/eas-prep` | all merged | Retired. New work cuts from `main` |
-| `web/` | The public website (c56) | **Does not exist yet.** No `firebase.json` anywhere in the repo; Hosting is greenfield |
-| CI | `.github/workflows/ci.yml`: backend pytest vs PG16 + mobile tsc on every push/PR | Green. No branch protection (deliberate, Aug 13) — CI is advisory |
+| `main` | Everything through **PR #13**: the campus FYP, dues + reserve-before-charging, the de-mock sweep, the public website under `web/`, the WS gateway fixes, and the NC legal pages. Migrations **0001-0010** | Canonical, and prod matches it |
+| `web/` | Vite + React + TS marketing and legal site | **Live** at chirps-prod.web.app |
+| Open PRs | **#12** (Q, WS fan-out verification) | Mergeable |
+| Branches | `q/compose` (Q, c49 compose flow) | In flight |
+| CI | backend pytest vs PG16 + mobile tsc on every push/PR | Green. No branch protection (deliberate) — CI is advisory |
 
-Test counts: **139 backend tests green** on `jose/auth-orgs` before it merged, tsc clean;
-CI green on all three merge commits. Nobody has re-run the suite against merged `main`
-locally yet — CI has, which is what the green check on `1aa19ba` means.
+Test counts: **150 backend tests green** locally and in CI, tsc clean on both `app-mobile`
+and `web`.
 
 Creds, runbooks, QA account, and live fixture ids: `INFRA-PRIVATE.html` at the repo root
 (gitignored — get a copy from Jose, never commit it).
