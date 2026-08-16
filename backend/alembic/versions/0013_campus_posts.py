@@ -38,7 +38,11 @@ sharing a down_revision is the multiple-heads version of the c41 collision.
 from alembic import op
 
 revision = "0013"
-down_revision = "0010"
+# Chains onto 0011 (moderation_capabilities), NOT 0010. Both this and 0011
+# originally declared down_revision "0010"; 0011 is already on main AND applied
+# to prod, so leaving this at 0010 gives alembic TWO HEADS and `upgrade head`
+# fails outright on the next deploy.
+down_revision = "0011"
 branch_labels = None
 depends_on = None
 
