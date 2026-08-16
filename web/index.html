@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/img/favicon.svg" type="image/svg+xml" />
+    <!-- Per-route <title> and description are set by usePageMeta(); this is the
+         pre-hydration default, and what a client with JS disabled would keep. -->
+    <title>Chirp — your campus, your chapter, one app</title>
+    <meta
+      name="description"
+      content="Chirp is where students post, where student orgs run themselves, and where chapter dues get paid without a spreadsheet."
+    />
+
+    <!--
+      Static link-preview tags, and they have to be static.
+
+      usePageMeta() sets per-route titles at runtime, but iMessage, WhatsApp and
+      Instagram fetch a URL WITHOUT executing JavaScript — so whatever is in this
+      shell is the entire preview they get. The point of moving invites from
+      chirp:// to https was surviving the trip through a text message; the link
+      survives, but a link with no preview is the one people do not tap.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Chirp" />
+    <meta property="og:title" content="Chirp — your campus, your chapter, one app" />
+    <meta
+      property="og:description"
+      content="Where students post, where student orgs run themselves, and where chapter dues get paid without a spreadsheet."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Chirp — your campus, your chapter, one app" />
+    <meta
+      name="twitter:description"
+      content="Where students post, where student orgs run themselves, and where chapter dues get paid without a spreadsheet."
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

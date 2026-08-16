@@ -1,0 +1,541 @@
+/*
+ * Chirp public site.
+ *
+ * Consumes only the custom properties in tokens.css — no hardcoded colour or
+ * type values, same rule the app enforces through src/theme.
+ *
+ * Structure follows DESIGN.md 10 ("zones, not card soup"): every page opens with
+ * a header zone (micro eyebrow, oversized title, short accent bar) and then a
+ * content zone. Card sizes and insets vary deliberately; an unbroken stack of
+ * identical rectangles is the slop tell.
+ */
+
+/* ---------------------------------------------------------------- reset --- */
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+/* No global smooth scrolling: Layout.tsx calls window.scrollTo(0,0) on every
+   route change, and `smooth` turns that into an animated slide, so a new page
+   paints at the OLD scroll offset and then crawls upward. Anchor links can opt
+   in locally if they ever need it. */
+html { -webkit-text-size-adjust: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--body);
+  line-height: var(--body-line);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img, svg { max-width: 100%; height: auto; display: block; }
+h1, h2, h3, h4, p, ul, ol, figure { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--space-1);
+}
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.skip-link {
+  position: absolute; left: var(--space-5); top: -100px;
+  z-index: 100; padding: var(--space-3) var(--space-5);
+  background: var(--accent); color: var(--on-accent);
+  border-radius: var(--radius-pill); font-weight: 600;
+}
+.skip-link:focus { top: var(--space-5); text-decoration: none; }
+
+/* --------------------------------------------------------------- layout --- */
+
+.wrap {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--space-5);
+}
+
+.section { padding-block: var(--space-96); }
+.section--tight { padding-block: var(--space-64); }
+
+.section + .section { border-top: 1px solid var(--border); }
+
+/* ----------------------------------------------------------- typography --- */
+
+.eyebrow {
+  font-size: var(--micro);
+  font-weight: var(--micro-weight);
+  letter-spacing: var(--micro-tracking);
+  text-transform: uppercase;
+  color: var(--ink-secondary);
+  margin-bottom: var(--space-3);
+}
+
+/* The short accent bar under a title — DESIGN.md 10.1, 4x28 at radius 2. */
+.accent-bar {
+  width: 28px; height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+  margin-top: var(--space-4);
+}
+.accent-bar--warm { background: var(--warning); }
+
+.display {
+  font-size: var(--display);
+  font-weight: var(--display-weight);
+  letter-spacing: var(--display-tracking);
+  line-height: 1.06;
+}
+
+.title {
+  font-size: var(--title);
+  font-weight: var(--title-weight);
+  letter-spacing: var(--title-tracking);
+  line-height: 1.25;
+}
+
+.headline { font-size: var(--headline); font-weight: var(--headline-weight); }
+
+.lede {
+  font-size: clamp(16px, 1.6vw, 19px);
+  line-height: 1.6;
+  color: var(--ink-secondary);
+  max-width: 54ch;
+}
+
+.caption {
+  font-size: var(--caption);
+  font-weight: var(--caption-weight);
+  color: var(--ink-secondary);
+}
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* --------------------------------------------------------------- header --- */
+
+.site-header {
+  position: sticky; top: 0; z-index: 50;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(140%) blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.site-header__inner {
+  display: flex; align-items: center; gap: var(--space-6);
+  min-height: 64px;
+}
+
+.wordmark {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  font-weight: 800; font-size: 17px; letter-spacing: -0.3px;
+  color: var(--ink);
+}
+.wordmark:hover { text-decoration: none; }
+
+.wordmark__mark {
+  width: 26px; height: 26px; border-radius: 9px;
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+  display: grid; place-items: center;
+  flex: none;
+}
+
+.site-nav { margin-left: auto; }
+.site-nav ul { display: flex; align-items: center; gap: var(--space-1); }
+
+.site-nav a {
+  display: inline-block;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-pill);
+  color: var(--ink-secondary);
+  font-size: 14px; font-weight: 600;
+  /* "How it works" is two spaces wide and will wrap to three lines in a narrow
+     header if allowed to. */
+  white-space: nowrap;
+}
+.site-nav a:hover { background: var(--surface-alt); color: var(--ink); text-decoration: none; }
+.site-nav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+
+@media (max-width: 720px) {
+  .site-nav ul { gap: 0; }
+  .site-nav a { padding: var(--space-2); font-size: 13px; }
+
+  /*
+   * Four links do not fit beside the wordmark on a phone. Hide the two longest
+   * (How it works, About) and let the footer carry the full set — the hero's
+   * primary CTA already points at How it works, so it stays one tap away.
+   *
+   * Hiding by position rather than by class because every page shares this
+   * header markup verbatim, so one rule covers all of them. The `.site-nav a`
+   * qualifier is load-bearing: a bare .site-nav__hide-sm (0,1,0) loses to
+   * .site-nav a (0,1,1) on specificity and silently does nothing.
+   */
+  .site-nav li:nth-child(2) a,
+  .site-nav li:nth-child(3) a,
+  .site-nav a.site-nav__hide-sm { display: none; }
+}
+
+/* -------------------------------------------------------------- buttons --- */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--space-2);
+  min-height: 52px;
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  font-size: var(--body); font-weight: 600;
+  cursor: pointer;
+  transition: transform 120ms ease, background-color 120ms ease;
+}
+.btn:hover { text-decoration: none; transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+
+.btn--primary { background: var(--accent); color: var(--on-accent); }
+.btn--secondary { background: var(--accent-soft); color: var(--accent); }
+.btn--ghost { background: transparent; color: var(--ink-secondary); border-color: var(--border); }
+
+/* On the pinned-dark surfaces the light-mode tokens would vanish. */
+.on-brand .btn--primary { background: var(--brand-ink); color: var(--brand-canvas); }
+.on-brand .btn--ghost { color: var(--brand-ink-secondary); border-color: var(--brand-border); }
+
+/* ---------------------------------------------------------------- cards --- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-6);
+}
+
+.card__icon {
+  width: 40px; height: 40px; border-radius: var(--radius-thumb);
+  background: var(--accent-soft); color: var(--accent);
+  display: grid; place-items: center;
+  margin-bottom: var(--space-4);
+}
+.card__icon--warm { background: var(--warning-soft); color: var(--warning); }
+
+.grid { display: grid; gap: var(--space-3); }
+.grid--3 { grid-template-columns: repeat(3, 1fr); }
+.grid--2 { grid-template-columns: repeat(2, 1fr); }
+
+@media (max-width: 860px) {
+  .grid--3 { grid-template-columns: 1fr; }
+  .grid--2 { grid-template-columns: 1fr; }
+}
+
+.chip {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--surface-alt); color: var(--ink-secondary);
+  font-size: var(--micro); font-weight: var(--micro-weight);
+  letter-spacing: var(--micro-tracking); text-transform: uppercase;
+}
+.chip--accent { background: var(--accent-soft); color: var(--accent); }
+.chip--warm { background: var(--warning-soft); color: var(--warning); }
+.chip--success { background: var(--success-soft); color: var(--success); }
+
+/* ----------------------------------------------------------- brand zone --- */
+/*
+ * Pinned dark in both schemes. Used by the landing hero and the three functional
+ * bounce pages, which are brand moments rather than reading surfaces.
+ */
+
+.on-brand {
+  background: var(--brand-canvas);
+  color: var(--brand-ink);
+}
+.on-brand .eyebrow,
+.on-brand .lede,
+.on-brand .caption { color: var(--brand-ink-secondary); }
+.on-brand a { color: var(--brand-accent); }
+.on-brand .card {
+  background: var(--brand-surface);
+  border-color: var(--brand-border);
+  box-shadow: none;
+}
+
+/*
+ * A soft violet bloom behind the hero so the dark canvas is not a flat black
+ * rectangle. Two low-opacity radial washes, no image to download.
+ */
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding-block: var(--space-96);
+}
+.hero::before {
+  content: "";
+  position: absolute; inset: -30% -10% auto -10%; height: 130%;
+  background:
+    radial-gradient(58% 48% at 18% 12%,
+      color-mix(in srgb, var(--gradient-start) 34%, transparent), transparent 70%),
+    radial-gradient(46% 44% at 88% 78%,
+      color-mix(in srgb, var(--gradient-end) 26%, transparent), transparent 68%);
+  pointer-events: none;
+}
+.hero > * { position: relative; }
+
+.hero__grid {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: var(--space-64);
+  align-items: center;
+}
+@media (max-width: 940px) {
+  .hero__grid { grid-template-columns: 1fr; gap: var(--space-48); }
+}
+
+.hero__actions {
+  display: flex; flex-wrap: wrap; gap: var(--space-3);
+  margin-top: var(--space-8);
+}
+
+/* --------------------------------------------------------- phone mockup --- */
+/*
+ * Hand-built recreation of real Chirp UI rather than a stock screenshot: there
+ * are no captured assets in the repo yet, and a grey placeholder box would read
+ * exactly as the slop DESIGN.md 10 bans. Every value below comes from the same
+ * tokens the app renders with, so this is the product, not an impression of it.
+ */
+
+.phone {
+  width: 100%; max-width: 320px;
+  margin-inline: auto;
+  background: var(--brand-surface);
+  border: 1px solid var(--brand-border);
+  border-radius: 38px;
+  padding: var(--space-3);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+}
+
+.phone__screen {
+  background: var(--brand-canvas);
+  border-radius: 28px;
+  padding: var(--space-5) var(--space-4) var(--space-6);
+  display: grid; gap: var(--space-3);
+}
+
+.phone__eyebrow {
+  font-size: var(--micro); font-weight: var(--micro-weight);
+  letter-spacing: var(--micro-tracking); text-transform: uppercase;
+  color: var(--brand-ink-faint);
+}
+.phone__title { font-size: 22px; font-weight: 800; letter-spacing: -0.4px; line-height: 1.2; }
+
+.phone__pills { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
+.phone__pill {
+  padding: 6px var(--space-3); border-radius: var(--radius-pill);
+  font-size: var(--micro); font-weight: 600;
+  background: var(--brand-surface-alt); color: var(--brand-ink-secondary);
+}
+.phone__pill--on { background: var(--brand-accent); color: var(--on-accent); }
+
+.post {
+  background: var(--brand-surface);
+  border: 1px solid var(--brand-border);
+  border-radius: var(--radius-card);
+  padding: var(--space-4);
+  display: grid; gap: var(--space-3);
+}
+
+.post__head { display: flex; align-items: center; gap: var(--space-3); }
+
+.avatar {
+  width: 36px; height: 36px; border-radius: var(--radius-avatar);
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+  display: grid; place-items: center; flex: none;
+  color: var(--on-accent); font-weight: 800; font-size: 13px;
+}
+
+.post__who { display: grid; line-height: 1.3; }
+.post__name { font-size: 14px; font-weight: 700; }
+.post__meta { font-size: var(--caption); color: var(--brand-ink-faint); }
+
+.post__body { font-size: 14px; line-height: 20px; color: var(--brand-ink); }
+
+.post__media {
+  height: 128px; border-radius: var(--radius-thumb);
+  background:
+    radial-gradient(70% 90% at 20% 15%,
+      color-mix(in srgb, var(--gradient-start) 60%, transparent), transparent 70%),
+    radial-gradient(70% 90% at 85% 80%,
+      color-mix(in srgb, var(--warning) 42%, transparent), transparent 70%),
+    var(--brand-surface-alt);
+}
+
+.post__actions { display: flex; gap: var(--space-2); }
+.act {
+  height: 30px; padding-inline: var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--brand-surface-alt); color: var(--brand-ink-secondary);
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--caption); font-weight: 600;
+}
+.act--on { background: color-mix(in srgb, var(--brand-accent) 18%, transparent); color: var(--brand-accent); }
+
+/* The one warm moment per page (DESIGN.md 10.4) — never a gold wash. */
+.act--warm { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+
+/* ---------------------------------------------------------- page header --- */
+
+.page-head { padding-block: var(--space-64) var(--space-8); }
+.page-head .display { max-width: 20ch; }
+.page-head .lede { margin-top: var(--space-5); }
+
+/* The header zone already ends on 32px of padding; a section's own 64px on top
+   of that leaves ~96px of dead space between a page title and its first line of
+   content. The gap between zones should read as deliberate, not as a gap. */
+.page-head + .section,
+.page-head + .section--tight { padding-block-start: 0; }
+
+/* ----------------------------------------------------------------- prose --- */
+/* Legal pages. Long-form reading, so measure is capped and rhythm is looser. */
+
+.prose { max-width: var(--measure); }
+.prose h2 {
+  font-size: var(--title); font-weight: var(--title-weight);
+  letter-spacing: var(--title-tracking);
+  margin-top: var(--space-48); margin-bottom: var(--space-3);
+}
+.prose h3 {
+  font-size: var(--headline); font-weight: var(--headline-weight);
+  margin-top: var(--space-6); margin-bottom: var(--space-2);
+}
+.prose p, .prose li { color: var(--ink-secondary); line-height: 1.7; }
+.prose p + p { margin-top: var(--space-4); }
+.prose ul { margin-top: var(--space-3); display: grid; gap: var(--space-2); }
+.prose li { padding-left: var(--space-5); position: relative; }
+.prose li::before {
+  content: ""; position: absolute; left: 0; top: 10px;
+  width: 6px; height: 6px; border-radius: 2px; background: var(--accent);
+}
+.prose strong { color: var(--ink); font-weight: 600; }
+
+.legal-meta {
+  display: flex; flex-wrap: wrap; gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+/* A callout for the things users deserve to be told plainly rather than have to
+   infer from a wall of clauses. */
+.note {
+  margin-top: var(--space-6);
+  padding: var(--space-5);
+  border-radius: var(--radius-card);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+}
+.note p { color: var(--ink); }
+
+/* ---------------------------------------------------------------- steps --- */
+
+.steps { counter-reset: step; display: grid; gap: var(--space-3); }
+.step { display: grid; grid-template-columns: 44px 1fr; gap: var(--space-4); align-items: start; }
+.step__num {
+  counter-increment: step;
+  width: 44px; height: 44px; border-radius: var(--radius-thumb);
+  background: var(--accent-soft); color: var(--accent);
+  display: grid; place-items: center;
+  font-size: var(--headline); font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.step__num::before { content: counter(step); }
+
+/* --------------------------------------------------------------- bounce --- */
+/* The three functional pages: Stripe return/refresh and the invite hand-off. */
+
+.bounce {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid; place-items: center;
+  padding: var(--space-6);
+  text-align: center;
+}
+.bounce__card {
+  width: 100%; max-width: 420px;
+  background: var(--brand-surface);
+  border: 1px solid var(--brand-border);
+  border-radius: var(--radius-card);
+  padding: var(--space-8) var(--space-6);
+}
+.bounce__mark {
+  width: 52px; height: 52px; border-radius: var(--radius-input);
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+  display: grid; place-items: center;
+  margin: 0 auto var(--space-5);
+}
+.bounce .btn { width: 100%; margin-top: var(--space-6); }
+
+.code-well {
+  margin-top: var(--space-5);
+  padding: var(--space-4);
+  border-radius: var(--radius-input);
+  background: var(--brand-surface-alt);
+}
+.code-well__value {
+  font-size: 22px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+  word-break: break-all;
+  margin-top: var(--space-1);
+  color: var(--brand-ink);
+}
+
+/* --------------------------------------------------------------- footer --- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding-block: var(--space-64) var(--space-8);
+  background: var(--surface);
+}
+
+.footer__grid {
+  display: grid;
+  grid-template-columns: 1.4fr repeat(3, 1fr);
+  gap: var(--space-8);
+}
+@media (max-width: 860px) {
+  .footer__grid { grid-template-columns: 1fr 1fr; }
+}
+
+.footer__col h2 {
+  font-size: var(--micro); font-weight: var(--micro-weight);
+  letter-spacing: var(--micro-tracking); text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: var(--space-3);
+}
+.footer__col ul { display: grid; gap: var(--space-2); }
+.footer__col a { color: var(--ink-secondary); font-size: 14px; }
+.footer__col a:hover { color: var(--ink); }
+
+.footer__base {
+  margin-top: var(--space-48);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+  display: flex; flex-wrap: wrap; gap: var(--space-3);
+  justify-content: space-between; align-items: center;
+}

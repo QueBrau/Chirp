@@ -24,7 +24,7 @@ alembic upgrade head
 uvicorn app.main:create_app --factory --reload
 ```
 
-API is now at `http://127.0.0.1:8000` (health check: `GET /healthz`).
+API is now at `http://127.0.0.1:8000` (health check: `GET /_health`).
 
 ### 3. Mobile app (Expo)
 

@@ -71,3 +71,9 @@ class JobPostOut(_Schema):
     apply_url: str | None = None
     created_at: datetime
     expires_at: datetime | None = None
+    # Resolved from users.display_name by the list route's join, mirroring how
+    # AlumniProfileOut.display_name is populated. There is no GET /users/{id},
+    # so without this the client has only a bare UUID and cannot show who
+    # posted a job. Optional because the create/delete routes return a job
+    # without running the join.
+    posted_by_name: str | None = None

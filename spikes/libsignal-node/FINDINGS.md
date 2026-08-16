@@ -29,7 +29,7 @@ Full run (unedited):
 
 ```
 === 0. backend health check ===
-GET /healthz -> { status: 'ok' }
+GET /_health -> { status: 'ok' }
 
 === 1. bootstrap two real users via POST /auth/bootstrap ===
 alice user_id = c008108a-34f7-48f8-8880-b22a1f41ec78
@@ -283,7 +283,7 @@ on the same local Postgres (`chirp` db, now at migration `0002`) — unedited ou
 
 ```
 === 0. backend health check ===
-GET /healthz -> { status: 'ok' }
+GET /_health -> { status: 'ok' }
 
 === 1. bootstrap two real users via POST /auth/bootstrap ===
 alice user_id = ccad37a7-28aa-42b7-b115-f07cbfa0c399
