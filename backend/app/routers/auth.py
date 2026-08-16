@@ -55,7 +55,10 @@ async def bootstrap_account(
         display_name=body.display_name,
         avatar_url=body.avatar_url,
         account_type=body.account_type,
-        campus_id=body.campus_id,
+        # campus_id is deliberately NOT set from the body (c85). A new account has no
+        # campus until it proves one; that is the correct state for someone who has
+        # verified nothing, not an edge case. The .edu redemption in c86 is the only
+        # writer of this column.
     )
     session.add(user)
     try:
