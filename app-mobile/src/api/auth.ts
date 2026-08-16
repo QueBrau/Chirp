@@ -54,3 +54,45 @@ export async function getCampus(campusId: string): Promise<CampusOut> {
 export async function fetchMe(): Promise<{ user: UserOut; memberships: MembershipOut[] }> {
   return request<{ user: UserOut; memberships: MembershipOut[] }>("/auth/me");
 }
+
+/**
+ * Mirrors backend CampusVerificationStatus (c86).
+ *
+ * `verified` already accounts for the yearly re-check, so it is the ONLY field a
+ * gate should branch on. `verified_at` is returned even when `verified` is false
+ * on purpose: it is how a LAPSED verification is told apart from one that never
+ * happened, which are two different screens — "your verification expired" versus
+ * "verify your .edu". A returning student should not be told they have never
+ * been here.
+ */
+export interface CampusVerificationStatus {
+  verified: boolean;
+  verified_at: string | null;
+  campus_id: string | null;
+}
+
+/**
+ * The caller's .edu verification state.
+ *
+ * WHY THIS EXISTS RATHER THAN A campus_id CHECK (c110): since c88 the campus feed
+ * and Yak are gated on a verification timestamp, not on having a campus. A user
+ * who joined by chapter invite HAS a campus_id and is still refused, so branching
+ * on `user.campus_id !== null` sends them down the call-the-endpoint path into a
+ * 403 — which is exactly the mistake the server was just moved off.
+ */
+export async function getCampusVerification(): Promise<CampusVerificationStatus> {
+  return request<CampusVerificationStatus>("/auth/campus-verification");
+}
+
+/** Request a one-time code at an .edu address. 202 — accepted for delivery. */
+export async function startCampusVerification(eduEmail: string): Promise<void> {
+  await request("/auth/campus-verification", { method: "POST", body: { edu_email: eduEmail } });
+}
+
+/** Redeem a code; on success the campus feed and Yak open. */
+export async function redeemCampusVerification(code: string): Promise<CampusVerificationStatus> {
+  return request<CampusVerificationStatus>("/auth/campus-verification/redeem", {
+    method: "POST",
+    body: { code },
+  });
+}
