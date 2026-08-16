@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -212,11 +212,33 @@ async def resolve_report(
     report = await session.get(models.ContentReport, report_id)
     if report is None:
         raise not_found("report_not_found")
+    # Scoping reads the loaded row, which is fine unlocked: a report's campus_id is set
+    # once when it is filed and never changes, so there is nothing to race on here.
     await _require_eboard_for_campus(session, moderator, report.campus_id)
-    if report.status != "open":
+
+    # The STATUS transition is a different matter, and read-check-then-write would have
+    # been wrong in exactly the case this route's docstring promises to handle. Two
+    # moderators clicking at once would both read "open", both pass the check, and both
+    # write — two audit rows, last-write-wins on status, and a 409 for neither. One
+    # actions while the other dismisses and the queue silently keeps whichever committed
+    # last. Sequentially correct, concurrently false, which is the harder half to see.
+    #
+    # So the guard IS the write: UPDATE ... WHERE status = 'open' lets the database
+    # decide the winner, and a rowcount of 0 means someone else got there first. Same
+    # shape as the dues double-charge reservation (c51) and c105's invite seat claim —
+    # this is the third time this pattern has been the right answer in this codebase.
+    claimed = await session.execute(
+        update(models.ContentReport)
+        .where(
+            models.ContentReport.id == report_id,
+            models.ContentReport.status == "open",
+        )
+        .values(status=body.status)
+        .returning(models.ContentReport.id)
+    )
+    if claimed.scalar_one_or_none() is None:
         raise conflict("report_already_resolved")
 
-    report.status = body.status
     # Mutable state lives on the row, history lives in the append-only log — the same
     # split c76 chose for suspensions, and the reason "who dismissed this, and why" can
     # still be answered after a later moderator actions the same target.
