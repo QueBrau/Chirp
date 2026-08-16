@@ -1,10 +1,11 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 16 2026, early morning. **Prod is current and verified.** Migration
-0011 is applied, revision `chirp-api-00013-rbg` is serving it, and a real signed-in
-request was confirmed returning 200. Alpha readiness is **50%** — 10 of 20 named gates._
+_Last updated: Aug 16 2026, after the c94/c93 session. **Prod is current and verified.**
+Migration 0011 is applied, revision `chirp-api-00013-rbg` is serving it, and a real
+signed-in request was confirmed returning 200. Alpha readiness is **50%** — 10 of 20
+named gates. Nothing has been deployed since; c94 is a mobile-only change._
 
-**board.html is the source of truth for tasks** — 94 cards, 58 decisions. It now has an
+**board.html is the source of truth for tasks** — 97 cards, 61 decisions. It now has an
 **alpha readiness bar** that recomputes from the cards on every render, and cards are
 **headlines with the detail behind a click** (a right-hand drawer). Open a card before
 acting on it; the headline is deliberately short and the reasoning lives in the drawer.
@@ -36,27 +37,34 @@ that must return 409.
 
 Ordered by what I'd actually do first:
 
-1. **c94 — sign-in authenticates but does not navigate.** Signing in with an *existing*
-   account returns `GET /auth/me` 200 and then sits on `/sign-in`. Reload and you land on
-   `/feed` with the session intact. Sign-*up* is fine; it walks itself through. This is a
-   **second, independent cause** of the bounce that CORS (c64) was masking — fixing the
-   first cause of a compound bug is why it looked closed. Start at
-   `app/(auth)/sign-in.tsx`: the sign-up path calls `applyBootstrap()` then `proceed()`,
-   and the sign-in submit has no equivalent post-success navigation. **Verify on a real
-   device** — headless saw it once.
-2. **c93 — DEPLOY.md will wipe the CORS fix.** Line 83 uses `--set-env-vars`, which
-   *replaces* the whole env block. Running it as written resets `CORS_ORIGINS` to a
-   placeholder and re-breaks phone login, failing in the browser rather than at deploy
-   time. Small doc fix, high blast radius.
-3. **c58 — live browser QA.** Partly done Aug 16: full signup → bootstrap → feed verified
-   against real prod on a phone viewport. The rest of the surface is still unproven.
-4. **c66** — the runbook's DB password is literally the string `REDACTED`.
-5. **c74** — `chirp.shared@gmail.com` is published on the live site *and* owns GCP,
+1. **c58 — live browser QA.** Partly done: full signup → bootstrap → feed, and now the
+   whole sign-in/sign-out round trip (c94), verified against real prod on a phone
+   viewport. Yak, Messages, compose, moderation and the invite path are still unproven.
+2. **c66** — the runbook's DB password is literally the string `REDACTED`.
+3. **c74** — `chirp.shared@gmail.com` is published on the live site *and* owns GCP,
    Firebase and Stripe. Wants a forwarding alias; coupled to c73's domain purchase.
-6. **c73** — marketing site to `about.<domain>`. Blocked on buying a domain.
-7. **c87 → c86 → c88** — transactional email, then `.edu` verification, then the gate.
+4. **c73** — marketing site to `about.<domain>`. Blocked on buying a domain.
+5. **c87 → c86 → c88** — transactional email, then `.edu` verification, then the gate.
    Strictly in that order. **Hold these until after alpha**: the two-tier decision means
    chapter membership grants org content with no email at all, so alpha runs without them.
+
+**c94 and c93 are done, on PR #21 (`jose/c94-signin-navigation`), not yet merged.**
+c94's sign-in bounce was a *race*, not a missing navigate call: the app navigated on the
+Firebase credential while SessionProvider was still resolving `/auth/me`, so the
+destination guard read a stale `"signedOut"` and redirected straight back. It now waits
+for the settled session. Reproduced on the pre-fix code against prod first, then
+re-verified: sign out and back in lands on `/feed` in ~1s.
+
+**Until PR #21 merges, `DEPLOY.md` on main still carries the `--set-env-vars` line that
+wipes `CORS_ORIGINS`.** Do not redeploy off main's copy — use the branch, or just deploy
+with no env flags at all.
+
+Three new cards came out of that live run: **c95** (every sign-in burns a 401 on
+`/auth/me` before the 200, spending one of loadMe's three retries on a self-inflicted
+failure), **c96** (the QA account has no `campus_id`, so Home/Campus is a dead end with
+no way forward — check whether a *fresh* signup lands there too before assuming it is
+stale fixture data), and **c97** (`MOCK_MOMENTS` — Tyler, Maria, Priya and four more
+invented people — still ship in every user's "Your story" row).
 
 Also open and unowned: **c84** (a chapter-less author cannot delete their own post) and
 **c91** (no endpoint to resolve a report).
@@ -98,7 +106,15 @@ moves the bar. **50% as of Aug 16.**
 
 ## Open PRs and branches
 
-`q/compose` (PR #14, draft, c49) and `q/moderation-ui` (PR #17, c35) are Q's. Origin was
+**PR #21 (`jose/c94-signin-navigation`, c94 + c93) is open and waiting on Jose to merge.**
+
+Q merged two of theirs on Aug 16 without touching the board: **PR #17** (c35, the
+moderation UI — an *alpha gate*) and **PR #20** (`q/nav-back-autohide`, real back button
+plus an auto-hiding tab bar, which rewrote `(tabs)/_layout.tsx` around the auth guard;
+the guard itself is unchanged). c35's card now says merged-pending-verification — when Q
+verifies it live and moves it to Done, the alpha bar moves with it.
+
+`q/compose` (PR #14, draft, c49) is Q's. Origin was
 pruned to `main` plus branches with open PRs; two superseded branches were **tagged**
 (`archive/q-website`, `archive/q-mock-identity-fixes`) before deletion, so nothing was
 lost.
@@ -107,7 +123,7 @@ lost.
 
 - **Real users see fabricated people.** A brand-new account's Home shows `MOCK_MOMENTS` —
   Tyler, Maria, Priya, Devon, Sam, Ethan, Noah — in the "Your story" row. There is no
-  backend concept for Moments, but it is in front of every user. Not yet carded.
+  backend concept for Moments, but it is in front of every user. **Now carded as c97.**
 - **Apple and Google sign-in are visual stubs** that skip authentication entirely and drop
   the user into a disconnected onboarding flow (c89). Apple guideline 4.8 makes Sign in
   with Apple mandatory once Google ships.
