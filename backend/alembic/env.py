@@ -13,7 +13,13 @@ from app.db import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which silently switches OFF every
+    # logger that already exists — including all of app.* whenever alembic is invoked
+    # in-process rather than as its own command. The test suite does exactly that in
+    # conftest's schema fixture, so any application logging after the first migration
+    # run vanished, and a test asserting on log output failed with an empty capture
+    # and no hint as to why (found writing c87's mailer tests).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
