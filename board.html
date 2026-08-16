@@ -798,6 +798,14 @@
       "title": "[A/Jose] MOVE THE MARKETING SITE TO A SUBDOMAIN — decided Aug 15, NOT started. Instagram's shape: the apex domain lands on sign-in / the app, and the marketing + legal site lives at about.<domain>. BLOCKED ON A DOMAIN PURCHASE — we do not own one, which is why c40 shipped on the free chirps-prod.web.app. THE PART THAT WILL BITE: three places already encode the current origin and must move IN LOCKSTEP or Stripe onboarding and invite links break silently. (1) APP_PUBLIC_BASE_URL on Cloud Run — payments.py:40 appends /stripe/connect/return and /stripe/connect/refresh to it, so whichever host serves those two paths is what this must equal. (2) WEB_BASE_URL in app-mobile/src/auth/inviteLink.ts plus the EXPO_PUBLIC_WEB_URL override. (3) app-mobile/app.json's applinks + Android intent filter, still on placeholder chirp.example.com, which also need an EAS rebuild to take effect. DECIDE EXPLICITLY where the Stripe callbacks live: keeping them on the marketing subdomain is simplest since those pages exist there, but it means Stripe redirects users to about.<domain> mid-onboarding. Firebase Hosting supports multiple sites per project, so apex and about can be separate targets."
     },
     {
+      "id": "c76",
+      "col": "next",
+      "owner": "J",
+      "tag": "legal",
+      "area": "website",
+      "title": "[A/Jose] LIVE /terms CLAIMS MODERATION POWERS THAT DO NOT EXIST — found Aug 15 while reviewing q/website, which caught the same class of thing on its own draft and corrected it before committing. Terms.tsx:132 says 'We can remove content and suspend accounts that break these rules' and :158 says 'We can suspend or close an account'. Checked against the code, not assumed: there is NO suspend / banned / is_active / disabled field on ANY model in backend/app/models, NO suspend-ban-deactivate endpoint in any router, and deletePost (src/api/feed.ts:102) and removeYak (src/api/moderation.ts:67) both exist in the API client with ZERO call sites in any .tsx — nothing in the app can invoke either. So a student who reports someone is told in writing that we can act, and we cannot. This is the same failure mode as section 14 of the privacy policy and c69: a written promise with nothing behind it. Note the honest distinction before rewriting — a reservation of RIGHT ('we may remove content') is normal and fine in a ToS; a statement of CAPABILITY is what this is and what is false. FIX: either wire a real removal path and an account disable (bigger than it sounds, needs a model field, an endpoint, an admin surface and an audit trail), or reword both clauses to reserve the right without asserting the button exists. Whichever way it goes, the fix is one PR touching Terms.tsx and the code together, same rule as c69."
+    },
+    {
       "id": "c74",
       "col": "next",
       "owner": "J",
