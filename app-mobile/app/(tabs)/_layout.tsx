@@ -11,10 +11,12 @@ import { Redirect, Tabs } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
 import { Pressable, View } from "react-native";
+import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useSession } from "@/auth";
 import { AppText } from "@/components";
+import { TabBarVisibilityProvider, useTabBarVisibility } from "@/nav/TabBarVisibility";
 import { cardShadow, metrics, radii, spacing, typography, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -32,23 +34,41 @@ function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const palette = useTheme();
   const insets = useSafeAreaInsets();
 
+  const tabBar = useTabBarVisibility();
+
+  // Slides the pill down past its own height plus the bottom inset and fades it,
+  // driven by the shared value Screen's scroll handler writes. Kept as a
+  // transform+opacity so it never affects layout — content clearance
+  // (TAB_BAR_CLEARANCE) stays constant whether the bar is shown or hidden.
+  const animatedStyle = useAnimatedStyle(() => {
+    const shown = tabBar?.visible.value ?? 1;
+    return {
+      opacity: shown,
+      transform: [{ translateY: interpolate(shown, [0, 1], [metrics.tabBarHiddenOffset, 0]) }],
+    };
+  });
+
   return (
-    <View
-      style={{
-        position: "absolute",
-        left: metrics.tabBarInsetX,
-        right: metrics.tabBarInsetX,
-        bottom: Math.max(insets.bottom, metrics.tabBarInsetBottom),
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: palette.surface,
-        borderRadius: radii.tabBar,
-        borderWidth: 1,
-        borderColor: palette.border,
-        paddingVertical: spacing.sm,
-        paddingHorizontal: spacing.sm,
-        ...cardShadow(palette),
-      }}
+    <Animated.View
+      pointerEvents="box-none"
+      style={[
+        {
+          position: "absolute",
+          left: metrics.tabBarInsetX,
+          right: metrics.tabBarInsetX,
+          bottom: Math.max(insets.bottom, metrics.tabBarInsetBottom),
+          flexDirection: "row",
+          alignItems: "center",
+          backgroundColor: palette.surface,
+          borderRadius: radii.tabBar,
+          borderWidth: 1,
+          borderColor: palette.border,
+          paddingVertical: spacing.sm,
+          paddingHorizontal: spacing.sm,
+          ...cardShadow(palette),
+        },
+        animatedStyle,
+      ]}
     >
       {state.routes.map((route, index) => {
         const focused = state.index === index;
@@ -103,7 +123,7 @@ function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
           </Pressable>
         );
       })}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -121,15 +141,20 @@ export default function TabsLayout() {
   if (status === "unregistered") return <Redirect href="/account-type" />;
 
   return (
-    <Tabs
-      tabBar={(props) => <FloatingTabBar {...props} />}
-      screenOptions={{ headerShown: false }}
-    >
-      <Tabs.Screen name="feed" options={{ title: "Home" }} />
-      <Tabs.Screen name="yak" options={{ title: "Yak" }} />
-      <Tabs.Screen name="messages" options={{ title: "Messages" }} />
-      <Tabs.Screen name="chapter" options={{ title: "Orgs" }} />
-      <Tabs.Screen name="profile" options={{ title: "Profile" }} />
-    </Tabs>
+    // Provider sits ABOVE <Tabs> so one visibility value is shared by every tab
+    // and every screen pushed inside it — otherwise each stack would animate its
+    // own copy of the bar and they'd disagree.
+    <TabBarVisibilityProvider>
+      <Tabs
+        tabBar={(props) => <FloatingTabBar {...props} />}
+        screenOptions={{ headerShown: false }}
+      >
+        <Tabs.Screen name="feed" options={{ title: "Home" }} />
+        <Tabs.Screen name="yak" options={{ title: "Yak" }} />
+        <Tabs.Screen name="messages" options={{ title: "Messages" }} />
+        <Tabs.Screen name="chapter" options={{ title: "Orgs" }} />
+        <Tabs.Screen name="profile" options={{ title: "Profile" }} />
+      </Tabs>
+    </TabBarVisibilityProvider>
   );
 }
