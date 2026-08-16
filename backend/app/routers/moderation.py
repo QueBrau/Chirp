@@ -1,4 +1,5 @@
-"""Moderation: content reports, user blocks, and admin yak removal."""
+"""Moderation: content reports, user blocks, account suspension, and admin content
+removal (yaks, posts, comments) — all with an audit trail (board card c76)."""
 import uuid
 from datetime import datetime, timezone
 
@@ -10,9 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.errors import conflict, forbidden, not_found
-from app.core.permissions import EBOARD
+from app.core.permissions import EBOARD, require_platform_admin
 from app.db import get_session
 from app.middleware.auth import get_current_user
+from app.schemas.moderation import (
+    ContentRemoveRequest,
+    SuspendUserRequest,
+    SuspensionStateOut,
+)
 from app.schemas.yak import (
     ContentReportCreate,
     ContentReportOut,
@@ -84,6 +90,34 @@ async def _resolve_report_campus_id(
                 if chapter is not None:
                     return chapter.campus_id
     return reporter.campus_id
+
+
+async def _require_eboard_for_campus(
+    session: AsyncSession, moderator: models.User, campus_id: uuid.UUID | None
+) -> None:
+    """403 unless moderator is active e-board in some chapter of campus_id.
+
+    Factored out of remove_yak (SECURITY-REVIEW finding 1's fix) so remove_content
+    enforces the identical per-campus scoping instead of a second hand-rolled check.
+    campus_id is None only when a target's campus could not be resolved (e.g. a
+    dangling chapter reference) — treated as "no campus matches" rather than falling
+    back to some platform-wide allowance.
+    """
+    if campus_id is None:
+        raise forbidden("insufficient_role")
+    campus_match = await session.execute(
+        select(models.Membership.id)
+        .join(models.Chapter, models.Chapter.id == models.Membership.chapter_id)
+        .where(
+            models.Membership.user_id == moderator.id,
+            models.Membership.status == "active",
+            models.Membership.role.in_(_EBOARD_ROLES),
+            models.Chapter.campus_id == campus_id,
+        )
+        .limit(1)
+    )
+    if campus_match.scalar_one_or_none() is None:
+        raise forbidden("insufficient_role")
 
 
 @router.post("/moderation/reports", status_code=201)
@@ -227,7 +261,8 @@ async def remove_yak(
     moderator: models.User = Depends(_require_any_eboard),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    """Admin removal: sets removed_at + removed_reason.
+    """Admin removal: sets removed_at + removed_reason, and writes a moderation_actions
+    audit row (board card c76: who removed it, not just that it was removed).
 
     SECURITY-REVIEW finding 1: previously any e-board member of any chapter could
     remove any campus's yaks. Now requires the caller to be active e-board in some
@@ -238,19 +273,146 @@ async def remove_yak(
         raise not_found("yak_not_found")
     if yak.removed_at is not None:
         raise conflict("already_removed")
-    campus_match = await session.execute(
-        select(models.Membership.id)
-        .join(models.Chapter, models.Chapter.id == models.Membership.chapter_id)
-        .where(
-            models.Membership.user_id == moderator.id,
-            models.Membership.status == "active",
-            models.Membership.role.in_(_EBOARD_ROLES),
-            models.Chapter.campus_id == yak.campus_id,
-        )
-        .limit(1)
-    )
-    if campus_match.scalar_one_or_none() is None:
-        raise forbidden("insufficient_role")
+    await _require_eboard_for_campus(session, moderator, yak.campus_id)
     yak.removed_at = datetime.now(timezone.utc)
     yak.removed_reason = body.reason
+    session.add(
+        models.ModerationAction(
+            actor_id=moderator.id,
+            action="remove_content",
+            target_type="yak",
+            target_id=yak.id,
+            reason=body.reason,
+        )
+    )
     await session.commit()
+
+
+@router.post("/moderation/content/remove", status_code=204)
+async def remove_content(
+    body: ContentRemoveRequest,
+    moderator: models.User = Depends(_require_any_eboard),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Admin removal of a post or comment (board card c76: the Terms claims we can
+    "remove content that breaks these rules" — this is what makes that true for named-
+    author content; yaks have their own dedicated route above, anonymous-content shaped).
+
+    Marks removed via the SAME deleted_at column the author/president self-delete in
+    routers/feed.py already sets — that is what makes a moderator's removal actually
+    disappear from feed.py's queries without this router being able to touch feed.py.
+    removed_reason is what distinguishes the two paths: NULL means self/president
+    delete, set means a moderator removed it. Writes a moderation_actions audit row
+    either way (who, when, why).
+    """
+    chapter: models.Chapter | None
+    if body.target_type == "post":
+        post = await session.get(models.Post, body.target_id)
+        if post is None:
+            raise not_found("post_not_found")
+        if post.deleted_at is not None:
+            raise conflict("already_removed")
+        chapter = await session.get(models.Chapter, post.chapter_id)
+        target: models.Post | models.PostComment = post
+    else:
+        comment = await session.get(models.PostComment, body.target_id)
+        if comment is None:
+            raise not_found("comment_not_found")
+        if comment.deleted_at is not None:
+            raise conflict("already_removed")
+        parent_post = await session.get(models.Post, comment.post_id)
+        chapter = (
+            await session.get(models.Chapter, parent_post.chapter_id)
+            if parent_post is not None
+            else None
+        )
+        target = comment
+
+    campus_id = chapter.campus_id if chapter is not None else None
+    await _require_eboard_for_campus(session, moderator, campus_id)
+
+    target.deleted_at = datetime.now(timezone.utc)
+    target.removed_reason = body.reason
+    session.add(
+        models.ModerationAction(
+            actor_id=moderator.id,
+            action="remove_content",
+            target_type=body.target_type,
+            target_id=body.target_id,
+            reason=body.reason,
+        )
+    )
+    await session.commit()
+
+
+@router.post("/moderation/users/{user_id}/suspend")
+async def suspend_user(
+    user_id: uuid.UUID,
+    body: SuspendUserRequest,
+    admin: models.User = Depends(require_platform_admin),
+    session: AsyncSession = Depends(get_session),
+) -> SuspensionStateOut:
+    """Suspend an account platform-wide (board card c76, Terms: "we can suspend
+    accounts that break these rules" / "we can suspend or close an account").
+
+    Platform-admin only, same gate as chapter creation (SECURITY-REVIEW finding 1 /
+    board card c28) — this is a platform-level power, not a chapter one, so EBOARD
+    roles (scoped to a single chapter) are not sufficient here.
+
+    Enforcement is NOT this endpoint's job: middleware/auth.get_current_user rejects
+    every request from a suspended account from here on, so this just flips the state
+    and records why.
+    """
+    target = await session.get(models.User, user_id)
+    if target is None:
+        raise not_found("user_not_found")
+    if target.suspended_at is not None:
+        raise conflict("already_suspended")
+    target.suspended_at = datetime.now(timezone.utc)
+    target.suspension_reason = body.reason
+    target.suspended_by = admin.id
+    session.add(
+        models.ModerationAction(
+            actor_id=admin.id,
+            action="suspend_user",
+            target_type="user",
+            target_id=target.id,
+            reason=body.reason,
+        )
+    )
+    await session.commit()
+    await session.refresh(target)
+    return SuspensionStateOut.model_validate(target)
+
+
+@router.post("/moderation/users/{user_id}/unsuspend")
+async def unsuspend_user(
+    user_id: uuid.UUID,
+    body: SuspendUserRequest,
+    admin: models.User = Depends(require_platform_admin),
+    session: AsyncSession = Depends(get_session),
+) -> SuspensionStateOut:
+    """Restore a suspended account's access. Clears the users.suspended_* columns back
+    to NULL — the moderation_actions row already written by suspend_user (and the one
+    this call adds) is what keeps the history past that clear.
+    """
+    target = await session.get(models.User, user_id)
+    if target is None:
+        raise not_found("user_not_found")
+    if target.suspended_at is None:
+        raise conflict("not_suspended")
+    target.suspended_at = None
+    target.suspension_reason = None
+    target.suspended_by = None
+    session.add(
+        models.ModerationAction(
+            actor_id=admin.id,
+            action="unsuspend_user",
+            target_type="user",
+            target_id=target.id,
+            reason=body.reason,
+        )
+    )
+    await session.commit()
+    await session.refresh(target)
+    return SuspensionStateOut.model_validate(target)

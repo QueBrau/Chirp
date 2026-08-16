@@ -195,6 +195,29 @@ async def _grant_platform_admin(user_id: str) -> None:
         await session.commit()
 
 
+async def set_campus(user_id: str, campus_id: str) -> None:
+    """Pin a user to a campus directly in the DB.
+
+    Board c85: campus_id used to be accepted in the POST /auth/bootstrap body, and
+    that was the ONLY way anything — including this suite — assigned a campus. It was
+    also the hole: the value was written unchecked, and the campus feed's guard
+    compares against it. Removing it from the schema broke 23 tests, which is the
+    clearest possible evidence that the vulnerability WAS the mechanism.
+
+    Same shape as _grant_platform_admin above and for the same reason: no API grants
+    this today. The .edu redemption in c86 will be the real writer; until it exists,
+    tests set the column the way they set is_platform_admin.
+    """
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text("UPDATE users SET campus_id = :campus WHERE id = :id"),
+            {"campus": campus_id, "id": user_id},
+        )
+        await session.commit()
+
+
 @pytest.fixture
 def make_chapter_with(
     client: AsyncClient, make_user: MakeUser, make_campus: MakeCampus

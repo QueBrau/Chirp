@@ -1,8 +1,13 @@
 /*
  * Chirp public site.
  *
- * Consumes only the custom properties in tokens.css — no hardcoded colour or
- * type values, same rule the app enforces through src/theme.
+ * Consumes only the custom properties in tokens.css for colour: there is no
+ * hardcoded hex or rgba() anywhere below, same rule the app enforces through
+ * src/theme. Type sizes follow that rule almost everywhere too; the handful
+ * of exceptions are literal px for chrome that is deliberately fixed-size
+ * rather than part of the fluid reading scale (the wordmark, the phone
+ * mockup, the invite-code display) — each is called out as a one-off at its
+ * declaration, not a duplicate of a token that already exists.
  *
  * Structure follows DESIGN.md 10 ("zones, not card soup"): every page opens with
  * a header zone (micro eyebrow, oversized title, short accent bar) and then a
@@ -170,6 +175,8 @@ a:hover { text-decoration: underline; }
 
 .wordmark {
   display: inline-flex; align-items: center; gap: var(--space-2);
+  /* 17px is a one-off logotype size, sized to sit beside the 26px mark next to
+     it, not a step in the type scale. */
   font-weight: 800; font-size: 17px; letter-spacing: -0.3px;
   color: var(--ink);
 }
@@ -190,7 +197,7 @@ a:hover { text-decoration: underline; }
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-pill);
   color: var(--ink-secondary);
-  font-size: 14px; font-weight: 600;
+  font-size: var(--label); font-weight: 600;
   /* "How it works" is two spaces wide and will wrap to three lines in a narrow
      header if allowed to. */
   white-space: nowrap;
@@ -222,7 +229,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--ink);
-  font-family: inherit; font-size: 14px; font-weight: 600;
+  font-family: inherit; font-size: var(--label); font-weight: 600;
   cursor: pointer;
 }
 .nav-toggle:hover { background: var(--surface-alt); }
@@ -260,7 +267,7 @@ a:hover { text-decoration: underline; }
 .site-menu__legal { border-top: 1px solid var(--border); }
 .site-menu__legal a {
   min-height: 46px;
-  font-size: 14px; font-weight: 500;
+  font-size: var(--label); font-weight: 500;
   color: var(--ink-secondary);
 }
 
@@ -395,8 +402,12 @@ a:hover { text-decoration: underline; }
 /*
  * Hand-built recreation of real Chirp UI rather than a stock screenshot: there
  * are no captured assets in the repo yet, and a grey placeholder box would read
- * exactly as the slop DESIGN.md 10 bans. Every value below comes from the same
- * tokens the app renders with, so this is the product, not an impression of it.
+ * exactly as the slop DESIGN.md 10 bans. Colour below comes from the same
+ * tokens the app renders with, so this is the product, not an impression of
+ * it. Type sizes are literal px instead, on purpose: this mockup is a fixed
+ * ~320px graphic, not a page flowing at the reading scale, so its text is
+ * sized to look right inside that frame rather than to track --reading or
+ * --headline.
  */
 
 .phone {
@@ -406,7 +417,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--brand-border);
   border-radius: 38px;
   padding: var(--space-3);
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-phone);
 }
 
 .phone__screen {
@@ -449,10 +460,10 @@ a:hover { text-decoration: underline; }
 }
 
 .post__who { display: grid; line-height: 1.3; }
-.post__name { font-size: 14px; font-weight: 700; }
+.post__name { font-size: var(--label); font-weight: 700; }
 .post__meta { font-size: var(--caption); color: var(--brand-ink-faint); }
 
-.post__body { font-size: 14px; line-height: 20px; color: var(--brand-ink); }
+.post__body { font-size: var(--label); line-height: 20px; color: var(--brand-ink); }
 
 .post__media {
   height: 128px; border-radius: var(--radius-thumb);
@@ -541,6 +552,17 @@ a:hover { text-decoration: underline; }
 }
 .step__num::before { content: counter(step); }
 
+/* ------------------------------------------------------------------ cta --- */
+/* The closing block at the foot of Home, About, Features and HowItWorks —
+   see components/CtaSection.tsx. Was four copies of the same inline style
+   objects (text-align, the heading's clamp, and two margins); this is that
+   set of rules moved into the stylesheet the four pages now share. */
+
+.cta { text-align: center; }
+.cta__heading { font-size: clamp(22px, 2.8vw, 32px); }
+.cta__body { margin: var(--space-4) auto 0; }
+.cta__action { margin-top: var(--space-6); }
+
 /* --------------------------------------------------------------- bounce --- */
 /* The three functional pages: Stripe return/refresh and the invite hand-off. */
 
@@ -573,6 +595,9 @@ a:hover { text-decoration: underline; }
   background: var(--brand-surface-alt);
 }
 .code-well__value {
+  /* One-off size for a code that needs to be glanced at and typed elsewhere,
+     not a step in the type scale; it is coincidence, not a shared token, that
+     this matches .phone__title's 22px above. */
   font-size: 22px; font-weight: 800;
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
@@ -605,7 +630,7 @@ a:hover { text-decoration: underline; }
   margin-bottom: var(--space-3);
 }
 .footer__col ul { display: grid; gap: var(--space-2); }
-.footer__col a { color: var(--ink-secondary); font-size: 14px; }
+.footer__col a { color: var(--ink-secondary); font-size: var(--label); }
 .footer__col a:hover { color: var(--ink); }
 
 .footer__base {
@@ -666,8 +691,10 @@ a:hover { text-decoration: underline; }
     min-height: 44px;
   }
 
-  /* A lede should still read as a lede once running copy is 17px. */
-  .lede { font-size: 18px; }
+  /* A lede should still read as a lede once running copy (--reading) is 17px
+     at this width — expressed relative to the token instead of restating its
+     phone-width value as a second literal that could quietly drift from it. */
+  .lede { font-size: calc(var(--reading) + 1px); }
 
   /* The bounce pages are the ones a user hits mid-flow on a phone. 100dvh
      already handles the URL bar; this handles the home indicator. */

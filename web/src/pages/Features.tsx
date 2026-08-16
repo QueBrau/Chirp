@@ -1,6 +1,5 @@
-import { Link } from "react-router-dom";
-
 import { usePageMeta } from "../components/usePageMeta";
+import { CtaSection } from "../components/CtaSection";
 
 export function Features() {
   usePageMeta(
@@ -229,17 +228,12 @@ export function Features() {
         </div>
       </section>
 
-      <section className="section section--tight">
-        <div className="wrap" style={{ textAlign: "center" }}>
-          <h2 className="title" style={{ fontSize: "clamp(22px, 2.8vw, 32px)" }}>Curious how this actually works day to day?</h2>
-          <p className="lede" style={{ margin: "var(--space-4) auto 0" }}>
-            Four steps take you from signing up to running your org.
-          </p>
-          <p style={{ marginTop: "var(--space-6)" }}>
-            <Link className="btn btn--primary" to="/how-it-works">See how Chirp works</Link>
-          </p>
-        </div>
-      </section>
+      <CtaSection
+        heading="Curious how this actually works day to day?"
+        body="Four steps take you from signing up to running your org."
+        buttonLabel="See how Chirp works"
+        buttonTo="/how-it-works"
+      />
     </>
   );
 }

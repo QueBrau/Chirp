@@ -76,6 +76,12 @@ from app.schemas.messaging import (
     MessageReceiptCreate,
     MessageReceiptOut,
 )
+from app.schemas.moderation import (
+    ContentRemoveRequest,
+    ModerationActionOut,
+    SuspendUserRequest,
+    SuspensionStateOut,
+)
 from app.schemas.social import (
     FeedPostOut,
     PostCommentCreate,
@@ -166,6 +172,11 @@ __all__ = [
     "MessageOut",
     "MessageReceiptCreate",
     "MessageReceiptOut",
+    # moderation
+    "ContentRemoveRequest",
+    "ModerationActionOut",
+    "SuspendUserRequest",
+    "SuspensionStateOut",
     # social
     "FeedPostOut",
     "PostCommentCreate",

@@ -28,19 +28,36 @@ class _Schema(BaseModel):
 
 
 class UserCreate(_Schema):
-    """Body for POST /auth/bootstrap — firebase_uid comes from the verified identity, not the body."""
+    """Body for POST /auth/bootstrap — firebase_uid comes from the verified identity, not the body.
+
+    NO campus_id (board c85). It used to be here and was written straight through to
+    users.campus_id with no check against anything, while the campus feed's guard is
+    `user.campus_id != campus_id -> 403` — a comparison against a value the caller
+    supplied, which enforces consistency and not identity. Campus is now SERVER-OWNED
+    and the .edu verification flow (c86) is its only writer.
+
+    Removing the field rather than validating it is deliberate: _Schema does not set
+    extra="forbid", so a client still sending campus_id has it ignored instead of
+    getting a 422, and nothing in the app sends it today anyway
+    (app/(auth)/account-type.tsx passes email, display_name and account_type only).
+    """
 
     email: str = Field(min_length=3)
     display_name: str = Field(min_length=1)
     avatar_url: str | None = None
     account_type: AccountType
-    campus_id: uuid.UUID | None = None
 
 
 class UserUpdate(_Schema):
+    """No campus_id here either, for the same reason (c85).
+
+    This schema has no route today, which is exactly why it is worth cleaning now:
+    an unused field is the one that gets wired up later by someone who assumes it
+    was safe because it was already written.
+    """
+
     display_name: str | None = None
     avatar_url: str | None = None
-    campus_id: uuid.UUID | None = None
 
 
 class UserOut(_Schema):

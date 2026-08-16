@@ -6,7 +6,7 @@ import uuid
 
 from httpx import AsyncClient
 
-from tests.conftest import ApiUser, MakeChapterWith, MakeUser
+from tests.conftest import ApiUser, MakeChapterWith, MakeUser, set_campus
 
 
 async def _bootstrap_user_with_campus(
@@ -27,12 +27,16 @@ async def _bootstrap_user_with_campus(
             "email": email,
             "display_name": display_name,
             "account_type": "greek",
-            "campus_id": campus_id,
         },
         headers=headers,
     )
     assert response.status_code == 201, response.text
-    return ApiUser(id=response.json()["id"], firebase_uid=uid, email=email, headers=headers)
+    user = ApiUser(id=response.json()["id"], firebase_uid=uid, email=email, headers=headers)
+    # c85: campus is server-owned, so it is set directly rather than claimed in the
+    # bootstrap body. Same pattern as _grant_platform_admin — no API grants it until
+    # the .edu redemption in c86 exists.
+    await set_campus(user.id, campus_id)
+    return user
 
 
 async def test_reporter_in_other_campus_cannot_see_report(

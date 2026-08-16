@@ -96,11 +96,19 @@ async def get_current_user(
     uid: str = Depends(get_verified_uid),
     session: AsyncSession = Depends(get_session),
 ) -> models.User:
-    """Resolve the verified uid to a registered users row, or raise 401.
+    """Resolve the verified uid to a registered users row, or raise 401/403.
 
     Only POST /auth/bootstrap uses get_verified_uid directly (it creates the row).
+
+    Also rejects a suspended account (board card c76): the Terms claims "we can
+    suspend accounts," which has to actually block every authenticated request, not
+    just the moderation endpoints themselves. Checked HERE — the one place every
+    router's current-user dependency passes through — so it cannot be forgotten on a
+    route added later the way a per-route check could be.
     """
     user = await get_user_by_uid(session, uid)
     if user is None:
         raise HTTPException(status_code=401, detail="user_not_registered")
+    if user.suspended_at is not None:
+        raise HTTPException(status_code=403, detail="account_suspended")
     return user
