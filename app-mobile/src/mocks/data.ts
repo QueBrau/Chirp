@@ -256,6 +256,9 @@ export const MOCK_INVITES: ChapterInviteOut[] = [
     code: "SIGCHI-EM-F26",
     role: "pledge",
     expires_at: "2026-10-01T00:00:00Z",
+    max_uses: 25,
+    uses: 3,
+    revoked_at: null,
     created_by: "usr-jake",
   },
 ];

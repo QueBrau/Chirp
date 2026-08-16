@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Text,
     UniqueConstraint,
     text,
@@ -135,7 +136,18 @@ class Membership(Base):
 
 
 class ChapterInvite(Base):
+    """A redeemable chapter invite. c105 made it a bounded credential, not a bearer
+    token: every code expires, every code has a redemption budget, and any of them
+    can be killed outright."""
+
     __tablename__ = "chapter_invites"
+    __table_args__ = (
+        CheckConstraint(
+            "max_uses >= 1 AND max_uses <= 200",
+            name="ck_chapter_invites_max_uses_range",
+        ),
+        CheckConstraint("uses >= 0", name="ck_chapter_invites_uses_nonneg"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -148,7 +160,16 @@ class ChapterInvite(Base):
     role: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'member'")
     )
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # NOT NULL since 0016 (c105): a never-expiring code is not representable here.
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    # Redemption budget. There is deliberately no "unlimited" value — see 0016.
+    max_uses: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("25")
+    )
+    uses: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
