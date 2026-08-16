@@ -96,6 +96,28 @@ jobs:
             echo "Heads found:"
             printf '%s\n' "$heads"
             echo ""
+            # Two heads is the symptom; a duplicated down_revision is the cause,
+            # and naming the two files beats alembic's generic complaint. This
+            # runs ONLY after the head count has already failed, deliberately:
+            # sharing a parent is legitimate when an alembic merge revision joins
+            # the branches back together, and that case is single-head and must
+            # not be blocked.
+            python - <<'PY'
+          import collections, pathlib, re
+          parents = collections.defaultdict(list)
+          for path in sorted(pathlib.Path("alembic/versions").glob("*.py")):
+              text = path.read_text()
+              rev = re.search(r'^revision = ["\'](.+?)["\']', text, re.M)
+              down = re.search(r'^down_revision = ["\'](.+?)["\']', text, re.M)
+              if rev and down:
+                  parents[down.group(1)].append(f"{rev.group(1)} ({path.name})")
+          for parent, children in sorted(parents.items()):
+              if len(children) > 1:
+                  print(f"CAUSE: {len(children)} migrations all declare down_revision={parent}:")
+                  for child in children:
+                      print(f"  - {child}")
+          PY
+            echo ""
             echo "Two migrations share a parent. RE-POINT the newer one's"
             echo "down_revision at the real head - do NOT renumber it, the number"
             echo "is validly claimed on the board. See board cards c41 and c101."
