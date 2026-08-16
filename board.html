@@ -907,7 +907,7 @@
         "col": "next",
         "owner": "J",
         "tag": "qa",
-        "title": "LIVE BROWSER QA — still NEVER DONE, and it is now the biggest unverified surface",
+        "title": "LIVE BROWSER QA - IN PROGRESS Aug 16: walking the auth/orgs half against real prod on a phone viewport",
         "area": "qa",
         "detail": "SPLIT Aug 15: Q drives his vertical (Yak, campus feed, messaging, treasurer/secretary dashboards, CSV export), Jose drives auth/orgs. NOTE the walk below expects real names — c59 means the Orgs eyebrow, Yak eyebrow and alumni job board will still show wrong data until that lands, so fix c59 first or expect known-bad output there. Everything from Aug 14-15 (c6, c44, c45, c43, c46, c51-c55) is proven only by pytest + tsc. Nobody has driven the real app against real prod. Proven loop: cloud-sql-proxy 5433 + local uvicorn AUTH_MODE=firebase + Metro 8082 with EXPO_PUBLIC_API_URL pointed at prod, using the three QA accounts in INFRA-PRIVATE.html. Walk: sign in (returning user should NOT re-run account-type, c45), profile shows REAL name/campus/chapter/role (c46), Orgs feed + events show real names not 'Unknown' (c46/c55), family tree loads or fails soft instead of hanging (c46), invite mint + join, dues screen states."
       },
