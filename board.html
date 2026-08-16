@@ -28,6 +28,10 @@
   h1 span { color:var(--accent); }
   #status { font-size:12.5px; font-weight:500; color:var(--ink-3); flex:1; }
   #status.dirty { color:var(--warn); }
+  /* Only ever visible when a card cannot be drawn — see renderIntegrity(). Loud on
+     purpose: the failure it reports is a card that looks filed and is not there. */
+  #integrity { background:var(--danger-soft); color:var(--danger); border-radius:12px;
+    padding:12px 16px; margin-bottom:16px; font-size:13px; font-weight:600; line-height:1.5; }
   button { font:inherit; border:0; cursor:pointer; border-radius:999px; padding:8px 16px; font-size:13px; font-weight:600; }
   .btn-primary { background:var(--accent); color:#fff; }
   .btn-ghost { background:var(--surface-alt); color:var(--ink-2); }
@@ -214,6 +218,7 @@
   <button class="btn-ghost" id="reset">Reset to committed</button>
   <button class="btn-primary" id="export">Export board.html</button>
 </header>
+<div id="integrity" role="alert" hidden></div>
 <section id="alpha"></section>
 <div id="drawer-scrim" hidden></div>
 <aside id="drawer" hidden aria-label="Card details"></aside>
@@ -1630,17 +1635,50 @@
     }
   }
 
+  /* Cards whose `col` matches no column id render NOWHERE, and until this existed
+   * they did it silently — the file parsed, the card was in the data, and the board
+   * looked complete. It happened three times in one day: seven cards at once
+   * (c39, c73, c86, c88, c101, c102, c104), then c108, then c110. Two of those were
+   * DO-NOT-DEPLOY warnings, and the session that wrote one of them told three other
+   * sessions and Jose it was carded while it was invisible.
+   *
+   * The cause is that the columns have two names each — an id ("backlog") and a
+   * human title ("Next") — and writing the title where the id belongs is silent.
+   * It spread by imitation, since every card copied from a bad card was bad too.
+   *
+   * So: say so on screen, not just in the console. Jose reads this board in a
+   * browser tab and would never see a console.warn. A card that cannot be drawn is
+   * listed by id in a banner instead, which is the one place it cannot be missed. */
+  function renderIntegrity() {
+    var colIds = state.columns.map(function (col) { return col.id; });
+    var orphans = state.cards.filter(function (c) { return colIds.indexOf(c.col) === -1; });
+    var el = document.getElementById('integrity');
+    if (!orphans.length) { el.hidden = true; el.textContent = ''; return; }
+    var ids = orphans.map(function (c) { return c.id + ' (col "' + c.col + '")'; });
+    el.hidden = false;
+    el.textContent =
+      orphans.length + (orphans.length === 1 ? ' CARD IS' : ' CARDS ARE') +
+      ' NOT ON THIS BOARD — its `col` matches no column. Valid values are ' +
+      colIds.join(' / ') + '. Invisible: ' + ids.join(', ');
+    console.warn('[board] cards rendering nowhere:', orphans.map(function (c) {
+      return { id: c.id, col: c.col, title: c.title };
+    }));
+  }
+
   function render() {
     // The alpha bar reads the same cards the columns do, so it repaints with
     // them rather than on its own schedule — otherwise dragging a gate card
     // leaves a stale percentage sitting above the board that looks authoritative.
     renderAlpha();
     renderCrew();
+    renderIntegrity();
     boardEl.innerHTML = '';
+    var drawn = 0;
     state.columns.forEach(function (col) {
       var colEl = document.createElement('div');
       colEl.className = 'col'; colEl.dataset.col = col.id;
       var cards = state.cards.filter(function (c) { return c.col === col.id; });
+      drawn += cards.length;
       var h = document.createElement('h2');
       h.innerHTML = col.title + ' <span class="count">' + cards.length + '</span>';
       colEl.appendChild(h);
@@ -1709,6 +1747,12 @@
       });
       boardEl.appendChild(colEl);
     });
+    // Every card is drawn exactly once or it is not drawn at all. The banner above
+    // names the ones that vanished; this is the arithmetic that proves none did.
+    if (drawn !== state.cards.length) {
+      console.warn('[board] ' + state.cards.length + ' cards in the data, ' + drawn +
+        ' drawn — ' + (state.cards.length - drawn) + ' missing.');
+    }
     var dl = document.getElementById('decision-list');
     dl.innerHTML = '';
     state.decisions.forEach(function (d) { var li = document.createElement('li'); li.textContent = d; dl.appendChild(li); });
@@ -1729,6 +1773,10 @@
     clone.querySelector('#decision-list').innerHTML = '';
     clone.querySelector('#status').textContent = 'committed state';
     clone.querySelector('#status').className = '';
+    // The banner is derived state, recomputed on load. Exporting it would bake a
+    // stale warning into the file, which is its own way of lying about the board.
+    clone.querySelector('#integrity').textContent = '';
+    clone.querySelector('#integrity').hidden = true;
     clone.querySelector('#board-data').textContent = '\n' + JSON.stringify(state, null, 2) + '\n';
     var blob = new Blob(['<!doctype html>\n' + clone.outerHTML], { type: 'text/html' });
     var a = document.createElement('a');
