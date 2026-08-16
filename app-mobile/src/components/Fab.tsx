@@ -24,12 +24,23 @@ const FAB_SIZE = 56;
  */
 const TAB_BAR_APPROX_HEIGHT = 64;
 
-export function Fab() {
+export interface FabProps {
+  chapterId: string | null;
+  campusName?: string | null;
+  onPosted?: () => void;
+}
+
+export function Fab({ chapterId, campusName, onPosted }: FabProps) {
   const palette = useTheme();
   const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
 
   const bottom = Math.max(insets.bottom, metrics.tabBarInsetBottom) + TAB_BAR_APPROX_HEIGHT + spacing.md;
+
+  // POST /chapters/{chapter_id}/posts requires an active chapter membership;
+  // campus audience still posts into a chapter row, so no membership = no valid
+  // create route — hide the button rather than open a sheet that cannot submit (c71).
+  if (chapterId === null) return null;
 
   return (
     <>
@@ -53,7 +64,13 @@ export function Fab() {
       >
         <Feather name="plus" size={typography.title.fontSize} color={palette.onAccent} />
       </Pressable>
-      <CreateSheet visible={open} onClose={() => setOpen(false)} />
+      <CreateSheet
+        visible={open}
+        onClose={() => setOpen(false)}
+        chapterId={chapterId}
+        campusName={campusName}
+        onPosted={onPosted}
+      />
     </>
   );
 }

@@ -11,6 +11,9 @@ export interface PostCreate {
   media_urls?: string[] | null;
   /** Server defaults to "org" when omitted (routers/feed.py). */
   audience?: PostAudience;
+  /** Server defaults to "text" — text compose omits this; declared now so a future media composer does not widen this type again. */
+  post_type?: PostType;
+  duration_sec?: number | null;
 }
 
 export interface PostUpdate {

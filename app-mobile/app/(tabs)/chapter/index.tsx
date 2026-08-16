@@ -187,7 +187,15 @@ interface OrgFeedItem {
  * excludes soft-deleted rows server-side (backend/app/routers/feed.py), so
  * no client-side chapter/source filtering belongs here.
  */
-function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: string }) {
+function OrgFeedSegment({
+  chapterId,
+  orgName,
+  refreshKey,
+}: {
+  chapterId: string;
+  orgName: string;
+  refreshKey: number;
+}) {
   const [items, setItems] = useState<OrgFeedItem[] | null>(null);
 
   useEffect(() => {
@@ -207,7 +215,7 @@ function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: st
         ),
       )
       .catch(() => setItems([]));
-  }, [chapterId]);
+  }, [chapterId, refreshKey]);
 
   const toggleLike = async (item: OrgFeedItem) => {
     if (item.likedByMe) {
@@ -571,11 +579,13 @@ function MemberOrgHub({
   chapter,
   segment,
   onSegmentChange,
+  feedRefreshKey,
 }: {
   membership: MembershipOut;
   chapter: ChapterOut | null;
   segment: OrgSegment;
   onSegmentChange: (segment: OrgSegment) => void;
+  feedRefreshKey: number;
 }) {
   // Called before the early return below: hooks cannot run conditionally.
   const campus = useCampus();
@@ -608,7 +618,9 @@ function MemberOrgHub({
 
       <OrgSegmentedControl segment={segment} onChange={onSegmentChange} />
 
-      {segment === "feed" ? <OrgFeedSegment chapterId={chapter.id} orgName={chapter.org_name} /> : null}
+      {segment === "feed" ? (
+        <OrgFeedSegment chapterId={chapter.id} orgName={chapter.org_name} refreshKey={feedRefreshKey} />
+      ) : null}
       {segment === "events" ? <OrgEventsSegment chapterId={chapter.id} /> : null}
       {segment === "tools" ? <OrgToolsSegment chapterId={chapter.id} role={role} /> : null}
     </View>
@@ -660,6 +672,7 @@ export default function OrgsScreen() {
   const { sessionStatus, membership, chapter, chapterLoading } = useOwnChapter();
   const campus = useCampus();
   const [segment, setSegment] = useState<OrgSegment>("feed");
+  const [feedRefreshKey, setFeedRefreshKey] = useState(0);
 
   // Session-status gating (PR #6 review): a real member must never flash the
   // non-member "No orgs yet" state on cold start — only render FindYourOrg
@@ -689,13 +702,25 @@ export default function OrgsScreen() {
         {loading ? (
           <EmptyState title="Loading your org..." />
         ) : membership !== null ? (
-          <MemberOrgHub membership={membership} chapter={chapter} segment={segment} onSegmentChange={setSegment} />
+          <MemberOrgHub
+            membership={membership}
+            chapter={chapter}
+            segment={segment}
+            onSegmentChange={setSegment}
+            feedRefreshKey={feedRefreshKey}
+          />
         ) : (
           <FindYourOrg />
         )}
       </Screen>
       {/* Org-colored composer FAB (§8.7) — Feed segment only, mirrors Home's Fab pattern. */}
-      {!loading && membership !== null && segment === "feed" ? <Fab /> : null}
+      {!loading && membership !== null && segment === "feed" ? (
+        <Fab
+          chapterId={membership.chapter_id}
+          campusName={campus?.name ?? null}
+          onPosted={() => setFeedRefreshKey((key) => key + 1)}
+        />
+      ) : null}
     </View>
   );
 }

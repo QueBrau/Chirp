@@ -10,7 +10,7 @@ export { Chip, type ChipProps, type ChipVariant } from "./Chip";
 export { CreateEventSheet, type CreateEventInput, type CreateEventSheetProps } from "./CreateEventSheet";
 export { CreateSheet, type CreateSheetProps } from "./CreateSheet";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
-export { Fab } from "./Fab";
+export { Fab, type FabProps } from "./Fab";
 export { GradientAvatar, type GradientAvatarProps } from "./GradientAvatar";
 export { HeroCard, type HeroCardProps } from "./HeroCard";
 export { ListRow, type ListRowProps } from "./ListRow";
