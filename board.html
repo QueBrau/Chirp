@@ -141,7 +141,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1786851969526,
+  "updated": 1786852830671,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -154,19 +154,58 @@
       "Stripe armed on prod, dues backend with the double-charge guard"
     ],
     "gates": [
-      { "id": "c39", "label": "Install it on a real phone (EAS dev build)" },
-      { "id": "c49", "label": "Create a post at all (compose flow)" },
-      { "id": "c71", "label": "A campus-only student can post" },
-      { "id": "c70", "label": "Attach a photo (media pipeline)" },
-      { "id": "c11", "label": "A dues payment actually clears, card and ACH" },
-      { "id": "c81", "label": "A treasurer can open a dues cycle in the app" },
-      { "id": "c77", "label": "The president has a screen" },
-      { "id": "c58", "label": "Someone has driven the real app against prod" },
-      { "id": "c64", "label": "Device QA is not blocked by CORS" },
-      { "id": "c76", "label": "Removal and suspension exist on the server" },
-      { "id": "c35", "label": "Moderation UI (the other App Store gate)" },
-      { "id": "c69", "label": "Deleted means deleted (purge job)" },
-      { "id": "c63", "label": "Messaging is actually live (websockets)" }
+      {
+        "id": "c39",
+        "label": "Install it on a real phone (EAS dev build)"
+      },
+      {
+        "id": "c49",
+        "label": "Create a post at all (compose flow)"
+      },
+      {
+        "id": "c71",
+        "label": "A campus-only student can post"
+      },
+      {
+        "id": "c70",
+        "label": "Attach a photo (media pipeline)"
+      },
+      {
+        "id": "c11",
+        "label": "A dues payment actually clears, card and ACH"
+      },
+      {
+        "id": "c81",
+        "label": "A treasurer can open a dues cycle in the app"
+      },
+      {
+        "id": "c77",
+        "label": "The president has a screen"
+      },
+      {
+        "id": "c58",
+        "label": "Someone has driven the real app against prod"
+      },
+      {
+        "id": "c64",
+        "label": "Device QA is not blocked by CORS"
+      },
+      {
+        "id": "c76",
+        "label": "Removal and suspension exist on the server"
+      },
+      {
+        "id": "c35",
+        "label": "Moderation UI (the other App Store gate)"
+      },
+      {
+        "id": "c69",
+        "label": "Deleted means deleted (purge job)"
+      },
+      {
+        "id": "c63",
+        "label": "Messaging is actually live (websockets)"
+      }
     ]
   },
   "columns": [
@@ -382,8 +421,8 @@
     },
     {
       "id": "c35",
-      "col": "backlog",
-      "title": "[B/Q] Moderation UI: report/block/remove (App Store gate before submit)",
+      "col": "progress",
+      "title": "[B/Q] Moderation UI — PR #17 OPEN (q/moderation-ui), 159 backend tests green. App Store 1.2 needs report AND block; both existed only on Yak. THE REAL BLOCKER WAS BACKEND, not UI: feed.py did not filter blocked authors (yaks.py did), so a Block button on the feed would have done NOTHING — the blocked person's posts keep appearing. Fixed by folding the yaks.py anti-join into the shared _post_counts_select, so BOTH /chapters/{id}/posts and /campuses/{id}/feed filter. 4 tests cover the two silent failure modes (not scoped to caller / not keyed on author) and were FALSIFIED first — stash the fix and all 4 fail. UI: report+block on feed posts (direct blockUser since the author is known, unlike Yak's anonymous board; never offered on your own posts), plus a new e-board-gated moderation screen listing open reports and removing reported yaks. LEFT: review + merge.",
       "owner": "Q",
       "tag": "vert:social-msg",
       "area": "yak"
@@ -391,7 +430,7 @@
     {
       "id": "c36",
       "col": "backlog",
-      "title": "[B/Q] m4: real in-app E2EE messaging (crypto stubs -> real, spike-proven path) + prekey rate-limit + msg index 0004",
+      "title": "[B/Q] m4 E2EE — CARD IS 2/3 STALE, re-scoped Aug 16. Prekey rate-limit is DONE (app/services/rate_limit.py, wired into routers/keys.py, tests exist — shipped in c29). Msg index is DONE, as migration 0005_msg_compound_index, NOT 0004 (0004 is alumni job location) — the card's number was always wrong. Spike Finding 1 (Kyber) closed by 0002; Finding 2 (PreKey vs Whisper wire format) is documented in SPEC 6 lines 465-467. The messaging screens are ALREADY de-mocked and honest: the thread states it can neither decrypt a body nor tell mine-from-theirs and renders a placeholder instead of faking either. ONLY REMAINING WORK = the libsignal binding, and it is blocked on THREE gates: an EAS dev build (c39), a physical device (c23), and an AGPL-3.0-only licensing decision on libsignal core which applies to every option and is a business call. Do not write crypto that cannot be executed — CONVENTIONS: a stub that fakes encryption is worse than one that throws.",
       "owner": "Q",
       "tag": "vert:social-msg",
       "area": "messages"
@@ -938,7 +977,7 @@
       "owner": "J",
       "tag": "security",
       "area": "auth",
-      "title": "[A/Jose] CAMPUS IS SELF-ASSERTED \u2014 ANY USER CAN READ ANY UNIVERSITY'S FEED AND YAKS TODAY. Found Aug 16 while designing the .edu rule, and it is the reason that rule is not a new restriction but the boundary itself. POST /auth/bootstrap takes campus_id STRAIGHT FROM THE REQUEST BODY (routers/auth.py:58, schemas/identity.py:37 UserCreate.campus_id) and writes it with no check against anything. UserUpdate.campus_id exists too, so it can be changed later at will. The campus feed's guard at routers/feed.py:113 is 'if user.campus_id != campus_id: 403' \u2014 which compares the path against a value THE USER CHOSE, so it enforces consistency and not identity. Note why the Aug 15 five-lens review missed it: the authorization lens checked that campus and org scoping were applied CONSISTENTLY everywhere, and they are. It never asked whether campus_id was trustworthy in the first place. FIX, and it is small and should land before any verification feature: campus_id becomes SERVER-OWNED. Remove it from UserCreate and UserUpdate, have bootstrap leave it null, and let the only writer be the verification flow in c86. A user with no verified campus simply has no campus feed \u2014 which is the correct state for someone who has not proven anything."
+      "title": "[A/Jose] CAMPUS IS SELF-ASSERTED — ANY USER CAN READ ANY UNIVERSITY'S FEED AND YAKS TODAY. Found Aug 16 while designing the .edu rule, and it is the reason that rule is not a new restriction but the boundary itself. POST /auth/bootstrap takes campus_id STRAIGHT FROM THE REQUEST BODY (routers/auth.py:58, schemas/identity.py:37 UserCreate.campus_id) and writes it with no check against anything. UserUpdate.campus_id exists too, so it can be changed later at will. The campus feed's guard at routers/feed.py:113 is 'if user.campus_id != campus_id: 403' — which compares the path against a value THE USER CHOSE, so it enforces consistency and not identity. Note why the Aug 15 five-lens review missed it: the authorization lens checked that campus and org scoping were applied CONSISTENTLY everywhere, and they are. It never asked whether campus_id was trustworthy in the first place. FIX, and it is small and should land before any verification feature: campus_id becomes SERVER-OWNED. Remove it from UserCreate and UserUpdate, have bootstrap leave it null, and let the only writer be the verification flow in c86. A user with no verified campus simply has no campus feed — which is the correct state for someone who has not proven anything."
     },
     {
       "id": "c86",
@@ -946,7 +985,7 @@
       "owner": "J",
       "tag": "auth",
       "area": "auth",
-      "title": "[A/Jose] BUILD .EDU CAMPUS VERIFICATION \u2014 the product rule Jose set Aug 16: anyone may SIGN UP with a personal email, but seeing a school's campus feed and Yak requires proving you attend that school. MIGRATION 0014 IS CLAIMED FOR THIS CARD (0011 c76, 0012 c69, 0013 c71 are taken). Depends on c85 (campus_id must be server-owned first) and c87 (nothing in this repo can send an email). WHAT IT NEEDS: (1) campuses.email_domains \u2014 a text[] allowlist per campus; the Campus model today is ONLY id, name and slug, there is no domain concept at all. Handle subdomains deliberately (a uncg.edu rule should decide up front whether students.uncg.edu passes). (2) A campus_verifications table: user_id, campus_id, the edu_email, a HASHED token, sent_at, expires_at, verified_at, and an attempt counter \u2014 store a hash not the token, same reasoning as any password reset. (3) POST to request a code to an .edu address, POST to redeem it; rate-limit both, and make redemption the ONLY writer of users.campus_id plus a new users.campus_verified_at. (4) Expire codes fast (15 minutes is fine) and make redemption idempotent. THE TRAP THAT DECIDES THE ARCHITECTURE: Apple's Hide My Email hands us an @privaterelay.appleid.com address, and Google hands us gmail.com, so the SIGN-IN email can never serve as the .edu proof. Verification has to be a separate step against a separate address \u2014 which is exactly the flow Jose described, and it is right for that reason. PRODUCT CALLS ANSWERED Aug 16, build to these: chapter membership grants ORG content only (private feed, events, dues) and never the campus feed or Yak, so the .edu gate covers campus-wide surfaces alone; and verification RE-CHECKS YEARLY, so the schema needs verified_at plus an expiry read, not a one-shot boolean. THE ALPHA CONSEQUENCE: the chapter experience needs no email at all, so this card and c87 block Yak and the campus feed but NOT Q's old chapter using org tools and paying dues. Superseded question, kept so nobody re-opens it: does a verified chapter membership at a campus grant campus access without an .edu, and what happens at graduation when the .edu stops working \u2014 is verification point-in-time or does it re-check."
+      "title": "[A/Jose] BUILD .EDU CAMPUS VERIFICATION — the product rule Jose set Aug 16: anyone may SIGN UP with a personal email, but seeing a school's campus feed and Yak requires proving you attend that school. MIGRATION 0014 IS CLAIMED FOR THIS CARD (0011 c76, 0012 c69, 0013 c71 are taken). Depends on c85 (campus_id must be server-owned first) and c87 (nothing in this repo can send an email). WHAT IT NEEDS: (1) campuses.email_domains — a text[] allowlist per campus; the Campus model today is ONLY id, name and slug, there is no domain concept at all. Handle subdomains deliberately (a uncg.edu rule should decide up front whether students.uncg.edu passes). (2) A campus_verifications table: user_id, campus_id, the edu_email, a HASHED token, sent_at, expires_at, verified_at, and an attempt counter — store a hash not the token, same reasoning as any password reset. (3) POST to request a code to an .edu address, POST to redeem it; rate-limit both, and make redemption the ONLY writer of users.campus_id plus a new users.campus_verified_at. (4) Expire codes fast (15 minutes is fine) and make redemption idempotent. THE TRAP THAT DECIDES THE ARCHITECTURE: Apple's Hide My Email hands us an @privaterelay.appleid.com address, and Google hands us gmail.com, so the SIGN-IN email can never serve as the .edu proof. Verification has to be a separate step against a separate address — which is exactly the flow Jose described, and it is right for that reason. PRODUCT CALLS ANSWERED Aug 16, build to these: chapter membership grants ORG content only (private feed, events, dues) and never the campus feed or Yak, so the .edu gate covers campus-wide surfaces alone; and verification RE-CHECKS YEARLY, so the schema needs verified_at plus an expiry read, not a one-shot boolean. THE ALPHA CONSEQUENCE: the chapter experience needs no email at all, so this card and c87 block Yak and the campus feed but NOT Q's old chapter using org tools and paying dues. Superseded question, kept so nobody re-opens it: does a verified chapter membership at a campus grant campus access without an .edu, and what happens at graduation when the .edu stops working — is verification point-in-time or does it re-check."
     },
     {
       "id": "c87",
@@ -954,7 +993,7 @@
       "owner": "J",
       "tag": "infra",
       "area": "infra",
-      "title": "[A/Jose] NO TRANSACTIONAL EMAIL EXISTS \u2014 grepped the whole backend, there is no SMTP, SendGrid, Resend, SES or Postmark anywhere (the only hits are inside .venv's pygments lexers). This is the hard dependency under c86: an .edu verification flow is a code sent to an email address, so without a sender there is no verification. It is also the missing piece under the privacy policy's manual removal route, which promises a 30-day response to mail sent to a human inbox. PICK A PROVIDER AND WIRE IT ONCE, behind a small interface, so the verification code, any future receipt and any policy notice all go through the same path. Domain matters: sending from a gmail.com address gets filtered by university mail servers, which is precisely who has to receive these \u2014 so this is genuinely coupled to c73's domain purchase and to c74's alias. Keep the key in Secret Manager like the Stripe keys, and log sends without logging codes."
+      "title": "[A/Jose] NO TRANSACTIONAL EMAIL EXISTS — grepped the whole backend, there is no SMTP, SendGrid, Resend, SES or Postmark anywhere (the only hits are inside .venv's pygments lexers). This is the hard dependency under c86: an .edu verification flow is a code sent to an email address, so without a sender there is no verification. It is also the missing piece under the privacy policy's manual removal route, which promises a 30-day response to mail sent to a human inbox. PICK A PROVIDER AND WIRE IT ONCE, behind a small interface, so the verification code, any future receipt and any policy notice all go through the same path. Domain matters: sending from a gmail.com address gets filtered by university mail servers, which is precisely who has to receive these — so this is genuinely coupled to c73's domain purchase and to c74's alias. Keep the key in Secret Manager like the Stripe keys, and log sends without logging codes."
     },
     {
       "id": "c88",
@@ -962,7 +1001,7 @@
       "owner": "J",
       "tag": "security",
       "area": "yak",
-      "title": "[A/Jose] GATE THE CAMPUS FEED AND YAK ON VERIFICATION \u2014 the enforcement half of c86, separate because it is the part that is easy to get subtly wrong. Once campus_verified_at exists, every read of campus-scoped content must require BOTH a matching campus_id AND a non-null verification. Do it in ONE dependency that the routes depend on, not with a copied if-statement per route: routers/feed.py and routers/yaks.py each scope their own way today, and a per-route check is a check someone forgets to add to route number three. Include the write side \u2014 posting a yak to a campus you have not verified is the same hole facing the other direction. ANSWERED Aug 16: an unverified user gets a REAL VERIFY SCREEN with the form on it, not an empty feed and not a bare error toast - so the 403 this card enforces has a designed destination and c90 owns building it. Original wording, for the reasoning:: an empty feed is confusing and a 403 is honest, and the app needs a real screen for 'verify your .edu to see your campus' rather than an error toast. Tests are the point of this card: a user with a campus_id but no verification must be refused, and that test must fail if the dependency is removed from any single route."
+      "title": "[A/Jose] GATE THE CAMPUS FEED AND YAK ON VERIFICATION — the enforcement half of c86, separate because it is the part that is easy to get subtly wrong. Once campus_verified_at exists, every read of campus-scoped content must require BOTH a matching campus_id AND a non-null verification. Do it in ONE dependency that the routes depend on, not with a copied if-statement per route: routers/feed.py and routers/yaks.py each scope their own way today, and a per-route check is a check someone forgets to add to route number three. Include the write side — posting a yak to a campus you have not verified is the same hole facing the other direction. ANSWERED Aug 16: an unverified user gets a REAL VERIFY SCREEN with the form on it, not an empty feed and not a bare error toast - so the 403 this card enforces has a designed destination and c90 owns building it. Original wording, for the reasoning:: an empty feed is confusing and a 403 is honest, and the app needs a real screen for 'verify your .edu to see your campus' rather than an error toast. Tests are the point of this card: a user with a campus_id but no verification must be refused, and that test must fail if the dependency is removed from any single route."
     },
     {
       "id": "c89",
@@ -970,7 +1009,7 @@
       "owner": "Q",
       "tag": "auth",
       "area": "auth",
-      "title": "[B/Q] APPLE AND GOOGLE SIGN-IN ARE VISUAL STUBS \u2014 reported by Jose Aug 16 from the phone: email works now, Apple and Google do not. They are not broken, they were never wired. sign-in.tsx:188-189 calls continueToOnboarding() DIRECTLY with no auth at all, and the caption under them already admits real OAuth 'arrives with the dev build'. So they do not fail, they silently skip authentication and drop the user into a disconnected onboarding flow \u2014 which is worse than a button that errors, because it looks like it worked. TWO REASONS THIS IS NOT OPTIONAL: Apple's App Store guideline 4.8 REQUIRES Sign in with Apple once you offer any other third-party sign-in, so shipping Google without Apple is a rejection; and native Apple/Google both need the EAS dev build, so this sits downstream of c39. Google can be wired on the web target first if we want it sooner. NOTE FOR c86: whatever these return, the email they hand us is a personal or an Apple private-relay address, so neither can ever serve as .edu proof \u2014 they authenticate the person, and c86 verifies the school. Two different questions."
+      "title": "[B/Q] APPLE AND GOOGLE SIGN-IN ARE VISUAL STUBS — reported by Jose Aug 16 from the phone: email works now, Apple and Google do not. They are not broken, they were never wired. sign-in.tsx:188-189 calls continueToOnboarding() DIRECTLY with no auth at all, and the caption under them already admits real OAuth 'arrives with the dev build'. So they do not fail, they silently skip authentication and drop the user into a disconnected onboarding flow — which is worse than a button that errors, because it looks like it worked. TWO REASONS THIS IS NOT OPTIONAL: Apple's App Store guideline 4.8 REQUIRES Sign in with Apple once you offer any other third-party sign-in, so shipping Google without Apple is a rejection; and native Apple/Google both need the EAS dev build, so this sits downstream of c39. Google can be wired on the web target first if we want it sooner. NOTE FOR c86: whatever these return, the email they hand us is a personal or an Apple private-relay address, so neither can ever serve as .edu proof — they authenticate the person, and c86 verifies the school. Two different questions."
     },
     {
       "id": "c90",
@@ -979,6 +1018,13 @@
       "tag": "frontend",
       "area": "auth",
       "title": "[A/Jose] THE VERIFY-YOUR-EDU SCREEN - the designed destination for the 403 that c88 introduces, carded separately because the server side can and should land first. Jose's call Aug 16 was explicit: an unverified user opening Yak or the campus feed sees a real screen explaining they need to confirm an .edu for their school, with the form ON that screen, rather than an empty feed (indistinguishable from a broken app) or a bare error toast. DESIGN.md is binding here and this is a brand moment in the same family as sign-in - dark canvas, one clear action, no default-looking form. It needs the states a code flow actually has and each is a real screen, not a toast: enter your .edu, code sent, code wrong, code expired, rate-limited, verified. Also the yearly re-check case (c86) lands on this same screen with different copy - your verification expired rather than you have never verified - and treating those as one state is how a returning student gets told they do not go here. Depends on c86 for the endpoints and c88 for the 403 to catch."
+    },
+    {
+      "id": "c91",
+      "col": "next",
+      "owner": "",
+      "tag": "backend",
+      "title": "[shared] NO ENDPOINT TO RESOLVE A REPORT — found building c35. content_reports has a status column ('open'/'actioned'/'dismissed') and GET /moderation/reports returns it, but there is NO route to transition it: no PATCH, no dismiss, no resolve. So the new moderator screen can remove a reported yak but cannot mark the report handled — it fakes it client-side for the session and the report reappears as open on reload. That makes the queue unusable as a real workflow (every handled item comes back), and it is the next thing that screen needs. Also missing: removal endpoints for reported POSTS and COMMENTS — only yaks can be removed today, so those reports render read-only."
     }
   ],
   "decisions": [
@@ -1034,7 +1080,8 @@
     "Aug 15 — Process: CARD IDS ARE A SHARED RESOURCE, exactly like migration numbers (c41). Jose and Q both minted c70 and c71 within minutes of each other for completely different work — Q for the media pipeline and the campus-only-user posting gap, Jose for mobile responsiveness and the subdomain move. Caught only because git rejected the push as non-fast-forward; had both been committed from the same base, the board would have silently ended up with two different c70s, which is precisely the duplicate-c50 mess already cleaned up once. Jose renumbered to c72/c73. Same rule as migrations: take the next id from the board's CURRENT state on origin, not from the copy you started editing ten minutes ago.",
     "Aug 15 — Product/scope (c49): the compose flow ships TEXT ONLY, and Photo/Video ship as visibly disabled 'Soon' rows. Worth recording because the tempting move was to add expo-image-picker and call it done. Two reasons not to. First, a picker produces a local file URI, and there is nothing in this repo that can turn that into a URL: no storage bucket wired, no presign, no upload endpoint. Every media_urls value in the app today is a picsum placeholder, which is precisely why the media path looked finished. Second, expo-image-picker is a native module, so it owes an EAS dev build of its own on top of the one c39 already owes — media would have been untestable on arrival. Disabled rows that say so beat a picker that silently drops the photo. Pipeline is c70. Related and more important: the only create-post route requires an active chapter membership, so a student in no org cannot post at all, which directly contradicts the Aug 11 'Chirp is for ALL students' premise. c49 hides the FAB for those users rather than opening a composer that dead-ends, but that is containment; the product decision is c71 and it needs both devs before TestFlight.",
     "Aug 15 — Process: the migration-number rule caught a REAL collision in real time, not in hindsight. Q read the board, saw 0010 as head, and started writing 0011 for c71; Jose pushed claims for 0011 (c76) and 0012 (c69) about a minute earlier, and the only reason the two did not both ship an 0011 is that git rejected the non-fast-forward push and the rebase forced a re-read of the board. Q moved to 0013. Note what did NOT save us: reading the board at the start of the task. The board was accurate when read and stale by the time the file was written, which is the same shape as the c41 failure. The rule that actually works is re-checking the CURRENT state on origin immediately before writing the file, and treating a rejected push as a signal to re-read rather than an obstacle to retry past.",
-    "Aug 15 — Product (c71): a student who belongs to no chapter CAN post, to their campus. The user's call, and it resolves a contradiction that had been sitting in the schema since the start: the Aug 11 premise is that Chirp is for all students with orgs as an optional thing you join, while posts.chapter_id was NOT NULL and the only create route sat behind a membership check. Shape: posts.campus_id NOT NULL and backfilled, chapter_id relaxed to nullable, and CHECK (audience = 'campus' OR chapter_id IS NOT NULL) so an org post with no org is impossible in the database rather than merely discouraged. Campus was NOT derived from the author on purpose - a transferring student would drag their old posts onto their new campus feed; the post belongs where it was made. The new route hard-codes audience and its request schema has no audience field, so 'org without a membership' is unreachable by construction instead of by validation. Two pre-existing bugs surfaced on the way and had to be fixed to ship coherently: likes and comments were authorized through the post's chapter, which 403'd every cross-chapter campus post the feed was already showing people, and moderation resolved a report's campus by hopping post -> chapter, which would have filed chapter-less reports on the reporter's campus queue. Both were invisible while every post had a chapter."
+    "Aug 15 — Product (c71): a student who belongs to no chapter CAN post, to their campus. The user's call, and it resolves a contradiction that had been sitting in the schema since the start: the Aug 11 premise is that Chirp is for all students with orgs as an optional thing you join, while posts.chapter_id was NOT NULL and the only create route sat behind a membership check. Shape: posts.campus_id NOT NULL and backfilled, chapter_id relaxed to nullable, and CHECK (audience = 'campus' OR chapter_id IS NOT NULL) so an org post with no org is impossible in the database rather than merely discouraged. Campus was NOT derived from the author on purpose - a transferring student would drag their old posts onto their new campus feed; the post belongs where it was made. The new route hard-codes audience and its request schema has no audience field, so 'org without a membership' is unreachable by construction instead of by validation. Two pre-existing bugs surfaced on the way and had to be fixed to ship coherently: likes and comments were authorized through the post's chapter, which 403'd every cross-chapter campus post the feed was already showing people, and moderation resolved a report's campus by hopping post -> chapter, which would have filed chapter-less reports on the reporter's campus queue. Both were invisible while every post had a chapter.",
+    "Aug 16 — Moderation: block must actually hide content or the button is theater. Adding a Block control to a surface whose feed query does not filter blocked authors ships an App Store 1.2 checkbox that does nothing. Check the read path filters before adding the write control; yaks.py's anti-join is the pattern."
   ]
 }
 </script>
