@@ -86,6 +86,33 @@
      by hand — a hardcoded percentage is a number that starts lying the moment
      someone moves a card. */
   #alpha { border:1px solid var(--line); border-radius:14px; background:var(--surface); padding:14px 16px; margin-bottom:12px; }
+  /* Crew leaderboard - who shipped what. Ranked by work that reached main,
+     not by commit count: a session that lands one migration outranks one that
+     pushes ten board edits, and the numbers below are all verifiable. */
+  #crew { border:1px solid var(--border); border-radius:14px; background:var(--surface); padding:14px 16px; margin:12px 0; }
+  #crew > h2 { font-size:15px; margin:0 0 2px; }
+  #crew .crew__sub { font-size:12.5px; color:var(--ink-3); margin:0 0 12px; }
+  .crew-grid { display:grid; gap:8px; }
+  .crew { display:grid; grid-template-columns:30px 1fr; gap:12px; align-items:start;
+          border:1px solid var(--border); border-radius:11px; padding:10px 12px; background:var(--surface-alt); }
+  .crew--human { background:var(--accent-soft); border-color:transparent; }
+  .crew__rank { font-size:15px; font-weight:800; color:var(--ink-3); text-align:center;
+                font-variant-numeric:tabular-nums; line-height:1.5; }
+  .crew--human .crew__rank { color:var(--accent); }
+  .crew__body { min-width:0; display:flex; flex-direction:column; gap:5px; }
+  .crew__top { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+  .crew__name { font-weight:700; font-size:14px; }
+  .crew__role { font-size:12px; color:var(--ink-2); }
+  .crew__kind { font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+                padding:2px 6px; border-radius:999px; background:var(--surface); color:var(--ink-3); }
+  .crew--human .crew__kind { background:var(--accent); color:#fff; }
+  .crew__stats { display:flex; gap:6px; flex-wrap:wrap; }
+  .crew__stats .stat { font-size:11px; font-weight:600; padding:2px 7px; border-radius:999px;
+                       background:var(--surface); color:var(--ink-2); font-variant-numeric:tabular-nums; }
+  .crew--human .crew__stats .stat { background:rgba(255,255,255,.6); }
+  .crew__catch { font-size:12.5px; color:var(--ink-2); }
+  .crew__catch b { color:var(--ink); font-weight:650; }
+  @media (max-width:640px){ .crew { grid-template-columns:24px 1fr; gap:9px; } }
   .alpha__h { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
   .alpha__h h2 { font-size:14px; font-weight:800; letter-spacing:-.01em; }
   .alpha__pct { margin-left:auto; font-size:20px; font-weight:800; font-variant-numeric:tabular-nums; }
@@ -192,6 +219,7 @@
 <aside id="drawer" hidden aria-label="Card details"></aside>
 <main id="board"></main>
 <main id="areas" hidden></main>
+<section id="crew"></section>
 <section id="decisions">
   <h2>Decisions log</h2>
   <ul id="decision-list"></ul>
@@ -202,7 +230,8 @@
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
-<script id="board-data" type="application/json">{
+<script id="board-data" type="application/json">
+{
   "updated": 1786864400799,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
@@ -358,14 +387,14 @@
   ],
   "cards": [
     {
-        "id": "c106",
-        "col": "progress",
-        "owner": "J",
-        "tag": "process",
-        "area": "process",
-        "title": "FIVE SESSIONS SHARED ONE TEST DATABASE - phantom failures that look exactly like a broken branch. FIXED and verified under real contention, in PR #22",
-        "detail": "Found by the security-review session, reproduced and fixed by the CI session. THE EXPENSIVE TWIN OF c103: c103 is a suite that reports success without running; this is a suite that reports FAILURE without being broken. Same root cause wearing a second hat - nothing guaranteed the tests ran against a database they owned. MECHANISM: the client fixture TRUNCATEs the entire table set before every test, and TRUNCATE takes an AccessExclusiveLock, so two pytest runs against one chirp_test block each other and deadlock (asyncpg DeadlockDetectedError: process A waits for AccessExclusiveLock, blocked by B; B waits for RowShareLock, blocked by A). MEASURED INDEPENDENTLY BY TWO SESSIONS on the same main commit: 72 failed / 65 passed / 39 errors, and 76 failed / 69 passed / 31 errors followed by 1 failed / 170 passed on a re-run WITH NO CODE CHANGE. EVIDENCE NOTE, correcting my own earlier framing: I originally cited a count of concurrent pytest processes from `ps aux | grep -c`, and the security session is right that this is unreliable - it counts the whole process tree and read 7 during a run that passed clean. Do NOT try to reproduce this with a process count. The load-bearing evidence is the deadlock's own DETAIL naming two DISTINCT pids blocking each other on the TRUNCATE, plus the fact that a serialized re-run came back clean on identical code. This is more expensive than the false green, because someone 'fixes' code that was never broken, or - worse - shrugs off a genuine failure as 'probably just the collision'. CI was safe only by accident: each job gets a fresh service container. Laptops never were. FIX, in PR #22: every run creates chirp_test_p<pid> and drops it at the end, so runs cannot see each other AT ALL rather than being asked to take turns - no serialisation, and pytest -n auto becomes available later for free. TEST_DATABASE_URL still selects the server and the base name, so Jose's PG14 on 5432 and Q's docker PG16 on 5434 both keep working untouched. Crashed runs are reclaimed by a startup sweep that decides liveness from the pid embedded in the name, so abandoned databases cannot pile up. SECOND BUG THIS EXPOSED, and the more interesting one: migrated_db ran DROP SCHEMA public CASCADE to reset the shared database. A database created by the chirp role inherits its public schema from template1, where it is owned by the bootstrap superuser, so a non-superuser cannot drop it - InsufficientPrivilegeError, 'must be owner of schema public', 154 errors on Jose's Homebrew PG14 - WHILE PASSING IN CI, where POSTGRES_USER is a superuser that owns everything. A works-in-CI-fails-locally split sitting in the suite. The reset is DELETED rather than worked around with an ownership grant, because the database is brand new by construction and there is nothing to reset. NOTE FOR HANDOFF: this obsoletes the 'ALTER SCHEMA public OWNER TO chirp' workaround written there today - after #22 the setup instruction is just 'run pytest', and leaving the grant documented will send the next person chasing something they do not need. The deadlock is also legible now: if anyone ever points two runs at one database again, the TRUNCATE raises a message naming the cause instead of 39 identical tracebacks. VERIFIED UNDER THE FAILING CONDITION ITSELF - full suite run with other sessions active: 176 passed, 3 skipped, 0 failed, 0 deadlocks, 0 leaked databases. That run exited 1 for one reason only: CHIRP_REQUIRE_DB=1 was set and this Mac has no redis-server, so the 3 fan-out tests skipped and c103's own skip ceiling caught them - working as designed, the flag is CI-only and CI has redis, and it incidentally proved that hook against the real suite rather than the scratch one it was built on. ADVERSARIAL REVIEW, run after the fix and reported here rather than quietly patched: four lenses, every finding independently refuted before acceptance - 9 raised, 5 refuted, 4 real, all four mine and all four fixed. HIGH: the stale sweep decided 'abandoned' from name shape plus a dead pid and nothing else, so a human scratch database called chirp_test_p9 would have been force-dropped underneath someone, on the hot path of every pytest run. Databases now carry a COMMENT ON DATABASE marker written at creation and the sweep considers only databases carrying it - the name is a hint, the comment is the proof. MEDIUM: pid reuse made the leak permanent, because once the OS reassigns a crashed run's pid the liveness check succeeds forever; the marker now carries a timestamp and anything older than twelve hours is stale regardless. MEDIUM: the URL helper silently dropped the query string, so sslmode/application_name would vanish and the resulting failure would be misread as 'postgres not available'; preserved now. LOW: the fail-closed probe proved CONNECT but not CREATEDB, so a role with one and not the other gave a raw traceback instead of the crafted message. Re-verified after the fixes: 176 passed, 3 skipped, 0 failed, exit 0, zero deadlocks, zero leaked databases."
-      },
+      "id": "c106",
+      "col": "progress",
+      "owner": "J",
+      "tag": "process",
+      "area": "process",
+      "title": "FIVE SESSIONS SHARED ONE TEST DATABASE - phantom failures that look exactly like a broken branch. FIXED and verified under real contention, in PR #22",
+      "detail": "Found by the security-review session, reproduced and fixed by the CI session. THE EXPENSIVE TWIN OF c103: c103 is a suite that reports success without running; this is a suite that reports FAILURE without being broken. Same root cause wearing a second hat - nothing guaranteed the tests ran against a database they owned. MECHANISM: the client fixture TRUNCATEs the entire table set before every test, and TRUNCATE takes an AccessExclusiveLock, so two pytest runs against one chirp_test block each other and deadlock (asyncpg DeadlockDetectedError: process A waits for AccessExclusiveLock, blocked by B; B waits for RowShareLock, blocked by A). MEASURED INDEPENDENTLY BY TWO SESSIONS on the same main commit: 72 failed / 65 passed / 39 errors, and 76 failed / 69 passed / 31 errors followed by 1 failed / 170 passed on a re-run WITH NO CODE CHANGE. EVIDENCE NOTE, correcting my own earlier framing: I originally cited a count of concurrent pytest processes from `ps aux | grep -c`, and the security session is right that this is unreliable - it counts the whole process tree and read 7 during a run that passed clean. Do NOT try to reproduce this with a process count. The load-bearing evidence is the deadlock's own DETAIL naming two DISTINCT pids blocking each other on the TRUNCATE, plus the fact that a serialized re-run came back clean on identical code. This is more expensive than the false green, because someone 'fixes' code that was never broken, or - worse - shrugs off a genuine failure as 'probably just the collision'. CI was safe only by accident: each job gets a fresh service container. Laptops never were. FIX, in PR #22: every run creates chirp_test_p<pid> and drops it at the end, so runs cannot see each other AT ALL rather than being asked to take turns - no serialisation, and pytest -n auto becomes available later for free. TEST_DATABASE_URL still selects the server and the base name, so Jose's PG14 on 5432 and Q's docker PG16 on 5434 both keep working untouched. Crashed runs are reclaimed by a startup sweep that decides liveness from the pid embedded in the name, so abandoned databases cannot pile up. SECOND BUG THIS EXPOSED, and the more interesting one: migrated_db ran DROP SCHEMA public CASCADE to reset the shared database. A database created by the chirp role inherits its public schema from template1, where it is owned by the bootstrap superuser, so a non-superuser cannot drop it - InsufficientPrivilegeError, 'must be owner of schema public', 154 errors on Jose's Homebrew PG14 - WHILE PASSING IN CI, where POSTGRES_USER is a superuser that owns everything. A works-in-CI-fails-locally split sitting in the suite. The reset is DELETED rather than worked around with an ownership grant, because the database is brand new by construction and there is nothing to reset. NOTE FOR HANDOFF: this obsoletes the 'ALTER SCHEMA public OWNER TO chirp' workaround written there today - after #22 the setup instruction is just 'run pytest', and leaving the grant documented will send the next person chasing something they do not need. The deadlock is also legible now: if anyone ever points two runs at one database again, the TRUNCATE raises a message naming the cause instead of 39 identical tracebacks. VERIFIED UNDER THE FAILING CONDITION ITSELF - full suite run with other sessions active: 176 passed, 3 skipped, 0 failed, 0 deadlocks, 0 leaked databases. That run exited 1 for one reason only: CHIRP_REQUIRE_DB=1 was set and this Mac has no redis-server, so the 3 fan-out tests skipped and c103's own skip ceiling caught them - working as designed, the flag is CI-only and CI has redis, and it incidentally proved that hook against the real suite rather than the scratch one it was built on. ADVERSARIAL REVIEW, run after the fix and reported here rather than quietly patched: four lenses, every finding independently refuted before acceptance - 9 raised, 5 refuted, 4 real, all four mine and all four fixed. HIGH: the stale sweep decided 'abandoned' from name shape plus a dead pid and nothing else, so a human scratch database called chirp_test_p9 would have been force-dropped underneath someone, on the hot path of every pytest run. Databases now carry a COMMENT ON DATABASE marker written at creation and the sweep considers only databases carrying it - the name is a hint, the comment is the proof. MEDIUM: pid reuse made the leak permanent, because once the OS reassigns a crashed run's pid the liveness check succeeds forever; the marker now carries a timestamp and anything older than twelve hours is stale regardless. MEDIUM: the URL helper silently dropped the query string, so sslmode/application_name would vanish and the resulting failure would be misread as 'postgres not available'; preserved now. LOW: the fail-closed probe proved CONNECT but not CREATEDB, so a role with one and not the other gave a raw traceback instead of the crafted message. Re-verified after the fixes: 176 passed, 3 skipped, 0 failed, exit 0, zero deadlocks, zero leaked databases."
+    },
     {
       "id": "c103",
       "col": "progress",
@@ -1433,8 +1462,113 @@
     "Aug 15 — Process: the migration-number rule caught a REAL collision in real time, not in hindsight. Q read the board, saw 0010 as head, and started writing 0011 for c71; Jose pushed claims for 0011 (c76) and 0012 (c69) about a minute earlier, and the only reason the two did not both ship an 0011 is that git rejected the non-fast-forward push and the rebase forced a re-read of the board. Q moved to 0013. Note what did NOT save us: reading the board at the start of the task. The board was accurate when read and stale by the time the file was written, which is the same shape as the c41 failure. The rule that actually works is re-checking the CURRENT state on origin immediately before writing the file, and treating a rejected push as a signal to re-read rather than an obstacle to retry past.",
     "Aug 15 — Product (c71): a student who belongs to no chapter CAN post, to their campus. The user's call, and it resolves a contradiction that had been sitting in the schema since the start: the Aug 11 premise is that Chirp is for all students with orgs as an optional thing you join, while posts.chapter_id was NOT NULL and the only create route sat behind a membership check. Shape: posts.campus_id NOT NULL and backfilled, chapter_id relaxed to nullable, and CHECK (audience = 'campus' OR chapter_id IS NOT NULL) so an org post with no org is impossible in the database rather than merely discouraged. Campus was NOT derived from the author on purpose - a transferring student would drag their old posts onto their new campus feed; the post belongs where it was made. The new route hard-codes audience and its request schema has no audience field, so 'org without a membership' is unreachable by construction instead of by validation. Two pre-existing bugs surfaced on the way and had to be fixed to ship coherently: likes and comments were authorized through the post's chapter, which 403'd every cross-chapter campus post the feed was already showing people, and moderation resolved a report's campus by hopping post -> chapter, which would have filed chapter-less reports on the reporter's campus queue. Both were invisible while every post had a chapter.",
     "Aug 16 — Moderation: block must actually hide content or the button is theater. Adding a Block control to a surface whose feed query does not filter blocked authors ships an App Store 1.2 checkbox that does nothing. Check the read path filters before adding the write control; yaks.py's anti-join is the pattern."
-  ]
-}</script>
+  ],
+  "crew": {
+    "title": "Crew leaderboard",
+    "note": "Ranked by work that actually reached main on Aug 16 2026 - merged PRs, migrations and cards moved to Done - not by commit count. Every number here is checkable from git, gh or this board. A session that lands one migration outranks one that pushes ten board edits.",
+    "members": [
+      {
+        "name": "Officer surfaces",
+        "kind": "agent",
+        "role": "auth, orgs, moderation UI",
+        "stats": [
+          "3 PRs merged today",
+          "#21 #23 #25",
+          "10 cards done",
+          "migration 0017"
+        ],
+        "catch": "Walked the real app against real prod and closed c58 - the biggest unverified surface on the project for two days. Found the sign-in bounce was a race, not a redirect bug, and proved it by reproducing on the pre-fix code first."
+      },
+      {
+        "name": "Email & campus gate",
+        "kind": "agent",
+        "role": "verification, transactional email",
+        "stats": [
+          "PR #26 merged",
+          "migration 0015",
+          "216 tests",
+          "first real email sent"
+        ],
+        "catch": "Went looking for two copies of the campus check and found four - including a third inline copy in vote_yak and a campus-wide WRITE in create_post with no campus check at all. Neither was in the two files the card named."
+      },
+      {
+        "name": "CI & review",
+        "kind": "agent",
+        "role": "the gates nobody else was watching",
+        "stats": [
+          "PR #22 merged",
+          "c103 + c106",
+          "4 defects self-found",
+          "1 HIGH in own code"
+        ],
+        "catch": "Ran an adversarial review against its own merged work, found a HIGH it had written, and fixed it. Then caught PR #24 sitting green-and-mergeable while being unsafe to merge - the check had run against a main that no longer existed."
+      },
+      {
+        "name": "Jose",
+        "kind": "human",
+        "role": "founder - every call that unblocked a lane",
+        "stats": [
+          "4 rulings",
+          "prod CORS fixed live",
+          "Resend key",
+          "3 merges authorized"
+        ],
+        "catchLabel": "Call of the day: ",
+        "catch": "Took the STRICTER option on c108 - campus moderation requires verified .edu - against the recommendation to leave it as officer-role. Cheap now because it is three endpoints through one function; expensive later."
+      },
+      {
+        "name": "Invite tokens",
+        "kind": "agent",
+        "role": "invite hardening, board integrity",
+        "stats": [
+          "PR #24 ready",
+          "migration 0016",
+          "14 tests",
+          "7 cards un-hidden"
+        ],
+        "catch": "Noticed the board was lying by omission: seven cards carried the column TITLE where its id belonged, so they parsed fine and rendered nowhere - including alpha gate one and a do-not-deploy warning."
+      },
+      {
+        "name": "Security audit",
+        "kind": "agent",
+        "role": "read-only review of main and prod",
+        "stats": [
+          "16 findings ranked",
+          "6 of 9 lenses",
+          "0 files written",
+          "2 scope expansions declined"
+        ],
+        "catch": "Turned down its own scope expansion twice, including from this session, on the grounds that part of what makes an audit worth reading is that the auditor did not touch the code it reviewed."
+      },
+      {
+        "name": "Roll-up / point of contact",
+        "kind": "agent",
+        "role": "reporting up, verifying sideways",
+        "stats": [
+          "c107 + c108",
+          "3 PRs merged",
+          "2 stranded commits recovered",
+          "1 own error caught"
+        ],
+        "catch": "Found the shared tree checked out to a feature branch, silently stranding board commits off main - then had to withdraw an approval it had no standing to give, which is where the scope rule came from."
+      },
+      {
+        "name": "Q (Braulio)",
+        "kind": "human",
+        "role": "vertical B - social, messaging, payments",
+        "stats": [
+          "8 PRs merged all-time",
+          "53 commits",
+          "2 in flight",
+          "Stripe + WS/Redis"
+        ],
+        "catchLabel": "Still owed: ",
+        "catch": "c39, the EAS dev build - alpha gate one and step four of the payment chain. Nothing on anyone else's list moves it, which makes it the single most blocking item on the project."
+      }
+    ]
+  }
+}
+</script>
 <script>
 (function () {
   var DATA = document.getElementById('board-data');
@@ -1501,6 +1635,7 @@
     // them rather than on its own schedule — otherwise dragging a gate card
     // leaves a stale percentage sitting above the board that looks authoritative.
     renderAlpha();
+    renderCrew();
     boardEl.innerHTML = '';
     state.columns.forEach(function (col) {
       var colEl = document.createElement('div');
@@ -1706,6 +1841,75 @@
     setTimeout(function () { d.hidden = true; scrim.hidden = true; }, 180);
     render();
     if (view === 'area') renderAreas();
+  }
+
+  function renderCrew() {
+    var host = document.getElementById('crew');
+    var crew = state.crew;
+    if (!host || !crew || !crew.members || !crew.members.length) { if (host) host.hidden = true; return; }
+    host.hidden = false;
+    host.textContent = '';
+
+    var h = document.createElement('h2');
+    h.textContent = crew.title || 'Crew';
+    host.appendChild(h);
+    var sub = document.createElement('p');
+    sub.className = 'crew__sub';
+    sub.textContent = crew.note || '';
+    host.appendChild(sub);
+
+    var grid = document.createElement('div');
+    grid.className = 'crew-grid';
+
+    crew.members.forEach(function (m, i) {
+      var row = document.createElement('div');
+      row.className = 'crew' + (m.kind === 'human' ? ' crew--human' : '');
+
+      var rank = document.createElement('div');
+      rank.className = 'crew__rank';
+      rank.textContent = String(i + 1);
+      row.appendChild(rank);
+
+      var body = document.createElement('div');
+      body.className = 'crew__body';
+
+      var top = document.createElement('div');
+      top.className = 'crew__top';
+      var name = document.createElement('span');
+      name.className = 'crew__name'; name.textContent = m.name;
+      var kind = document.createElement('span');
+      kind.className = 'crew__kind'; kind.textContent = m.kind === 'human' ? 'human' : 'agent';
+      var role = document.createElement('span');
+      role.className = 'crew__role'; role.textContent = m.role || '';
+      top.appendChild(name); top.appendChild(kind); top.appendChild(role);
+      body.appendChild(top);
+
+      if (m.stats && m.stats.length) {
+        var stats = document.createElement('div');
+        stats.className = 'crew__stats';
+        m.stats.forEach(function (t) {
+          var s2 = document.createElement('span');
+          s2.className = 'stat'; s2.textContent = t;
+          stats.appendChild(s2);
+        });
+        body.appendChild(stats);
+      }
+
+      if (m.catch) {
+        var c = document.createElement('div');
+        c.className = 'crew__catch';
+        var b = document.createElement('b');
+        b.textContent = m.catchLabel || 'Signature catch: ';
+        c.appendChild(b);
+        c.appendChild(document.createTextNode(m.catch));
+        body.appendChild(c);
+      }
+
+      row.appendChild(body);
+      grid.appendChild(row);
+    });
+
+    host.appendChild(grid);
   }
 
   function renderAlpha() {
