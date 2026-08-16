@@ -154,7 +154,18 @@ export default function ProfileScreen() {
   const [postCount, setPostCount] = useState<number | null>(null);
   const [editing, setEditing] = useState(false);
   const [layout, setLayout] = useState<ProfileSectionLayout[]>(() =>
-    mockProfileLayout.map((section) => ({ ...section })),
+    mockProfileLayout
+      // c99: "About" rendered a hardcoded bio - "Sophomore, Business, here for
+      // the group chats and the intramural fields" - on EVERY profile, as if it
+      // were that user's own words. There is no bio field on the backend, so
+      // there was nothing real to show and no way to edit it. It also flatly
+      // contradicted the account type people pick at onboarding: an alum's own
+      // profile called them a sophomore. Dropped rather than replaced with an
+      // empty state plus an edit button, because an edit affordance over a
+      // column that does not exist is the same lie in a different shape.
+      // Restore this section in the commit that adds users.bio.
+      .filter((section) => section.key !== "about")
+      .map((section) => ({ ...section })),
   );
 
   useEffect(() => {
@@ -320,14 +331,6 @@ export default function ProfileScreen() {
                   </View>
                 ) : null}
               </View>
-
-              {section.key === "about" ? (
-                // Static placeholder copy: the backend has no user bio field yet,
-                // so there is no real value to source this from.
-                <AppText tone="secondary">
-                  Sophomore · Business · here for the group chats and the intramural fields.
-                </AppText>
-              ) : null}
 
               {section.key === "orgs" && membership !== null ? (
                 <ListRow

@@ -113,7 +113,7 @@ export default function PostJobScreen() {
           <TextInput
             value={description}
             onChangeText={setDescription}
-            placeholder="What the role is, who should apply, how brothers can reach you"
+            placeholder="What the role is, who should apply, how members can reach you"
             placeholderTextColor={palette.textTertiary}
             multiline
             style={[inputStyle, { minHeight: 120, textAlignVertical: "top" }]}
