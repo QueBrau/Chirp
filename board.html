@@ -735,10 +735,10 @@
     },
     {
       "id": "c64",
-      "col": "next",
+      "col": "progress",
       "owner": "J",
       "tag": "go-live",
-      "title": "[A/Jose] PROD CORS IS POINTED AT A DEV ORIGIN. Found while settling c61: the live service has CORS_ORIGINS = [\"http://localhost:8081\"], which is Jose's local Metro dev server and nothing else. Not urgent and not currently exploitable in any meaningful way — the native mobile app is not subject to CORS at all, and the new public website (c56) deliberately makes zero API calls — but a production API whose only allowed browser origin is localhost is wrong in both directions: it permits a page served from the developer's own machine and permits nothing real. Decide the actual answer when Expo web or any browser client becomes a supported target. Worth doing in the same Cloud Run env update as c40's Stripe keys, since that is already an env-only change and needs no rebuild.",
+      "title": "[A/Jose] IN PROGRESS Aug 16 - ROOT-CAUSED, AND THIS IS THE PHONE-LOGIN BUG. Testing the app from a phone loads Expo web from the LAN origin http://192.168.1.119:8081, so the browser preflights POST /auth/bootstrap and prod answers 400 with NO access-control-allow-origin. The localhost origin answers 200 and echoes it - checked both ways with curl, that is the whole diagnosis. Firebase sign-in itself succeeds because that talks to Google rather than to us; the session bootstrap is what the browser blocks, so no session exists and the router sends you straight back to sign-in. It reads as \"sign-up does nothing\". The card said not urgent and not exploitable, which was true, and it is now the thing blocking device QA. FIX IS ONE COMMAND AND IT IS A HUMAN STEP - agent sessions are permission-blocked from prod deploys. Run: gcloud run services update chirp-api --region=us-central1 --project=chirps-prod --update-env-vars='^@^CORS_ORIGINS=[\"http://localhost:8081\",\"http://192.168.1.119:8081\"]' . The ^@^ prefix is load-bearing: it changes gcloud list separator to @ so the commas inside the JSON are not parsed as separate env vars. Note the LAN IP is DHCP and will change; when it does, this breaks again the same way. ORIGINAL: PROD CORS IS POINTED AT A DEV ORIGIN. Found while settling c61: the live service has CORS_ORIGINS = [\"http://localhost:8081\"], which is Jose's local Metro dev server and nothing else. Not urgent and not currently exploitable in any meaningful way — the native mobile app is not subject to CORS at all, and the new public website (c56) deliberately makes zero API calls — but a production API whose only allowed browser origin is localhost is wrong in both directions: it permits a page served from the developer's own machine and permits nothing real. Decide the actual answer when Expo web or any browser client becomes a supported target. Worth doing in the same Cloud Run env update as c40's Stripe keys, since that is already an env-only change and needs no rebuild.",
       "area": "infra"
     },
     {
@@ -759,27 +759,27 @@
     },
     {
       "id": "c67",
-      "col": "next",
+      "col": "progress",
       "owner": "J",
       "tag": "vert:auth-orgs",
       "area": "frontend",
-      "title": "[A/Jose] useCampus() fires twice on every Orgs mount. Found by reviewing PR #13. OrgsScreen and MemberOrgHub each call the hook independently and render together, so one screen mount sends two identical GET /campuses/{id} requests, plus a third when Yak mounts, and every remount repeats them — the hook holds state per instance with no cache. Campus is a property of the SESSION (it is derived from user.campus_id), so the honest fix is resolving it once in SessionProvider and reading it from context; the per-screen hook is a special case layered on shared state and will multiply with every new call site. Left out of PR #13 deliberately: it is a wider change than a review pass should smuggle into a website PR."
+      "title": "[A/Jose] IN PROGRESS Aug 16 - being fixed now, resolving campus once in SessionProvider per the card. ORIGINAL: useCampus() fires twice on every Orgs mount. Found by reviewing PR #13. OrgsScreen and MemberOrgHub each call the hook independently and render together, so one screen mount sends two identical GET /campuses/{id} requests, plus a third when Yak mounts, and every remount repeats them — the hook holds state per instance with no cache. Campus is a property of the SESSION (it is derived from user.campus_id), so the honest fix is resolving it once in SessionProvider and reading it from context; the per-screen hook is a special case layered on shared state and will multiply with every new call site. Left out of PR #13 deliberately: it is a wider change than a review pass should smuggle into a website PR."
     },
     {
       "id": "c68",
-      "col": "backlog",
+      "col": "progress",
       "owner": "J",
       "tag": "design",
       "area": "website",
-      "title": "[A/Jose] The website's closing CTA block is hand-copied across four pages (About, Features, HowItWorks, Home) with per-copy inline style objects, and ~12 repeated inline style objects belong in a site.css rule. Changing the CTA means four edits — the exact drift the React rewrite exists to prevent, so it is worth collapsing into a <CtaSection> component. Also: site.css's own header claims it consumes only tokens, while it hardcodes an rgba shadow and about a dozen literal type sizes. Either fix the file or fix the claim; a comment that states an invariant the file does not follow is worse than no comment."
+      "title": "[A/Jose] IN PROGRESS Aug 16 - being fixed now: CtaSection component plus an honest site.css header. ORIGINAL: The website's closing CTA block is hand-copied across four pages (About, Features, HowItWorks, Home) with per-copy inline style objects, and ~12 repeated inline style objects belong in a site.css rule. Changing the CTA means four edits — the exact drift the React rewrite exists to prevent, so it is worth collapsing into a <CtaSection> component. Also: site.css's own header claims it consumes only tokens, while it hardcodes an rgba shadow and about a dozen literal type sizes. Either fix the file or fix the claim; a comment that states an invariant the file does not follow is worse than no comment."
     },
     {
       "id": "c69",
-      "col": "next",
+      "col": "progress",
       "owner": "J",
       "tag": "backend",
       "area": "api",
-      "title": "[A/Jose] BUILD THE PURGE JOB — the privacy policy now commits to it in writing. Posts, comments and yaks all soft-delete (deleted_at / removed_at) and there is NO job anywhere that erases them; grep finds no DELETE FROM in the app at all. Rather than claim a deletion we do not perform, /privacy section 14 says plainly that deleted content is hidden immediately but not yet erased, and offers a manual email route. That is honest but it is a promise with a person behind it, which does not scale past one campus. Ship a job that hard-deletes soft-deleted rows after a stated window, then UPDATE SECTION 14 in the same PR — the policy and the code have to move together or the page becomes a lie. Also handle the manual path in the meantime: removal requests arrive at chirp.shared@gmail.com and the policy commits to a 30-day response."
+      "title": "[A/Jose] IN PROGRESS Aug 16 - being built now. MIGRATION 0012 IS CLAIMED FOR THIS CARD (indexes on the soft-delete columns the purge scans). If the job turns out to need no schema change the number goes back on the board unused rather than being silently held. ORIGINAL: BUILD THE PURGE JOB — the privacy policy now commits to it in writing. Posts, comments and yaks all soft-delete (deleted_at / removed_at) and there is NO job anywhere that erases them; grep finds no DELETE FROM in the app at all. Rather than claim a deletion we do not perform, /privacy section 14 says plainly that deleted content is hidden immediately but not yet erased, and offers a manual email route. That is honest but it is a promise with a person behind it, which does not scale past one campus. Ship a job that hard-deletes soft-deleted rows after a stated window, then UPDATE SECTION 14 in the same PR — the policy and the code have to move together or the page becomes a lie. Also handle the manual path in the meantime: removal requests arrive at chirp.shared@gmail.com and the policy commits to a 30-day response."
     },
     {
       "id": "c72",
@@ -799,11 +799,11 @@
     },
     {
       "id": "c76",
-      "col": "next",
+      "col": "progress",
       "owner": "J",
       "tag": "legal",
       "area": "website",
-      "title": "[A/Jose] LIVE /terms CLAIMS MODERATION POWERS THAT DO NOT EXIST — found Aug 15 while reviewing q/website, which caught the same class of thing on its own draft and corrected it before committing. Terms.tsx:132 says 'We can remove content and suspend accounts that break these rules' and :158 says 'We can suspend or close an account'. Checked against the code, not assumed: there is NO suspend / banned / is_active / disabled field on ANY model in backend/app/models, NO suspend-ban-deactivate endpoint in any router, and deletePost (src/api/feed.ts:102) and removeYak (src/api/moderation.ts:67) both exist in the API client with ZERO call sites in any .tsx — nothing in the app can invoke either. So a student who reports someone is told in writing that we can act, and we cannot. This is the same failure mode as section 14 of the privacy policy and c69: a written promise with nothing behind it. Note the honest distinction before rewriting — a reservation of RIGHT ('we may remove content') is normal and fine in a ToS; a statement of CAPABILITY is what this is and what is false. FIX: either wire a real removal path and an account disable (bigger than it sounds, needs a model field, an endpoint, an admin surface and an audit trail), or reword both clauses to reserve the right without asserting the button exists. Whichever way it goes, the fix is one PR touching Terms.tsx and the code together, same rule as c69."
+      "title": "[A/Jose] IN PROGRESS Aug 16 - DECISION FROM JOSE: DO NOT REWORD THE TERMS, BUILD THE CAPABILITY. So this stops being a copy edit and becomes the moderation path the page already promises - an account-level disable and a real content-removal route with an audit trail, wired to a surface someone can actually press. MIGRATION 0011 IS CLAIMED FOR THIS CARD. Overlaps c35 (Q, moderation UI): this card owns the server side and the model, c35 owns the Yak-side UI. ORIGINAL: LIVE /terms CLAIMS MODERATION POWERS THAT DO NOT EXIST — found Aug 15 while reviewing q/website, which caught the same class of thing on its own draft and corrected it before committing. Terms.tsx:132 says 'We can remove content and suspend accounts that break these rules' and :158 says 'We can suspend or close an account'. Checked against the code, not assumed: there is NO suspend / banned / is_active / disabled field on ANY model in backend/app/models, NO suspend-ban-deactivate endpoint in any router, and deletePost (src/api/feed.ts:102) and removeYak (src/api/moderation.ts:67) both exist in the API client with ZERO call sites in any .tsx — nothing in the app can invoke either. So a student who reports someone is told in writing that we can act, and we cannot. This is the same failure mode as section 14 of the privacy policy and c69: a written promise with nothing behind it. Note the honest distinction before rewriting — a reservation of RIGHT ('we may remove content') is normal and fine in a ToS; a statement of CAPABILITY is what this is and what is false. FIX: either wire a real removal path and an account disable (bigger than it sounds, needs a model field, an endpoint, an admin surface and an audit trail), or reword both clauses to reserve the right without asserting the button exists. Whichever way it goes, the fix is one PR touching Terms.tsx and the code together, same rule as c69."
     },
     {
       "id": "c74",
