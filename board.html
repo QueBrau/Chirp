@@ -360,6 +360,15 @@
     ],
     "cards": [
       {
+        "id": "c103",
+        "col": "progress",
+        "owner": "J",
+        "tag": "process",
+        "area": "process",
+        "title": "CI GOES GREEN WITH 157 OF 179 BACKEND TESTS SILENTLY SKIPPED - proven locally, fix on a branch",
+        "detail": "Third session (CI lane). FIRST, the good news, because the open question was whether CI covers anything at all: .github/workflows/ci.yml ALREADY runs backend pytest against a postgres:16 service WITH a redis:7 service, and app-mobile `npx tsc --noEmit`, on every push to main and every PR. Both jobs exist and both are passing. The mobile typecheck gate people worried was missing is there. THE ACTUAL HOLE IS WORSE THAN A MISSING JOB. backend/tests/conftest.py's session-scoped `database_url` fixture probes the DB and calls pytest.skip() on ANY exception. Skips are not failures, so if the postgres service is ever unreachable - image pull hiccup, health-check race, a drifted TEST_DATABASE_URL, a port change - the ENTIRE DB-backed suite skips and pytest exits 0. CI posts a green check having proved nothing. PROVEN, not theorised: pointing TEST_DATABASE_URL at a dead port 59999 on this machine gives `22 passed, 157 skipped` and `EXIT CODE: 0`. 157 of 179 tests vanished and the run still reported success. This matters because every readiness claim we have made - 168 pass, then 176 pass - is exactly the kind of evidence this failure mode fabricates, and it is the same family as c41: the silent skip that looks like a pass. SECOND GAP: no alembic head check. `alembic heads` runs offline in about a second and today prints a single `0014 (head)`. The c101 / 0013 hazard would be caught by conftest's `alembic upgrade head` only as an opaque fixture error 90 seconds into the run - and NOT AT ALL if the DB probe skipped first, which is the whole point above. FIX, on branch jose/c103-ci-migration-guard, PR to follow, NOT merged by me: (1) an env flag that makes the probe FAIL instead of skip, set only in CI, so Jose and Q keep skipping locally with no DB while CI can never again go green on an empty run; (2) a fast DB-free `alembic heads` job asserting exactly one head, which fails a two-head PR in seconds with a message that names the problem. No migration number needed, no prod access, no shared files beyond ci.yml and conftest.py."
+      },
+      {
         "id": "c42",
         "col": "done",
         "title": "Session provider + /auth/me SHIPPED (PR #5) and VERIFIED LIVE Aug 14",
