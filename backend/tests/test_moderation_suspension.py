@@ -8,7 +8,7 @@ import uuid
 from httpx import AsyncClient
 from sqlalchemy import text
 
-from tests.conftest import MakeChapterWith, MakeUser
+from tests.conftest import MakeChapterWith, MakeUser, set_campus
 
 
 async def _moderation_action_rows(
@@ -195,11 +195,15 @@ async def test_remove_yak_writes_audit_row(
             "email": f"{uid}@example.edu",
             "display_name": "Yakker",
             "account_type": "greek",
-            "campus_id": campus_id,
         },
         headers=headers,
     )
     assert bootstrap.status_code == 201, bootstrap.text
+    # c85: campus is server-owned, so pin it directly instead of claiming it in the
+    # bootstrap body. Without this the yak POST below 403s and the audit-row assertion
+    # never runs — which would look like the audit trail is broken rather than like
+    # the yakker simply has no campus.
+    await set_campus(bootstrap.json()["id"], campus_id)
 
     yak = await client.post(
         f"/campuses/{campus_id}/yaks", json={"body": "bad yak"}, headers=headers

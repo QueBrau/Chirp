@@ -11,7 +11,9 @@ export interface UserCreate {
   display_name: string;
   avatar_url?: string | null;
   account_type: AccountType;
-  campus_id?: string | null;
+  // No campus_id: the server owns it (board c85). It was never sent from here
+  // anyway — account-type.tsx passes email, display_name and account_type — but
+  // leaving it in the type invites someone to start sending it.
 }
 
 export interface UserOut {

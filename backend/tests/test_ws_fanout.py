@@ -42,6 +42,44 @@ from starlette.websockets import WebSocketDisconnect
 from tests.conftest import b64
 
 
+def _redis_reachable() -> bool:
+    """True if a Redis is actually listening at settings.redis_url.
+
+    Board c92. These three tests need a live Redis, and the two dev machines do not
+    agree about having one: Q's Mac runs Docker and CI now starts a Redis service,
+    while Jose's Mac has neither a redis-server binary nor Docker. Without this the
+    file fails permanently on one machine and passes on the others, which is the
+    corrosive kind of red — the sort a person learns to scroll past, with the next
+    real failure hiding behind it.
+
+    Deliberately a CONNECTION check and nothing more. A skip that triggered on any
+    error would swallow the exact regression this file exists to catch: if Redis is
+    up and fan-out is broken, these must still fail loudly.
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    from app.config import get_settings
+
+    parsed = urlparse(get_settings().redis_url)
+    try:
+        with socket.create_connection((parsed.hostname or "localhost", parsed.port or 6379), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+#: Applied per-test, NOT as a module-level pytestmark. Two tests in this file
+#: (test_no_credentials_closes_4401, test_unknown_uid_closes_4401) exercise the
+#: gateway's auth handshake and close before Redis is ever touched — they pass with
+#: no Redis running, and a module-level skip would silently stop running them on
+#: Jose's machine. Skipping more than necessary is its own way of losing coverage.
+needs_redis = pytest.mark.skipif(
+    not _redis_reachable(),
+    reason="no Redis at settings.redis_url — see board c92 (brew install redis, or use CI)",
+)
+
+
 @dataclass
 class WsUser:
     """A bootstrapped user plus the auth headers that act as them (emulated mode)."""
@@ -221,6 +259,7 @@ def _receive_text_required(session: WebSocketTestSession, timeout: float = 3.0) 
 # ---------------------------------------------------------------------------
 
 
+@needs_redis
 def test_happy_path_recipient_receives_message_event(ws_client: TestClient) -> None:
     client = ws_client
     alice = _make_user(client, "Alice")
@@ -247,6 +286,7 @@ def test_happy_path_recipient_receives_message_event(ws_client: TestClient) -> N
 # ---------------------------------------------------------------------------
 
 
+@needs_redis
 def test_non_member_receives_nothing(ws_client: TestClient) -> None:
     client = ws_client
     alice = _make_user(client, "Alice")
@@ -306,6 +346,7 @@ def test_unknown_uid_closes_4401(ws_client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
+@needs_redis
 def test_message_published_while_recipient_offline_is_dropped_but_http_catchup_exists(
     ws_client: TestClient,
 ) -> None:
