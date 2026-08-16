@@ -1182,7 +1182,7 @@
         "col": "progress",
         "owner": "J",
         "tag": "backend",
-        "title": "NO ENDPOINT TO RESOLVE A REPORT",
+        "title": "IN PROGRESS Aug 16 - MIGRATION 0017 IS MINE. Endpoint + 7 tests written; 0017 extends two CHECK constraints",
         "detail": "found building c35. content_reports has a status column ('open'/'actioned'/'dismissed') and GET /moderation/reports returns it, but there is NO route to transition it: no PATCH, no dismiss, no resolve. So the new moderator screen can remove a reported yak but cannot mark the report handled — it fakes it client-side for the session and the report reappears as open on reload. That makes the queue unusable as a real workflow (every handled item comes back), and it is the next thing that screen needs. Also missing: removal endpoints for reported POSTS and COMMENTS — only yaks can be removed today, so those reports render read-only."
       },
       {
