@@ -976,12 +976,12 @@
       },
       {
         "id": "c66",
-        "col": "next",
+        "col": "done",
         "owner": "J",
         "tag": "infra",
         "area": "process",
-        "title": "PARTLY STALE - the password is real now; 7 paste-traps fixed Aug 16; the one-source-of-truth half is a call for Jose",
-        "detail": "the migration runbook cannot be followed as written. Hit this running c60: the psql line reads postgresql://chirp:REDACTED@localhost:5433/chirp, so password auth fails for anyone who copies it. Worked around by reading the canonical value out of Secret Manager instead (gcloud secrets versions access latest --secret=DATABASE_URL --project=chirps-prod), which the same file already documents two sections lower. Either paste the real password back in, or — better — delete the inline copy entirely and make the Secret Manager read the ONLY documented way to get it, so there is one source of truth and one less credential sitting in a file that gets emailed between devs. REOPENED AND RE-SCOPED Aug 16 after actually reading the file. THE ORIGINAL COMPLAINT IS STALE: the DB password is no longer the literal string REDACTED, it is the real value, so the runbook does authenticate if you paste it. But the SECOND half of this card - the security half - is now MORE true than when it was written, not less: the real credential is duplicated inline in three places in a file whose whole distribution model is 'Jose shares it dev-to-dev'. WHAT WAS FIXED, Aug 16: seven separate paste-traps, all the same family as c93. The psql line still told you to type a literal PASSWORD placeholder, which fails auth and reads like a proxy or permissions problem rather than a wrong password - the exact confusion that filed this card, just with a different placeholder word. And SIX inline # comments sat inside copy-to-clipboard blocks, including three in the migration runbook itself, which is the runbook that broke on Aug 16 partly BECAUSE a trailing comment got fed to alembic as an argument. The file now carries no inline comments in any block, and the explanations moved to prose above them - including a note that the second 'alembic current' is the PROOF step and its output must be read, which is the other half of that incident. STILL OPEN, and it is a judgment call rather than a fix: should the inline password be deleted entirely in favour of the Secret Manager read that this same file already documents two sections lower? That is what the card originally recommended and it is the right instinct, but it trades a working local runbook for one that depends on a gcloud call, so it is Jose's ergonomics decision, not an obvious win to make unilaterally. Coupled to c74: the mailbox that owns that secret is also the published support address."
+        "title": "DONE - 7 paste-traps fixed in the private runbook Aug 16. Inline password KEPT on purpose, Jose's call",
+        "detail": "the migration runbook cannot be followed as written. Hit this running c60: the psql line reads postgresql://chirp:REDACTED@localhost:5433/chirp, so password auth fails for anyone who copies it. Worked around by reading the canonical value out of Secret Manager instead (gcloud secrets versions access latest --secret=DATABASE_URL --project=chirps-prod), which the same file already documents two sections lower. Either paste the real password back in, or — better — delete the inline copy entirely and make the Secret Manager read the ONLY documented way to get it, so there is one source of truth and one less credential sitting in a file that gets emailed between devs. REOPENED AND RE-SCOPED Aug 16 after actually reading the file. THE ORIGINAL COMPLAINT IS STALE: the DB password is no longer the literal string REDACTED, it is the real value, so the runbook does authenticate if you paste it. But the SECOND half of this card - the security half - is now MORE true than when it was written, not less: the real credential is duplicated inline in three places in a file whose whole distribution model is 'Jose shares it dev-to-dev'. WHAT WAS FIXED, Aug 16: seven separate paste-traps, all the same family as c93. The psql line still told you to type a literal PASSWORD placeholder, which fails auth and reads like a proxy or permissions problem rather than a wrong password - the exact confusion that filed this card, just with a different placeholder word. And SIX inline # comments sat inside copy-to-clipboard blocks, including three in the migration runbook itself, which is the runbook that broke on Aug 16 partly BECAUSE a trailing comment got fed to alembic as an argument. The file now carries no inline comments in any block, and the explanations moved to prose above them - including a note that the second 'alembic current' is the PROOF step and its output must be read, which is the other half of that incident. STILL OPEN, and it is a judgment call rather than a fix: should the inline password be deleted entirely in favour of the Secret Manager read that this same file already documents two sections lower? That is what the card originally recommended and it is the right instinct, but it trades a working local runbook for one that depends on a gcloud call, so it is Jose's ergonomics decision, not an obvious win to make unilaterally. Coupled to c74: the mailbox that owns that secret is also the published support address. RESOLVED Aug 16 - JOSE DECIDED TO KEEP THE INLINE PASSWORD and close this card. Recorded as a deliberate tradeoff rather than an oversight, which is the point of writing it down: the runbook works offline and with no gcloud round trip, and the duplication is accepted in a file that is already gitignored and hand-shared. If that file ever moves somewhere less controlled, or a third person joins, this is the decision to revisit first. The paste-trap half is fully fixed and is what actually blocked anyone."
       },
       {
         "id": "c67",
@@ -1209,8 +1209,8 @@
       },
       {
         "id": "c95",
-        "col": "next",
-        "owner": "",
+        "col": "progress",
+        "owner": "J",
         "tag": "frontend",
         "area": "auth",
         "title": "EVERY SIGN-IN BURNS A 401 ON /auth/me BEFORE THE 200 - a wasted retry on the critical path",
@@ -1218,8 +1218,8 @@
       },
       {
         "id": "c96",
-        "col": "next",
-        "owner": "",
+        "col": "progress",
+        "owner": "J",
         "tag": "backend",
         "area": "auth",
         "title": "A USER WITH NO CAMPUS HITS A DEAD END ON HOME/CAMPUS, AND THE QA ACCOUNT IS ONE",
