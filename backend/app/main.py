@@ -1,11 +1,14 @@
 """FastAPI application factory: CORS, all domain routers, WS gateway, health check."""
+import asyncio
+import contextlib
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.routers import (
     alumni,
     auth,
@@ -22,6 +25,65 @@ from app.routers import (
     yaks,
 )
 from app.ws import gateway
+
+logger = logging.getLogger(__name__)
+
+# Long enough that a cold Memorystore connection is not called dead, short enough
+# that a wrong host cannot hold a Cloud Run cold start hostage.
+_REDIS_PROBE_TIMEOUT_S = 3.0
+
+
+async def _probe_redis(settings: Settings) -> None:
+    """PING Redis at boot and say so in the logs, either way. Never fatal.
+
+    Board c61: Redis was never provisioned in chirps-prod at all — no Memorystore
+    instance, no VPC connector, and no REDIS_URL on the service, so config.py's
+    redis://localhost:6379/0 default was live and pointing inside a container
+    where nothing listens. That went unnoticed for days because the only symptom
+    was per-connection: the WS gateway died at subscribe time (c62), which reads
+    as flaky clients rather than as missing infrastructure. Nothing anywhere said
+    "there is no Redis".
+
+    This is the same principle the firebase_admin init above already follows — a
+    misconfigured deploy should announce itself at startup rather than hide in
+    request-time failures.
+
+    Deliberately NOT fatal, unlike the Firebase branch. Real-time fan-out is the
+    only thing that needs Redis, and today nothing in the app even opens a socket
+    (c63), so refusing to boot would take down a working HTTP API over a feature
+    nobody is using yet. The log line is the deliverable: it turns a silent
+    absence into one greppable line in Cloud Run.
+    """
+    if settings.env == "local":
+        # Local dev without Redis is a normal, uninteresting state; warning about
+        # it every boot trains people to ignore the warning that matters.
+        return
+
+    from redis.asyncio import Redis
+
+    # A throwaway client on the URL we were handed, deliberately not the shared
+    # get_redis() singleton. Two reasons: this probe must test the configuration
+    # it was given rather than whatever global state happens to be cached, and a
+    # failed connection at boot must not leave the app's long-lived pool holding
+    # a dead socket.
+    probe = Redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await asyncio.wait_for(probe.ping(), timeout=_REDIS_PROBE_TIMEOUT_S)
+    except Exception as exc:
+        # The URL can carry a password (Memorystore AUTH and every managed Redis
+        # put it there), so log the failure TYPE, never the value.
+        logger.error(
+            "redis unreachable at startup (%s) — real-time fan-out is DOWN; "
+            "websocket connects will close 4503. Check that Memorystore and the "
+            "VPC connector exist and that REDIS_URL is set on the service.",
+            type(exc).__name__,
+        )
+        return
+    else:
+        logger.info("redis reachable — real-time fan-out available")
+    finally:
+        with contextlib.suppress(Exception):
+            await probe.aclose()
 
 
 @asynccontextmanager
@@ -45,6 +107,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 else None
             )
             firebase_admin.initialize_app(options=options)
+
+    await _probe_redis(settings)
     yield
 
 
