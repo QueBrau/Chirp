@@ -1,6 +1,8 @@
 /**
  * Profile per DESIGN.md §7: centered GradientAvatar 64 + name + role Chips, then
- * USER-ARRANGEABLE section cards (About, My Orgs, Activity, Alumni info, Settings).
+ * USER-ARRANGEABLE section cards (My Orgs, Activity, Alumni info, Settings).
+ * "About" is defined in SECTION_TITLES but filtered out of the layout — see c97's
+ * sibling c99 at the useState below; it comes back with users.bio.
  * "Edit layout" ghost toggle reveals Feather chevron-up/down (reorder) and
  * eye/eye-off (visibility) per card. Order + visibility live in local state seeded
  * from the additive mockProfileLayout — mock persistence for now.

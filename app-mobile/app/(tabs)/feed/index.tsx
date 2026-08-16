@@ -1,7 +1,10 @@
 /**
- * Home = the FYP (DESIGN §7): header zone (§10.1) → Moments row → filter
- * pills → mixed-media feed (MediaPostCard renders text/photo/video variants)
- * → floating create FAB.
+ * Home = the FYP (DESIGN §7): header zone (§10.1) → filter pills → mixed-media
+ * feed (MediaPostCard renders text/photo/video variants) → floating create FAB.
+ *
+ * The Moments row that used to sit above the pills was cut in c97: it rendered
+ * seven fabricated people to every real user and had no backend behind it. See
+ * the note further down for how to bring it back with a real endpoint.
  *
  * Filter pills are "For You" / "Campus" only (§8.6 — NOT "My Orgs": org posts
  * never surface on the public FYP, they live inside the org's own space,
