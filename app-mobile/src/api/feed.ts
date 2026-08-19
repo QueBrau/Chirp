@@ -40,8 +40,8 @@ export interface PostOut {
 /**
  * FeedPostOut: the shape both feed list endpoints actually return — a post
  * row plus the author display fields and engagement counts pre-joined
- * server-side, so screens never have to fan out to listLikes/listComments
- * per post.
+ * server-side, so screens never have to fan out to a per-post likes or
+ * comments request.
  */
 export interface FeedPostOut extends PostOut {
   display_name: string;
@@ -103,12 +103,15 @@ export async function deletePost(chapterId: string, postId: string): Promise<voi
   return request<void>(`/chapters/${chapterId}/posts/${postId}`, { method: "DELETE" });
 }
 
-export async function listLikes(postId: string): Promise<PostLikeOut[]> {
-  return request<PostLikeOut[]>(`/posts/${postId}/likes`);
-}
-
+/**
+ * Like a post. PUT, not POST: the backend registers this path as PUT only
+ * (routers/feed.py `like_post`), because the handler is an idempotent upsert —
+ * a double-tap re-sends the same like rather than creating a second one. A POST
+ * here never reached the handler at all; FastAPI answered 405 at routing time,
+ * so every like tap failed while unliking (DELETE) kept working.
+ */
 export async function likePost(postId: string): Promise<PostLikeOut> {
-  return request<PostLikeOut>(`/posts/${postId}/likes`, { method: "POST" });
+  return request<PostLikeOut>(`/posts/${postId}/likes`, { method: "PUT" });
 }
 
 export async function unlikePost(postId: string): Promise<void> {
