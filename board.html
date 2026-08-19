@@ -364,6 +364,33 @@
   ],
   "cards": [
     {
+      "id": "c113",
+      "col": "done",
+      "owner": "J",
+      "tag": "process",
+      "area": "process",
+      "title": "DONE Aug 16 - web/ is gated in CI, merged as PR #32 (772ce07). Card reconstructed Aug 18: the work shipped with no card at all",
+      "detail": "The public marketing site had NO check of any kind - web/ could break and every PR still went green, because CI only ever built backend and app-mobile. Adds a web job to .github/workflows/ci.yml (+31 lines): npm ci, npm run typecheck, npm run build. Jose verified it locally before pushing rather than trusting the YAML: typecheck clean and build succeeding in 8.70s producing dist/index.html plus the css and js bundles. RECONSTRUCTED Aug 18 as part of c116 - this landed on main with no board card, which is half of why a later session took 113 for something else and then 114 collided too. THE ID IS KEPT HERE because this is the copy that MERGED; the other c113 (dependency pinning, PR #33, still open) is renumbered to c117. Nothing in Jose's branch or PR title was touched - only the board now distinguishes them."
+    },
+    {
+      "id": "c114",
+      "col": "progress",
+      "owner": "J",
+      "tag": "money",
+      "area": "payments",
+      "title": "PR #35 OPEN (Jose) - a spend approval is decided ONCE, by whoever gets there first. Card reconstructed Aug 18",
+      "detail": "Concurrency fix in backend/app/routers/finance.py: two approvers acting on the same spend request at the same moment could both have their decision applied. Now the first decision wins and the second is refused rather than silently overwriting it. +41 lines of router change and a dedicated 135-line test_spend_approval_decide.py. Jose reported the suite at 247 passed / 3 skipped / 0 failed. RECONSTRUCTED Aug 18 as part of c116: the id was used in jose/c114-decide-races on Aug 16 with no card, so on Aug 18 a Q session read the board's max id as 112 and took 114 for an unrelated mobile fix. Q's side yielded and renumbered to c115 (PR #37); THIS card keeps 114, which is the older claim. Residue worth knowing: PR #36 was opened against the withdrawn q/c114-like-verb branch and auto-closed when that branch was deleted, so a CLOSED PR #36 also carries the c114 name."
+    },
+    {
+      "id": "c117",
+      "col": "progress",
+      "owner": "J",
+      "tag": "process",
+      "area": "process",
+      "title": "PR #33 OPEN (Jose) - pin backend dependencies with a lockfile and make CI install from it. RENUMBERED from c113, whose branch and PR title still say 113",
+      "detail": "Adds backend/requirements.lock and requirements-dev.lock (~3.1k lines between them), points CI and backend/Dockerfile at them, so a build installs the versions that were actually tested instead of whatever resolves that day. RENUMBERED FROM c113 ON THE BOARD ONLY, Aug 18, as part of c116: two different pieces of Jose's work were both called c113, and the other one (gate web/ in CI) is the one that MERGED, so it keeps the number. The branch jose/c113-dep-pinning and the PR #33 title still say c113 and were deliberately NOT touched - renaming another dev's open PR to satisfy the board is worse than the board carrying the note. If Jose would rather this keep 113 and the merged one move, say so and the two cards swap; the point is only that one id cannot mean two things."
+    },
+    {
       "id": "c115",
       "col": "progress",
       "owner": "Q",
@@ -374,12 +401,12 @@
     },
     {
       "id": "c116",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "Q",
       "tag": "process",
       "area": "process",
-      "title": "CARD IDS 113 AND 114 ARE USED IN COMMITS BUT HAVE NO CARDS - the board is no longer a reliable place to take the next id from",
-      "detail": "Found Aug 18 when this session took c114 off the board (board max was 112, so 113/114 looked free) and collided with jose/c114-decide-races, which had used 114 two days earlier on Aug 16. Renumbered to c115 - Jose had the claim, so this side yielded. THE COLLISION IS THE SYMPTOM, NOT THE BUG. CLAUDE.md says to take the next id from origin's current board, and that instruction is now wrong, because work is being done under ids that never get a card: c113 is used by TWO branches (jose/c113-web-ci, MERGED as PR #32, and jose/c113-dep-pinning, unmerged - so Jose collided with himself on 113 as well), and c114 by jose/c114-decide-races, unmerged. None of the three has a card. So the board's max id UNDERSTATES what is taken, and the documented way to pick an id hands out numbers that are already in use. scripts/board-check cannot see this: it validates the board file against itself and never looks at branch names or commit subjects. TWO THINGS TO FIX, and the second matters more: (1) reconstruct cards for c113 and c114 so the history is not lost; (2) either make claiming an id a board write BEFORE the branch is cut, the same rule migration numbers already have and for exactly the same reason, or teach board-check to scan git for ids used outside the board. Right now the next genuinely free id is 117, and you can only learn that by grepping every ref."
+      "title": "PR #38 OPEN, all 4 checks green - board-check now scans GIT for card ids, not just board.html, and prints the next free id (c118). Missing c113/c114/c117 cards already reconstructed on main. LEFT: review + merge",
+      "detail": "Found Aug 18 when this session took c114 off the board (board max was 112, so 113/114 looked free) and collided with jose/c114-decide-races, which had used 114 two days earlier on Aug 16. Renumbered to c115 - Jose had the claim, so this side yielded. THE COLLISION WAS THE SYMPTOM. Every check in scripts/board-check validated board.html AGAINST ITSELF, which is exactly why none of them could see this: the file was perfectly well-formed and still could not answer 'what is the next free id'. c113 was used by TWO branches (jose/c113-web-ci, MERGED as PR #32, and jose/c113-dep-pinning, open as PR #33) and c114 by jose/c114-decide-races, none with a card - so the board UNDERSTATED what was taken and CLAUDE.md's 'take the next one from origin's current board' was actively wrong. FIXED IN TWO HALVES. (1) Cards reconstructed from git and pushed to main (9eb16b0): c113 keeps the id because it is the copy that MERGED, c114 keeps the older claim, and the second c113 is c117 on the board only - Jose's branch names and PR titles were deliberately NOT touched, since renaming another dev's open PR to satisfy the board is worse than the board carrying the note. Say the word and the two swap. (2) PR #38 teaches board-check to collect ids from branch names and commit subjects and FAIL on any with no card, naming the branch or commit that claims it; on success it prints the next genuinely free id. Deliberately narrow - an id counts as claimed only in a branch-name segment or the leading token of a commit subject, because matching cNNN anywhere in prose would fail the script on somebody's sentence, and a pre-flight gate that cries wolf gets bypassed. PROVEN BY SABOTAGE IN BOTH DIRECTIONS, not just by passing: deleting the c113 card fails naming jose/c113-dep-pinning, a branch q/c999-unclaimed-id fails naming c999, and undoing both passes with 'next free id is c118'. CLAUDE.md also gains card ids in the shared-resources list next to migration numbers, where they belonged all along."
     },
     {
       "id": "c106",
