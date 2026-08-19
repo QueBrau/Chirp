@@ -63,7 +63,10 @@ export interface MemberOut extends MembershipOut {
 
 export interface ChapterInviteCreate {
   role?: RoleName;
+  /** Omit for the server default. There is no value meaning "never" (c105). */
   expires_at?: string | null;
+  /** Redemptions the code is good for; server default 25, hard cap 200 (c105). */
+  max_uses?: number;
 }
 
 export interface ChapterInviteOut {
@@ -71,7 +74,11 @@ export interface ChapterInviteOut {
   chapter_id: string;
   code: string;
   role: RoleName;
-  expires_at: string | null;
+  /** Never null since c105 — every code expires. */
+  expires_at: string;
+  max_uses: number;
+  uses: number;
+  revoked_at: string | null;
   created_by: string;
 }
 
@@ -138,6 +145,21 @@ export async function createInvite(
   body: ChapterInviteCreate,
 ): Promise<ChapterInviteOut> {
   return request<ChapterInviteOut>(`/chapters/${chapterId}/invites`, { method: "POST", body });
+}
+
+/** Every code this chapter has minted, live and dead (c111). E-board only.
+ *  Dead ones are included on purpose: "is the code going around still live" is
+ *  the question the screen exists to answer. */
+export async function listInvites(chapterId: string): Promise<ChapterInviteOut[]> {
+  return request<ChapterInviteOut[]>(`/chapters/${chapterId}/invites`);
+}
+
+/** Kill a leaked code (c105). By code, not id — the string is what leaks. */
+export async function revokeInvite(chapterId: string, code: string): Promise<ChapterInviteOut> {
+  return request<ChapterInviteOut>(`/chapters/${chapterId}/invites/revoke`, {
+    method: "POST",
+    body: { code },
+  });
 }
 
 /** Redeem an invite code (deep link `chirp://join-chapter?code=...`). */

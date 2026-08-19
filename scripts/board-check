@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# Pre-flight for a board.html push. Run it BEFORE you commit, and again with
+# --pushed after you push.
+#
+# Four ways a board change has silently disappeared on this project, all in one
+# day, none of which any of us noticed at the time:
+#
+#   1. A card whose `col` is the column's TITLE ("next") instead of its id
+#      ("backlog") renders NOWHERE. Seven cards at once, then c108, then c110 -
+#      two of them DO-NOT-DEPLOY warnings. board.html now shows a red banner for
+#      this, but the banner only helps someone looking at the page; this catches
+#      it before the push.
+#   2. A bad find/replace deletes a card and the file still parses.
+#   3. The shared tree gets checked out to a feature branch, board commits land
+#      there instead of main, and the push either "succeeds" onto that branch or
+#      fails with a fast-forward message that reads like ordinary contention.
+#   4. You edit a copy you have been holding, and your push reverts someone
+#      else's card without either of you seeing a conflict.
+#
+# A JSON parse check catches NONE of those except a truncated file. Hence this.
+#
+# Usage:
+#   scripts/board-check            before committing board.html
+#   scripts/board-check --pushed   after pushing, to prove it reached origin/main
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+fail() { printf '\nBOARD CHECK FAILED: %s\n' "$1" >&2; exit 1; }
+
+if [ "${1:-}" = "--pushed" ]; then
+  # Failure mode 3, second half: the commit exists locally and never left. A push
+  # onto the wrong branch reports success, so "it pushed" is not the question -
+  # "is it on origin/main" is.
+  git fetch -q origin main
+  head_sha=$(git rev-parse HEAD)
+  if git merge-base --is-ancestor "$head_sha" origin/main; then
+    echo "OK: $(git rev-parse --short HEAD) is on origin/main"
+    exit 0
+  fi
+  fail "$(git rev-parse --short HEAD) is NOT reachable from origin/main. It is sitting on $(git symbolic-ref --short HEAD 2>/dev/null || echo 'a detached HEAD') and nobody else can see it."
+fi
+
+# Failure mode 3, first half. The shared tree at ~/Desktop/chirps/Chirp gets moved
+# to whatever branch someone is working on, and board commits follow it there.
+#
+# The escape hatch is not a loophole, it is the normal case with several sessions:
+# git refuses to check main out in two worktrees at once, so anyone whose lane is
+# already a worktree CANNOT be on main and has to push HEAD:main from a throwaway
+# branch. Requiring it to be deliberate is the point - BOARD_PUSH_TO_MAIN=1 is a
+# sentence you have to mean, unlike drifting onto a feature branch and not
+# noticing. Either way --pushed afterwards is what actually proves it landed.
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "DETACHED")
+if [ "$branch" != "main" ]; then
+  [ "${BOARD_PUSH_TO_MAIN:-}" = "1" ] || fail "you are on '$branch', not main. Board commits go straight to main. Either switch to main, or - if main is checked out in another worktree - re-run as BOARD_PUSH_TO_MAIN=1 scripts/board-check, push with 'git push origin HEAD:main', and confirm with scripts/board-check --pushed."
+  echo "NOTE: on '$branch' with BOARD_PUSH_TO_MAIN=1 - push with 'git push origin HEAD:main' and then run --pushed. A commit left on this branch is invisible to everyone."
+fi
+
+# Failure mode 4. Cheapest check of all and the one that actually bit us: an edit
+# made against a copy fetched twenty minutes ago silently reverts whatever landed
+# in between.
+git fetch -q origin main
+behind=$(git rev-list --count HEAD..origin/main)
+[ "$behind" = "0" ] || fail "origin/main is $behind commit(s) ahead of you. Pull FIRST, re-apply your edit on top, then push - otherwise you will revert someone's card without a conflict."
+
+python3 - "$@" <<'PY'
+import json, sys, subprocess, collections
+
+MARK = '<script id="board-data" type="application/json">'
+raw = open("board.html").read()
+start = raw.index(MARK) + len(MARK)
+blob = raw[start:raw.index("</script>", start)]
+
+dups = []
+def hook(pairs):
+    keys = [k for k, _ in pairs]
+    for k in set(keys):
+        if keys.count(k) > 1:
+            dups.append(k)
+    return dict(pairs)
+
+try:
+    data = json.loads(blob, object_pairs_hook=hook)
+except Exception as exc:
+    sys.exit("the embedded JSON does not parse: %s" % exc)
+
+problems = []
+if dups:
+    # Last-wins means a duplicate key is invisible rather than an error. This is
+    # how c58's card title ended up as the backlog column's title in 1ebd318.
+    problems.append("duplicate keys, silently last-wins: %s" % ", ".join(sorted(set(dups))))
+
+col_ids = {c["id"] for c in data["columns"]}
+orphans = [c for c in data["cards"] if c.get("col") not in col_ids]
+if orphans:
+    problems.append("cards that render NOWHERE (col must be one of %s): %s" % (
+        " / ".join(sorted(col_ids)),
+        ", ".join("%s (col %r)" % (c["id"], c.get("col")) for c in orphans)))
+
+ids = [c["id"] for c in data["cards"]]
+repeats = [i for i, n in collections.Counter(ids).items() if n > 1]
+if repeats:
+    problems.append("duplicate card ids, so one id has two histories: %s" % ", ".join(sorted(repeats)))
+
+# Failure mode 2: compare against the committed board rather than a remembered
+# number, so this works without anyone having to record the count anywhere.
+try:
+    prev = subprocess.run(["git", "show", "origin/main:board.html"],
+                          capture_output=True, text=True, check=True).stdout
+    pstart = prev.index(MARK) + len(MARK)
+    before = len(json.loads(prev[pstart:prev.index("</script>", pstart)])["cards"])
+    if len(ids) < before:
+        problems.append("card count DROPPED %d -> %d. A find/replace can delete a card and still parse - if the deletion is deliberate, say so in the commit." % (before, len(ids)))
+except Exception:
+    pass
+
+if problems:
+    sys.exit("\n  - ".join(["", *problems]))
+
+print("OK: %d cards, all in %s, no duplicate ids or keys" % (len(ids), " / ".join(sorted(col_ids))))
+PY

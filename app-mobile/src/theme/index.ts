@@ -96,6 +96,10 @@ export const metrics = {
   tabBarInsetX: 12,
   /** Floating tab bar bottom inset (§5). */
   tabBarInsetBottom: 8,
+  /** How far the floating tab bar slides down when auto-hiding on scroll.
+   * Comfortably past its own height plus the bottom safe-area inset, so it
+   * clears the screen edge entirely instead of leaving a sliver visible. */
+  tabBarHiddenOffset: 140,
   /**
    * Header accent bar under an oversized screen title (§10.1: "zones, not card
    * soup" — Home/Yak/Orgs headers get a short accent bar under the title).

@@ -2,12 +2,13 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.campus_access import require_campus_member, require_verified_campus
 from app.core.errors import forbidden, not_found
 from app.db import get_session
 from app.middleware.auth import get_current_user
@@ -22,20 +23,10 @@ class YakFeedOut(YakOut):
     my_vote: int | None = None
 
 
-async def _require_campus_user(
-    campus_id: uuid.UUID = Path(...),
-    user: models.User = Depends(get_current_user),
-) -> models.User:
-    """403 unless the caller belongs to the campus in the path (users.campus_id)."""
-    if user.campus_id != campus_id:
-        raise forbidden("not_your_campus")
-    return user
-
-
 @router.get("/campuses/{campus_id}/yaks")
 async def list_yaks(
     campus_id: uuid.UUID,
-    user: models.User = Depends(_require_campus_user),
+    user: models.User = Depends(require_campus_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[YakFeedOut]:
     """List the campus's yaks newest first (not removed), with score and the caller's own vote.
@@ -75,7 +66,7 @@ async def list_yaks(
 async def create_yak(
     campus_id: uuid.UUID,
     body: YakCreate,
-    user: models.User = Depends(_require_campus_user),
+    user: models.User = Depends(require_campus_member),
     session: AsyncSession = Depends(get_session),
 ) -> YakOut:
     """Post an anonymous yak; author_id is stored server-side only, never returned."""
@@ -97,8 +88,11 @@ async def vote_yak(
     yak = await session.get(models.Yak, yak_id)
     if yak is None or yak.removed_at is not None:
         raise not_found("yak_not_found")
-    if user.campus_id != yak.campus_id:
-        raise forbidden("not_your_campus")
+    # No campus_id in this path, so the campus comes off the yak and the shared check is
+    # called directly. Voting is participation in a campus board, not a private action:
+    # an unverified caller must be refused here exactly as they are on list and create,
+    # or the gate is a front door with an open window beside it.
+    require_verified_campus(user, yak.campus_id)
     vote = await session.get(models.YakVote, (yak_id, user.id))
     if vote is None:
         session.add(models.YakVote(yak_id=yak_id, user_id=user.id, value=body.value))
@@ -135,7 +129,14 @@ async def delete_yak(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    """Author-only soft removal: sets removed_at with removed_reason='author_deleted'."""
+    """Author-only soft removal: sets removed_at with removed_reason='author_deleted'.
+
+    DELIBERATELY NOT campus-gated, so this is not an omission — an author may always
+    retract their own post. Gating deletion on a current verification would trap
+    content: a student whose yearly re-check lapsed could no longer take down
+    something they wrote, which is the opposite of what the gate is for. Authorship is
+    already the stricter check here, and it does not depend on campus at all.
+    """
     yak = await session.get(models.Yak, yak_id)
     if yak is None or yak.removed_at is not None:
         raise not_found("yak_not_found")

@@ -88,6 +88,10 @@ class Post(Base):
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set only by moderator removal (routers/moderation.py remove_content), never by the
+    # author/president self-delete in routers/feed.py — so NULL vs set is what tells a
+    # self-delete apart from a moderator's removal even though both share deleted_at.
+    removed_reason: Mapped[str | None] = mapped_column(Text)
 
 
 class PostLike(Base):
@@ -121,3 +125,5 @@ class PostComment(Base):
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # See Post.removed_reason: set only by moderator removal, never by ordinary delete.
+    removed_reason: Mapped[str | None] = mapped_column(Text)

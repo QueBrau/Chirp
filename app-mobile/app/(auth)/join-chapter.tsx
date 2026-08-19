@@ -51,6 +51,13 @@ export default function JoinChapterScreen() {
         router.replace("/feed");
       } else if (err instanceof ApiError && err.status === 403 && err.detail === "invite_expired") {
         setError("This invite code has expired. Ask your e-board for a fresh one.");
+      } else if (err instanceof ApiError && err.status === 403 && err.detail === "invite_exhausted") {
+        // c105: codes now have a redemption budget, so "used up" is a real,
+        // reachable state and needs its own line. The generic message would tell
+        // a student to re-check a code they typed correctly.
+        setError("This invite code has been used up. Ask your e-board for a fresh one.");
+      } else if (err instanceof ApiError && err.status === 403 && err.detail === "invite_revoked") {
+        setError("This invite code was turned off by your e-board. Ask them for a new one.");
       } else {
         setError("Something went wrong. Try again.");
       }

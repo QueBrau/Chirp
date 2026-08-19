@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.invites import INVITE_DEFAULT_MAX_USES, INVITE_MAX_USES_CAP
+
 AccountType = Literal["greek", "non_greek", "alumni"]
 RoleName = Literal[
     "president",
@@ -28,19 +30,36 @@ class _Schema(BaseModel):
 
 
 class UserCreate(_Schema):
-    """Body for POST /auth/bootstrap — firebase_uid comes from the verified identity, not the body."""
+    """Body for POST /auth/bootstrap — firebase_uid comes from the verified identity, not the body.
+
+    NO campus_id (board c85). It used to be here and was written straight through to
+    users.campus_id with no check against anything, while the campus feed's guard is
+    `user.campus_id != campus_id -> 403` — a comparison against a value the caller
+    supplied, which enforces consistency and not identity. Campus is now SERVER-OWNED
+    and the .edu verification flow (c86) is its only writer.
+
+    Removing the field rather than validating it is deliberate: _Schema does not set
+    extra="forbid", so a client still sending campus_id has it ignored instead of
+    getting a 422, and nothing in the app sends it today anyway
+    (app/(auth)/account-type.tsx passes email, display_name and account_type only).
+    """
 
     email: str = Field(min_length=3)
     display_name: str = Field(min_length=1)
     avatar_url: str | None = None
     account_type: AccountType
-    campus_id: uuid.UUID | None = None
 
 
 class UserUpdate(_Schema):
+    """No campus_id here either, for the same reason (c85).
+
+    This schema has no route today, which is exactly why it is worth cleaning now:
+    an unused field is the one that gets wired up later by someone who assumes it
+    was safe because it was already written.
+    """
+
     display_name: str | None = None
     avatar_url: str | None = None
-    campus_id: uuid.UUID | None = None
 
 
 class UserOut(_Schema):
@@ -151,8 +170,16 @@ class MeOut(_Schema):
 
 
 class ChapterInviteCreate(_Schema):
+    """Body for minting an invite (c105).
+
+    expires_at stays optional on the WIRE and is no longer optional in the SYSTEM:
+    omit it and the router picks the default window. A caller cannot ask for a code
+    that never expires, because there is no longer a value that means that.
+    """
+
     role: RoleName = "member"
     expires_at: datetime | None = None
+    max_uses: int = Field(default=INVITE_DEFAULT_MAX_USES, ge=1, le=INVITE_MAX_USES_CAP)
 
 
 class ChapterInviteOut(_Schema):
@@ -160,8 +187,22 @@ class ChapterInviteOut(_Schema):
     chapter_id: uuid.UUID
     code: str
     role: RoleName
-    expires_at: datetime | None = None
+    expires_at: datetime
+    max_uses: int
+    uses: int
+    revoked_at: datetime | None = None
     created_by: uuid.UUID
+
+
+class ChapterInviteRevokeRequest(_Schema):
+    """Body for POST /chapters/{id}/invites/revoke.
+
+    By CODE, not by invite id, and that is the whole point: the thing that leaks is
+    the string in a group chat. A president holding it should not first have to find
+    the row it came from.
+    """
+
+    code: str = Field(min_length=1)
 
 
 class ChapterJoinRequest(_Schema):

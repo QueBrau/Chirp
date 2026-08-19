@@ -5,8 +5,13 @@ __pycache__/
 .eggs/
 build/
 dist/
-.venv/
+.venv
 venv/
+venv
+# NOTE: no trailing slash on .venv or venv. With ".venv/" git matches a DIRECTORY
+# only, which is how a SYMLINK named .venv slipped past and got committed on
+# Aug 16 - it pointed at its own absolute path, so every checkout recreated a
+# self-referencing link and destroyed the environment.
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -21,6 +26,12 @@ INFRA-PRIVATE.*
 
 # Node / Expo
 node_modules/
+node_modules
+# NOTE: no trailing slash on the second one, same trap as .venv/venv above. A
+# git worktree gets node_modules as a SYMLINK to the main checkout's copy, and
+# "node_modules/" matches a DIRECTORY only - so `git add -A` in a worktree stages
+# the link itself. Committing it would point every checkout at one machine's
+# absolute path.
 .expo/
 .expo-shared/
 expo-env.d.ts
@@ -39,3 +50,6 @@ app-mobile/android/
 # OS
 .DS_Store
 .gstack/
+
+# Agent worktrees are local scratch, never committed
+.claude/worktrees/

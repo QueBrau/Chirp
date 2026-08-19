@@ -33,8 +33,15 @@ import {
   type ReactNode,
 } from "react";
 
-import { fetchMe, type UserOut } from "@/api/auth";
-import { ApiError } from "@/api/client";
+import {
+  fetchMe,
+  getCampus,
+  getCampusVerification,
+  type CampusOut,
+  type CampusVerificationStatus,
+  type UserOut,
+} from "@/api/auth";
+import { ApiError, setAuthToken } from "@/api/client";
 import type { MembershipOut } from "@/api/chapters";
 
 import { hasFirebaseConfig } from "./config";
@@ -47,6 +54,31 @@ export interface SessionContextValue {
   status: SessionStatus;
   user: UserOut | null;
   memberships: MembershipOut[];
+  /**
+   * The signed-in user's campus (GET /campuses/{id}, resolved once here from
+   * user.campus_id — c67: campus is a property of the session, not a
+   * per-screen fetch. Every screen that used to call the hook independently
+   * now reads the same value, so one Orgs mount no longer fires N identical
+   * requests. Fails soft to null on a failed lookup for the same reason the
+   * old per-screen hook did: campus name is a cosmetic label everywhere it's
+   * used, so an absent eyebrow beats a wrong one or a crashed screen. Also
+   * null while resolving — callers cannot and should not distinguish
+   * "still fetching" from "failed"; both mean "do not render a name yet".
+   */
+  campus: CampusOut | null;
+  /**
+   * Whether the user currently holds a valid .edu verification (c110).
+   *
+   * REQUIRED FOR ANY CAMPUS-CONTENT DECISION. Since c88 the campus feed and Yak
+   * are gated on a verification timestamp, NOT on having a campus_id — a user who
+   * joined by chapter invite has a campus and is still refused. Screens that branch
+   * on `user.campus_id !== null` will send that user into a 403.
+   *
+   * null means "not resolved yet" and is deliberately distinct from false: a screen
+   * must not flash "verify your .edu" at an already-verified student during the
+   * first frame. Wait for a boolean before deciding anything.
+   */
+  campusVerification: CampusVerificationStatus | null;
   /**
    * Re-run fetchMe() for the current Firebase user. Resolves true when the
    * session state was settled by a server answer (200 or 404), false when the
@@ -74,6 +106,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SessionStatus>(hasFirebaseConfig() ? "loading" : "ready");
   const [user, setUser] = useState<UserOut | null>(null);
   const [memberships, setMemberships] = useState<MembershipOut[]>([]);
+  const [campus, setCampus] = useState<CampusOut | null>(null);
+  const [campusVerification, setCampusVerification] = useState<CampusVerificationStatus | null>(
+    null,
+  );
   // Bumped on every auth event / seed / load start; a load only applies its
   // result while its generation is still current.
   const genRef = useRef(0);
@@ -120,6 +156,64 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Resolve campus ONCE per campus_id, here, instead of in every screen that
+  // wants the name (c67). Keyed on campusId rather than re-running per mount:
+  // any number of useCampus() readers below share this single fetch/result.
+  const campusId = user?.campus_id ?? null;
+  useEffect(() => {
+    if (campusId === null) {
+      setCampus(null);
+      return;
+    }
+
+    // Guards a stale response landing after campusId has already moved on
+    // (sign-out/sign-in as a different user mid-flight).
+    let active = true;
+    getCampus(campusId)
+      .then((value) => {
+        if (active) setCampus(value);
+      })
+      .catch(() => {
+        if (active) setCampus(null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [campusId]);
+
+  // Resolve .edu verification once per session, alongside campus and for the same
+  // reason (c67's pattern): every screen that gates campus content needs it, and
+  // N screens must not each fire their own request.
+  //
+  // Keyed on the user id rather than campus_id: verification is a property of the
+  // PERSON, and a user with campus_id null still needs a real answer — they are
+  // exactly who the verify screen is for. Keying on campusId would skip the fetch
+  // for the users who most need it.
+  const userId = user?.id ?? null;
+  useEffect(() => {
+    if (userId === null) {
+      setCampusVerification(null);
+      return;
+    }
+
+    let active = true;
+    getCampusVerification()
+      .then((value) => {
+        if (active) setCampusVerification(value);
+      })
+      .catch(() => {
+        // Fails CLOSED, unlike campus above. A failed campus lookup costs a cosmetic
+        // label; a failed verification lookup must not be read as "verified", so this
+        // stays null and callers keep waiting rather than opening a gated surface.
+        if (active) setCampusVerification(null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [userId]);
+
   const refresh = useCallback(async (): Promise<boolean> => {
     if (!hasFirebaseConfig() || !getFirebaseAuth().currentUser) return false;
     return loadMe();
@@ -155,9 +249,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setUser(null);
         setMemberships([]);
         setStatus("signedOut");
+        setAuthToken(null);
         return;
       }
-      void loadMe();
+      // c95: own the bearer token before firing our own request. This listener
+      // runs the moment Firebase resolves a user — on a cold start that is
+      // before anything has called setAuthToken, so fetchMe() used to go out
+      // with no Authorization header and come back 401 on EVERY sign-in and
+      // every reload. A 401 is not a 404, so loadMe treated it as transient and
+      // spent one of its three retries on a failure we caused ourselves,
+      // shrinking the budget that exists for real network trouble.
+      // signInWithEmail and the root layout's onIdTokenChanged both also set the
+      // token; this is not redundant with them, it is the only one ordered
+      // before the fetch that needs it.
+      void (async () => {
+        try {
+          setAuthToken(await firebaseUser.getIdToken());
+        } catch {
+          // Token fetch failed: fall through to loadMe anyway rather than
+          // stranding the session. If a token was already set it stays valid,
+          // and loadMe's retry path owns the recovery either way.
+        }
+        await loadMe();
+      })();
     });
 
     return () => {
@@ -168,8 +282,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [loadMe]);
 
   const value = useMemo<SessionContextValue>(
-    () => ({ status, user, memberships, refresh, applyBootstrap }),
-    [status, user, memberships, refresh, applyBootstrap],
+    () => ({ status, user, memberships, campus, campusVerification, refresh, applyBootstrap }),
+    [status, user, memberships, campus, campusVerification, refresh, applyBootstrap],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

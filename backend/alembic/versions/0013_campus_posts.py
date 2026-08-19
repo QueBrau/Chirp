@@ -38,11 +38,16 @@ sharing a down_revision is the multiple-heads version of the c41 collision.
 from alembic import op
 
 revision = "0013"
-# Chains onto 0011 (moderation_capabilities), NOT 0010. Both this and 0011
-# originally declared down_revision "0010"; 0011 is already on main AND applied
-# to prod, so leaving this at 0010 gives alembic TWO HEADS and `upgrade head`
-# fails outright on the next deploy.
-down_revision = "0011"
+# THE PARENT IS "WHATEVER MAIN'S HEAD IS AT THE MOMENT THIS MERGES", not a number
+# anyone can write down in advance (board c101). This pointer has now gone stale
+# three times: 0010 -> 0011 -> 0014 -> 0016. Each time main grew a migration while
+# this branch sat, and each time the symptom was identical - two heads, and
+# `alembic upgrade head` failing outright on the next deploy rather than picking
+# one. Re-point, never renumber: 0013 is a validly claimed number.
+#
+# 0016 is main's head as of this merge (0011 -> 0014 -> 0017 -> 0015 -> 0016).
+# If this branch sits again, check `alembic heads` on main before merging.
+down_revision = "0016"
 branch_labels = None
 depends_on = None
 

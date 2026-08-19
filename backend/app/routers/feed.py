@@ -9,12 +9,17 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.campus_access import (
+    is_campus_verified,
+    require_campus_member,
+    require_verified_campus,
+)
 from app.core.errors import forbidden, not_found
 from app.core.permissions import Role
 from app.db import get_session
@@ -35,12 +40,23 @@ router = APIRouter(tags=["feed"])
 
 
 def _post_counts_select(caller_id: uuid.UUID):
-    """Base SELECT for posts + author identity + batched like/comment counts (c43).
+    """Base SELECT for posts + author identity + batched like/comment counts (c43),
+    with blocked-author filtering (c35).
 
     Scalar subqueries (not a join-and-COUNT(DISTINCT)) so a post with many likes
     AND many comments doesn't fan out into a cartesian product of rows before
     counting — that would multiply rows (3 likes x 4 comments = 12 rows) and
     COUNT(DISTINCT) only masks the bug while making the query slow.
+
+    The UserBlock outerjoin/filter is folded in here rather than repeated in each
+    caller (list_posts, list_campus_feed) since both already thread `caller_id`
+    through for liked_by_me — same anti-join proven in routers/yaks.py list_yaks:
+    outerjoin on (blocked_id == Post.author_id) AND (blocker_id == caller_id), then
+    WHERE blocker_id IS NULL. The ON clause pins blocker_id to this one caller, so
+    it matches at most one UserBlock row per post — no fan-out. A blocked author's
+    posts are simply ABSENT: no tombstone, no count, nothing revealing a hide
+    happened (mirrors the yak anonymity invariant, SPEC §8.3, applied here to
+    known-author feed posts).
     """
     like_count = (
         select(func.count())
@@ -55,6 +71,15 @@ def _post_counts_select(caller_id: uuid.UUID):
         .where(
             models.PostComment.post_id == models.Post.id,
             models.PostComment.deleted_at.is_(None),
+            # c109: the count has to agree with what list_comments will actually
+            # return, or a card reads "3 comments" and opens to show two. Blocked
+            # authors are excluded from both or from neither.
+            ~select(models.UserBlock.blocker_id)
+            .where(
+                models.UserBlock.blocker_id == caller_id,
+                models.UserBlock.blocked_id == models.PostComment.author_id,
+            )
+            .exists(),
         )
         .correlate(models.Post)
         .scalar_subquery()
@@ -79,6 +104,12 @@ def _post_counts_select(caller_id: uuid.UUID):
         )
         # INNER JOIN: display_name is non-null on FeedPostOut (matches MemberOut).
         .join(models.User, models.User.id == models.Post.author_id)
+        .outerjoin(
+            models.UserBlock,
+            (models.UserBlock.blocked_id == models.Post.author_id)
+            & (models.UserBlock.blocker_id == caller_id),
+        )
+        .where(models.UserBlock.blocker_id.is_(None))
     )
 
 
@@ -104,19 +135,6 @@ def _feed_post_out(row: Any) -> FeedPostOut:
     )
 
 
-async def _require_campus_user(
-    campus_id: uuid.UUID = Path(...),
-    user: models.User = Depends(get_current_user),
-) -> models.User:
-    """403 unless the caller belongs to the campus in the path (users.campus_id).
-
-    Matches routers/yaks.py `_require_campus_user`.
-    """
-    if user.campus_id != campus_id:
-        raise forbidden("not_your_campus")
-    return user
-
-
 async def _readable_post(
     post_id: uuid.UUID,
     user: models.User,
@@ -131,13 +149,19 @@ async def _readable_post(
 
     - 'org' - active membership in the post's chapter, unchanged. Org posts stay
       private to the org.
-    - 'campus' - anyone on the post's campus, OR an active member of the chapter it
-      came from. This is what the campus feed already promises: it serves these
-      posts to every student on the campus, so requiring chapter membership to like
-      one was never coherent. It 403'd every cross-chapter campus post, and since
+    - 'campus' - anyone VERIFIED on the post's campus, OR an active member of the
+      chapter it came from. This is what the campus feed already promises: it serves
+      these posts to every student on the campus, so requiring chapter membership to
+      like one was never coherent. It 403'd every cross-chapter campus post, and since
       c71 a chapter-less post has no chapter to be a member of, so the old rule
       would have locked out even its own author. Pre-existing bug, fixed here
       because c71 cannot ship on top of it.
+
+      The verification half is c88, landed on main while this branch sat. Merging
+      the branch's original `user.campus_id == post.campus_id` would have quietly
+      reopened the bypass campus_access.py exists to close: that column is writable
+      by redeeming a forwarded invite code (c96/c105), so it answers "associated
+      with" and not "proved an address at". Campus content needs the second.
 
     The membership half of that union is not redundant. users.campus_id and
     chapters.campus_id are independent columns with nothing keeping them in step,
@@ -149,7 +173,11 @@ async def _readable_post(
     if post is None or post.deleted_at is not None:
         raise not_found("post_not_found")
 
-    if post.audience == "campus" and user.campus_id == post.campus_id:
+    if (
+        post.audience == "campus"
+        and user.campus_id == post.campus_id
+        and is_campus_verified(user)
+    ):
         return post
 
     result = await session.execute(
@@ -176,6 +204,8 @@ async def list_posts(
 
     Includes author identity and batched like/comment counts in one round trip
     (c43) — see `_post_counts_select` for why this isn't a join-and-COUNT(DISTINCT).
+    Posts by an author the caller has blocked are silently absent (c35) — see
+    `_post_counts_select` for the anti-join.
     """
     stmt = (
         _post_counts_select(membership.user_id)
@@ -194,6 +224,7 @@ async def create_post(
     chapter_id: uuid.UUID,
     body: PostCreate,
     membership: models.Membership = Depends(get_current_membership),
+    user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> PostOut:
     """Create a post authored by the caller, inside a chapter they belong to.
@@ -201,13 +232,30 @@ async def create_post(
     `audience` defaults to 'org' (PostCreate schema default) so a client that
     omits it can never accidentally broadcast a chapter post campus-wide.
 
-    campus_id is taken from the CHAPTER, never from the author. The two are
-    normally the same, but the post belongs where it was made: it must not follow
-    its author onto another campus feed later.
+    THE CAMPUS GATE APPLIES HERE TOO, and this is the route it was missing (c88). The
+    path is chapter-scoped, so it never went through `require_campus_member` and read
+    as an org endpoint — but `audience='campus'` makes the post appear on
+    GET /campuses/{id}/feed, so this is a campus-wide WRITE wearing a chapter URL.
+    Gating the read alone would have left the door open facing the other way: an
+    unverified member could not READ the campus feed but could still PUBLISH to it,
+    which is the worse half of the pair.
+
+    campus_id is taken from the CHAPTER, never from the author (c71), and the same
+    chapter is what the gate is checked against. The two are normally the same, but
+    the post belongs where it was made: it must not follow its author onto another
+    campus feed later, and reading the campus off the user would let a mismatched
+    pair through.
+
+    The chapter is loaded for EVERY post, not just campus ones, because c71 stores
+    campus_id on the row itself. That also means an org post naming a chapter that
+    does not exist is now a 404 rather than an integrity error later.
     """
     chapter = await session.get(models.Chapter, chapter_id)
     if chapter is None:
         raise not_found("chapter_not_found")
+    if body.audience == "campus":
+        require_verified_campus(user, chapter.campus_id)
+
     post = models.Post(
         chapter_id=chapter_id,
         campus_id=chapter.campus_id,
@@ -228,7 +276,7 @@ async def create_post(
 async def create_campus_post(
     campus_id: uuid.UUID,
     body: CampusPostCreate,
-    user: models.User = Depends(_require_campus_user),
+    user: models.User = Depends(require_campus_member),
     session: AsyncSession = Depends(get_session),
 ) -> PostOut:
     """Post to the campus feed without going through a chapter (c71).
@@ -246,8 +294,11 @@ async def create_campus_post(
       author may not be in. Posting into a chapter still requires the membership
       check on POST /chapters/{chapter_id}/posts, which is unchanged.
 
-    Authorization is `_require_campus_user`: you may only post to your OWN campus
-    feed, matching who GET /campuses/{campus_id}/feed will show it to.
+    Authorization is `require_campus_member`, the same c88 dependency the campus
+    FEED read uses: you may only post to your own campus, and only with a current
+    .edu verification. This route is the purest case of what c88 gates - a
+    campus-wide write by someone with no org at all - so it must not keep the
+    weaker `user.campus_id == campus_id` check this branch was written against.
     """
     post = models.Post(
         chapter_id=None,
@@ -271,7 +322,7 @@ async def list_campus_feed(
     before: datetime | None = None,
     before_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
-    user: models.User = Depends(_require_campus_user),
+    user: models.User = Depends(require_campus_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[FeedPostOut]:
     """Campus-wide feed: only `audience = 'campus'` posts on this campus, newest
@@ -290,7 +341,8 @@ async def list_campus_feed(
     alone still works (legacy clients) but doesn't guarantee that tie-break.
 
     Also carries author identity and batched like/comment counts (c43), same
-    shape as GET /chapters/{id}/posts.
+    shape as GET /chapters/{id}/posts. Posts by an author the caller has blocked
+    are silently absent (c35) — see `_post_counts_select` for the anti-join.
     """
     stmt = (
         _post_counts_select(user.id)
@@ -353,6 +405,61 @@ async def delete_post(
     await session.commit()
 
 
+@router.delete("/posts/{post_id}", status_code=204)
+async def delete_own_post(
+    post_id: uuid.UUID,
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Soft-delete a post you authored, without going through a chapter (board c84).
+
+    The existing route is DELETE /chapters/{chapter_id}/posts/{post_id} and it matches
+    on post.chapter_id == the path chapter. That is fine for org posts and impossible
+    to satisfy for a post that has no chapter: there is no chapter_id to put in the URL,
+    so the author can publish and then cannot take it back.
+
+    WHY THIS LANDS BEFORE THE BUG DOES. On main today posts.chapter_id is NOT NULL, so
+    the broken state is unreachable and this route is merely a nicer alias. It becomes
+    load-bearing the moment c71 merges: q/campus-posts changes the column to
+    `Mapped[uuid.UUID | None]` and still ships only the chapter-scoped delete, so a
+    campus post by a student with no chapter is undeletable by the person who wrote it.
+    Verified by reading that branch rather than assuming. Building it now means c71 does
+    not have to carry the fix as well, and there is no window where the bug is live.
+
+    It also matters more than an ordinary gap because the promise is already in writing:
+    /privacy is live and commits to deleting your content, and c69's purge job is built
+    against the same promise. A delete the user cannot reach makes both untrue.
+
+    AUTHORIZATION: the author always. A president may also delete, but only for a post
+    that HAS a chapter — no chapter means no president, and inventing one would be the
+    c85 mistake in a new place. Campus-wide removal is deliberately NOT here: that is
+    moderation, it belongs behind POST /moderation/content/remove with its audit row and
+    its own scoping, and folding it in would let a chapter officer quietly delete campus
+    content with no record.
+    """
+    post = await session.get(models.Post, post_id)
+    if post is None or post.deleted_at is not None:
+        raise not_found("post_not_found")
+
+    if post.author_id != user.id:
+        if post.chapter_id is None:
+            # Unreachable until c71; the branch exists so c71 does not have to add it.
+            raise forbidden("not_author")
+        result = await session.execute(
+            select(models.Membership).where(
+                models.Membership.chapter_id == post.chapter_id,
+                models.Membership.user_id == user.id,
+                models.Membership.status == "active",
+            )
+        )
+        membership = result.scalar_one_or_none()
+        if membership is None or membership.role != Role.president.value:
+            raise forbidden("not_author_or_president")
+
+    post.deleted_at = datetime.now(timezone.utc)
+    await session.commit()
+
+
 @router.put("/posts/{post_id}/likes")
 async def like_post(
     post_id: uuid.UUID,
@@ -399,13 +506,35 @@ async def list_comments(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[PostCommentOut]:
-    """List a post's comments, oldest first, excluding soft-deleted ones."""
+    """List a post's comments, oldest first, excluding soft-deleted and blocked ones.
+
+    c109: blocking was half-implemented. The block filter existed on the POST query
+    (_post_counts_select's outerjoin on Post.author_id) and on yaks, but not here — so
+    blocking someone hid their posts and left their comments sitting underneath
+    everyone else's. The app makes this promise in words: yak/index.tsx's confirm
+    dialog says "You won't see posts from this person again". Same family as c76, where
+    /terms claimed removal powers the server did not have, and the fix there was making
+    the claim true rather than softening the claim.
+
+    READER PATHS ONLY. This filter must never be copied onto a moderation surface: a
+    blocked author's reported comment is exactly the row a moderator needs to see, and
+    c91's resolve flow would start hiding the evidence it exists to act on. Blocking is
+    a reader preference; moderation is not. The moderation routes reach comments by id
+    (remove_content) and never through this query, so that separation holds today —
+    keep it that way.
+    """
     await _readable_post(post_id, user, session)
     result = await session.execute(
         select(models.PostComment)
+        .outerjoin(
+            models.UserBlock,
+            (models.UserBlock.blocked_id == models.PostComment.author_id)
+            & (models.UserBlock.blocker_id == user.id),
+        )
         .where(
             models.PostComment.post_id == post_id,
             models.PostComment.deleted_at.is_(None),
+            models.UserBlock.blocker_id.is_(None),
         )
         .order_by(models.PostComment.created_at)
     )

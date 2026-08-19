@@ -102,10 +102,15 @@ The two Stripe routes must resolve with a single `200`, not a redirect — Strip
 hits them exactly as `payments.py` builds them, and a redirect hop there fails
 confusingly, long after a real user has finished KYC.
 
+All three must print `200`. The two Stripe lines must print `200` and not `301`
+or `308`. (No inline comments below on purpose — Jose's zsh has
+`interactive_comments` off, so a trailing `#` gets handed to `head` as an
+argument and the check errors instead of answering.)
+
 ```sh
-curl -sI https://chirps-prod.web.app/privacy                | head -1   # 200
-curl -sI https://chirps-prod.web.app/stripe/connect/return  | head -1   # 200, NOT 301/308
-curl -sI https://chirps-prod.web.app/stripe/connect/refresh | head -1   # 200, NOT 301/308
+curl -sI https://chirps-prod.web.app/privacy | head -1
+curl -sI https://chirps-prod.web.app/stripe/connect/return | head -1
+curl -sI https://chirps-prod.web.app/stripe/connect/refresh | head -1
 ```
 
 Then open `/join-chapter?code=TEST123` in a real browser and confirm the button

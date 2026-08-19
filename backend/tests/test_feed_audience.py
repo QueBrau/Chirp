@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from httpx import AsyncClient
 from sqlalchemy import text
 
-from tests.conftest import ApiUser, MakeChapterWith, MakeUser
+from tests.conftest import ApiUser, MakeChapterWith, MakeUser, set_campus, verify_campus
 
 
 async def _make_campus_user(
@@ -34,12 +34,16 @@ async def _make_campus_user(
             "email": email,
             "display_name": display_name,
             "account_type": "greek",
-            "campus_id": campus_id,
         },
         headers=headers,
     )
     assert response.status_code == 201, response.text
-    return ApiUser(id=response.json()["id"], firebase_uid=uid, email=email, headers=headers)
+    user = ApiUser(id=response.json()["id"], firebase_uid=uid, email=email, headers=headers)
+    # c85: campus is server-owned, so it is set directly rather than claimed in the
+    # bootstrap body. Same pattern as _grant_platform_admin — no API grants it until
+    # the .edu redemption in c86 exists.
+    await set_campus(user.id, campus_id)
+    return user
 
 
 async def _campus_id_of(client: AsyncClient, chapter_id: str, headers: dict[str, str]) -> str:
@@ -83,6 +87,8 @@ async def test_org_post_never_appears_in_campus_feed(
     org_post = await _create_post(
         client, setup.chapter_id, setup.president.headers, "chapter-only", audience="org"
     )
+    # c88: posting campus-wide requires a proved .edu, not merely a chapter campus.
+    await verify_campus(setup.president.id)
     campus_post = await _create_post(
         client, setup.chapter_id, setup.president.headers, "campus-wide", audience="campus"
     )
@@ -119,6 +125,8 @@ async def test_cross_campus_isolation(
     campus_b = await _campus_id_of(client, chapter_b.chapter_id, chapter_b.president.headers)
     assert campus_a != campus_b, "make_chapter_with should mint a fresh campus each call"
 
+    await verify_campus(chapter_a.president.id)
+    await verify_campus(chapter_b.president.id)
     post_a = await _create_post(
         client, chapter_a.chapter_id, chapter_a.president.headers, "campus A post", "campus"
     )
@@ -194,6 +202,7 @@ async def test_counts_present_on_campus_feed_too(
     """The campus feed carries the same batched-count shape as the chapter listing."""
     setup = await make_chapter_with("president")
     campus_id = await _campus_id_of(client, setup.chapter_id, setup.president.headers)
+    await verify_campus(setup.president.id)
     post = await _create_post(
         client, setup.chapter_id, setup.president.headers, "campus counted", "campus"
     )
@@ -328,6 +337,7 @@ async def test_soft_deleted_post_excluded_from_both_feeds(
 ) -> None:
     setup = await make_chapter_with("president")
     campus_id = await _campus_id_of(client, setup.chapter_id, setup.president.headers)
+    await verify_campus(setup.president.id)
     post = await _create_post(
         client, setup.chapter_id, setup.president.headers, "will be deleted", "campus"
     )

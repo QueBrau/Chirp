@@ -58,6 +58,12 @@ export default function TreeScreen() {
 
   const pending = tree?.edges.filter((e) => !e.confirmed_by_little).length ?? 0;
   const unplaced = tree ? unplacedCount(tree) : 0;
+  // layoutLineageGraph only places nodes that appear in an edge, so with no
+  // edges the canvas renders an empty box. Guarding on nodes.length alone let
+  // that through: a chapter with members but no pairs yet got a blank card and
+  // a bare "N unplaced" caption. That is not an edge case, it is the FIRST-RUN
+  // state of every chapter — members exist before any lineage is recorded.
+  const nothingToDraw = tree === null || tree.edges.length === 0;
 
   return (
     <Screen scroll>
@@ -72,10 +78,14 @@ export default function TreeScreen() {
 
       {loading ? (
         <EmptyState title="Loading lineage..." />
-      ) : tree === null || tree.nodes.length === 0 ? (
+      ) : nothingToDraw ? (
         <EmptyState
           title="No lineage yet"
-          message="Bigs and littles will show up here once your chapter starts pairing them."
+          message={
+            unplaced > 0
+              ? `${unplaced} ${unplaced === 1 ? "member is" : "members are"} in the chapter, but no bigs and littles have been paired yet. Pairs show up here as soon as they are.`
+              : "Bigs and littles will show up here once your chapter starts pairing them."
+          }
         />
       ) : (
         <View style={{ gap: spacing.md }}>

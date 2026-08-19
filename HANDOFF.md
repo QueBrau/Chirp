@@ -1,267 +1,210 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 15 2026, late night. **The dues blocker chain is CLEARED.** Prod is
-migrated and current, the public website is live, and Stripe test keys are armed and
-proven. Exactly two things stand between here and the sprint goal (a test-mode dues
-payment on card AND ACH), and the first one is Q's._
+_Last updated: Aug 16 2026, after the c94/c93/c58/c66/c95/c96 session. **Prod is current and verified.**
+Migration 0011 is applied, revision `chirp-api-00013-rbg` is serving it, and a real
+signed-in request was confirmed returning 200. Alpha readiness is **50%** — 10 of 20
+named gates. Nothing has been deployed since; c94 is a mobile-only change._
 
-**board.html is the source of truth for tasks** — 73 cards, and it now has a
-**Status / Feature area toggle** so progress reads per surface (Orgs 9/9, Auth 5/6,
-Messages 3/8) instead of per column. This file only answers what the board can't:
-which copy of Chirp you are looking at.
+**board.html is the source of truth for tasks** — 101 cards, 62 decisions. It now has an
+**alpha readiness bar** that recomputes from the cards on every render, and cards are
+**headlines with the detail behind a click** (a right-hand drawer). Open a card before
+acting on it; the headline is deliberately short and the reasoning lives in the drawer.
+
+This file only answers what the board can't: which copy of Chirp you are looking at, and
+what will bite you.
 
 ## What is live right now
 
 | Thing | Where | State |
 | --- | --- | --- |
-| API | `chirp-api-593616178468.us-central1.run.app`, rev **chirp-api-00011-b6l** | Current with `main` |
-| Prod DB | Cloud SQL `chirp-db` | `alembic_version` **0010**, matches main |
-| Website | **https://chirps-prod.web.app** | Live. Vite + React + TS, static on Firebase Hosting |
-| Stripe | test mode, acct `acct_1U4pwbFjVGWnUErJ` | Keys + webhook armed. **No money has moved** |
-| Redis | — | **Never provisioned.** Deliberate; see c61 |
+| API | `chirp-api-593616178468.us-central1.run.app`, rev **chirp-api-00013-rbg** | Current with `main` |
+| Prod DB | Cloud SQL `chirp-db` | `alembic_version` **0011** |
+| Website | **https://chirps-prod.web.app** | Live, phone-tuned, real phone menu |
+| Stripe | test mode, acct `acct_1U4pwbFjVGWnUErJ` | Armed. **No money has moved** |
+| Redis | — | **Never provisioned** on prod (deliberate, c61) |
+| Tests | 168 pass, 3 skip, 0 fail locally | Skips are the Redis fan-out tests (c92) |
 
-## The only two things left on the dues chain
+## The one thing blocking the sprint goal
 
-1. **c39 — Q rebuilds the EAS dev build.** Three native modules landed after the
-   current build was cut, so the dues PaymentSheet cannot run on a device. This is the
-   sole blocker.
-2. **c11 — the test-mode payment**, card AND ACH, including the cross-rail retry that
-   must return 409. The DB constraint behind that (`uq_dues_intent_live`) is already
-   proven against the real prod schema.
+**c39 — Q rebuilds the EAS dev build.** Three native modules landed after the current
+build was cut, so the dues PaymentSheet cannot run on a device. It is alpha gate one and
+step four of the payment chain. Nothing on Jose's list moves it.
 
-## Two new asks from Jose, both carded
+Then **c11** — the test-mode dues payment on card AND ACH, including the cross-rail retry
+that must return 409.
 
-- **c72 — the website is not phone-tuned.** Read the card before touching it: it does
-  **not** horizontally break. Measured live at 390x844 on all six pages, `scrollWidth`
-  equals `innerWidth` everywhere. The real issue is desktop spacing applied unchanged at
-  phone width (96px section padding on an 844px screen). Verify on a real device, not
-  only headless Chromium.
-- **c73 — move the marketing site to a subdomain** (`about.<domain>`), apex reserved for
-  sign-in. Blocked on buying a domain. Three places encode the current origin and must
-  move together: `APP_PUBLIC_BASE_URL`, `WEB_BASE_URL` in `inviteLink.ts`, and
-  `app.json`'s universal-link config.
+## Jose's queue (the "Next" column, owner J)
+
+Ordered by what I'd actually do first:
+
+**Answer c96's scope question first — it may reorder everything below.** See "The
+campus problem" further down.
+
+1. **c58 — live browser QA.** Jose's auth/orgs half is **walked** against real prod.
+   Q's vertical (Yak content, campus feed, messaging, treasurer/secretary dashboards,
+   CSV export) is still unproven, which is the only reason the card isn't Done.
+2. **c74** — `chirp.shared@gmail.com` is published on the live site *and* owns GCP,
+   Firebase and Stripe. Wants a forwarding alias; **blocked on c73's domain purchase**.
+3. **c73** — marketing site to `about.<domain>`. **Blocked on buying a domain** (yours).
+4. **c87 → c86 → c88** — transactional email, then `.edu` verification, then the gate.
+   Strictly in that order. Previously "hold until after alpha" — **c96 challenges that**.
+
+**PR #21 IS MERGED** (Jose authorized it directly) — c94, c93, c98, c95, c97, c99, c100, c66,
+c96 and c58's walk are all on main. `DEPLOY.md`'s `--set-env-vars` trap is fixed on main now.
+Follow-up fixes from review are on `jose/c94-review-fixes`, unmerged.
+
+> **DO NOT DEPLOY THE BACKEND RIGHT NOW WITHOUT READING c104.** main carries c96, which
+> grants `users.campus_id` on chapter join — and `feed.py:130` / `yaks.py:30` gate campus
+> content on *nothing but that column*. Jose's c88 ruling (same day, after c96 was written)
+> says campus content stays strictly `.edu`-gated. So deploying c96 alone ships a bypass of
+> a policy decided after the code. It is safe today **only because prod is un-migrated and
+> un-redeployed.** c88's gate lands first or in the same deploy.
+
+Done this session, all verified live against prod, not by reading code:
+**c94** (the sign-in bounce was a *race* — the app navigated on the Firebase credential
+while SessionProvider was still resolving `/auth/me`, so the destination guard read a
+stale `"signedOut"` and redirected straight back; reproduced on the pre-fix code first,
+then re-verified: sign out and back in lands on `/feed` in ~1s) · **c93** (+ four more
+paste-traps of the same family across three docs) · **c98** (Family Tree drew a blank box
+in the state *every* chapter starts in) · **c95** (zero 401s now, on both sign-in and cold
+reload) · **c66** (seven paste-traps fixed in the private runbook; inline password kept,
+your call) · **c97 / c99 / c100** (the fake-content trio — the seven invented people are
+cut from Home, the hardcoded "Sophomore · Business" bio is gone from every profile, and
+"brothers" is gone from the two places it appeared; the rest of the app was already
+inclusive).
+
+**No invented content ships to users any more**, with one exception worth knowing:
+Apple/Google sign-in are still visual stubs (c89).
+
+Still open from the walk: **c101** (below).
+
+Also open and unowned: **c84** (a chapter-less author cannot delete their own post) and
+**c91** (no endpoint to resolve a report).
+
+## The campus problem (c96) — decide this before alpha
+
+**Nothing in the backend writes `users.campus_id`. Anywhere.** Every `campus_id=`
+assignment in `backend/app` is a `Chapter`, `ContentReport` or `Yak`; every other
+reference is a read, mostly a 403 comparison. Bootstrap says so in its own comment,
+added by c85: *"The .edu redemption in c86 is the only writer of this column."*
+
+So "hold c87 → c86 → c88 until after alpha" does not defer email. It means **every alpha
+user permanently has no campus**, which darkens **Home's Campus tab and the entire Yak
+tab** (both confirmed live on prod), and makes alpha gate **c71** — *"a campus-only
+student can post"* — unreachable by construction.
+
+The org half of the two-tier reasoning is genuinely fine: Orgs, events, members, dues and
+invites all work perfectly with `campus_id` null. That's why this went unnoticed.
+
+Either alpha ships with two of five tabs dark and c71 dropped from the gate list, or c86
+moves ahead of alpha. **Do not "fix" it by writing a campus assignment into bootstrap** —
+that is exactly the hole c85 closed, and see c101: `q/campus-posts` predates c85, still
+has `campus_id=body.campus_id`, and will conflict on those very lines. Its side is the
+*tempting* resolution, because it is the only code in either branch that makes campus
+features work. Resolve in favour of main.
 
 ## Things that will bite you
 
-- **`payments.py:40` builds the Stripe callback URLs by string concatenation.** Whichever
-  host serves `/stripe/connect/return` and `/stripe/connect/refresh` is exactly what
-  `APP_PUBLIC_BASE_URL` must equal. Renaming those routes without changing that function
-  breaks Connect onboarding, and the failure surfaces only after a real user finishes KYC.
-- **`/healthz` is unreachable from the internet** — Google's frontend answers it before
-  Cloud Run sees it. The route is now **`/_health`** (c65). Don't point a health check at
-  the old path; it will lie in both directions.
+- **Migrate FIRST, then deploy.** This bit us on Aug 16: the migration failed, the deploy
+  succeeded, and prod briefly served code reading `users.suspended_at` against a schema
+  without it. It looked fine — health checks and unauthenticated requests never reach
+  `get_current_user`, so nothing 500s until a real user signs in. **"Health is 200" is not
+  evidence a deploy is healthy when the broken path is behind auth.**
+- **The prod `DATABASE_URL` secret is in Cloud Run's UNIX-SOCKET form**
+  (`...@/chirp?host=/cloudsql/...`). To migrate from a laptop you must *decompose* it and
+  rebuild with `127.0.0.1:5433`, not regex the host out — a substitution that silently
+  matches nothing leaves asyncpg trying a socket that does not exist. Working recipe is in
+  c93's card detail.
+- **`cloud-sql-proxy` is not on PATH.** It lives at `~/cloud-sql-proxy`, and it must use
+  **5433** because local Postgres 14 owns 5432.
+- **Jose's zsh has `interactive_comments` off.** A `#` in a pasted command runs as a
+  command, and a trailing comment gets fed to the program as an argument. Hand over
+  commands with no inline comments.
+- **THE LOCAL TEST DB IS SHARED, AND IT LIES TO YOU INSTEAD OF ERRORING.** Every session
+  points at `chirp_test` on 5432, and conftest drops and recreates the schema per run — so
+  concurrent runs tear down each other's tables mid-suite. This produced **76 failed** on a
+  tree that was genuinely green, and it corrupts the other direction too: a run can *pass*
+  against tables someone else's fixtures populated. **Give yourself your own DB:**
+  `createdb -U chirp -h localhost chirp_test_<lane>`, then hand the schema over **as the
+  local superuser, not as `chirp`** (as `chirp` it fails with the very error you are
+  trying to fix): `psql -h localhost -d postgres -c "ALTER DATABASE chirp_test_<lane>
+  OWNER TO chirp;"` followed by `psql -h localhost -d chirp_test_<lane> -c "ALTER SCHEMA
+  public OWNER TO chirp;"`. Without it every DB test errors with `must be owner of schema
+  public`. Then pass `TEST_DATABASE_URL=...` to pytest.
+  **This whole recipe is temporary.** PR #22 (c106) gives every run its own
+  `chirp_test_p<pid>` database and drops it at the end, so once that merges the answer is
+  just "run pytest" — no createdb, no ownership grant. Delete this bullet then.
+- **CI is honest today but has no floor** (c103). The backend job runs postgres:16 + redis:7
+  services and a healthy run is **179 passed, 0 skipped** — that is why CI shows 179 where a
+  laptop shows 176 pass / 3 skip. The trap is that conftest's postgres probe *skips* rather
+  than fails, so if the service ever fails to come up the suite skips and still exits 0.
+  Latent, not live. Mobile CI is `tsc` only — there is no mobile test harness at all, so it
+  means "it compiles", never "it works".
+- **`/healthz` is unreachable** — Google's frontend answers it. The route is `/_health`.
 - **The firebase CLI is logged in as `madden25boss1@gmail.com`**, which cannot see
-  `chirps-prod`. Deploys go through the gcloud ADC for `chirp.shared@gmail.com` — clear
-  `user`/`tokens` from `~/.config/configstore/firebase-tools.json`, deploy, then restore
-  it. Full runbook in `web/README.md`.
-- **The migration runbook's password is literally the string `REDACTED`** (c66). Read the
-  real one from Secret Manager: `gcloud secrets versions access latest
-  --secret=DATABASE_URL --project=chirps-prod`.
-- **Card ids are a shared resource, like migration numbers.** Jose and Q both minted c70
-  and c71 within minutes on Aug 15. Take the next id from origin's *current* board.
+  `chirps-prod`. Website deploys go through the gcloud ADC; runbook in `web/README.md`.
+- **CLAIMING A MIGRATION NUMBER DOES NOT CLAIM A PARENT, and that is the gap that
+  actually bites.** The board reserves numbers, which prevents duplicate revision ids —
+  it does not stop two people writing different numbers that both set
+  `down_revision` to the same head. That happened Aug 16: 0017 (c91) and 0015 (c86) both
+  parented on 0014, so `alembic upgrade head` failed with two heads. **Before you write a
+  migration, run `alembic heads` against main and parent on what it actually prints** —
+  not on the highest number on disk, which is no longer the same thing. The chain is now
+  0011 -> 0014 -> 0017 -> 0015, so 0015 sits numerically after 0017 on purpose; alembic
+  walks `down_revision`, not filenames, so do not "fix" it. The rule when two migrations
+  collide is the one c71's 0013 already set: **the side that has not merged re-points at
+  the current head**, because renumbering a revision id breaks anything that recorded it.
+- **Card ids and migration numbers are shared resources.** Take the next one from
+  *origin's current* board, not the copy you started editing. Taken: 0011 (c76), **0014 (c96, MERGED)**,
+  0013 (c71, on Q's branch), **0015 (c86, claimed by the email session)**. **0012 was claimed for
+  c69 and released unused.** Next free: **0016**.
+- **`q/campus-posts` carries TWO hazards, not one** (c101). Besides the heads problem
+  below, it predates c85 and still sets `campus_id` from the request body — the merge will
+  conflict on those lines and the branch's side looks like the fix. Take main's.
+- **A multiple-heads hazard is pending.** Q's `0013_campus_posts.py` has
+  `down_revision = "0010"`, and `0011` is now on main with the same parent. Main is
+  single-head today; the moment `q/campus-posts` merges there will be **two heads** and
+  `alembic upgrade head` fails outright. 0013 needs re-pointing to 0011 before that lands.
 
-## The legal pages are ours, not a lawyer's
+## Alpha is defined, not vibes
 
-`/privacy` and `/terms` are written in-house, scoped to **North Carolina and UNCG only**,
-grounded in the actual schema so every claim is checkable against a model file. Contact
-is `chirp.shared@gmail.com` — worth moving to a forwarding alias, since that account also
-owns GCP, Firebase and Stripe.
+Alpha = Q's old chapter plus a couple more orgs, real students on real phones, small
+enough to phone someone when it breaks. `board.html` carries the list: 7 shipped
+foundations plus 13 named gates, each reading its status from its own card. Moving a card
+moves the bar. **50% as of Aug 16.**
 
-Three statements are deliberately unflattering and must stay true: anonymous board posts
-are anonymous to other students but **not to us**; reporting a DM forwards that message's
-text to us; and deleted content is hidden but **not erased**, because no purge job exists.
-That last one is a written promise with a person behind it — **c69** builds the job, and
-section 14 of the policy changes in the same PR.
+## Open PRs and branches
 
-## Repo state
+**PR #21 (`jose/c94-signin-navigation`, c94 + c93) is open and waiting on Jose to merge.**
 
-| Where | What's there | State |
-| --- | --- | --- |
-| `main` | Everything through **PR #13**: the campus FYP, dues + reserve-before-charging, the de-mock sweep, the public website under `web/`, the WS gateway fixes, and the NC legal pages. Migrations **0001-0010** | Canonical, and prod matches it |
-| `web/` | Vite + React + TS marketing and legal site | **Live** at chirps-prod.web.app |
-| Open PRs | **#12** (Q, WS fan-out verification) | Mergeable |
-| Branches | `q/compose` (Q, c49 compose flow) | In flight |
-| CI | backend pytest vs PG16 + mobile tsc on every push/PR | Green. No branch protection (deliberate) — CI is advisory |
+Q merged two of theirs on Aug 16 without touching the board: **PR #17** (c35, the
+moderation UI — an *alpha gate*) and **PR #20** (`q/nav-back-autohide`, real back button
+plus an auto-hiding tab bar, which rewrote `(tabs)/_layout.tsx` around the auth guard;
+the guard itself is unchanged). c35's card now says merged-pending-verification — when Q
+verifies it live and moves it to Done, the alpha bar moves with it.
 
-Test counts: **150 backend tests green** locally and in CI, tsc clean on both `app-mobile`
-and `web`.
+`q/compose` (PR #14, draft, c49) is Q's. Origin was
+pruned to `main` plus branches with open PRs; two superseded branches were **tagged**
+(`archive/q-website`, `archive/q-mock-identity-fixes`) before deletion, so nothing was
+lost.
 
-Creds, runbooks, QA account, and live fixture ids: `INFRA-PRIVATE.html` at the repo root
-(gitignored — get a copy from Jose, never commit it).
+## Known-bad things that are shipped
 
-## The review (Aug 15) — read this before touching payments
-
-PRs #2, #3, #7 and #8 had all merged **without any code review** (absorbed reviews exist
-only for PRs #4/#5/#6), and `SECURITY-REVIEW.md` is dated Aug 13, predating the entire
-Stripe money path. A five-lens review of `42d8e35..HEAD` raised 6 findings; **all 6
-survived two independent adversarial verifiers**, and all 6 are fixed in PR #11.
-
-The critical one: **a member could be charged twice for one dues cycle.** `already_paid`
-only queried the ledger, which stays empty until a webhook settles; ACH sits in
-`processing` for days so the cycle still looked unpaid; and the Stripe idempotency key
-was scoped **per rail** (`dues:{cycle}:{user}:{rail}`), so retrying on card minted a
-genuinely different PaymentIntent. Both settled, both appended, and the ledger is
-append-only with no reversal path.
-
-Fix, now the standing rule for anything touching money: **reserve before charging.** A
-`dues_payment_intents` row is written BEFORE Stripe is called, and a partial unique index
-(`uq_dues_intent_live`) holds one live reservation per (cycle, member) across BOTH rails.
-`payment_failed`/`canceled` release it so genuine retries still work; same-rail retries
-stay idempotent (an existing contract test caught a blunter first version that broke
-them). The ledger gets `uq_ledger_dues_payment_once` as an independent backstop.
-
-The authorization lens found **nothing** — org and campus scoping held everywhere.
-
-Creds, runbooks, QA account, and live fixture ids: `INFRA-PRIVATE.html` at the repo root
-(gitignored — get a copy from Jose, never commit it).
-
-## Next human steps (in order)
-
-_(Step 1, the 0008 migration + redeploy, is DONE as of Aug 14 — see the top of this file.
-The rule it established, now also in INFRA-PRIVATE.html: **migrate first, then deploy.**
-The Cloud Run deploy does not run migrations, and post-#3 code selects
-`ledger_entries.stripe_payment_intent_id`, which does not exist until 0008 runs —
-deploying first would have 500'd the treasurer ledger. Two gotchas worth keeping:
-`cloud-sql-proxy` is NOT part of the gcloud SDK and has to be installed separately
-(command is in the runbook), and the prod DB is human-only — agent sessions are
-permission-blocked from it, though the redeploy itself is not.)_
-
-1. **Apply migrations 0009 AND 0010, then redeploy** (board c60). The merges are done;
-   this is all that is left of that chain. Migrate first, then deploy.
-2. **Build the public website (board c56)** — DECIDED Aug 15, not started. It lives in
-   **this repo** under `web/` as plain static HTML/CSS (never the Expo bundle: it must
-   load fast and work with no auth), deployed to **Firebase Hosting** on the existing
-   `chirps-prod` project. Pages: landing, features, how it works, about, **privacy
-   policy**, **terms**, disclosure/contact — plus two functional pages the backend
-   already depends on (`/stripe/connect/return`, `/stripe/connect/refresh`) and an
-   invite bounce page that converts an https link into `chirp://join-chapter?code=...`.
-   Design direction: borrow the STRUCTURE and polish bar of a great app landing page
-   (split hero, dark canvas, real product imagery, one clear CTA, quiet footer) but NOT
-   another product's look — `app-mobile/DESIGN.md` is binding and Chirp keeps its own
-   identity. Do not ship a clone.
-3. **Then set the Stripe TEST keys (c40)** — `STRIPE_SECRET_KEY`,
-   `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`, `APP_PUBLIC_BASE_URL` in Secret
-   Manager + Cloud Run, then register the webhook at `/webhooks/stripe`.
-4. **Rebuild the EAS dev build (c39)** — `expo-file-system`, `expo-sharing` and
-   `@stripe/stripe-react-native` were all added after the current build was cut, so CSV
-   export and the dues PaymentSheet can't be exercised on device until then. PR #10
-   fixes the two blockers that would have failed this build.
-5. **Then, and only then, a test-mode dues payment on both card and ACH.** Until that
-   runs, treat the entire dues flow as unverified (see below).
-
-### Why the website comes BEFORE the Stripe keys (board c57)
-
-This ordering is not aesthetic. `backend/app/routers/payments.py:36-38` raises
-`503 app_public_base_url_not_configured` when `APP_PUBLIC_BASE_URL` is unset, and Stripe
-**rejects custom schemes**, so it can never be a `chirp://` link — Connect onboarding
-needs a real https return/refresh URL that exists. Two more forcing functions: the App
-Store will not accept a submission without a publicly reachable privacy-policy URL, and
-`app-mobile/app/(auth)/sign-in.tsx:198` **already tells every user** "you agree to
-Chirp's Terms of Service and acknowledge our Privacy Policy" — neither document exists
-today, and the sentence is not even a link.
-
-**Domain decided Aug 15: `https://chirps-prod.web.app`**, the free Firebase Hosting
-domain on the existing project. Stripe accepts it, it costs nothing, and it unblocks
-`APP_PUBLIC_BASE_URL` the day the site deploys — waiting on a domain purchase would have
-parked the entire dues chain behind a shopping decision. A custom domain is its own card
-and only becomes load-bearing when iOS universal links do; `app-mobile/app.json:14,26`
-still declares the placeholder `applinks:chirp.example.com`, which is wrong either way.
-
-One thing not to miss: **the invite bounce page fixes nothing on its own.**
-`app-mobile/app/(tabs)/chapter/index.tsx:499` currently shares the raw
-`withInviteCode("chirp://join-chapter", code)` string, so invites still go out as a
-`chirp://` link that dies when pasted into a text message and nothing will ever point at
-the new page. That one-line mobile change ships with c56.
-
-## The de-mock sweep is NOT complete (board c59) — correction
-
-PR #8 was reported as finishing the de-mock work, and c55 specifically claimed "the last
-`mockUserById` call site in the app is gone." **Both overstated it.** Re-grepped on
-`main` (`1aa19ba`), three screens still render fake identity against live data:
-
-- `app-mobile/app/(tabs)/chapter/index.tsx:53,597,666,673` — `MOCK_CAMPUS.name`
-  hardcoded into the Orgs hero subtitle, screen eyebrow and empty state, plus a literal
-  `· SPARTANS`. Every user sees UNC Greensboro and UNCG's mascot.
-- `app-mobile/app/(tabs)/yak/index.tsx:28,211` — same, with a stale `TODO` claiming no
-  campus endpoint exists. `GET /campuses/{id}` shipped with c46.
-- `app-mobile/app/(tabs)/chapter/alumni/index.tsx:9,64` — `mockUserById(job.posted_by)`
-  resolves a **real** UUID through the mock table, so it never matches and every job
-  renders "Posted by Alumni".
-
-The fix pattern for the first two is already in the repo: `feed/index.tsx:86,145` calls
-`getCampus(campusId)` and fails soft to an absent eyebrow. Four other `@/mocks` imports
-on `main` are legitimate and are listed on c59 so the cleanup does not overshoot.
-
-The failure mode is worth naming: **a claim about the whole repo was made from the scope
-of one PR's diff.** When closing a card that asserts something repo-wide, re-grep the
-repo, not the branch.
-
-## Live browser QA has NEVER been done (board c58)
-
-This is the largest unverified surface in the project. Everything shipped Aug 14–15 —
-the session provider, Orgs on real memberships, role metadata, the sign-in UX change,
-the batch endpoints, and the entire de-mock sweep — is proven by `pytest` and `tsc`
-only. Nobody has driven the real app against real prod. The proven loop is
-`cloud-sql-proxy` on 5433 + local uvicorn with `AUTH_MODE=firebase` + Metro on 8082 with
-`EXPO_PUBLIC_API_URL` pointed at prod, using the three QA accounts in INFRA-PRIVATE.html.
-
-## The Stripe migration number (board c41) — RESOLVED
-
-PR #3 originally shipped the Stripe migration as `0006`. That number was Jose's events
-migration, already applied to prod, with `0007` taken by `is_platform_admin`.
-
-Left alone, prod (already past `0006`) would have had Alembic mark the Stripe migration
-as already-applied and never run it — no `processed_stripe_events`, no unique partial
-index on `ledger_entries.stripe_payment_intent_id`. Those are the webhook-replay guards,
-so a Stripe retry would have appended a second dues payment to an append-only ledger.
-Silent, and on the money path.
-
-**Fixed**: renamed to `0008_stripe_dues.py`, `revision = "0008"`,
-`down_revision = "0007"`. Verified the chain is linear with a single head
-(`0001` → … → `0008`), not merely that the file parses.
-
-**Rule that came out of this (now in CLAUDE.md): claim your migration number on the board
-before you write the file. Next free number: `0009`.**
-
-## The roster-names overlap (came out of the PR #6 catch-up)
-
-PR #6 and the dashboards work solved the same problem independently — "the roster is a
-list of bare UUIDs, and there is no `GET /users/{id}` to resolve names." Git did **not**
-flag most of it as a text conflict, so it needed catching by hand.
-
-Resolution: kept main's `MemberOut` (real INNER JOIN, non-null `display_name`, plus
-`avatar_url`) and deleted the `MembershipOut.display_name` field the dashboards branch
-had added. `GET /me/memberships` still returns the plain `MembershipOut`; only
-`GET /chapters/{id}/members` returns `MemberOut`. If you find yourself re-adding a
-nullable `display_name` to `MembershipOut`, that's the regression.
-
-## Verification status
-
-- Both branches were green at merge: `family-tree` 92 backend tests, `q/social-msg` 116
-  (the extra ones are the Stripe suite), each run fresh against postgres:16 through the
-  full 0001–0008 chain. tsc clean on both. CI agreed.
-- PR #7 adds 6 tests (role-meta anti-drift asserts against permissions.py itself;
-  events-with-rsvps grouping + org-scoping): **122 green** on Jose's local PG14, tsc
-  clean. No migration — `0009` stays free.
-- Stripe is code-complete but **has never talked to real Stripe**. Nothing in the dues
-  flow is proven until step 2 above is done and a test-mode payment runs on card AND ACH.
-  Treat it as unverified — merged is not the same as working.
-- Yak, the dashboards, and CSV export are exercised only against mocks and the test
-  suite; they have not been driven on a device (the iOS Simulator was broken on Q's Mac
-  this session — `launchd_sim` failing to bind a session after an `xcode-select` switch;
-  a reboot is the known fix, not yet confirmed).
+- **Real users see fabricated people.** A brand-new account's Home shows `MOCK_MOMENTS` —
+  Tyler, Maria, Priya, Devon, Sam, Ethan, Noah — in the "Your story" row. There is no
+  backend concept for Moments, but it is in front of every user. **Now carded as c97.**
+- **Apple and Google sign-in are visual stubs** that skip authentication entirely and drop
+  the user into a disconnected onboarding flow (c89). Apple guideline 4.8 makes Sign in
+  with Apple mandatory once Google ships.
+- **`/terms` and `/privacy` are not lawyer-reviewed** (c75), scoped to NC and UNCG on
+  purpose. c76 made the moderation claim true; the liability sections are still
+  placeholders.
 
 ## Environment
 
-Two very different Macs, and the differences bite. Both are written up in **CLAUDE.md**:
-Jose's Intel Mac (no Docker, local PG14) and Q's Apple Silicon Mac (Docker, postgres:16
-on port 5434, venv on Python 3.12 — note `backend/.venv` itself is still Python 3.9 and
-unusable against `pyproject.toml`'s `>=3.11`, so every test run builds a throwaway venv
-from Homebrew `python@3.12`; worth fixing, it's pure friction). Prod credentials and the
-redeploy runbook live in INFRA-PRIVATE.html at the repo root — gitignored, never commit it.
+Two very different Macs, both written up in `CLAUDE.md`. Jose: Intel Mac, no Docker, local
+PG14 on 5432, no `redis-server`. Q: Apple Silicon, Docker, postgres:16 on 5434. Run the
+backend suite from **inside `backend/`** or every async test errors confusingly.
 
-Run the backend suite from **inside `backend/`** — `pyproject.toml`'s
-`asyncio_mode = "auto"` isn't picked up from the repo root, and every async test errors
-out confusingly (76 errors, all "async fixture" complaints) if you forget.
-
-Every backend change that should go live needs a Cloud Run redeploy. It is a human step.
+Creds, runbooks and live fixture ids: `INFRA-PRIVATE.html` at the repo root — gitignored,
+never commit it.

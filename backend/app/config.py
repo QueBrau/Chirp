@@ -24,6 +24,24 @@ class Settings(BaseSettings):
     # rejects custom schemes, so a chirp:// deep link cannot be used directly.
     app_public_base_url: str | None = None
     cors_origins: list[str] = ["*"]
+    # Soft-deleted posts/comments/yaks are hard-deleted by app.jobs.purge once this many
+    # days have passed since deleted_at/removed_at. Matches the 30-day response window
+    # /privacy section 14 already commits to (board c69) — do not let these drift apart.
+    purge_retention_days: int = 30
+    # Transactional email (board c87). "log" records the send and delivers nothing,
+    # which is the correct default for local dev and the whole test suite: no key is
+    # required and no test can accidentally mail a real person. Production sets
+    # "resend" and supplies resend_api_key from Secret Manager.
+    email_provider: Literal["log", "resend"] = "log"
+    resend_api_key: str | None = None
+    # Sender identity. Until c73 buys a domain this is Resend's shared onboarding
+    # sender, which Resend only permits to reach our OWN account address — a
+    # deliberate, temporary state, explained in full in app.services.email_service.
+    email_from: str = "Chirp <onboarding@resend.dev>"
+    # Where a human reply should land. Once c74's support mailbox exists this becomes
+    # that address, so a student replying to a verification mail reaches a person
+    # rather than a sender nobody reads.
+    email_reply_to: str | None = None
 
 
 @lru_cache

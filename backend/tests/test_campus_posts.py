@@ -28,16 +28,29 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from tests.conftest import ApiUser, MakeChapterWith, MakeUser
+from tests.conftest import ApiUser, MakeChapterWith, MakeUser, set_campus, verify_campus
 
 
 async def _make_campus_user(
     client: AsyncClient, campus_id: str, display_name: str = "Campus User"
 ) -> ApiUser:
-    """Bootstrap a user pinned to `campus_id` and belonging to NO chapter.
+    """Bootstrap a VERIFIED user on `campus_id` who belongs to NO chapter.
 
-    Same helper as test_feed_audience.py; duplicated rather than shared because
-    every test module that needs it already keeps its own copy.
+    Two things changed on main while this branch sat, and this helper had to absorb
+    both:
+
+    - c85 removed campus_id from the POST /auth/bootstrap body. It used to be the
+      only way anything assigned a campus, and it was also the hole - the value was
+      written unchecked and the campus guard compared against it. Passing it here now
+      does nothing, so the user came out with NO campus and every campus assertion
+      below failed with not_your_campus.
+    - c88 made campus content require a CURRENT .edu verification, not merely a
+      campus_id. Setting the column alone would swap that failure for
+      campus_unverified.
+
+    So the campus is stamped through conftest's `set_campus`, which writes both
+    columns, exactly as the rest of the suite now does. The chapter-less student is
+    still the subject: what makes them able to post is a verified campus, not an org.
     """
     uid = f"uid-{uuid.uuid4().hex}"
     headers = {"X-Debug-Firebase-Uid": uid}
@@ -48,12 +61,13 @@ async def _make_campus_user(
             "email": email,
             "display_name": display_name,
             "account_type": "greek",
-            "campus_id": campus_id,
         },
         headers=headers,
     )
     assert response.status_code == 201, response.text
-    return ApiUser(id=response.json()["id"], firebase_uid=uid, email=email, headers=headers)
+    user = ApiUser(id=response.json()["id"], firebase_uid=uid, email=email, headers=headers)
+    await set_campus(user.id, campus_id)
+    return user
 
 
 async def _campus_id_of(client: AsyncClient, chapter_id: str, headers: dict[str, str]) -> str:
@@ -137,6 +151,13 @@ async def test_campus_post_is_likeable_by_a_student_from_another_chapter(
     setup = await make_chapter_with("president")
     campus_id = await _campus_id_of(client, setup.chapter_id, setup.president.headers)
     outsider = await _make_campus_user(client, campus_id, "Other Chapter Student")
+
+    # c88: authoring a campus-audience post needs a proved .edu, and a member built
+    # by make_chapter_with has a campus derived from their chapter (c96) with no
+    # verification - the c104/c105 bypass shape, refused on purpose. The SUBJECT of
+    # this test is who can LIKE the post, so the author is made legitimate here
+    # rather than weakening the gate.
+    await verify_campus(setup.president.id)
 
     created = await client.post(
         f"/chapters/{setup.chapter_id}/posts",
