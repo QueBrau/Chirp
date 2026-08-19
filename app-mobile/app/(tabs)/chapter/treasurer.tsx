@@ -34,18 +34,22 @@ import {
 } from "@/api/payments";
 import {
   AppText,
+  BalanceTrend,
   Button,
   Card,
+  CategoryDonut,
   Chip,
   type ChipVariant,
   EmptyState,
   HeroCard,
   ListRow,
+  ProgressMeter,
   Screen,
   SectionHeader,
 } from "@/components";
 import { shareCsv } from "@/lib/export";
-import { radii, spacing, typography, useTheme } from "@/theme";
+import { duesProgress, runningBalance, spendByCategory } from "@/lib/treasury";
+import { radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 /** Entry types offered in the "Add entry" form — "correction" needs a
  * per-entry "correct this" flow (a valid corrects_entry_id) that's out of
@@ -73,6 +77,21 @@ const SPEND_STATUS_VARIANT: Record<SpendApprovalOut["status"], ChipVariant> = {
 
 function dollars(cents: number): string {
   return (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+/**
+ * Whole-dollar money, for chart labels only.
+ *
+ * Cents are load-bearing in the ledger and are always shown there. On an axis or a
+ * legend they are noise that pushes the number wider than the column it sits in —
+ * the exact figure is one row away in the ledger either way.
+ */
+function dollarsRounded(cents: number): string {
+  return (cents / 100).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  });
 }
 
 function entryDate(iso: string): string {
@@ -118,6 +137,11 @@ function FieldLabel({ children }: { children: string }) {
 
 export default function TreasurerScreen() {
   const palette = useTheme();
+  // Campus secondary = Spartan gold (DESIGN §8.5). Used for exactly one decorative
+  // mark on this screen, and deliberately NOWHERE in the charts: gold is 1.74:1 on
+  // white, so a gold data mark would be close to invisible in light mode. On the
+  // violet hero it is decoration on a dark ground, which is what §10.1 asks for.
+  const { campusColors } = useAppearance();
 
   // undefined = /me/memberships hasn't resolved yet; null = signed-in user has
   // no treasurer/president membership anywhere (role-gated screen — NO further
@@ -188,12 +212,15 @@ export default function TreasurerScreen() {
   // Newest first for the ledger list (balance still sums everything).
   const sorted = [...entries].sort((a, b) => b.created_at.localeCompare(a.created_at));
   const cycle = cycles[0];
-  const paidCount =
-    cycle !== undefined
-      ? entries.filter(
-          (entry) => entry.entry_type === "dues_payment" && entry.dues_cycle_id === cycle.id,
-        ).length
-      : 0;
+
+  // Chart inputs. All of these are pure functions over the ledger in src/lib/treasury,
+  // kept out of the screen so the numbers behind the pictures can be tested without
+  // rendering anything — a chart drawn perfectly from a wrong total is worse than no
+  // chart, because it is confidently wrong about someone's money.
+  const balancePoints = runningBalance(entries);
+  const categorySlices = spendByCategory(entries);
+  const dues = duesProgress(cycle, entries, memberNames.size);
+  const paidCount = dues?.paidCount ?? 0;
 
   const sortedApprovals = [...(approvals ?? [])].sort((a, b) =>
     b.created_at.localeCompare(a.created_at),
@@ -346,6 +373,15 @@ export default function TreasurerScreen() {
             >
               {dollars(balance)}
             </AppText>
+            {/* The one gold moment (DESIGN §10.4): short accent bar, never a wash. */}
+            <View
+              style={{
+                width: 28,
+                height: 4,
+                borderRadius: radii.sm / 3,
+                backgroundColor: campusColors.secondary,
+              }}
+            />
             {cycle !== undefined ? (
               <AppText variant="caption" tone="onAccent">
                 {cycle.name} · {dollars(cycle.amount_cents)} per member · {paidCount}{" "}
@@ -354,6 +390,93 @@ export default function TreasurerScreen() {
             ) : null}
           </View>
         </HeroCard>
+
+        {/*
+          ONE zone, not three more cards on the stack (DESIGN §10.1: zones, not card
+          soup). Everything in here is derived from the same ledger rendered further
+          down — none of it is a second source of truth, which is why the section
+          caption says so rather than implying a separate report.
+
+          Each block is a deliberately different shape: a wide short band, a single
+          bar, then a ring beside a list. Identical spacing on identical rectangles is
+          the tell §10.3 is about.
+        */}
+        {entries.length > 0 ? (
+          <View style={{ gap: spacing.md }}>
+            <SectionHeader
+              title="Where the money stands"
+              caption="All of it derived from the ledger below, not a separate report"
+            />
+
+            <Card>
+              <AppText variant="title">Balance over time</AppText>
+              <AppText variant="caption" tone="secondary" style={{ marginTop: spacing.xs }}>
+                {`${entries.length} ${entries.length === 1 ? "entry" : "entries"} · running total, oldest to newest`}
+              </AppText>
+              <View style={{ marginTop: spacing.md }}>
+                <BalanceTrend points={balancePoints} format={dollarsRounded} />
+              </View>
+            </Card>
+
+            {/* Only when there is a target to measure against. Without a roster the
+                denominator is unknown, and a meter drawn against a guess is a lie
+                with a progress bar around it. */}
+            {dues !== null && dues.expectedCents > 0 ? (
+              <Card>
+                <AppText variant="title">Dues collected</AppText>
+                <AppText variant="caption" tone="secondary" style={{ marginTop: spacing.xs }}>
+                  {`${cycle?.name ?? "This cycle"} · ${dues.paidCount} of ${dues.memberCount} members paid`}
+                </AppText>
+                <View style={{ marginTop: spacing.md }}>
+                  <ProgressMeter
+                    fraction={dues.fraction}
+                    label={`Dues collected: ${dollars(dues.collectedCents)} of ${dollars(dues.expectedCents)}`}
+                  />
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "baseline",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <AppText
+                      variant="stat"
+                      style={{ fontVariant: typography.stat.fontVariant }}
+                    >
+                      {dollars(dues.collectedCents)}
+                    </AppText>
+                    <AppText variant="caption" tone="tertiary">
+                      {`of ${dollars(dues.expectedCents)}`}
+                    </AppText>
+                  </View>
+                  {dues.overCollected ? (
+                    <AppText variant="caption" tone="secondary" style={{ marginTop: spacing.xs }}>
+                      {`More came in than this cycle bills — the bar is capped at full, the figure is not.`}
+                    </AppText>
+                  ) : null}
+                </View>
+              </Card>
+            ) : null}
+
+            {/* Spending only. A chapter that has taken money in but not spent any has
+                no part-to-whole to show, and an empty ring is worse than no ring. */}
+            {categorySlices.length > 0 ? (
+              <Card>
+                <AppText variant="title">Where the money went</AppText>
+                <AppText variant="caption" tone="secondary" style={{ marginTop: spacing.xs }}>
+                  {`Across ${categorySlices.length} ${categorySlices.length === 1 ? "category" : "categories"}`}
+                </AppText>
+                <View style={{ marginTop: spacing.md }}>
+                  <CategoryDonut
+                    slices={categorySlices}
+                    format={dollarsRounded}
+                    centerCaption="total out"
+                  />
+                </View>
+              </Card>
+            ) : null}
+          </View>
+        ) : null}
 
         <View>
           <SectionHeader

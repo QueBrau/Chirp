@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./.chart-verify",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "target": "ES2022",
+    "rootDir": "src",
+    "declaration": false
+  },
+  "include": [
+    "src/components/charts/geometry.ts",
+    "src/lib/treasury.ts"
+  ]
+}
