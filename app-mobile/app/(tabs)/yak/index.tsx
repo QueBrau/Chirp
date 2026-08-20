@@ -19,6 +19,7 @@
 import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Modal, Pressable, TextInput, View } from "react-native";
+import { useRouter } from "expo-router";
 
 import { ApiError } from "@/api/client";
 import { createReport, blockYakAuthor } from "@/api/moderation";
@@ -66,6 +67,7 @@ interface SheetOption {
 }
 
 export default function YakScreen() {
+  const router = useRouter();
   const { campusColors } = useAppearance();
   const navyWash = campusNightWash(campusColors);
 
@@ -250,7 +252,8 @@ export default function YakScreen() {
               ? "It's been a year since you last confirmed your .edu address. Verify again to get back on the board."
               : "Yak is your school's anonymous board, so it's limited to students. Confirm your .edu address to join in."
           }
-          // Action arrives with c90's verify screen; a dead button is worse than none.
+          actionLabel={access === "lapsed" ? "Verify again" : "Verify my .edu"}
+          onAction={() => router.push("/(auth)/verify-campus")}
         />
       ) : campusId === null ? (
         // c96: same dead end as the campus feed, same fix. Joining an org

@@ -363,6 +363,33 @@
   ],
   "cards": [
     {
+      "id": "c119",
+      "col": "done",
+      "owner": "J",
+      "tag": "process",
+      "area": "process",
+      "title": "DONE Aug 20 - board-check catches multi-id and verb-prefixed claims (PR pending), fixing the exact gap that let c113/c114 collide",
+      "detail": "From court's post-merge review ticket on PR #37/#38. c116's subject scanner only recognized an id as the token immediately after an optional 'board: ' prefix, matched once. This project's own real convention defeats that: 'board: claim c84, c91, c80, c77, c78 for J' has a verb between the prefix and the first id, so the OLD checker matched nothing from that commit at all, and even a single-id 'board: claim cN for J' matched nothing either, since 'claim' isn't the id. Proven on a scratch repo before fixing: that exact single-claim phrasing passed the old checker clean and printed a WRONG next-free-id on top of it - a false negative in the tool built specifically to prevent false negatives. FIX: findall every c<digits> token in the subject rather than matching a leading one. Checked against the real ~200-commit history first - 95 distinct ids matched, every one already on the board, zero new noise - before shipping. Five cases proven on a bare-origin scratch repo: good board passes; solo leading id with no card still fails (regression); verb-prefixed single claim NOW fails; a five-id list claim catches all five, not just the first; a DONE commit for an already-carded id still passes clean (the false-positive court asked to be tested explicitly)."
+    },
+    {
+      "id": "c120",
+      "col": "backlog",
+      "owner": "",
+      "tag": "frontend",
+      "area": "fyp",
+      "title": "toggleLike in chapter/index.tsx has no catch, unlike its feed/index.tsx twin",
+      "detail": "Found during the c115 post-merge review, unowned. app-mobile/app/(tabs)/chapter/index.tsx's toggleLike awaits likePost/unlikePost and only updates local state AFTER the call succeeds, with no try/catch; called as `void toggleLike(item)` from onPress, so any failure is an unhandled promise rejection with zero UI feedback - the tap just silently does nothing. app-mobile/app/(tabs)/feed/index.tsx's version is genuinely optimistic: it flips state BEFORE the await and has a catch that rolls the flip back on failure. Pre-dates c115 and c115 doesn't touch either file, so it shipped clean, but the asymmetry between the two nearly-identical screens is real and worth closing - probably by porting feed/index.tsx's pattern into chapter/index.tsx."
+    },
+    {
+      "id": "c121",
+      "col": "backlog",
+      "owner": "",
+      "tag": "process",
+      "area": "process",
+      "title": "Mobile has no integration tests, so a client HTTP-verb mismatch is invisible to CI - c115 shipped broken for that reason",
+      "detail": "Found during the c115 post-merge review, unowned. c115 was a client-only bug: feed.ts called POST on a route the backend only ever registered as PUT (routers/feed.py `like_post`), so every like tap was a 405. TypeScript cannot catch this - the verb is a string literal on both sides, so `tsc --noEmit` (mobile's only CI gate, per repo HANDOFF) has no way to know they disagree, and there is no mobile-side test that actually calls the backend to find out. The backend DOES assert the right verb (backend/tests/test_feed_audience.py calls client.put(...) against the live route), so the contract is tested from exactly one side. Same root cause as c113's original gap on web/ - a surface with no gate reads as fine until someone taps it by hand. Worth a card of its own rather than folding into c115, since the fix (some form of mobile-to-backend contract test, or a shared route-constant/schema both sides import from) is a process change, not a one-line patch."
+    },
+    {
       "id": "c118",
       "col": "done",
       "owner": "Q",
@@ -724,8 +751,8 @@
     },
     {
       "id": "c11",
-      "col": "done",
-      "title": "DONE - MERGED to main via PR #3 (2026-08-14). Stripe Connect dues: Express onboarding + rail-locked PaymentSheet.",
+      "col": "progress",
+      "title": "BACKEND MERGED (PR #3, Aug 14) - GATE NOT PASSED: no test-mode payment has ever cleared, card or ACH. Blocked on c39 (EAS dev build - PaymentSheet cannot run on a device). Cross-rail 409 retry must be exercised when it runs.",
       "owner": "Q",
       "tag": "m8",
       "area": "payments",
