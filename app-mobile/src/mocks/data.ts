@@ -247,6 +247,9 @@ export const MOCK_ROLE_META: RoleMetaOut = {
   roles: ["president", "vice_president", "treasurer", "secretary", "historian", "member", "pledge", "alumni"],
   eboard: ["president", "vice_president", "treasurer", "secretary", "historian"],
   invitable: ["member", "pledge", "alumni", "president", "vice_president", "treasurer", "secretary", "historian"],
+  // c80: a president holds every capability. Kept in the same order the server
+  // sorts them so a diff against a real response reads cleanly.
+  capabilities: ["dues_admin", "members_admin", "minutes_admin", "moderation"],
 };
 
 export const MOCK_INVITES: ChapterInviteOut[] = [

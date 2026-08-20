@@ -92,10 +92,22 @@ export interface MyMembershipOut extends MembershipOut {
 /** GET /chapters/{id}/role-meta — role taxonomy served from backend permissions.py
  * (c44), so this app never hand-mirrors the eboard set or the create_invite rule.
  * `invitable` is what the CALLER may mint (empty for non-eboard), common roles first. */
+/**
+ * What the server says about roles, so the app never keeps its own copy (c44, c80).
+ *
+ * `capabilities` is what THIS caller may DO, by name. Gate UI on it — ask "may I see
+ * the dues tile", never "am I a treasurer or a president". The names come from
+ * permissions.CAPABILITIES, which is the same definition the routers gate on, so a
+ * permission change moves the server and the UI together. Deriving a capability from
+ * `roles` client-side rebuilds exactly the drift these cards exist to delete.
+ */
+export type Capability = "dues_admin" | "minutes_admin" | "members_admin" | "moderation";
+
 export interface RoleMetaOut {
   roles: RoleName[];
   eboard: RoleName[];
   invitable: RoleName[];
+  capabilities: Capability[];
 }
 
 export async function listChapters(): Promise<ChapterOut[]> {

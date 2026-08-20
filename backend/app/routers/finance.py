@@ -11,7 +11,7 @@ from sqlalchemy.orm import aliased
 from app import models
 from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.errors import conflict, not_found
-from app.core.permissions import Role, require_role
+from app.core.permissions import DUES_ADMIN, Role, require_role
 from app.db import get_session
 from app.middleware.org_scope import get_current_membership
 from app.schemas.finance import (
@@ -52,7 +52,7 @@ async def list_dues_cycles(
 async def create_dues_cycle(
     chapter_id: uuid.UUID,
     body: DuesCycleCreate,
-    _membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> DuesCycleOut:
     """Create a dues cycle; treasurer/president only."""
@@ -77,7 +77,7 @@ async def list_ledger_entries(
     category: str | None = Query(default=None),
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = Query(default=None),
-    _membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> list[LedgerEntryOut]:
     """List ledger entries newest-first, optionally filtered; treasurer/president only."""
@@ -96,7 +96,7 @@ async def list_ledger_entries(
 async def create_ledger_entry(
     chapter_id: uuid.UUID,
     body: LedgerEntryCreate,
-    membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> LedgerEntryOut:
     """Append a ledger entry; treasurer/president only.
@@ -145,7 +145,7 @@ async def export_ledger_csv(
     category: str | None = Query(default=None),
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = Query(default=None),
-    _membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     """Export the (optionally filtered) ledger as CSV; treasurer/president only.
@@ -244,7 +244,7 @@ async def decide_spend_approval(
     chapter_id: uuid.UUID,
     approval_id: uuid.UUID,
     body: SpendApprovalDecision,
-    membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> SpendApprovalOut:
     """Approve/reject a pending spend approval; treasurer/president; 409 if decided."""

@@ -24,6 +24,7 @@ import {
   listInvites,
   listMembers,
   revokeInvite,
+  type Capability,
   type ChapterInviteOut,
   type ChapterOut,
   type MemberOut,
@@ -62,8 +63,14 @@ interface Tool {
   icon: FeatherIconName;
   title: string;
   description: string;
-  /** undefined = visible to every member. */
-  roles?: RoleName[];
+  /**
+   * undefined = visible to every member. Otherwise the SERVER-NAMED capability the
+   * caller must hold (c80). Never a role list: the server decides who holds a
+   * capability, and a client-side role list is a second copy of permissions.py that
+   * drifts silently — nothing fails when it does, you just get a tile nobody can use
+   * or an officer who never sees their own dashboard.
+   */
+  capability?: Capability;
 }
 
 const TOOLS: Tool[] = [
@@ -86,14 +93,14 @@ const TOOLS: Tool[] = [
     icon: "dollar-sign",
     title: "Treasurer",
     description: "Dues and the ledger",
-    roles: ["treasurer", "president"],
+    capability: "dues_admin",
   },
   {
     href: "/chapter/secretary",
     icon: "file-text",
     title: "Secretary",
     description: "Minutes and attendance",
-    roles: ["secretary", "president"],
+    capability: "minutes_admin",
   },
 ];
 
@@ -671,12 +678,10 @@ function OrgToolsSegment({ chapterId, role }: { chapterId: string; role: RoleNam
   const router = useRouter();
   const palette = useTheme();
   const { roleMeta } = useOwnChapter();
-  // Moderation (board c35): gated to e-board, same server-decided taxonomy the
-  // invite card uses below (never hand-mirror permissions.py's EBOARD set).
-  // While roleMeta is loading/errored, eboardRoles is [] and .includes(role) is
-  // false for everyone — fails CLOSED (tile absent) rather than flashing it
-  // open, matching the invite card's own fail-soft-to-absent posture.
-  const eboardRoles = roleMeta?.eboard ?? [];
+  // c80: every gated tile now asks the server what this caller may DO. While
+  // roleMeta is loading or errored this is [], so every gated tile is ABSENT —
+  // fails CLOSED rather than flashing open, matching the invite card's posture.
+  const capabilities = roleMeta?.capabilities ?? [];
   const allTools: Tool[] = [
     ...TOOLS,
     {
@@ -684,10 +689,12 @@ function OrgToolsSegment({ chapterId, role }: { chapterId: string; role: RoleNam
       icon: "shield",
       title: "Moderation",
       description: "Open reports and yak removal",
-      roles: eboardRoles,
+      capability: "moderation",
     },
   ];
-  const visible = allTools.filter((tool) => tool.roles === undefined || tool.roles.includes(role));
+  const visible = allTools.filter(
+    (tool) => tool.capability === undefined || capabilities.includes(tool.capability),
+  );
   // Server-decided (c44): a non-empty invitable set means this caller may mint
   // invites. Fail soft — while roleMeta is loading (or errored) the card is
   // simply absent, never shown to someone the backend would 403.

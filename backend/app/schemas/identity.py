@@ -152,11 +152,19 @@ class RoleMetaOut(_Schema):
     `roles` is every role in canonical display order, `eboard` the officer subset,
     `invitable` the roles THIS caller may mint invites for (empty for non-eboard),
     ordered as a picker should show them: common roles first.
+
+    `capabilities` (c80) is what THIS caller may DO, by name, so the app asks "may I
+    see the dues tile" instead of "am I a treasurer or a president". It is derived
+    from the same frozensets the routers gate on (permissions.CAPABILITIES), so a
+    permission change moves the gate and the UI together. The client must never
+    reconstruct it from `roles` - that is the hand-mirroring c44 and c80 both exist
+    to stop.
     """
 
     roles: list[RoleName]
     eboard: list[RoleName]
     invitable: list[RoleName]
+    capabilities: list[str] = []
 
 
 class MeOut(_Schema):
