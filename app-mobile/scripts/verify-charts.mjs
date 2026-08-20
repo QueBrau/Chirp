@@ -88,6 +88,21 @@ const entry = (amount, category, iso, type = amount >= 0 ? "dues_payment" : "exp
   check("running balance sorts chronologically regardless of input order",
     bal.map((p) => p.y).join(",") === "10000,7000,5000", bal.map((p) => p.y).join(","));
 
+  // Regression: two entries in the SAME second, shaped exactly as the backend
+  // actually serializes them. Pydantic omits microseconds when they are exactly
+  // zero and includes them otherwise, so a real pair can look like this — same
+  // second, different string LENGTH. A comparison on the raw string (localeCompare)
+  // orders "23Z" before "23.500000Z" by CHARACTER, which is wrong here since the
+  // second one is later; sorting on the parsed instant gets it right regardless of
+  // string shape. If this ever regresses to string comparison, this is the pair
+  // that catches it — the two entries above never land in the same second.
+  const sameSecond = runningBalance([
+    entry(2000, "dues", "2026-08-19T05:47:23.500000Z"),
+    entry(1000, "dues", "2026-08-19T05:47:23Z"),
+  ]);
+  check("same-second entries with a microsecond boundary still sort chronologically",
+    sameSecond.map((p) => p.y).join(",") === "1000,3000", sameSecond.map((p) => p.y).join(","));
+
   const cats = spendByCategory([
     entry(-5000, "formal", "2026-01-01T00:00:00Z"),
     entry(-3000, "rush", "2026-01-02T00:00:00Z"),
@@ -149,6 +164,10 @@ console.log("TREASURY — stable colour slots");
 }
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
+// Without this the script always exited 0, so wiring it into CI (c118) would have
+// produced a check that runs but can never fail - green regardless of what it found,
+// which is worse than not running at all because it LOOKS like coverage.
+process.exit(failures === 0 ? 0 : 1);
 
 // ---- render a real preview so the picture can be looked at, not just asserted ----
 const LIGHT = { surface:"#FFFFFF", bg:"#F6F7FB", ink:"#101223", inkSecondary:"#575B75", inkFaint:"#9BA0B8",
