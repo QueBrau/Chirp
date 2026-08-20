@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.errors import not_found
-from app.core.permissions import Role, require_role
+from app.core.permissions import MINUTES_ADMIN, Role, require_role
 from app.db import get_session
 from app.middleware.org_scope import get_current_membership
 from app.schemas.meetings import (
@@ -50,7 +50,7 @@ async def list_meetings(
 @router.get("/chapters/{chapter_id}/meetings/export.csv")
 async def export_meetings_csv(
     chapter_id: uuid.UUID,
-    _membership: models.Membership = Depends(require_role(Role.secretary, Role.president)),
+    _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     """Export chapter attendance as CSV, one row per (meeting, member); secretary/president only.
@@ -90,7 +90,7 @@ async def export_meetings_csv(
 async def create_meeting(
     chapter_id: uuid.UUID,
     body: MeetingCreate,
-    membership: models.Membership = Depends(require_role(Role.secretary, Role.president)),
+    membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> MeetingOut:
     """Create a meeting; secretary/president only."""
@@ -124,7 +124,7 @@ async def update_meeting(
     chapter_id: uuid.UUID,
     meeting_id: uuid.UUID,
     body: MeetingUpdate,
-    _membership: models.Membership = Depends(require_role(Role.secretary, Role.president)),
+    _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> MeetingOut:
     """Update title/date/minutes; secretary/president only."""
@@ -143,7 +143,7 @@ async def update_meeting(
 async def delete_meeting(
     chapter_id: uuid.UUID,
     meeting_id: uuid.UUID,
-    _membership: models.Membership = Depends(require_role(Role.secretary, Role.president)),
+    _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Delete a meeting and its attendance records; secretary/president only."""
@@ -162,7 +162,7 @@ async def upsert_attendance(
     chapter_id: uuid.UUID,
     meeting_id: uuid.UUID,
     body: MeetingAttendanceUpdate,
-    _membership: models.Membership = Depends(require_role(Role.secretary, Role.president)),
+    _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> list[MeetingAttendanceOut]:
     """Bulk-upsert attendance statuses for a meeting; secretary/president only."""

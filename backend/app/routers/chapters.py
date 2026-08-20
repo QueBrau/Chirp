@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.core.errors import conflict, forbidden, not_found
 from app.core.invites import clamp_invite_expiry
-from app.core.permissions import EBOARD, Role, require_role
+from app.core.permissions import EBOARD, MEMBERS_ADMIN, Role, capabilities_for, require_role
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.middleware.org_scope import get_current_membership
@@ -138,14 +138,19 @@ async def get_role_meta(
         invitable = non_eboard
     else:
         invitable = []
-    return RoleMetaOut(roles=roles, eboard=eboard, invitable=invitable)
+    return RoleMetaOut(
+        roles=roles,
+        eboard=eboard,
+        invitable=invitable,
+        capabilities=capabilities_for(membership.role),
+    )
 
 
 @router.patch("/chapters/{chapter_id}/members")
 async def update_member(
     chapter_id: uuid.UUID,
     body: MembershipUpdate,
-    _actor: models.Membership = Depends(require_role(Role.president)),
+    _actor: models.Membership = Depends(require_role(*MEMBERS_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> MembershipOut:
     """Update a member's role/status/pledge_class; president only."""
