@@ -126,9 +126,27 @@ except Exception:
 # none of it could see the problem - the file was perfectly well-formed. This is
 # the only check that looks at git.
 #
-# Deliberately narrow: an id counts as CLAIMED only where claiming actually
-# happens - a branch name segment, or the leading token of a commit subject.
-# Matching "c12" anywhere in prose would fail this script on someone's sentence.
+# Deliberately narrow to two places claiming actually happens - a branch name
+# segment, or a commit SUBJECT (never the body, which is full of prose that
+# mentions ids in passing rather than claiming them).
+#
+# Board card c119. The subject scan was originally the leading token only -
+# "^(?:board: )?(c\d+)\b" - on the assumption that a claim always opens the
+# subject. That assumption is false for this project's own convention: "board:
+# claim c84, c91, c80, c77, c78 for J" has a VERB between the prefix and the
+# first id, so the old pattern matched NOTHING from it, and even where it did
+# match, it only ever took the first id of a list, silently dropping the rest.
+# Verified against a scratch repo before fixing: that exact phrasing, adapted
+# to a single id ("board: claim c9 for J"), passed this checker clean and even
+# printed a wrong "next free id" - the same failure this script exists to
+# prevent, reached through a different door.
+#
+# Fix: take every c<digits> token anywhere in the subject, not just a leading
+# one. Checked this is not noisier in practice, not just in theory - run
+# against this repo's full history (git log --all --format=%s, ~200 commits,
+# 95 distinct ids matched), every id it finds is already on the board. Nothing
+# starts failing that was not already going to fail; multi-id and verb-prefixed
+# claims just stop being invisible to it.
 seen = {}
 
 
@@ -141,7 +159,7 @@ def _git(*args):
 
 
 BRANCH_ID = re.compile(r"(?:^|/)(c\d+)[-_]")
-SUBJECT_ID = re.compile(r"^(?:board: )?(c\d+)\b")
+SUBJECT_IDS = re.compile(r"\bc\d+\b")
 
 for ref in _git("branch", "-a", "--format=%(refname:short)").splitlines():
     ref = ref.strip()
@@ -150,9 +168,9 @@ for ref in _git("branch", "-a", "--format=%(refname:short)").splitlines():
         _note(match.group(1), "branch %s" % ref)
 
 for subject in _git("log", "--all", "--format=%s").splitlines():
-    match = SUBJECT_ID.match(subject.strip())
-    if match:
-        _note(match.group(1), "commit %r" % subject.strip()[:60])
+    subject = subject.strip()
+    for card_id in SUBJECT_IDS.findall(subject):
+        _note(card_id, "commit %r" % subject[:60])
 
 known = set(ids)
 undeclared = sorted((i for i in seen if i not in known), key=lambda x: int(x[1:]))
