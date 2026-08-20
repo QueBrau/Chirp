@@ -28,15 +28,25 @@ export interface BalancePoint {
  * for the list, and summing in that order draws the chart backwards.
  */
 export function runningBalance(entries: LedgerEntryOut[]): BalancePoint[] {
-  const chronological = [...entries].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  // Sorted on the PARSED instant, not the raw string. created_at is serialized by
+  // Pydantic, which omits microseconds when they are exactly zero and includes them
+  // otherwise ("...23Z" vs "...23.500000Z"). Two entries landing in the same second
+  // can then differ in STRING LENGTH at that boundary, and localeCompare orders by
+  // character rather than by time - "23Z" sorts before "23.5...Z" even though the
+  // second timestamp is later, misordering a pair that both parse correctly. Parsing
+  // once here and sorting on the number sidesteps the string shape entirely.
+  const withInstant = entries.map((entry) => ({ entry, at: Date.parse(entry.created_at) }));
+  withInstant.sort((a, b) => a.at - b.at);
+
   const points: BalancePoint[] = [];
   let total = 0;
-  for (const entry of chronological) {
+  for (const { entry, at } of withInstant) {
     total += entry.amount_cents;
-    const at = Date.parse(entry.created_at);
     // A row with an unparseable timestamp would poison every x with NaN and blank
     // the whole chart; it still belongs in the running total, so carry the value
-    // forward on the previous instant instead of dropping the money.
+    // forward on the previous instant instead of dropping the money. `a.at - b.at`
+    // is also NaN whenever either side is NaN, which sort treats as "equal" to its
+    // neighbour, so a bad row stays put rather than jumping to either end.
     const x = Number.isNaN(at) ? (points[points.length - 1]?.x ?? 0) : at;
     points.push({ x, y: total });
   }
@@ -107,8 +117,9 @@ export interface DuesProgress {
  *
  * Expected is `amount per member x members`, which is the only target the API can
  * express today — there is no per-member assessment table. When the roster has not
- * loaded (`memberCount` 0) expected is 0 and the caller shows counts, not a ratio,
- * rather than drawing a meter against a denominator it does not have.
+ * loaded (`memberCount` 0) expected is 0, which the caller (treasurer.tsx) reads as
+ * "no target to measure against" and hides the whole dues card rather than drawing
+ * a meter against a denominator it does not have.
  */
 export function duesProgress(
   cycle: DuesCycleOut | undefined,

@@ -141,6 +141,13 @@ jobs:
       - name: Type-check
         working-directory: app-mobile
         run: npx tsc --noEmit
+      - name: Chart math
+        working-directory: app-mobile
+        # tsc cannot tell you an arc is drawn at the wrong angle - chart geometry
+        # fails by rendering a confident, wrong picture rather than throwing, which
+        # is exactly what verify:charts exists to catch (c118). Until this step, the
+        # script only ran if a human remembered to type the command by hand.
+        run: npm run verify:charts
 
   web:
     # Board card c113. web/ is the PUBLIC MARKETING SITE and it had no gate at
