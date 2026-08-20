@@ -23,7 +23,7 @@ import { Alert, Modal, Pressable, TextInput, View } from "react-native";
 import { ApiError } from "@/api/client";
 import { createReport, blockYakAuthor } from "@/api/moderation";
 import { createYak, listYaks, voteYak, type YakFeedOut, type YakVoteValue } from "@/api/yaks";
-import { useCampus, useSession } from "@/auth";
+import { useCampus, useCampusAccess, useSession } from "@/auth";
 import { AppText, EmptyState, Screen, VotePill } from "@/components";
 import {
   campusNightWash,
@@ -74,6 +74,10 @@ export default function YakScreen() {
   // fetch needed (that would just duplicate SessionProvider's own call).
   const { user } = useSession();
   const campusId = user?.campus_id ?? null;
+  // c110: since c88 the board is gated on a verified .edu, not on having a
+  // campus. A chapter-joined user has campusId set and is still refused, so
+  // loading on campusId alone fires a request that comes back 403.
+  const access = useCampusAccess();
 
   const campus = useCampus();
   const [yaks, setYaks] = useState<YakFeedOut[] | null>(null);
@@ -94,9 +98,9 @@ export default function YakScreen() {
   }, []);
 
   useEffect(() => {
-    if (campusId === null) return; // alumni/off-campus: nothing to load
+    if (campusId === null || access !== "ok") return; // no campus, or not verified yet
     void loadYaks(campusId).catch((error: unknown) => showApiError(error, "Couldn't load the board"));
-  }, [campusId, loadYaks]);
+  }, [campusId, access, loadYaks]);
 
 
   const vote = async (yak: YakFeedOut, value: YakVoteValue) => {
@@ -233,7 +237,22 @@ export default function YakScreen() {
         </AppText>
       </View>
 
-      {campusId === null ? (
+      {access === "loading" ? (
+        <EmptyState title="Opening the board..." />
+      ) : access === "unverified" || access === "lapsed" ? (
+        // The designed refusal (c110). Yak is the surface the .edu rule exists
+        // for — a stranger reading your school's anonymous board is precisely
+        // what it costs something to allow.
+        <EmptyState
+          title={access === "lapsed" ? "Confirm your school again" : "Students only"}
+          message={
+            access === "lapsed"
+              ? "It's been a year since you last confirmed your .edu address. Verify again to get back on the board."
+              : "Yak is your school's anonymous board, so it's limited to students. Confirm your .edu address to join in."
+          }
+          // Action arrives with c90's verify screen; a dead button is worse than none.
+        />
+      ) : campusId === null ? (
         // c96: same dead end as the campus feed, same fix. Joining an org
         // grants a campus (derived from the chapter, never client-asserted),
         // so there is now an actual next step to point at.

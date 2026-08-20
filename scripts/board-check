@@ -65,7 +65,7 @@ behind=$(git rev-list --count HEAD..origin/main)
 [ "$behind" = "0" ] || fail "origin/main is $behind commit(s) ahead of you. Pull FIRST, re-apply your edit on top, then push - otherwise you will revert someone's card without a conflict."
 
 python3 - "$@" <<'PY'
-import json, sys, subprocess, collections
+import json, re, sys, subprocess, collections
 
 MARK = '<script id="board-data" type="application/json">'
 raw = open("board.html").read()
@@ -115,8 +115,58 @@ try:
 except Exception:
     pass
 
+# Failure mode 5, added Aug 18 after it cost a renumber. THE BOARD IS NOT A
+# RELIABLE PLACE TO TAKE THE NEXT ID FROM unless every id in use is on it.
+# CLAUDE.md says to take the next id from origin's current board, and that had
+# quietly become wrong: c113 was used by TWO of Jose's branches and c114 by a
+# third, none with a card, so the board's max id read 112. A Q session took 114,
+# collided with work from two days earlier, and had to renumber to c115.
+#
+# Everything above this point validates board.html against ITSELF, which is why
+# none of it could see the problem - the file was perfectly well-formed. This is
+# the only check that looks at git.
+#
+# Deliberately narrow: an id counts as CLAIMED only where claiming actually
+# happens - a branch name segment, or the leading token of a commit subject.
+# Matching "c12" anywhere in prose would fail this script on someone's sentence.
+seen = {}
+
+
+def _note(card_id, where):
+    seen.setdefault(card_id, set()).add(where)
+
+
+def _git(*args):
+    return subprocess.run(["git", *args], capture_output=True, text=True).stdout
+
+
+BRANCH_ID = re.compile(r"(?:^|/)(c\d+)[-_]")
+SUBJECT_ID = re.compile(r"^(?:board: )?(c\d+)\b")
+
+for ref in _git("branch", "-a", "--format=%(refname:short)").splitlines():
+    ref = ref.strip()
+    match = BRANCH_ID.search(ref)
+    if match:
+        _note(match.group(1), "branch %s" % ref)
+
+for subject in _git("log", "--all", "--format=%s").splitlines():
+    match = SUBJECT_ID.match(subject.strip())
+    if match:
+        _note(match.group(1), "commit %r" % subject.strip()[:60])
+
+known = set(ids)
+undeclared = sorted((i for i in seen if i not in known), key=lambda x: int(x[1:]))
+if undeclared:
+    problems.append(
+        "ids used in git with NO card on the board, so the next free id cannot be "
+        "read off this file: %s. Write the card (reconstruct it from the commit if "
+        "the work already shipped), or renumber the branch." % "; ".join(
+            "%s (%s)" % (i, sorted(seen[i])[0]) for i in undeclared))
+
 if problems:
     sys.exit("\n  - ".join(["", *problems]))
 
 print("OK: %d cards, all in %s, no duplicate ids or keys" % (len(ids), " / ".join(sorted(col_ids))))
+print("OK: %d ids claimed in git, all declared on the board; next free id is c%d"
+      % (len(seen), max(int(i[1:]) for i in known | set(seen)) + 1))
 PY
