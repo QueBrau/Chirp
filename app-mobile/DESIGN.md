@@ -272,3 +272,81 @@ in icons — vector icons (Feather) or geometric Views only. Emoji reads as AI s
 heavy shadow together at full strength. No more than one HeroCard per screen. No
 accent-colored body text. No dense screens — if it feels full, split into cards.
 No new colors outside §2.
+
+## 11. Data visualisation (Aug 18) — charts are computed, not styled
+
+Added for the treasurer dashboard (board c118). §2 had no chart tokens at all, and
+this file's own rule is that a value gets added here before it gets used.
+
+**The form follows the data's job, not the request.** "Add pie charts" is a request
+for a form, and three of the four things a treasurer needs are not pies:
+
+| The question | Form | Why not the obvious thing |
+|---|---|---|
+| What is the balance right now? | hero figure on the HeroCard | a one-bar chart is a number with decoration |
+| How did it get there? | line + area, ONE series | a multi-colour chart implies series that don't exist |
+| How much of dues is in? | **meter** | a 2-slice pie makes you compare two angles to read one percentage |
+| What did we spend it on? | **donut**, <= 5 + Other | this one genuinely is part-to-whole |
+
+A donut is legal for part-to-whole **at a glance only**, never for comparing close
+values — so every slice's exact amount sits in the legend beside it. Past ~6 segments
+adjacent slices stop being separable at any palette, so the tail folds into one
+"Other" rather than growing more colours.
+
+### Categorical palette (`palette.chartCategorical`)
+
+Five slots, fixed order, assigned in sequence and **never cycled**. The order IS the
+colour-blindness safety mechanism, not a preference.
+
+| mode | slots |
+|---|---|
+| light (on `surface` #FFFFFF) | `#5B5BF6` `#DB2777` `#0284C7` `#EA580C` `#0D9488` |
+| dark (on `surface` #15161F) | `#7C7CFF` `#EC4899` `#0891B2` `#EA580C` `#10A99A` |
+
+Both were **run through a validator, not eyeballed** — lightness band, chroma floor,
+CVD separation under protanopia/deuteranopia, a normal-vision floor and contrast vs
+the surface. Light clears at worst-adjacent 13.8 CVD / 28.8 normal; dark at 8.1 /
+24.4; all ten swatches >= 3:1 on their surface. The donut's **wrap-around pair** was
+checked too, since the last segment touches the first. The slot order came out of
+enumerating all 120 permutations and taking the one with the best worst-case adjacent
+separation. **Do not hand-edit a slot — re-run the validator.**
+
+Dark is its own set of steps, not a flip: the light steps sit outside the dark
+lightness band entirely.
+
+- **`chartOther`** is a neutral, deliberately not a sixth hue. "Other" is the absence
+  of an identity; giving it one implies a category that isn't there.
+- **Colour follows the entity, never its rank.** Slices display largest-first, but the
+  colour comes from a stable slot derived from the category's own label
+  (`assignCategorySlots`). Two categories swapping places must not swap colours.
+- **Status colours are reserved.** `success`/`danger` mean money in and money out. A
+  spend category wearing them would be making a claim about the money that isn't true,
+  so they are never reused as series identity.
+- **Categorical slots do NOT follow the org accent** (§8.6), because they are validated
+  values. Single-series charts DO use `accent`, so a trend line wears the org's colour
+  automatically.
+
+### Marks
+
+- Line **2px**, round join and cap. Area fill = the same hue at **10% opacity**, a
+  wash and never a saturated block.
+- End dot r=4.5 with a **2px ring in the surface colour** — a ring, not a border, so it
+  stays legible where it crosses its own line.
+- **2px of surface between touching marks** (donut segments), specified in pixels and
+  converted to degrees at the ring's mid radius, so the gap looks even at any size.
+- Gridlines/axis rules: hairline 1px solid in `border`, recessive. The zero line is
+  drawn **only when the series actually crosses zero**.
+- Meter track is `accentSoft` — a lighter step of the fill's own ramp, not a neutral —
+  so state reads across the whole bar.
+
+### Rules that are easy to get wrong
+
+- **Text never wears the data colour.** Labels, values and legends use ink tokens; the
+  swatch beside them carries identity. A light hue is illegible as text on `surface`.
+- **A legend is always present for two or more series**; a single series gets none, as
+  the card title already names it.
+- **No gold on any chart mark.** Spartan gold is 1.74:1 on white — a gold data mark is
+  nearly invisible in light mode. The screen's one gold moment (§10.4) is decorative
+  and lives on the violet hero, where it has a dark ground behind it.
+- **The area closes onto zero when zero is in range**, not onto the bottom of the box:
+  an overdrawn chapter's deficit must not shade like a surplus.
