@@ -20,12 +20,39 @@ CODE = "483920"
 HTML = f"<p>Your Chirp code is {CODE}</p>"
 
 
+# Every field this suite asserts on. Cleared from BOTH sources before a Settings is
+# built, so a test states what the code does rather than what this machine happens to
+# be configured for.
+_AMBIENT_EMAIL_VARS = (
+    "EMAIL_PROVIDER",
+    "RESEND_API_KEY",
+    "EMAIL_FROM",
+    "EMAIL_REPLY_TO",
+)
+
+
 @pytest.fixture
 def configure(monkeypatch: pytest.MonkeyPatch):
-    """Override settings for one test; clears the lru_cache both ways."""
+    """Override settings for one test, isolated from ambient config.
+
+    `_env_file=None` AND the env-var deletions are both required, and neither is
+    belt-and-braces. Settings reads backend/.env, so a developer with a real
+    EMAIL_PROVIDER=resend in that file made the "the default is log" test assert
+    something about their machine instead of about the code — it passed in CI, which
+    builds a clean checkout with no .env, and failed for anyone who had one. Reported
+    by the c84 session hitting it on a full-suite run before merging.
+
+    The general trap, worth remembering beyond this file: ANY test that constructs
+    Settings() directly inherits backend/.env, so the suite silently tests whatever
+    configuration the developer happens to have. That is the same shape as the shared
+    test database and the destroyed venv — a result that depends on machine state
+    rather than on the code, which is the most expensive kind of green.
+    """
 
     def _configure(**overrides: object) -> Settings:
-        settings = Settings(**overrides)  # type: ignore[arg-type]
+        for name in _AMBIENT_EMAIL_VARS:
+            monkeypatch.delenv(name, raising=False)
+        settings = Settings(_env_file=None, **overrides)  # type: ignore[arg-type,call-arg]
         monkeypatch.setattr(email_service, "get_settings", lambda: settings)
         return settings
 

@@ -41,6 +41,24 @@ export interface Palette {
   /** Rotating pastel card tints on Yak (index % 4). */
   yakTints: readonly [string, string, string, string];
 
+  /**
+   * Categorical chart series (DESIGN §11). Fixed order, assigned in sequence and
+   * NEVER cycled — slot order is the colour-blindness safety mechanism, not a
+   * preference. Five slots is the cap: a 6th category folds into `chartOther`.
+   *
+   * Both modes were validated with the dataviz validator (lightness band, chroma
+   * floor, CVD separation under protanopia/deuteranopia, normal-vision floor and
+   * contrast vs `surface`), including the donut's wrap-around pair, since the last
+   * segment touches the first. Do not hand-edit a slot: re-run the validator.
+   */
+  chartCategorical: readonly [string, string, string, string, string];
+
+  /**
+   * The folded "Other" slice. Deliberately a NEUTRAL, not a sixth hue: it is the
+   * absence of an identity, and giving it one implies a category that isn't there.
+   */
+  chartOther: string;
+
   /** Preset gradient pairs for GradientAvatar (picked by name hash). */
   avatarGradients: readonly GradientPair[];
 
@@ -97,6 +115,12 @@ export const light: Palette = {
 
   yakTints: ["#FFF3E9", "#EDF6FF", "#F3EDFF", "#EAF8F1"],
 
+  // Validated on surface #FFFFFF: worst adjacent CVD dE 13.8, normal-vision 28.8,
+  // all >= 3:1 contrast. Slot order chosen by enumerating all 120 permutations and
+  // taking the one with the best worst-case adjacent separation.
+  chartCategorical: ["#5B5BF6", "#DB2777", "#0284C7", "#EA580C", "#0D9488"],
+  chartOther: "#9BA0B8",
+
   avatarGradients,
 
   // Legacy aliases
@@ -138,6 +162,12 @@ export const dark: Palette = {
     "rgba(243,237,255,0.12)",
     "rgba(234,248,241,0.12)",
   ],
+
+  // Its own steps, not a flip of the light ramp: validated on surface #15161F,
+  // worst adjacent CVD dE 8.1, normal-vision 24.4, all >= 3:1. The light steps sit
+  // outside the dark lightness band (0.48-0.67), which is why these differ.
+  chartCategorical: ["#7C7CFF", "#EC4899", "#0891B2", "#EA580C", "#10A99A"],
+  chartOther: "#666B85",
 
   avatarGradients,
 

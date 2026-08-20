@@ -17,7 +17,7 @@ import uuid
 
 from httpx import AsyncClient
 
-from tests.conftest import MakeChapterWith
+from tests.conftest import MakeChapterWith, verify_campus
 
 
 async def _file_report_on_chapter_post(
@@ -44,6 +44,7 @@ async def test_resolving_a_report_takes_it_out_of_the_open_queue(
 ) -> None:
     """The actual c91 bug: handled items used to come back as open on every reload."""
     setup = await make_chapter_with("president")
+    await verify_campus(setup.president.id)
     report_id = await _file_report_on_chapter_post(client, setup)
 
     before = await client.get("/moderation/reports", headers=setup.president.headers)
@@ -71,6 +72,7 @@ async def test_dismissed_is_distinct_from_actioned(
     """Both mean 'a moderator looked at it', which is what empties the queue; the
     difference is whether anything happened, and that must survive."""
     setup = await make_chapter_with("president")
+    await verify_campus(setup.president.id)
     report_id = await _file_report_on_chapter_post(client, setup)
 
     resolved = await client.patch(
@@ -95,6 +97,8 @@ async def test_eboard_of_another_campus_cannot_resolve(
     """
     chapter_a = await make_chapter_with("president")
     chapter_b = await make_chapter_with("president")
+    await verify_campus(chapter_a.president.id)
+    await verify_campus(chapter_b.president.id)
     report_id = await _file_report_on_chapter_post(client, chapter_a)
 
     attempt = await client.patch(
@@ -114,6 +118,7 @@ async def test_plain_member_cannot_resolve(
 ) -> None:
     """Same campus, no e-board role — refused before campus scoping is even reached."""
     setup = await make_chapter_with("member")
+    await verify_campus(setup.president.id)
     report_id = await _file_report_on_chapter_post(client, setup)
 
     attempt = await client.patch(
@@ -130,6 +135,7 @@ async def test_double_resolve_is_a_conflict_not_a_silent_success(
     """Two moderators working one queue is the normal case. The second must be told
     their decision did not land rather than believing it overwrote the first."""
     setup = await make_chapter_with("president")
+    await verify_campus(setup.president.id)
     report_id = await _file_report_on_chapter_post(client, setup)
 
     first = await client.patch(
@@ -154,6 +160,7 @@ async def test_unknown_report_is_404(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
     setup = await make_chapter_with("president")
+    await verify_campus(setup.president.id)
     attempt = await client.patch(
         "/moderation/reports/00000000-0000-0000-0000-000000000000",
         json={"status": "dismissed", "reason": "nope"},
@@ -168,6 +175,7 @@ async def test_reopening_is_rejected_by_the_schema(
     """'open' is deliberately not a resolvable-to value: closing is a decision, undoing
     another moderator's decision is a different feature with no product answer yet."""
     setup = await make_chapter_with("president")
+    await verify_campus(setup.president.id)
     report_id = await _file_report_on_chapter_post(client, setup)
 
     attempt = await client.patch(

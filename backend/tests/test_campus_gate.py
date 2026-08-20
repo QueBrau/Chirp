@@ -215,3 +215,122 @@ async def test_deleting_your_own_yak_survives_a_lapsed_verification(
     response = await client.delete(f"/yaks/{yak_id}", headers=user.headers)
 
     assert response.status_code == 204, response.text
+
+
+# ---------------------------------------------------------------------------
+# c108 — moderating campus content requires a verified .edu, not just the role
+# ---------------------------------------------------------------------------
+
+
+async def _open_report_on_a_yak(client: AsyncClient, reporter, yak_id: str) -> str:
+    response = await client.post(
+        "/moderation/reports",
+        json={"target_type": "yak", "target_id": yak_id, "reason": "test"},
+        headers=reporter.headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def test_an_unverified_officer_cannot_moderate_campus_content(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """THE c108 TRIPWIRE, and it guards all THREE moderation endpoints at once because
+    they share one function.
+
+    Jose ruled Aug 16 that moderating campus content requires a verified .edu — stricter
+    than the officer-role-is-enough recommendation on that card. So a president who has
+    never proved an .edu keeps every chapter power and loses the campus Yak board.
+
+    If this starts passing 204s back, the verification line came out of
+    _require_eboard_for_campus and all three endpoints regressed together.
+    """
+    setup = await make_chapter_with("member")
+    # A verified author to create the yak the officer will try to remove.
+    from tests.conftest import verify_campus
+
+    await verify_campus(setup.member.id)
+    campus = await client.get(f"/chapters/{setup.chapter_id}", headers=setup.president.headers)
+    assert campus.status_code == 200, campus.text
+    campus_id = campus.json()["campus_id"]
+
+    yak = await client.post(
+        f"/campuses/{campus_id}/yaks", json={"body": "moderate me"}, headers=setup.member.headers
+    )
+    assert yak.status_code == 201, yak.text
+    yak_id = yak.json()["id"]
+    report_id = await _open_report_on_a_yak(client, setup.member, yak_id)
+
+    # The president is active e-board on this campus but has never verified.
+    remove_yak = await client.post(
+        f"/moderation/yaks/{yak_id}/remove",
+        json={"reason": "spam"},
+        headers=setup.president.headers,
+    )
+    resolve = await client.patch(
+        f"/moderation/reports/{report_id}",
+        json={"status": "dismissed", "reason": "no action"},
+        headers=setup.president.headers,
+    )
+
+    for label, response in (("remove_yak", remove_yak), ("resolve_yak_report", resolve)):
+        assert response.status_code == 403, f"{label}: {response.text}"
+        assert response.json()["detail"] == UNVERIFIED, f"{label}: {response.text}"
+
+
+async def test_an_unverified_officer_can_still_moderate_their_own_chapter(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """THE OTHER HALF OF c108, and the one that keeps it from being an over-reach.
+
+    _require_eboard_for_campus gates BOTH tiers - yaks, which are campus-wide, and posts
+    and comments, which are chapter content. Putting the .edu check in unconditionally
+    would lock an unverified president out of moderating their OWN chapter's posts,
+    which is the exact opposite of the ruling that chapter membership grants chapter
+    content in full with no email at all.
+
+    So: an unverified officer removes a member's org post normally. If this starts
+    403ing, campus_content=True leaked onto a chapter-content path.
+    """
+    setup = await make_chapter_with("member")
+    post = await client.post(
+        f"/chapters/{setup.chapter_id}/posts",
+        json={"body": "org post", "audience": "org"},
+        headers=setup.member.headers,
+    )
+    assert post.status_code == 201, post.text
+
+    response = await client.post(
+        "/moderation/content/remove",
+        json={"target_type": "post", "target_id": post.json()["id"], "reason": "spam"},
+        headers=setup.president.headers,
+    )
+
+    assert response.status_code == 204, response.text
+
+
+async def test_a_verified_officer_can_still_moderate(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """c108 must refuse the right people and only them — without this, a rule that
+    refused every moderator would pass the test above."""
+    from tests.conftest import verify_campus
+
+    setup = await make_chapter_with("member")
+    await verify_campus(setup.member.id)
+    await verify_campus(setup.president.id)
+    campus = await client.get(f"/chapters/{setup.chapter_id}", headers=setup.president.headers)
+    campus_id = campus.json()["campus_id"]
+
+    yak = await client.post(
+        f"/campuses/{campus_id}/yaks", json={"body": "moderate me"}, headers=setup.member.headers
+    )
+    assert yak.status_code == 201, yak.text
+
+    response = await client.post(
+        f"/moderation/yaks/{yak.json()['id']}/remove",
+        json={"reason": "spam"},
+        headers=setup.president.headers,
+    )
+
+    assert response.status_code == 204, response.text

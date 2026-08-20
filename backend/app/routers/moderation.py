@@ -95,15 +95,38 @@ async def _resolve_report_campus_id(
 
 
 async def _require_eboard_for_campus(
-    session: AsyncSession, moderator: models.User, campus_id: uuid.UUID | None
+    session: AsyncSession,
+    moderator: models.User,
+    campus_id: uuid.UUID | None,
+    *,
+    campus_content: bool,
 ) -> None:
-    """403 unless moderator is active e-board in some chapter of campus_id.
+    """403 unless moderator is active e-board in a chapter of campus_id AND verified there.
 
     Factored out of remove_yak (SECURITY-REVIEW finding 1's fix) so remove_content
     enforces the identical per-campus scoping instead of a second hand-rolled check.
     campus_id is None only when a target's campus could not be resolved (e.g. a
     dangling chapter reference) — treated as "no campus matches" rather than falling
     back to some platform-wide allowance.
+
+    c108, Jose's call Aug 16: MODERATING CAMPUS content requires a verified .edu, not
+    merely an officer role. He went stricter than the recommendation on that card, which
+    argued the officer role was sufficient because other officers had vouched. His
+    reasoning is the one already in c88 — the campus-wide surface is where a stranger
+    costs something, and removing someone else's post is a more powerful act than
+    reading it.
+
+    `campus_content` IS REQUIRED AND HAS NO DEFAULT, because getting it wrong is silent
+    in both directions and this function serves BOTH tiers. It gates yaks, which are
+    campus-wide, AND chapter posts and comments, which are org content. The first
+    implementation of c108 put the verification check here unconditionally, which would
+    have locked an unverified officer out of moderating their OWN CHAPTER'S posts — the
+    exact opposite of the two-tier ruling that chapter membership grants chapter content
+    in full with no email at all. Passing it explicitly at every call site makes the
+    tier a decision someone had to make rather than a default they inherited.
+
+    So: a president who never verified keeps every chapter power, including removing a
+    member's post, and cannot touch the campus Yak board.
     """
     if campus_id is None:
         raise forbidden("insufficient_role")
@@ -120,6 +143,11 @@ async def _require_eboard_for_campus(
     )
     if campus_match.scalar_one_or_none() is None:
         raise forbidden("insufficient_role")
+    if campus_content:
+        # Officer role established; now the .edu (c108). Ordered this way on purpose so
+        # a non-officer gets insufficient_role and never learns that verification was
+        # the only thing standing between them and moderator powers.
+        require_verified_campus(moderator, campus_id)
 
 
 @router.post("/moderation/reports", status_code=201)
@@ -212,9 +240,17 @@ async def resolve_report(
     report = await session.get(models.ContentReport, report_id)
     if report is None:
         raise not_found("report_not_found")
-    # Scoping reads the loaded row, which is fine unlocked: a report's campus_id is set
-    # once when it is filed and never changes, so there is nothing to race on here.
-    await _require_eboard_for_campus(session, moderator, report.campus_id)
+    # A report's tier follows its TARGET: a yak is campus-wide, a post or comment is
+    # chapter content (c108). Dismissing a yak report is a campus moderation act;
+    # dismissing a post report is not, so an unverified officer may still clear their
+    # own chapter's queue.
+    #
+    # Scoping reads the loaded row, which is fine unlocked: a report's campus_id and
+    # target_type are set once when it is filed and never change, so there is nothing
+    # to race on here.
+    await _require_eboard_for_campus(
+        session, moderator, report.campus_id, campus_content=report.target_type == "yak"
+    )
 
     # The STATUS transition is a different matter, and read-check-then-write would have
     # been wrong in exactly the case this route's docstring promises to handle. Two
@@ -354,7 +390,8 @@ async def remove_yak(
         raise not_found("yak_not_found")
     if yak.removed_at is not None:
         raise conflict("already_removed")
-    await _require_eboard_for_campus(session, moderator, yak.campus_id)
+    # Yaks are the campus-wide surface by definition (c108).
+    await _require_eboard_for_campus(session, moderator, yak.campus_id, campus_content=True)
     yak.removed_at = datetime.now(timezone.utc)
     yak.removed_reason = body.reason
     session.add(
@@ -410,7 +447,10 @@ async def remove_content(
         target = comment
 
     campus_id = chapter.campus_id if chapter is not None else None
-    await _require_eboard_for_campus(session, moderator, campus_id)
+    # This route only accepts posts and comments (RemovableContentType) - both chapter
+    # content, so officer role alone is the right bar. Yaks have their own route above,
+    # which passes campus_content=True.
+    await _require_eboard_for_campus(session, moderator, campus_id, campus_content=False)
 
     target.deleted_at = datetime.now(timezone.utc)
     target.removed_reason = body.reason
