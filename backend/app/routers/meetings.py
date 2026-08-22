@@ -157,6 +157,36 @@ async def delete_meeting(
     await session.commit()
 
 
+@router.get("/chapters/{chapter_id}/meetings/{meeting_id}/attendance")
+async def get_attendance(
+    chapter_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> list[MeetingAttendanceOut]:
+    """Read a meeting's attendance sheet; secretary/president only (board card c124).
+
+    Found by a static contract check, not by driving the UI - same class of gap as
+    c77's chapter PATCH, this time the client function (getAttendance, meetings.ts:73)
+    and its one call site existed, and every call has been a silent 405 since the
+    screen was written, because the backend only ever registered the PUT.
+
+    Gated on MINUTES_ADMIN, not plain membership, DESPITE list_meetings (above) being
+    member-readable - checked this rather than assumed it should mirror the write.
+    Attendance is per-member presence data, one tier more sensitive than "a meeting
+    exists," and export_meetings_csv - which already exports this exact data, one row
+    per (meeting, member) - is ALREADY MINUTES_ADMIN-only. This route matches that
+    existing, deliberate precedent, not just the PUT it sits next to.
+    """
+    meeting = await _get_chapter_meeting(session, chapter_id, meeting_id)
+    result = await session.execute(
+        select(models.MeetingAttendance)
+        .where(models.MeetingAttendance.meeting_id == meeting.id)
+        .order_by(models.MeetingAttendance.user_id)
+    )
+    return [MeetingAttendanceOut.model_validate(a) for a in result.scalars().all()]
+
+
 @router.put("/chapters/{chapter_id}/meetings/{meeting_id}/attendance")
 async def upsert_attendance(
     chapter_id: uuid.UUID,
