@@ -1539,6 +1539,15 @@
       "area": "auth",
       "title": "CLAIMED Aug 22 - render suspended_at and WS 4403 as a real screen, not a wall of 403s",
       "detail": "Client side of c126 (PR #55, merged). Backend now tells the truth - MeOut.suspended_at is non-null for a suspended caller (deliberately, per the manager's ruling: /auth/me is the ONE route that stays reachable while suspended, precisely so the client can render this), and the WS gateway closes with 4403 instead of accepting. The app currently does NOTHING with either signal. WHAT TO BUILD: a clear 'account suspended since <date>' state wherever the session resolves MeOut with a non-null suspended_at, instead of letting every other screen fail as a wall of unexplained 403s (their detail is already the machine-readable string 'account_suspended' - funnel it to the same state wherever it surfaces, not just from MeOut). WS: on a 4403 close, route to the same state instead of the normal reconnect-with-backoff loop - reconnecting into a suspension is pointless traffic and confusing UX (repeatedly failing silently). SCOPE, held deliberately: render the state well, do not build an appeals flow - that is a different, larger feature. DESIGN.md is binding - no default-looking UI, even for a wall; this screen is a real state a real user can land on and deserves the same craft bar as anything else in the app."
+    },
+    {
+      "id": "c130",
+      "col": "progress",
+      "owner": "J",
+      "tag": "qa",
+      "area": "auth",
+      "title": "IN PROGRESS Aug 22 - live prod drive of window 00020: c49/c77/c81 gate evidence",
+      "detail": "Claimed Aug 22 per court. Live drive of tonight's deploy (rev 00020) against real prod, using the QA fixtures in INFRA-PRIVATE (Chirp HQ chapter; qa account is president, e2e.member is member) - no new accounts minted. Goal is gate evidence, not a general walk: c49 (real post through the app), c77 (president officer screens shipped tonight - tools grid, VP moderation queue), c81 (open a dues cycle through the treasurer form). GATE PRECISION, per the manager: the gate sentences require 'through the app' - a curl-created post or dues cycle proves the ROUTE, not the SCREEN, and does not flip c49 or c81 on its own. c77 is UI-only, screen or nothing. PORT CONSTRAINT FOUND BEFORE STARTING: prod's CORS_ORIGINS is hardcoded to exactly [\"http://localhost:8081\"], and that port was held by james's Metro from c124 testing, verified (not assumed) pointed at a LOCAL backend by grepping the compiled bundle for the baked EXPO_PUBLIC_API_URL value - same technique now adopted as standard for confirming any Expo web session is actually hitting prod before trusting what it renders. James freed the port and confirmed it directly. API-leg route verification (real Firebase tokens, direct HTTP, bypasses CORS since that is a browser rule) proceeds alongside the browser leg, and is recorded explicitly as route-proof only, not gate evidence. All created content self-identifies as QA drive data. Evidence goes to court before any of c49/c77/c81 move."
     }
   ],
   "decisions": [
