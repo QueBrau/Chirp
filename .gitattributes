@@ -1,0 +1,6 @@
+# verify-contract.mjs used a raw NUL byte as a path sentinel (c137/c144), which made
+# git classify it as binary and render its PRs as unreviewable "Bin" blobs - the one
+# file whose job is to stop a gate passing vacuously was itself unreviewable. The NUL is
+# now escaped (\\u0000) so this is defensive, but keep it: it forces a text diff even if
+# a NUL sentinel is ever reintroduced, and keeps the security-critical checker reviewable.
+app-mobile/scripts/verify-contract.mjs text diff

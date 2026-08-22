@@ -325,6 +325,44 @@ async def test_guessing_runs_out_of_attempts(
     assert response.json()["detail"] == "verification_attempts_exhausted"
 
 
+async def test_attempts_never_creeps_past_the_cap(
+    client: AsyncClient, campus_user, sent_codes: list[dict]
+) -> None:
+    """Board card c138: the atomic guard (UPDATE ... WHERE attempts < MAX_ATTEMPTS ...)
+    must reject a guess ONCE the cap is reached, not merely refuse to authenticate it —
+    a rejected guess must never increment the stored attempts value. Sequential coverage
+    of the guard's own WHERE clause; the genuinely concurrent case (25 real OS threads,
+    25 independent connections, hammering one row at once) is proven separately with a
+    standalone script outside pytest/ASGI-TestClient, documented in the c138 PR - this
+    codebase already established (test_moderation_resolve.py, test_spend_approval_decide.py)
+    that asyncio.gather over the ASGI transport never interleaves inside the critical
+    section, so a gather-based test here would pass regardless of whether the guard exists.
+    """
+    user, _ = campus_user
+    await client.post(
+        "/auth/campus-verification",
+        json={"edu_email": f"student@{DOMAIN}"},
+        headers=user.headers,
+    )
+
+    for _ in range(campus_verification.MAX_ATTEMPTS):
+        await client.post(
+            "/auth/campus-verification/redeem",
+            json={"code": "000000"},
+            headers=user.headers,
+        )
+    assert (await _pending_row(user.id))["attempts"] == campus_verification.MAX_ATTEMPTS
+
+    for _ in range(3):
+        response = await client.post(
+            "/auth/campus-verification/redeem", json={"code": "000000"}, headers=user.headers
+        )
+        assert response.status_code == 429, response.text
+        assert (await _pending_row(user.id))["attempts"] == campus_verification.MAX_ATTEMPTS, (
+            "a rejected over-cap guess must not increment attempts further"
+        )
+
+
 async def test_an_expired_code_is_refused_even_when_correct(
     client: AsyncClient, campus_user, sent_codes: list[dict]
 ) -> None:
