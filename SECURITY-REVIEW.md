@@ -47,13 +47,19 @@ An attacker bootstraps first with a victim's real email; the UNIQUE constraint t
 permanently blocks the victim's own signup. **Fix:** in firebase mode, thread the
 token's verified `email` claim through and ignore/verify `body.email`.
 
-### 4. Auth tokens written to logs (SPEC §8.6 violation)
-`backend/app/ws/gateway.py:26` — WS auth accepts `?token=<id-token>` in the URL;
+### 4. Auth tokens written to logs (SPEC §8.6 violation) — CLOSED
+`backend/app/ws/gateway.py:26` — WS auth accepted `?token=<id-token>` in the URL;
 uvicorn's default access log records the full request line, so real Firebase ID
-tokens land in stdout/Cloud Run logs verbatim (reproduced live). The mobile client's
-`wsUrl()` always uses the query param (RN WS can't set headers), so this is the
-primary path. **Fix:** install a log filter that redacts `token=` from access logs
-(and/or move WS auth to a subprotocol/first-frame). Add a "no token in logs" test.
+tokens landed in stdout/Cloud Run logs verbatim (reproduced live). Worse than the
+in-process log filter this repo shipped first could reach: Cloud Run logs
+`httpRequest.requestUrl` at the platform layer, outside anything the app installs.
+**Fixed (security-pass item 7, board c63's coordinated PR):** WS auth moved to the
+Sec-WebSocket-Protocol subprotocol (RN's WebSocket constructor can set this,
+unlike arbitrary headers) with an `Authorization: Bearer` fallback for callers
+that can set headers; the query string is removed entirely, not deprecated —
+zero real traffic ever depended on it. The now-pointless log filter was removed
+along with it rather than left as dead defensive code. See
+`test_ws_auth_subprotocol.py`.
 
 ### 5. Dangerous default config → cross-origin user impersonation
 `backend/app/main.py:28` + `config.py` — defaults are `cors_origins=["*"]` +

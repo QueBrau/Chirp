@@ -2,7 +2,6 @@
 import asyncio
 import contextlib
 import logging
-import re
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
@@ -31,54 +30,51 @@ WS_REALTIME_UNAVAILABLE = 4503
 # a "your account is suspended" screen, not another reconnect attempt.
 WS_ACCOUNT_SUSPENDED = 4403
 
-_TOKEN_QS_RE = re.compile(r"([?&]token=)[^&\s]+")
 
+def _offered_protocol(websocket: WebSocket) -> str | None:
+    """The first client-offered Sec-WebSocket-Protocol value, or None.
 
-class _RedactWsTokenFilter(logging.Filter):
-    """Redacts `token=<...>` from uvicorn's access log (SECURITY-REVIEW finding 4).
-
-    The WS handshake authenticates via `?token=<firebase-id-token>` in the URL (RN
-    WebSocket clients can't always set headers), so uvicorn's default access log would
-    otherwise write real bearer tokens to stdout/Cloud Run logs verbatim. This filter
-    scrubs any log record whose args or message contain a `token=` query param, without
-    touching the auth mechanism itself.
+    (security-pass item 7, ~Aug 22): this IS the auth material now — see
+    _resolve_uid. Populated by the ASGI server from the handshake request's
+    Sec-WebSocket-Protocol header before accept(), so it is readable pre-accept
+    the same way ?token= used to be, which is what keeps a bad token rejecting
+    the handshake outright rather than accepting first and closing after.
     """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.args, tuple):
-            record.args = tuple(
-                _TOKEN_QS_RE.sub(r"\1[REDACTED]", value)
-                if isinstance(value, str) and "token=" in value
-                else value
-                for value in record.args
-            )
-        elif isinstance(record.msg, str) and "token=" in record.msg:
-            record.msg = _TOKEN_QS_RE.sub(r"\1[REDACTED]", record.msg)
-        return True
-
-
-def _install_ws_token_log_filter() -> None:
-    """Idempotently attach the redaction filter to uvicorn's access logger."""
-    access_logger = logging.getLogger("uvicorn.access")
-    if not any(isinstance(f, _RedactWsTokenFilter) for f in access_logger.filters):
-        access_logger.addFilter(_RedactWsTokenFilter())
-
-
-_install_ws_token_log_filter()
+    protocols = websocket.scope.get("subprotocols") or []
+    return protocols[0] if protocols else None
 
 
 def _resolve_uid(websocket: WebSocket) -> str | None:
     """Resolve a verified Firebase uid from the handshake, or None.
 
-    Emulated mode: X-Debug-Firebase-Uid header (or ?token= fallback, since RN
-    WebSocket clients cannot always set headers). Firebase mode: ?token= query
-    param (or Authorization: Bearer) verified via firebase_admin.
+    REWRITTEN (security-pass item 7, ~Aug 22): the handshake used to authenticate
+    via `?token=<id-token>` in the URL, because RN's WebSocket constructor cannot
+    set arbitrary headers. Cloud Run logs `httpRequest.requestUrl` itself — outside
+    any redaction the app could install (a filter existed for uvicorn's OWN access
+    log only; it never touched Cloud Run's platform-level logging, so this was
+    live at the infra layer regardless of what ran in-process). The query string
+    is gone entirely rather than deprecated: grepped Cloud Logging directly before
+    this landed (see the security pass's report) — zero requests had ever carried
+    `token=`, because nothing in the app called `chirpSocket.connect()` yet
+    (board c63 is what would have started sending real traffic down this path).
+    There was no live client to preserve compatibility for.
+
+    RN's WebSocket constructor CAN set subprotocols (the second constructor arg),
+    which is why that replaces the query string as the primary path rather than
+    sitting next to it. Emulated mode: X-Debug-Firebase-Uid header (already
+    settable by every test client in this repo), or the offered subprotocol as a
+    fallback for a caller that can set one but not the header. Firebase mode: the
+    offered subprotocol, or an Authorization: Bearer header for a caller that CAN
+    set headers (browsers/RN cannot on a WebSocket, but this keeps the door open
+    for a server-to-server or native caller that could).
     """
     settings = get_settings()
-    if settings.auth_mode == "emulated":
-        return websocket.headers.get("X-Debug-Firebase-Uid") or websocket.query_params.get("token")
+    protocol_token = _offered_protocol(websocket)
 
-    token = websocket.query_params.get("token")
+    if settings.auth_mode == "emulated":
+        return websocket.headers.get("X-Debug-Firebase-Uid") or protocol_token
+
+    token = protocol_token
     if not token:
         auth_header = websocket.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
@@ -105,6 +101,7 @@ async def websocket_gateway(
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Authenticate the connection, then forward user:{user_id} Redis events until disconnect."""
+    offered_protocol = _offered_protocol(websocket)
     uid = _resolve_uid(websocket)
     if uid is None:
         await websocket.close(code=4401)
@@ -124,7 +121,11 @@ async def websocket_gateway(
         await websocket.close(code=WS_ACCOUNT_SUSPENDED)
         return
 
-    await websocket.accept()
+    # item 7: echo the offered protocol back so a strict client (one that
+    # verifies the server selected a protocol it actually offered) doesn't
+    # treat a bare accept() as a mismatch. None when auth came via the
+    # Authorization header instead — nothing was offered, so nothing to select.
+    await websocket.accept(subprotocol=offered_protocol)
     channel = f"user:{user.id}"
     pubsub = get_redis().pubsub()
 

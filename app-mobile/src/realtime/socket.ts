@@ -15,7 +15,7 @@
  * but is currently inert in practice until something calls `.connect()`.
  */
 
-import { wsUrl } from "../api/client";
+import { wsAuthProtocol, wsUrl } from "../api/client";
 import type { MessageType } from "../api/messages";
 
 /** New message fan-out, published by the messages router on POST. */
@@ -81,7 +81,7 @@ export class ChirpSocket {
     return () => this.statusListeners.delete(listener);
   }
 
-  /** Open the connection (token rides the ?token= query param — see wsUrl()). */
+  /** Open the connection (token rides the subprotocol — see wsAuthProtocol()). */
   connect(): void {
     this.shouldRun = true;
     this.open();
@@ -102,7 +102,13 @@ export class ChirpSocket {
   private open(): void {
     if (!this.shouldRun || this.ws) return;
     this.setStatus("connecting");
-    const ws = new WebSocket(wsUrl());
+    // security-pass item 7: token goes in as a subprotocol, not the URL. No
+    // token yet (never signed in, or SessionProvider raced ahead of
+    // setAuthToken) means an anonymous handshake the server will 4401 — same
+    // failure as before, just no longer one that also wrote a bearer token
+    // into Cloud Run's request-url logging on the way.
+    const protocol = wsAuthProtocol();
+    const ws = new WebSocket(wsUrl(), protocol !== null ? [protocol] : undefined);
     this.ws = ws;
 
     ws.onopen = () => {
