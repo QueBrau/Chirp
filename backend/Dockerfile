@@ -33,6 +33,15 @@ COPY app ./app
 # quietly upgrade one of them, which would defeat the entire point of the lock.
 RUN pip install --no-cache-dir --no-deps .
 
+# Root has no job left to do once the packages and source are in place: the app
+# never writes to /srv at runtime (config comes from env vars and Secret Manager,
+# not files), so this drops privileges before a single line of app code runs. Cuts
+# blast radius if a dependency (or the app itself) is ever exploited — root inside
+# the container would otherwise be one less thing standing between an RCE and the
+# host's container runtime.
+RUN useradd --system --no-create-home --uid 1000 appuser
+USER appuser
+
 EXPOSE 8080
 
 # Cloud Run injects PORT; shell form so the env var expands, exec so uvicorn gets signals.

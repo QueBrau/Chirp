@@ -135,12 +135,21 @@ def create_app() -> FastAPI:
     allow_credentials = "*" not in settings.cors_origins
     if settings.env != "local":
         # Refuse to start a non-local deployment with dev-only defaults still in place.
-        assert settings.auth_mode == "firebase", (
-            f"env={settings.env!r} requires auth_mode='firebase', not 'emulated'"
-        )
-        assert "*" not in settings.cors_origins, (
-            f"env={settings.env!r} forbids wildcard cors_origins"
-        )
+        #
+        # `raise`, not `assert`. This guard exists to make exactly one failure mode
+        # impossible: emulated auth or a wildcard CORS origin reaching a real
+        # deployment (SECURITY-REVIEW finding 5 - any website's JS impersonating any
+        # uid). An `assert` is compiled OUT entirely under `python -O` /
+        # `PYTHONOPTIMIZE=1`, silently turning the one line that exists to prevent a
+        # catastrophic misconfiguration into a no-op. Nothing in this Dockerfile sets
+        # either today, which is exactly the kind of fact that stops being true
+        # without anyone deciding it should.
+        if settings.auth_mode != "firebase":
+            raise RuntimeError(
+                f"env={settings.env!r} requires auth_mode='firebase', not {settings.auth_mode!r}"
+            )
+        if "*" in settings.cors_origins:
+            raise RuntimeError(f"env={settings.env!r} forbids wildcard cors_origins")
 
     app.add_middleware(
         CORSMiddleware,
