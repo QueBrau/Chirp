@@ -18,6 +18,10 @@ the thing under test is precisely what happens when the network refuses.
 
 Note on scope: this is deliberately a separate file from the fan-out suite in
 PR #12 (tests/test_ws_fanout.py, not yet merged) so the two do not conflict.
+
+Every connect below moved from `?token=<uid>` to `subprotocols=[uid]` (security-
+pass item 7, ~Aug 22) — the query string this file exercised is gone from the
+gateway entirely, not just deprecated. See test_ws_auth_subprotocol.py.
 """
 from __future__ import annotations
 
@@ -109,7 +113,7 @@ def test_unreachable_redis_closes_with_realtime_unavailable(
     uid = _bootstrap(dead_redis_client)
 
     with pytest.raises(WebSocketDisconnect) as caught:
-        with dead_redis_client.websocket_connect(f"/ws?token={uid}") as ws:
+        with dead_redis_client.websocket_connect("/ws", subprotocols=[uid]) as ws:
             # Nothing should arrive; the close happens during subscribe. Reading
             # is what surfaces the close frame.
             ws.receive_text()
@@ -130,7 +134,7 @@ def test_realtime_unavailable_is_distinct_from_auth_failure(
     """
     # Unknown uid: never bootstrapped, so it resolves to no user.
     with pytest.raises(WebSocketDisconnect) as unauthenticated:
-        with dead_redis_client.websocket_connect("/ws?token=uid-does-not-exist") as ws:
+        with dead_redis_client.websocket_connect("/ws", subprotocols=["uid-does-not-exist"]) as ws:
             ws.receive_text()
 
     assert unauthenticated.value.code == 4401
@@ -138,7 +142,7 @@ def test_realtime_unavailable_is_distinct_from_auth_failure(
 
     uid = _bootstrap(dead_redis_client)
     with pytest.raises(WebSocketDisconnect) as backend_down:
-        with dead_redis_client.websocket_connect(f"/ws?token={uid}") as ws:
+        with dead_redis_client.websocket_connect("/ws", subprotocols=[uid]) as ws:
             ws.receive_text()
 
     assert backend_down.value.code == WS_REALTIME_UNAVAILABLE
@@ -175,7 +179,7 @@ async def test_forwarder_death_closes_the_socket(dead_redis_client: TestClient) 
     uid = _bootstrap(dead_redis_client)
 
     with pytest.raises(WebSocketDisconnect) as caught:
-        with dead_redis_client.websocket_connect(f"/ws?token={uid}") as ws:
+        with dead_redis_client.websocket_connect("/ws", subprotocols=[uid]) as ws:
             ws.receive_text()
 
     # Either close path is the realtime-unavailable code; what must never happen

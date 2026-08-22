@@ -141,12 +141,25 @@ export async function requestText(path: string, options: RequestOptions = {}): P
 }
 
 /**
- * WebSocket URL for the gateway at `/ws`. RN WebSocket clients can't always set
- * headers, so the token rides the `?token=` query param (backend supports both;
- * in emulated mode the debug uid doubles as the token).
+ * WebSocket URL for the gateway at `/ws` — no auth material on it (security-pass
+ * item 7, ~Aug 22). It used to carry `?token=` because RN's WebSocket
+ * constructor can't set arbitrary headers, but Cloud Run logs the full request
+ * URL at the platform layer regardless of anything the app does in-process, so
+ * a query-string token was never actually protectable. Pair with
+ * wsAuthProtocol() for the second WebSocket() constructor argument instead —
+ * RN CAN set that.
  */
 export function wsUrl(): string {
   const base = API_BASE_URL.replace(/^http/, "ws");
-  const token = authToken ?? debugFirebaseUid;
-  return token ? `${base}/ws?token=${encodeURIComponent(token)}` : `${base}/ws`;
+  return `${base}/ws`;
+}
+
+/**
+ * The value to send as the WebSocket subprotocol — this IS the auth material
+ * now (ws/gateway.py's `_offered_protocol`/`_resolve_uid`), not the URL. Same
+ * precedence as every other request: a real token when signed in for real, the
+ * debug uid in emulated mode.
+ */
+export function wsAuthProtocol(): string | null {
+  return authToken ?? debugFirebaseUid;
 }
