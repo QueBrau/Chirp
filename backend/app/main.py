@@ -127,7 +127,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Build the Chirp API app; run with `uvicorn app.main:create_app --factory`."""
     settings = get_settings()
-    app = FastAPI(title="Chirp API", version="0.1.0", lifespan=lifespan)
+    # /docs, /redoc and /openapi.json publish the entire route/schema surface with no
+    # auth of their own. Fine locally; on any real deployment they hand an attacker a
+    # map for free, and they were live on chirps-prod (board finding, Aug 16 audit)
+    # simply because nobody had ever turned them off.
+    docs_enabled = settings.env == "local"
+    app = FastAPI(
+        title="Chirp API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+    )
 
     # SECURITY-REVIEW finding 5: never pair a wildcard origin with credentialed CORS —
     # Starlette reflects any origin, so "*" + credentials lets any website's JS send
@@ -135,12 +147,21 @@ def create_app() -> FastAPI:
     allow_credentials = "*" not in settings.cors_origins
     if settings.env != "local":
         # Refuse to start a non-local deployment with dev-only defaults still in place.
-        assert settings.auth_mode == "firebase", (
-            f"env={settings.env!r} requires auth_mode='firebase', not 'emulated'"
-        )
-        assert "*" not in settings.cors_origins, (
-            f"env={settings.env!r} forbids wildcard cors_origins"
-        )
+        #
+        # `raise`, not `assert`. This guard exists to make exactly one failure mode
+        # impossible: emulated auth or a wildcard CORS origin reaching a real
+        # deployment (SECURITY-REVIEW finding 5 - any website's JS impersonating any
+        # uid). An `assert` is compiled OUT entirely under `python -O` /
+        # `PYTHONOPTIMIZE=1`, silently turning the one line that exists to prevent a
+        # catastrophic misconfiguration into a no-op. Nothing in this Dockerfile sets
+        # either today, which is exactly the kind of fact that stops being true
+        # without anyone deciding it should.
+        if settings.auth_mode != "firebase":
+            raise RuntimeError(
+                f"env={settings.env!r} requires auth_mode='firebase', not {settings.auth_mode!r}"
+            )
+        if "*" in settings.cors_origins:
+            raise RuntimeError(f"env={settings.env!r} forbids wildcard cors_origins")
 
     app.add_middleware(
         CORSMiddleware,

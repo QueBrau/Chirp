@@ -26,6 +26,12 @@ INFRA-PRIVATE.*
 
 # Node / Expo
 node_modules/
+node_modules
+# NOTE: no trailing slash on the second one, same trap as .venv/venv above. A
+# git worktree gets node_modules as a SYMLINK to the main checkout's copy, and
+# "node_modules/" matches a DIRECTORY only - so `git add -A` in a worktree stages
+# the link itself. Committing it would point every checkout at one machine's
+# absolute path.
 .expo/
 .expo-shared/
 expo-env.d.ts

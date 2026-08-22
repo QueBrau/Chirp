@@ -216,13 +216,21 @@ interface OrgFeedItem {
  * dropping the blocked author's posts locally, then refetching, since GET
  * /chapters/{chapter_id}/posts now filters blocked authors server-side.
  */
-function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: string }) {
+function OrgFeedSegment({
+  chapterId,
+  orgName,
+  refreshKey,
+}: {
+  chapterId: string;
+  orgName: string;
+  refreshKey: number;
+}) {
   const { user } = useSession();
   const [items, setItems] = useState<OrgFeedItem[] | null>(null);
 
   // ONE round trip: GET /chapters/{id}/posts returns FeedPostOut, which already
   // carries the author's display identity and batched like/comment counts (c43).
-  // The old shape here fetched listLikes + listComments PER POST (2N queries)
+  // The old shape here fetched a per-post likes and comments call (2N queries)
   // and resolved authors through a separate roster call.
   // Fail soft (internally, not via a thrown rejection): a failed fetch must not
   // crash the feed segment, and this needs to be safely re-awaitable from
@@ -244,7 +252,7 @@ function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: st
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   const reportPost = async (item: OrgFeedItem, reason: string) => {
     try {
@@ -273,22 +281,33 @@ function OrgFeedSegment({ chapterId, orgName }: { chapterId: string; orgName: st
   };
 
   const toggleLike = async (item: OrgFeedItem) => {
-    if (item.likedByMe) {
-      await unlikePost(item.post.id);
-    } else {
-      await likePost(item.post.id);
-    }
+    // c120: mirrors feed/index.tsx's toggleLike. That one flips optimistically
+    // and rolls back on failure; this one used to await the network call FIRST
+    // with no catch at all, so a failed request became an unhandled rejection
+    // instead of the UI just staying as it was.
+    const wasLiked = item.likedByMe;
     setItems((current) =>
       (current ?? []).map((entry) =>
         entry.post.id === item.post.id
-          ? {
-              ...entry,
-              likedByMe: !entry.likedByMe,
-              likeCount: entry.likeCount + (entry.likedByMe ? -1 : 1),
-            }
+          ? { ...entry, likedByMe: !wasLiked, likeCount: entry.likeCount + (wasLiked ? -1 : 1) }
           : entry,
       ),
     );
+    try {
+      if (wasLiked) {
+        await unlikePost(item.post.id);
+      } else {
+        await likePost(item.post.id);
+      }
+    } catch {
+      setItems((current) =>
+        (current ?? []).map((entry) =>
+          entry.post.id === item.post.id
+            ? { ...entry, likedByMe: wasLiked, likeCount: entry.likeCount + (wasLiked ? 1 : -1) }
+            : entry,
+        ),
+      );
+    }
   };
 
   if (items !== null && items.length === 0) {
@@ -761,11 +780,13 @@ function MemberOrgHub({
   chapter,
   segment,
   onSegmentChange,
+  feedRefreshKey,
 }: {
   membership: MembershipOut;
   chapter: ChapterOut | null;
   segment: OrgSegment;
   onSegmentChange: (segment: OrgSegment) => void;
+  feedRefreshKey: number;
 }) {
   // Called before the early return below: hooks cannot run conditionally.
   const campus = useCampus();
@@ -798,7 +819,9 @@ function MemberOrgHub({
 
       <OrgSegmentedControl segment={segment} onChange={onSegmentChange} />
 
-      {segment === "feed" ? <OrgFeedSegment chapterId={chapter.id} orgName={chapter.org_name} /> : null}
+      {segment === "feed" ? (
+        <OrgFeedSegment chapterId={chapter.id} orgName={chapter.org_name} refreshKey={feedRefreshKey} />
+      ) : null}
       {segment === "events" ? <OrgEventsSegment chapterId={chapter.id} /> : null}
       {segment === "tools" ? <OrgToolsSegment chapterId={chapter.id} role={role} /> : null}
     </View>
@@ -850,6 +873,7 @@ export default function OrgsScreen() {
   const { sessionStatus, membership, chapter, chapterLoading } = useOwnChapter();
   const campus = useCampus();
   const [segment, setSegment] = useState<OrgSegment>("feed");
+  const [feedRefreshKey, setFeedRefreshKey] = useState(0);
 
   // Session-status gating (PR #6 review): a real member must never flash the
   // non-member "No orgs yet" state on cold start — only render FindYourOrg
@@ -879,13 +903,26 @@ export default function OrgsScreen() {
         {loading ? (
           <EmptyState title="Loading your org..." />
         ) : membership !== null ? (
-          <MemberOrgHub membership={membership} chapter={chapter} segment={segment} onSegmentChange={setSegment} />
+          <MemberOrgHub
+            membership={membership}
+            chapter={chapter}
+            segment={segment}
+            onSegmentChange={setSegment}
+            feedRefreshKey={feedRefreshKey}
+          />
         ) : (
           <FindYourOrg />
         )}
       </Screen>
       {/* Org-colored composer FAB (§8.7) — Feed segment only, mirrors Home's Fab pattern. */}
-      {!loading && membership !== null && segment === "feed" ? <Fab /> : null}
+      {!loading && membership !== null && segment === "feed" ? (
+        <Fab
+          chapterId={membership.chapter_id}
+          campusId={campus?.id ?? null}
+          campusName={campus?.name ?? null}
+          onPosted={() => setFeedRefreshKey((key) => key + 1)}
+        />
+      ) : null}
     </View>
   );
 }

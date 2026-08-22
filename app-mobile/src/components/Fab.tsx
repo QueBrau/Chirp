@@ -24,12 +24,27 @@ const FAB_SIZE = 56;
  */
 const TAB_BAR_APPROX_HEIGHT = 64;
 
-export function Fab() {
+export interface FabProps {
+  /** Chapter to post into, or null when the caller belongs to no chapter. */
+  chapterId: string | null;
+  /** The caller's campus — the create route for a chapter-less student (c71). */
+  campusId: string | null;
+  campusName?: string | null;
+  onPosted?: () => void;
+}
+
+export function Fab({ chapterId, campusId, campusName, onPosted }: FabProps) {
   const palette = useTheme();
   const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
 
   const bottom = Math.max(insets.bottom, metrics.tabBarInsetBottom) + TAB_BAR_APPROX_HEIGHT + spacing.md;
+
+  // Hidden only when there is genuinely nowhere to post: no chapter AND no campus.
+  // A chapter-less student keeps the button and posts to their campus (c71) — the
+  // Aug 11 product line is that Chirp is for all students, so "no org" must not
+  // mean "read only".
+  if (chapterId === null && campusId === null) return null;
 
   return (
     <>
@@ -53,7 +68,14 @@ export function Fab() {
       >
         <Feather name="plus" size={typography.title.fontSize} color={palette.onAccent} />
       </Pressable>
-      <CreateSheet visible={open} onClose={() => setOpen(false)} />
+      <CreateSheet
+        visible={open}
+        onClose={() => setOpen(false)}
+        chapterId={chapterId}
+        campusId={campusId}
+        campusName={campusName}
+        onPosted={onPosted}
+      />
     </>
   );
 }

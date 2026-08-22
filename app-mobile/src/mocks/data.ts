@@ -272,6 +272,7 @@ export const MOCK_POSTS: PostOut[] = [
   {
     id: "post-1",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-priya",
     body: "Composite photos are IN. Come by the house library to see the wall of shame (and glory). Fall 2024 might be the best-looking class yet, no bias.",
     media_urls: null,
@@ -283,6 +284,7 @@ export const MOCK_POSTS: PostOut[] = [
   {
     id: "post-2",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-devon",
     body: "Chapter meeting moved to 7pm Sunday — attendance is mandatory for actives, pledges welcome. Minutes from last week are posted in the secretary dashboard.",
     media_urls: null,
@@ -294,6 +296,7 @@ export const MOCK_POSTS: PostOut[] = [
   {
     id: "post-3",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-jake",
     body: "Huge shoutout to everyone who showed up for the Peabody Park cleanup this morning. 42 bags of trash. Philanthropy chair says we beat the Delts' number by double.",
     media_urls: null,
@@ -305,6 +308,7 @@ export const MOCK_POSTS: PostOut[] = [
   {
     id: "post-4",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-jordan",
     body: "First week back on campus and College Ave already looks unreal. Miss this place.",
     media_urls: ["https://picsum.photos/seed/241/700/500"],
@@ -316,6 +320,7 @@ export const MOCK_POSTS: PostOut[] = [
   {
     id: "post-5",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-noah",
     body: "Campus radio's live set on the EUC lawn tonight — swing by after dinner.",
     media_urls: ["https://picsum.photos/seed/242/700/500"],
@@ -328,6 +333,7 @@ export const MOCK_POSTS: PostOut[] = [
   {
     id: "post-6",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-alexis",
     body: "Recruiting a few sophomores/juniors for a summer analyst class — DM if interested, doesn't have to be finance majors.",
     media_urls: null,
@@ -339,6 +345,7 @@ export const MOCK_POSTS: PostOut[] = [
   {
     id: "post-7",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-tyler",
     body: "New composite frame is up in the chapter room. Looks sharp.",
     media_urls: ["https://picsum.photos/seed/243/700/500"],
@@ -350,6 +357,7 @@ export const MOCK_POSTS: PostOut[] = [
   {
     id: "post-8",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-devon",
     body: "Timelapse of the Peabody Park cleanup crew this morning — 42 bags in under two hours.",
     media_urls: ["https://picsum.photos/seed/244/700/500"],
@@ -362,6 +370,7 @@ export const MOCK_POSTS: PostOut[] = [
   {
     id: "post-9",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-ethan",
     body: "Anyone know if the Kaplan Center pool is open this weekend? Website says maintenance but that's been up since June.",
     media_urls: null,
@@ -452,6 +461,7 @@ export const MOCK_ORG_POSTS: PostOut[] = [
   {
     id: "post-org-1",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-tyler",
     body: "Ritual practice runs right after chapter meeting tonight — new members, chapter room by 7:45, jacket and tie. Actives who haven't been through in a while, come brush up too.",
     media_urls: null,
@@ -463,6 +473,7 @@ export const MOCK_ORG_POSTS: PostOut[] = [
   {
     id: "post-org-2",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-priya",
     body: "Big/Little reveal is locked in for next Thursday at the house. Actives — I will know if you leak the theme, don't test me.",
     media_urls: ["https://picsum.photos/seed/sigchi-reveal/700/500"],
@@ -474,6 +485,7 @@ export const MOCK_ORG_POSTS: PostOut[] = [
   {
     id: "post-org-3",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-devon",
     body: "House kitchen deep clean Saturday morning before Monday's inspection — sign-up sheet's on the fridge, need at least eight of you. Pledges get priority credit.",
     media_urls: null,
@@ -485,6 +497,7 @@ export const MOCK_ORG_POSTS: PostOut[] = [
   {
     id: "post-org-4",
     chapter_id: MOCK_CHAPTER.id,
+    campus_id: MOCK_CHAPTER.campus_id,
     author_id: "usr-jake",
     body: "Founders Day formal photographer is booked for the Blandwood Mansion lawn. Dress code and call times drop in Chapter Chat this week — don't be the guy asking me in the group chat.",
     media_urls: ["https://picsum.photos/seed/sigchi-founders/700/500"],

@@ -67,7 +67,10 @@ export default function FeedScreen() {
   const router = useRouter();
   const palette = useTheme();
   const { campusColors } = useAppearance();
-  const { user } = useSession();
+  const { user, memberships } = useSession();
+  // Single-org world (OwnChapterProvider): memberships[0] is the only chapter.
+  // That provider is not mounted on this route, so derive the post target here.
+  const chapterId = memberships[0]?.chapter_id ?? null;
   const [items, setItems] = useState<FeedPostOut[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [filter, setFilter] = useState<FeedFilter>("forYou");
@@ -268,7 +271,15 @@ export default function FeedScreen() {
           </View>
         )}
       </Screen>
-      {campusId !== null ? <Fab /> : null}
+      {/* org-audience posts never appear here — GET /campuses/{id}/feed is campus-only, so onPosted refreshing with no new row is correct. */}
+      {campusId !== null ? (
+        <Fab
+          chapterId={chapterId}
+          campusId={campusId}
+          campusName={campus?.name ?? null}
+          onPosted={() => void load()}
+        />
+      ) : null}
     </View>
   );
 }
