@@ -1,11 +1,27 @@
 /**
  * CreateSheet (DESIGN §7/§8.7): bottom sheet opened by the Home/Org FAB —
- * Photo / Video / Text rows. Photo and Video are visibly disabled: there is
- * no media upload capability anywhere in the stack (media_urls is a column
- * on the post model, but no endpoint, storage bucket, or presign flow exists
- * to turn a picked photo/video into a URL), so faking a picker would just
- * silently drop the media. Text opens a real composer — body + an audience
+ * Photo / Video / Text rows. Text opens a real composer — body + an audience
  * picker (org/campus, board Decisions log Aug 14).
+ *
+ * PHOTO IS REAL NOW (c70): tapping it picks from the library (no camera capture
+ * in alpha scope — a photo-library permission is a smaller ask than camera, and
+ * "attach a photo" never required taking one fresh), uploads it via a signed GCS
+ * url (src/api/media.ts — the client never proxies bytes through the API), and
+ * lands in the same compose step Text does, now carrying a photo. VIDEO STAYS
+ * DISABLED: c70's approved scope is photos on posts only.
+ *
+ * Caption is still required even with a photo attached — this does not relax
+ * canSubmit's existing rule, on purpose: "can I post a photo with no caption" is
+ * a real, separate product question nobody has answered yet, not something to
+ * decide silently while wiring the upload pipeline.
+ *
+ * The picker itself needs expo-image-picker, a NATIVE module — it cannot run in
+ * Expo Go or the current EAS dev build, only a rebuilt one (same blocker as
+ * c39). Everything up to and including the picker call is real, tested code;
+ * the actual "tap it and see a picker" moment is untestable until that build
+ * exists. See app-mobile/src/api/media.ts and backend/app/services/
+ * storage_service.py for the upload half, which IS tested (server-side, and via
+ * fetch mocking here) without needing a device at all.
  *
  * Two create routes sit behind that picker (c71). A member posting to their org,
  * or to campus from inside their org, goes to POST /chapters/{chapter_id}/posts.
@@ -15,13 +31,20 @@
  */
 
 import { Feather } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import type { ComponentProps } from "react";
 import { useRef, useState } from "react";
-import { Alert, Modal, Pressable, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Pressable, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ApiError } from "@/api/client";
 import { createCampusPost, createPost, type PostAudience } from "@/api/feed";
+import {
+  getMediaUploadUrl,
+  uploadMediaBytes,
+  MAX_UPLOAD_BYTES,
+  type AllowedMediaContentType,
+} from "@/api/media";
 import { light, radii, spacing, typography, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
@@ -161,6 +184,10 @@ export function CreateSheet({
   // offer and no way for the org default above to apply to them (c71).
   const canChooseAudience = chapterId !== null;
   const effectiveAudience: PostAudience = canChooseAudience ? audience : "campus";
+  // public_url of an uploaded photo, once the pick+upload round trip finishes —
+  // null means "no photo attached," not "still uploading" (see uploadingPhoto).
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [posting, setPosting] = useState(false);
   // Belt-and-suspenders alongside `posting` state: a ref is read/written
   // synchronously, so two taps that both land before the first setState
@@ -172,6 +199,8 @@ export function CreateSheet({
     setStep("options");
     setBody("");
     setAudience("org");
+    setPhotoUrl(null);
+    setUploadingPhoto(false);
   };
 
   const close = () => {
@@ -184,17 +213,69 @@ export function CreateSheet({
   const canSubmit =
     body.trim().length > 0 && (chapterId !== null || campusId !== null) && !posting;
 
+  /**
+   * Pick a photo from the library, then request+upload in the same tap — the user
+   * sees one loading state ("Uploading...") rather than a pick step followed by a
+   * separate, confusing upload step. Client-side content-type/size checks happen
+   * BEFORE any network call, mirroring backend's own rules (storage_service.
+   * ALLOWED_CONTENT_TYPES / MAX_UPLOAD_BYTES) so a bad pick fails instantly instead
+   * of round-tripping to the server to be told the same thing.
+   */
+  const pickPhoto = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert(
+        "Photo access needed",
+        "Chirp needs access to your photos to attach one. You can allow it in Settings.",
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.8,
+      selectionLimit: 1,
+    });
+    if (result.canceled || result.assets.length === 0) return;
+    const asset = result.assets[0];
+
+    const contentType = asset.mimeType;
+    if (contentType !== "image/jpeg" && contentType !== "image/png" && contentType !== "image/webp") {
+      Alert.alert("Unsupported photo", "Please choose a JPEG, PNG, or WebP image.");
+      return;
+    }
+    if (asset.fileSize !== undefined && asset.fileSize > MAX_UPLOAD_BYTES) {
+      Alert.alert("Photo too large", "Photos are limited to 10MB. Try a different one.");
+      return;
+    }
+
+    setUploadingPhoto(true);
+    try {
+      const typedContentType = contentType as AllowedMediaContentType;
+      const bytes = await (await fetch(asset.uri)).blob();
+      const { upload_url, public_url } = await getMediaUploadUrl(typedContentType, bytes.size);
+      await uploadMediaBytes(upload_url, bytes, typedContentType);
+      setPhotoUrl(public_url);
+      setStep("compose");
+    } catch (error) {
+      showApiError(error, "Couldn't upload that photo");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
   const submit = async () => {
     if (!canSubmit || postingRef.current) return;
     postingRef.current = true;
     setPosting(true);
     try {
+      const media = photoUrl !== null ? { media_urls: [photoUrl], post_type: "photo" as const } : {};
       if (chapterId !== null) {
-        await createPost(chapterId, { body: body.trim(), audience: effectiveAudience });
+        await createPost(chapterId, { body: body.trim(), audience: effectiveAudience, ...media });
       } else if (campusId !== null) {
         // No chapter: the campus route is the only one that will accept this, and
         // it sets audience itself, so nothing about org can be requested here.
-        await createCampusPost(campusId, { body: body.trim() });
+        await createCampusPost(campusId, { body: body.trim(), ...media });
       }
     } catch (error) {
       // Body/audience deliberately survive a failure so the user can just retry.
@@ -249,10 +330,11 @@ export function CreateSheet({
               <View>
                 <ListRow
                   title="Photo"
-                  subtitle="Coming soon — media posting isn't wired up yet"
+                  subtitle={uploadingPhoto ? "Uploading..." : "Attach a photo to your post"}
                   divider
-                  left={<OptionIcon icon="image" muted />}
-                  right={<Badge label="Soon" />}
+                  onPress={uploadingPhoto ? undefined : () => void pickPhoto()}
+                  left={<OptionIcon icon="image" />}
+                  right={uploadingPhoto ? <ActivityIndicator /> : undefined}
                 />
                 <ListRow
                   title="Video"
@@ -283,6 +365,35 @@ export function CreateSheet({
                 </Pressable>
                 <AppText variant="title">New post</AppText>
               </View>
+
+              {photoUrl !== null ? (
+                <View style={{ borderRadius: radii.input, overflow: "hidden" }}>
+                  <Image
+                    source={{ uri: photoUrl }}
+                    style={{ width: "100%", height: 180 }}
+                    resizeMode="cover"
+                  />
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Remove photo"
+                    onPress={() => setPhotoUrl(null)}
+                    hitSlop={spacing.sm}
+                    style={{
+                      position: "absolute",
+                      top: spacing.sm,
+                      right: spacing.sm,
+                      width: 28,
+                      height: 28,
+                      borderRadius: radii.pill,
+                      backgroundColor: withAlpha(light.ink, 0.6),
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Feather name="x" size={16} color={light.surface} />
+                  </Pressable>
+                </View>
+              ) : null}
 
               <TextInput
                 value={body}
