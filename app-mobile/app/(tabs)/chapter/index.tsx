@@ -281,22 +281,33 @@ function OrgFeedSegment({
   };
 
   const toggleLike = async (item: OrgFeedItem) => {
-    if (item.likedByMe) {
-      await unlikePost(item.post.id);
-    } else {
-      await likePost(item.post.id);
-    }
+    // c120: mirrors feed/index.tsx's toggleLike. That one flips optimistically
+    // and rolls back on failure; this one used to await the network call FIRST
+    // with no catch at all, so a failed request became an unhandled rejection
+    // instead of the UI just staying as it was.
+    const wasLiked = item.likedByMe;
     setItems((current) =>
       (current ?? []).map((entry) =>
         entry.post.id === item.post.id
-          ? {
-              ...entry,
-              likedByMe: !entry.likedByMe,
-              likeCount: entry.likeCount + (entry.likedByMe ? -1 : 1),
-            }
+          ? { ...entry, likedByMe: !wasLiked, likeCount: entry.likeCount + (wasLiked ? -1 : 1) }
           : entry,
       ),
     );
+    try {
+      if (wasLiked) {
+        await unlikePost(item.post.id);
+      } else {
+        await likePost(item.post.id);
+      }
+    } catch {
+      setItems((current) =>
+        (current ?? []).map((entry) =>
+          entry.post.id === item.post.id
+            ? { ...entry, likedByMe: wasLiked, likeCount: entry.likeCount + (wasLiked ? 1 : -1) }
+            : entry,
+        ),
+      );
+    }
   };
 
   if (items !== null && items.length === 0) {
