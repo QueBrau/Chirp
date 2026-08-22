@@ -95,6 +95,42 @@ async def _resolve_report_campus_id(
     return reporter.campus_id
 
 
+async def _report_campus_content(
+    session: AsyncSession, target_type: str, target_id: uuid.UUID | None
+) -> bool:
+    """Whether a report's target is campus-wide content, for c108's tier (c139/c142).
+
+    THE BUG THIS CLOSES: the tier used to come from target_type alone
+    (target_type == "yak"), which was true only until c71 let a Post carry
+    audience="campus" and publish to the campus feed. A campus-audience post's
+    report was then keyed as chapter content — an unverified officer could
+    dismiss it, the exact reverse of feed.py's create-side rule that PUBLISHING
+    a campus post requires a verified .edu. Removing/dismissing must never be the
+    weaker side of that pair.
+
+    Yaks are campus-wide by definition. A post or comment's tier follows its own
+    `audience` column, not its type — a comment has none of its own, so it
+    inherits its parent post's. Anything else (message_forward, user, or an
+    unresolvable/deleted target) has no chapter-content justification to point
+    to, so it defaults to the STRICTER campus tier rather than assuming it is
+    safe to relax — the burden is on positively proving chapter content, not on
+    disproving campus content.
+    """
+    if target_type == "yak":
+        return True
+    if target_type == "post" and target_id is not None:
+        post = await session.get(models.Post, target_id)
+        if post is not None:
+            return post.audience == "campus"
+    elif target_type == "comment" and target_id is not None:
+        comment = await session.get(models.PostComment, target_id)
+        if comment is not None:
+            post = await session.get(models.Post, comment.post_id)
+            if post is not None:
+                return post.audience == "campus"
+    return True
+
+
 async def _require_eboard_for_campus(
     session: AsyncSession,
     moderator: models.User,
@@ -241,16 +277,19 @@ async def resolve_report(
     report = await session.get(models.ContentReport, report_id)
     if report is None:
         raise not_found("report_not_found")
-    # A report's tier follows its TARGET: a yak is campus-wide, a post or comment is
-    # chapter content (c108). Dismissing a yak report is a campus moderation act;
-    # dismissing a post report is not, so an unverified officer may still clear their
-    # own chapter's queue.
+    # A report's tier follows its TARGET's actual audience, not its type (c108/c139/
+    # c142) — a campus-audience post is campus-wide content wearing "post" as its
+    # target_type, and dismissing that report is a campus moderation act just like
+    # dismissing a yak report is. Only a genuinely chapter-scoped post/comment lets an
+    # unverified officer clear their own chapter's queue; _report_campus_content is
+    # what tells the two apart.
     #
-    # Scoping reads the loaded row, which is fine unlocked: a report's campus_id and
-    # target_type are set once when it is filed and never change, so there is nothing
-    # to race on here.
+    # Scoping reads the loaded report row, which is fine unlocked: a report's
+    # campus_id and target_type/target_id are set once when it is filed and never
+    # change, so there is nothing to race on here.
+    campus_content = await _report_campus_content(session, report.target_type, report.target_id)
     await _require_eboard_for_campus(
-        session, moderator, report.campus_id, campus_content=report.target_type == "yak"
+        session, moderator, report.campus_id, campus_content=campus_content
     )
 
     # The STATUS transition is a different matter, and read-check-then-write would have
@@ -424,34 +463,48 @@ async def remove_content(
     delete, set means a moderator removed it. Writes a moderation_actions audit row
     either way (who, when, why).
     """
-    chapter: models.Chapter | None
     if body.target_type == "post":
         post = await session.get(models.Post, body.target_id)
         if post is None:
             raise not_found("post_not_found")
         if post.deleted_at is not None:
             raise conflict("already_removed")
-        chapter = await session.get(models.Chapter, post.chapter_id)
         target: models.Post | models.PostComment = post
+        source_post = post
     else:
         comment = await session.get(models.PostComment, body.target_id)
         if comment is None:
             raise not_found("comment_not_found")
         if comment.deleted_at is not None:
             raise conflict("already_removed")
-        parent_post = await session.get(models.Post, comment.post_id)
-        chapter = (
-            await session.get(models.Chapter, parent_post.chapter_id)
-            if parent_post is not None
-            else None
-        )
         target = comment
+        source_post = await session.get(models.Post, comment.post_id)
 
-    campus_id = chapter.campus_id if chapter is not None else None
-    # This route only accepts posts and comments (RemovableContentType) - both chapter
-    # content, so officer role alone is the right bar. Yaks have their own route above,
-    # which passes campus_content=True.
-    await _require_eboard_for_campus(session, moderator, campus_id, campus_content=False)
+    # campus_id and the c108 tier both come straight off the POST row (c139/c142) -
+    # never through Chapter, which this route used to hop for campus_id alone and
+    # which broke two ways at once:
+    #
+    # (1) campus_content was hard-coded False here on the theory that a post/comment
+    #     is always chapter content. c71 made that false: a Post can carry
+    #     audience="campus" and publish to the campus feed, same as a yak. That made
+    #     REMOVING a campus post require less than PUBLISHING one required
+    #     (feed.py's create route demands a verified .edu for audience="campus") -
+    #     backwards, and exploitable by an unverified officer in a different chapter
+    #     on the same campus.
+    #
+    # (2) Chapter.campus_id is unreachable for a chapter-less campus post
+    #     (chapter_id NULL, allowed by ck_posts_org_requires_chapter since c71) - the
+    #     hop silently produced campus_id=None, which _require_eboard_for_campus
+    #     treats as "no campus matches" and 403s EVERY officer, verified or not.
+    #     Post.campus_id is a first-class, non-nullable column set unconditionally by
+    #     both create routes in feed.py, so reading it directly fixes both bugs with
+    #     one change - the same shift _resolve_report_campus_id already made above
+    #     for the reports path, for the identical reason.
+    #
+    # A comment carries neither column itself, so it inherits its parent post's.
+    campus_id = source_post.campus_id if source_post is not None else None
+    campus_content = source_post is not None and source_post.audience == "campus"
+    await _require_eboard_for_campus(session, moderator, campus_id, campus_content=campus_content)
 
     target.deleted_at = datetime.now(timezone.utc)
     target.removed_reason = body.reason
