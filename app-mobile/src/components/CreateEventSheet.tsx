@@ -87,9 +87,13 @@ export function CreateEventSheet({ visible, onClose, onCreate }: CreateEventShee
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
+      {/* c131: NOT accessibilityRole="button" — same fix as CreateSheet.tsx. This
+          backdrop was a byte-for-byte copy of that one, so it carried the identical
+          bug: react-native-web maps accessibilityRole="button" to a literal <button>,
+          and this backdrop wraps every real control in the form, each ALSO
+          accessibilityRole="button" — a <button> nested inside a <button>. onPress
+          alone keeps it tappable without the semantic role. */}
       <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Close"
         onPress={close}
         style={{ flex: 1, backgroundColor: withAlpha(light.ink, 0.4), justifyContent: "flex-end" }}
       >
