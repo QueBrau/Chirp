@@ -1,15 +1,18 @@
 /**
- * Moderation (board c35, App Store Guideline 1.2): lists open content reports
- * and lets an e-board moderator remove a reported yak — the ONLY removal
- * action the backend actually supports (POST /moderation/yaks/{yak_id}/remove,
- * gated `_require_any_eboard`). There is no endpoint to remove a reported post
+ * Moderation (board c35/c78, App Store Guideline 1.2): lists open content reports,
+ * lets an e-board moderator remove a reported yak — the ONLY removal action the
+ * backend actually supports (POST /moderation/yaks/{yak_id}/remove, gated
+ * `_require_any_eboard`) — and now closes reports for real via PATCH
+ * /moderation/reports/{id} (c91). There is no endpoint to remove a reported post
  * or comment, and no endpoint at all for message_forward reports (E2EE — the
- * client would need to decrypt/forward plaintext, which the crypto layer
- * doesn't support yet, SPEC §6.7) — those reports render read-only with an
- * explicit "not available" note instead of a button that can't work.
+ * client would need to decrypt/forward plaintext, which the crypto layer doesn't
+ * support yet, SPEC §6.7) — those reports get an explicit Dismiss action instead
+ * of a Remove button that can't work, so the queue can still be emptied.
  *
  * Reachable from Orgs > Tools, gated to e-board roles via `roleMeta.eboard`
- * (chapter/index.tsx OrgToolsSegment). Re-checked here too, the same way
+ * (chapter/index.tsx OrgToolsSegment) — c80 made that a named `moderation`
+ * capability, so vice_president and historian see the tile now too, not only
+ * treasurer/secretary/president. Re-checked here too, the same way
  * chapter/secretary.tsx / treasurer.tsx re-check their own role instead of
  * trusting the tile alone — a direct/deep-linked nav must still land on an
  * EmptyState rather than a screen full of would-be 403s.
@@ -19,11 +22,11 @@
  * list_reports), which may cover more than just `useOwnChapter()`'s single
  * chapter. That's the server's call to make, not this screen's.
  *
- * Report status has no transition endpoint anywhere in the API (no PATCH/
- * dismiss route) — removing a yak does not flip its report(s) to "actioned".
- * So a removed yak's report(s) are tracked as "handled" locally for this
- * session only; a fresh load will show them as "open" again until that
- * backend gap is closed (out of scope here — SCOPE only covers feed.py).
+ * c91 shipped PATCH /moderation/reports/{id} with no client function and no call
+ * site anywhere — this screen is the first thing that calls it. Removing a yak now
+ * resolves its report as "actioned" through the real endpoint instead of tracking
+ * "handled" in local state for the session only, so a reload no longer resurrects
+ * it as open.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -33,6 +36,7 @@ import { ApiError } from "@/api/client";
 import {
   listReports,
   removeYak,
+  resolveReport,
   type ContentReportOut,
   type ReportTargetType,
 } from "@/api/moderation";
@@ -82,8 +86,9 @@ export default function ModerationScreen() {
 
   const [state, setState] = useState<LoadState>("loading");
   const [reports, setReports] = useState<ContentReportOut[]>([]);
-  const [removedYakIds, setRemovedYakIds] = useState<Set<string>>(new Set());
-  const [removingReportId, setRemovingReportId] = useState<string | null>(null);
+  // One id in flight at a time, covers both "removing" and "dismissing" — a report
+  // can only be leaving the open queue one way, never both.
+  const [workingReportId, setWorkingReportId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setState("loading");
@@ -113,18 +118,47 @@ export default function ModerationScreen() {
     );
   }
 
+  /**
+   * Drop the report from the OPEN list once it's genuinely closed server-side,
+   * rather than the old approach of tracking a local "handled" flag that a
+   * reload would forget. This is the same query the initial load runs — a
+   * fresh GET /moderation/reports would return this report at all, just with
+   * status "actioned"/"dismissed" instead of "open" — so removing it here
+   * keeps the screen in sync with what a reload will show without refetching.
+   */
+  const closeReport = (reportId: string) => {
+    setReports((current) => current.filter((r) => r.id !== reportId));
+  };
+
   const doRemove = async (report: ContentReportOut, yakId: string) => {
-    setRemovingReportId(report.id);
+    setWorkingReportId(report.id);
     try {
       // Reuse the reporter's own stated reason as the removal reason (v1
       // scaffolding, CONVENTIONS.md "functional-but-simple" for moderation)
       // rather than adding a second free-text field just for this.
       await removeYak(yakId, report.reason);
-      setRemovedYakIds((current) => new Set(current).add(yakId));
+      // c78: c91's resolve endpoint existed with no caller anywhere. Removing
+      // the yak takes the content down; resolving the REPORT is what actually
+      // empties the queue — the two were separate actions server-side and
+      // this screen used to only ever do the first one.
+      await resolveReport(report.id, "actioned", report.reason);
+      closeReport(report.id);
     } catch (error) {
       showApiError(error, "Couldn't remove that yak");
     } finally {
-      setRemovingReportId(null);
+      setWorkingReportId(null);
+    }
+  };
+
+  const doDismiss = async (report: ContentReportOut) => {
+    setWorkingReportId(report.id);
+    try {
+      await resolveReport(report.id, "dismissed", "Reviewed — no action needed");
+      closeReport(report.id);
+    } catch (error) {
+      showApiError(error, "Couldn't dismiss that report");
+    } finally {
+      setWorkingReportId(null);
     }
   };
 
@@ -134,6 +168,17 @@ export default function ModerationScreen() {
       "This takes it down for everyone on the board. This can't be undone.",
       [
         { text: "Remove", style: "destructive", onPress: () => void doRemove(report, yakId) },
+        { text: "Cancel", style: "cancel" },
+      ],
+    );
+  };
+
+  const confirmDismiss = (report: ContentReportOut) => {
+    Alert.alert(
+      "Dismiss this report?",
+      "Marks it reviewed with no action taken. It leaves the queue either way.",
+      [
+        { text: "Dismiss", onPress: () => void doDismiss(report) },
         { text: "Cancel", style: "cancel" },
       ],
     );
@@ -157,7 +202,7 @@ export default function ModerationScreen() {
           <SectionHeader title="Open reports" caption={`${reports.length} waiting`} />
           {reports.map((report) => {
             const yakId = removableYakId(report);
-            const alreadyRemoved = yakId !== null && removedYakIds.has(yakId);
+            const working = workingReportId === report.id;
             return (
               <Card key={report.id}>
                 <View style={{ gap: spacing.sm }}>
@@ -179,24 +224,29 @@ export default function ModerationScreen() {
                       {report.forwarded_plaintext}
                     </AppText>
                   ) : null}
-
-                  {yakId !== null ? (
-                    alreadyRemoved ? (
-                      <Chip label="Removed" variant="success" />
-                    ) : (
-                      <Button
-                        label={removingReportId === report.id ? "Removing..." : "Remove yak"}
-                        variant="destructive"
-                        disabled={removingReportId === report.id}
-                        onPress={() => confirmRemove(report, yakId)}
-                      />
-                    )
-                  ) : (
+                  {yakId === null ? (
                     <AppText variant="caption" tone="tertiary">
                       Removal isn't available for {TARGET_LABELS[report.target_type].toLowerCase()}{" "}
-                      reports yet.
+                      reports yet — dismiss it once you've reviewed it.
                     </AppText>
-                  )}
+                  ) : null}
+
+                  <View style={{ gap: spacing.xs }}>
+                    {yakId !== null ? (
+                      <Button
+                        label={working ? "Working..." : "Remove yak"}
+                        variant="destructive"
+                        disabled={working}
+                        onPress={() => confirmRemove(report, yakId)}
+                      />
+                    ) : null}
+                    <Button
+                      label={working ? "Working..." : "Dismiss"}
+                      variant="ghost"
+                      disabled={working}
+                      onPress={() => confirmDismiss(report)}
+                    />
+                  </View>
                 </View>
               </Card>
             );
