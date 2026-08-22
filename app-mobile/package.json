@@ -8,7 +8,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
-    "verify:charts": "tsc -p tsconfig.chart-verify.json && node scripts/verify-charts.mjs"
+    "verify:charts": "tsc -p tsconfig.chart-verify.json && node scripts/verify-charts.mjs",
+    "verify:contract": "node scripts/verify-contract.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/muli": "^0.1.0",

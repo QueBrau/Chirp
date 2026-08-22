@@ -156,6 +156,15 @@ jobs:
         # is exactly what verify:charts exists to catch (c118). Until this step, the
         # script only ran if a human remembered to type the command by hand.
         run: npm run verify:charts
+      - name: Client/backend contract
+        working-directory: app-mobile
+        # Board card c121. tsc cannot tell you a client HTTP verb disagrees with
+        # the backend route it targets - it is a string literal on both sides.
+        # c115 shipped broken for days because of exactly that (POST vs the
+        # backend registered PUT). This reads backend/app/routers/*.py and
+        # app-mobile/src/api/*.ts as plain text - no server boot, no simulator -
+        # and diffs every request() call against the real route table.
+        run: npm run verify:contract
 
   web:
     # Board card c113. web/ is the PUBLIC MARKETING SITE and it had no gate at
