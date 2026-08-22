@@ -296,9 +296,15 @@ export function CreateSheet({
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
+      {/* c131: NOT accessibilityRole="button" — react-native-web maps that role to a
+          literal HTML <button>, and this backdrop wraps every real control in the
+          sheet (Post, Back, audience choices, the option rows), each of which is
+          ALSO accessibilityRole="button". A <button> cannot legally contain another
+          <button>; the browser's click/focus targeting on the inner ones becomes
+          undefined behavior once it does. onPress alone makes the backdrop tappable
+          without making it a semantic "button" - matches MediaPostCard's own
+          full-screen dismiss overlay, which never had this role either. */}
       <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Close"
         onPress={close}
         style={{ flex: 1, backgroundColor: withAlpha(light.ink, 0.4), justifyContent: "flex-end" }}
       >
