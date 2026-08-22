@@ -296,7 +296,10 @@
   "columns": [
     {
       "id": "backlog",
-      "title": "CLAIMED Aug 22 - DESIGN PHASE, plan under review before any code",
+      "title": "Next"
+    },
+    {
+      "id": "progress",
       "title": "In Progress"
     },
     {
@@ -956,9 +959,9 @@
     {
       "id": "c70",
       "col": "backlog",
-      "owner": "J",
+      "owner": "",
       "tag": "m5",
-      "title": "CLAIMED Aug 22 - DESIGN PHASE, plan under review before any code",
+      "title": "NO MEDIA UPLOAD PIPELINE EXISTS",
       "area": "fyp",
       "detail": "split out of c49 so text compose could ship. posts.media_urls is a TEXT[] the backend happily stores and MediaPostCard happily renders, but nothing anywhere can PRODUCE a url: no expo-image-picker dependency, no camera permission in app.json, no storage bucket wired, no presign or upload endpoint, and grep finds no upload code at all. Every media_urls value in the app today is a picsum.photos placeholder from the mocks, which is exactly why this looked done. Needs a real decision first: Firebase Storage (chirps-prod already has a storageBucket in its config and the JS SDK is already a dependency) vs GCS signed URLs from the backend. Note the cost: expo-image-picker is a NATIVE module, so this owes an EAS dev build of its own, on top of c39's."
     },
