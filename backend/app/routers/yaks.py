@@ -2,8 +2,8 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import func, select, update
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,16 +26,29 @@ class YakFeedOut(YakOut):
 @router.get("/campuses/{campus_id}/yaks")
 async def list_yaks(
     campus_id: uuid.UUID,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     user: models.User = Depends(require_campus_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[YakFeedOut]:
     """List the campus's yaks newest first (not removed), with score and the caller's own vote.
 
+    Board card c127 (security hardening item 5): this had no limit at all, so a
+    campus with enough history returned its entire yak table on every load.
+    Reverse-chron with a compound (created_at, id) cursor (`before` + `before_id`),
+    same shape as feed.py's campus feed and messages.py's list_messages — matching
+    the house pattern (see routers/feed.py:list_campus_feed and
+    tests/test_pagination.py) rather than inventing a third one. `before` alone
+    still works (legacy clients) but does not guarantee the tie-break. Backed by
+    the existing idx_yaks_campus_time index, so this does not add a new query
+    shape the schema wasn't already built for.
+
     Yaks whose (anonymous) author the caller has blocked are silently absent — no
     tombstone, no count — matching every other blocked yak simply not existing for
     this caller (§8.3: nothing in the response may reveal that anything was hidden).
     """
-    result = await session.execute(
+    stmt = (
         select(models.Yak, models.YakVote.value)
         .outerjoin(
             models.YakVote,
@@ -52,8 +65,18 @@ async def list_yaks(
             models.Yak.removed_at.is_(None),
             models.UserBlock.blocker_id.is_(None),
         )
-        .order_by(models.Yak.created_at.desc())
     )
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.Yak.created_at, models.Yak.id) < (before, before_id)
+        )
+    elif before is not None:
+        stmt = stmt.where(models.Yak.created_at < before)
+    stmt = stmt.order_by(
+        models.Yak.created_at.desc(), models.Yak.id.desc()
+    ).limit(limit)
+
+    result = await session.execute(stmt)
     items: list[YakFeedOut] = []
     for yak, my_vote in result.all():
         item = YakFeedOut.model_validate(yak)

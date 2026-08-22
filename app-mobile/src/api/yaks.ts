@@ -35,8 +35,17 @@ export interface YakFeedOut extends YakOut {
   my_vote: number | null;
 }
 
-export async function listYaks(campusId: string): Promise<YakFeedOut[]> {
-  return request<YakFeedOut[]>(`/campuses/${campusId}/yaks`);
+export interface ListYaksOptions {
+  limit?: number;
+  /** created_at cursor — yaks older than this. */
+  before?: string;
+  before_id?: string;
+}
+
+export async function listYaks(campusId: string, opts: ListYaksOptions = {}): Promise<YakFeedOut[]> {
+  return request<YakFeedOut[]>(`/campuses/${campusId}/yaks`, {
+    query: { limit: opts.limit, before: opts.before, before_id: opts.before_id },
+  });
 }
 
 export async function createYak(campusId: string, body: YakCreate): Promise<YakOut> {

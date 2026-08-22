@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from httpx import AsyncClient
+from sqlalchemy import text
 
 from tests.conftest import ApiUser, MakeCampus, set_campus
 
@@ -146,3 +148,121 @@ async def test_delete_yak_author_only(
 
     listing = await client.get(f"/campuses/{campus_id}/yaks", headers=author.headers)
     assert all(item["id"] != yak_id for item in listing.json())
+
+
+async def test_tied_timestamp_page_boundary_is_lossless_with_before_id(
+    client: AsyncClient, make_campus: MakeCampus
+) -> None:
+    """5 same-timestamp yaks: paging with before+before_id returns all 5, no dupes/gaps.
+
+    Board card c127 - same shape as test_pagination.py's message version
+    (security review finding 10): a created_at-only cursor silently drops rows
+    that share a timestamp at a page boundary.
+    """
+    campus_id = await make_campus()
+    author = await _make_campus_user(client, campus_id)
+
+    tied_at = datetime.now(timezone.utc)
+    yak_ids: list[str] = []
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        for i in range(5):
+            result = await session.execute(
+                text(
+                    "INSERT INTO yaks (campus_id, author_id, body, created_at)"
+                    " VALUES (:campus_id, :author_id, :body, :created_at)"
+                    " RETURNING id"
+                ),
+                {
+                    "campus_id": uuid.UUID(campus_id),
+                    "author_id": uuid.UUID(author.id),
+                    "body": f"tied-{i}",
+                    "created_at": tied_at,
+                },
+            )
+            yak_ids.append(str(result.scalar_one()))
+        await session.commit()
+
+    seen: list[str] = []
+    before: str | None = None
+    before_id: str | None = None
+    for _ in range(10):
+        params: dict[str, str | int] = {"limit": 2}
+        if before is not None:
+            params["before"] = before
+            params["before_id"] = before_id
+        response = await client.get(
+            f"/campuses/{campus_id}/yaks", params=params, headers=author.headers
+        )
+        assert response.status_code == 200, response.text
+        page = response.json()
+        if not page:
+            break
+        seen.extend(item["id"] for item in page)
+        before = page[-1]["created_at"]
+        before_id = page[-1]["id"]
+
+    assert sorted(seen) == sorted(yak_ids), "lost or duplicated a row at a tied-timestamp page boundary"
+
+
+async def test_before_alone_still_works_backward_compatible(
+    client: AsyncClient, make_campus: MakeCampus
+) -> None:
+    """`before` without `before_id` (legacy clients) still paginates without erroring."""
+    campus_id = await make_campus()
+    author = await _make_campus_user(client, campus_id)
+
+    for i in range(3):
+        posted = await client.post(
+            f"/campuses/{campus_id}/yaks", json={"body": f"yak-{i}"}, headers=author.headers
+        )
+        assert posted.status_code == 201, posted.text
+
+    first_page = await client.get(
+        f"/campuses/{campus_id}/yaks", params={"limit": 2}, headers=author.headers
+    )
+    assert first_page.status_code == 200, first_page.text
+    items = first_page.json()
+    assert len(items) == 2
+
+    second_page = await client.get(
+        f"/campuses/{campus_id}/yaks",
+        params={"before": items[-1]["created_at"]},
+        headers=author.headers,
+    )
+    assert second_page.status_code == 200, second_page.text
+    assert len(second_page.json()) == 1
+
+
+async def test_list_yaks_limit_defaults_and_caps(
+    client: AsyncClient, make_campus: MakeCampus
+) -> None:
+    """No limit param -> default page size applies; a limit above the cap is rejected.
+
+    Board card c127: this endpoint had no bound at all before - the request that
+    used to return the whole table now returns at most `limit`, and the cap
+    itself cannot be raised by a client that just asks for more.
+    """
+    campus_id = await make_campus()
+    author = await _make_campus_user(client, campus_id)
+
+    for i in range(3):
+        posted = await client.post(
+            f"/campuses/{campus_id}/yaks", json={"body": f"yak-{i}"}, headers=author.headers
+        )
+        assert posted.status_code == 201, posted.text
+
+    default_page = await client.get(f"/campuses/{campus_id}/yaks", headers=author.headers)
+    assert default_page.status_code == 200, default_page.text
+    assert len(default_page.json()) == 3  # well under the default cap, so nothing is trimmed
+
+    too_large = await client.get(
+        f"/campuses/{campus_id}/yaks", params={"limit": 201}, headers=author.headers
+    )
+    assert too_large.status_code == 422, too_large.text
+
+    zero = await client.get(
+        f"/campuses/{campus_id}/yaks", params={"limit": 0}, headers=author.headers
+    )
+    assert zero.status_code == 422, zero.text
