@@ -26,7 +26,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -180,10 +180,39 @@ async def redeem(
     if not secrets.compare_digest(
         verification.code_hash, _hash_code(verification.id, code.strip())
     ):
-        # A wrong guess costs an attempt and is persisted before the error is raised —
-        # otherwise the rollback would refund the guess and the cap would never bind.
-        verification.attempts += 1
-        session.add(verification)
+        # Board card c138 (security's 7-day-pass finding): `verification.attempts += 1`
+        # here used to be a Python-side read-modify-write with no row lock. Proven against
+        # a real Postgres — 25 concurrent wrong guesses against a cap of 5, counter reached
+        # 3 — because concurrent requests all read the SAME stale `attempts` value, each
+        # computes its own `old + 1`, and whichever commits last wins; the others' increments
+        # are simply overwritten, not lost to a crash. "Dies after a handful of wrong
+        # guesses" (see the module docstring) did not hold under concurrency.
+        #
+        # Same shape as c51's dues reservation, c105's invite seat claim, c91's report
+        # resolution and c114's spend-approval decision: the guard IS the write. The
+        # database picks whether this guess counted, not a Python-side precondition
+        # checked before it. `attempts = attempts + 1` is computed server-side from the
+        # row Postgres is currently looking at (row-locked for the statement's duration),
+        # not from a value read moments earlier in this session — so N truly concurrent
+        # wrong guesses against a fresh row converge on exactly `MAX_ATTEMPTS` accepted
+        # increments, not fewer.
+        result = await session.execute(
+            update(models.CampusVerification)
+            .where(
+                models.CampusVerification.id == verification.id,
+                models.CampusVerification.attempts < MAX_ATTEMPTS,
+            )
+            .values(attempts=models.CampusVerification.attempts + 1)
+            .returning(models.CampusVerification.attempts)
+            .execution_options(synchronize_session=False)
+        )
+        if result.scalar_one_or_none() is None:
+            # A concurrent guess already pushed attempts to the cap between our SELECT
+            # above and this UPDATE — the guess was never counted, and it must not be:
+            # counting a guess the guard refused would let the cap creep past MAX_ATTEMPTS
+            # under exactly the concurrency this fix exists to close.
+            await session.commit()
+            raise too_many_requests("verification_attempts_exhausted")
         await session.commit()
         raise forbidden("verification_code_invalid")
 
