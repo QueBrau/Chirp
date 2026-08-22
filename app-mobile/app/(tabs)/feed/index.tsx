@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, View } from "react-native";
+import { useRouter } from "expo-router";
 
 import { ApiError } from "@/api/client";
 import { likePost, listCampusFeed, unlikePost, type FeedPostOut } from "@/api/feed";
@@ -63,6 +64,7 @@ const FILTERS: { key: FeedFilter; label: string }[] = [
 ];
 
 export default function FeedScreen() {
+  const router = useRouter();
   const palette = useTheme();
   const { campusColors } = useAppearance();
   const { user, memberships } = useSession();
@@ -225,9 +227,8 @@ export default function FeedScreen() {
                 ? "It's been a year since you last confirmed your .edu address. Verify again to reopen your campus feed."
                 : "Your campus feed is for students at your school. Confirm your .edu address to unlock it."
             }
-            // No action button yet on purpose: c90 builds the verify screen and
-            // wires it here in the same change. A button that navigates nowhere
-            // is worse than honest copy with nothing to press.
+            actionLabel={access === "lapsed" ? "Verify again" : "Verify my .edu"}
+            onAction={() => router.push("/(auth)/verify-campus")}
           />
         ) : campusId === null ? (
           // c96: this used to be a flat dead end — it stated a fact and offered

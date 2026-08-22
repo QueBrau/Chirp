@@ -40,9 +40,17 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install backend with dev extras
+      # Installs from the SAME lockfile family the Cloud Run image uses, rather
+      # than re-resolving pyproject's open ranges. Before this, CI and prod could
+      # install different versions of stripe or firebase-admin from identical
+      # source, and nothing anywhere would report it — a green check that did not
+      # describe what shipped. requirements-dev.lock is requirements.lock plus the
+      # test extras, generated from the same pyproject in the same command.
+      - name: Install backend from the lockfile
         working-directory: backend
-        run: pip install -e ".[dev,firebase]"
+        run: |
+          pip install --require-hashes -r requirements-dev.lock
+          pip install -e . --no-deps
       - name: Run tests
         working-directory: backend
         env:
@@ -141,6 +149,13 @@ jobs:
       - name: Type-check
         working-directory: app-mobile
         run: npx tsc --noEmit
+      - name: Chart math
+        working-directory: app-mobile
+        # tsc cannot tell you an arc is drawn at the wrong angle - chart geometry
+        # fails by rendering a confident, wrong picture rather than throwing, which
+        # is exactly what verify:charts exists to catch (c118). Until this step, the
+        # script only ran if a human remembered to type the command by hand.
+        run: npm run verify:charts
 
   web:
     # Board card c113. web/ is the PUBLIC MARKETING SITE and it had no gate at

@@ -4,14 +4,14 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app import models
 from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.errors import conflict, not_found
-from app.core.permissions import Role, require_role
+from app.core.permissions import DUES_ADMIN, Role, require_role
 from app.db import get_session
 from app.middleware.org_scope import get_current_membership
 from app.schemas.finance import (
@@ -52,7 +52,7 @@ async def list_dues_cycles(
 async def create_dues_cycle(
     chapter_id: uuid.UUID,
     body: DuesCycleCreate,
-    _membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> DuesCycleOut:
     """Create a dues cycle; treasurer/president only."""
@@ -77,7 +77,7 @@ async def list_ledger_entries(
     category: str | None = Query(default=None),
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = Query(default=None),
-    _membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> list[LedgerEntryOut]:
     """List ledger entries newest-first, optionally filtered; treasurer/president only."""
@@ -96,7 +96,7 @@ async def list_ledger_entries(
 async def create_ledger_entry(
     chapter_id: uuid.UUID,
     body: LedgerEntryCreate,
-    membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> LedgerEntryOut:
     """Append a ledger entry; treasurer/president only.
@@ -145,7 +145,7 @@ async def export_ledger_csv(
     category: str | None = Query(default=None),
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = Query(default=None),
-    _membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     """Export the (optionally filtered) ledger as CSV; treasurer/president only.
@@ -244,17 +244,48 @@ async def decide_spend_approval(
     chapter_id: uuid.UUID,
     approval_id: uuid.UUID,
     body: SpendApprovalDecision,
-    membership: models.Membership = Depends(require_role(Role.treasurer, Role.president)),
+    membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> SpendApprovalOut:
     """Approve/reject a pending spend approval; treasurer/president; 409 if decided."""
     approval = await session.get(models.SpendApproval, approval_id)
     if approval is None or approval.chapter_id != chapter_id:
         raise not_found("spend_approval_not_found")
-    if approval.status != "pending":
+
+    # The 409 above USED to be a read-check-then-write, and that was wrong in exactly
+    # the case this route exists to arbitrate. A treasurer and a president deciding at
+    # the same moment would both read "pending", both pass the guard, and both write:
+    # last-write-wins on status, decided_by naming whichever committed first, and a
+    # conflict for neither. One approves, the other rejects, and the record silently
+    # keeps one of them with no indication a decision was overwritten. On a
+    # money-adjacent audit row that is the wrong failure mode — worse than an error,
+    # because both officers walk away believing their decision stood.
+    #
+    # So the guard IS the write. UPDATE ... WHERE status = 'pending' lets the database
+    # pick the winner, and a rowcount of 0 means someone else got there first. Same
+    # shape as c51's dues reservation, c105's invite seat claim, and c91's report
+    # resolution — the fourth time this pattern has been the right answer here.
+    decided = await session.execute(
+        update(models.SpendApproval)
+        .where(
+            models.SpendApproval.id == approval_id,
+            models.SpendApproval.chapter_id == chapter_id,
+            models.SpendApproval.status == "pending",
+        )
+        .values(
+            status=body.status,
+            decided_by=membership.user_id,
+            decided_at=datetime.now(timezone.utc),
+        )
+        .returning(models.SpendApproval.id)
+        .execution_options(synchronize_session=False)
+    )
+    if decided.scalar_one_or_none() is None:
         raise conflict("already_decided")
-    approval.status = body.status
-    approval.decided_by = membership.user_id
-    approval.decided_at = datetime.now(timezone.utc)
+
     await session.commit()
+    # synchronize_session=False leaves the identity-mapped `approval` holding the
+    # pre-UPDATE values, so it must be re-read before it is serialized. Without this
+    # the response body would report the row as still pending.
+    await session.refresh(approval)
     return SpendApprovalOut.model_validate(approval)

@@ -43,6 +43,14 @@ see what is going on. Update it at EVERY step, not just at the end of a task:
   revision ids, and if one is already applied to prod the other is skipped SILENTLY —
   the tables never get created and nothing errors. Claim the next number on the board
   before writing the file. (This already happened once: c41.)
+- **Card ids.** Same shape as migration numbers, and it already bit us: c113 was
+  used by two branches and c114 by a third, none of them with a card, so the
+  board's highest id read 112 and a session took 114 for unrelated work that was
+  already two days old on someone else's branch (c116). **Write the card before you
+  cut the branch.** Do NOT eyeball the board for the highest number —
+  `scripts/board-check` prints the next genuinely free id, counting ids claimed in
+  branch names and commit subjects as well as on the board, and FAILS if any id is
+  in use without a card.
 - Shared files — api/client, theme, components, mocks: touch sparingly, and say on the
   board when you do.
 

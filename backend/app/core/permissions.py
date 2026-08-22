@@ -28,6 +28,46 @@ EBOARD: frozenset[Role] = frozenset(
     {Role.president, Role.vice_president, Role.treasurer, Role.secretary, Role.historian}
 )
 
+# ---- capabilities (board card c80) ----
+#
+# Each set is the SINGLE definition of who may do a thing. The routers gate on them
+# (require_role(*DUES_ADMIN)) and GET /chapters/{id}/role-meta reports them, so the
+# app never keeps its own copy of the taxonomy.
+#
+# It kept one anyway, which is why this exists: chapter/index.tsx hardcoded
+# roles: ["treasurer","president"] and ["secretary","president"] for its dashboard
+# tiles while the invite card in the same file read the server's answer. One half of
+# one screen trusted the backend and the other half guessed. The guess was already
+# wrong - vice_president and historian are in EBOARD and got no tools at all - and
+# nothing failed when it drifted, because a client-side role list that disagrees with
+# the server produces a 403 the user never sees, or a tile that was never drawn.
+#
+# Adding a capability means adding it HERE and using it at the gate. If a route gates
+# on a literal role tuple instead, the UI cannot know about it and the drift starts
+# over.
+DUES_ADMIN: frozenset[Role] = frozenset({Role.treasurer, Role.president})
+MINUTES_ADMIN: frozenset[Role] = frozenset({Role.secretary, Role.president})
+# President only, deliberately: PATCH /chapters/{id}/members can change roles, which
+# includes changing someone else's. See c83 - the person granting a role can be the
+# person losing one, and there is exactly one president.
+MEMBERS_ADMIN: frozenset[Role] = frozenset({Role.president})
+
+CAPABILITIES: dict[str, frozenset[Role]] = {
+    "dues_admin": DUES_ADMIN,
+    "minutes_admin": MINUTES_ADMIN,
+    "members_admin": MEMBERS_ADMIN,
+    "moderation": EBOARD,
+}
+
+
+def capabilities_for(role: str) -> list[str]:
+    """Capability names this role holds, for the client to render against.
+
+    Returned as names rather than role lists on purpose: the app should ask "may I
+    see the dues tile" and never "am I a treasurer or a president".
+    """
+    return sorted(name for name, roles in CAPABILITIES.items() if role in {r.value for r in roles})
+
 
 def require_role(*roles: Role) -> Callable[..., Coroutine[Any, Any, models.Membership]]:
     """Dependency factory layered on get_current_membership; 403 unless role is allowed."""
