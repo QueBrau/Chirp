@@ -35,6 +35,7 @@ from app.schemas.social import (
     PostOut,
     PostUpdate,
 )
+from app.services.storage_service import validate_media_urls
 
 router = APIRouter(tags=["feed"])
 
@@ -255,6 +256,7 @@ async def create_post(
         raise not_found("chapter_not_found")
     if body.audience == "campus":
         require_verified_campus(user, chapter.campus_id)
+    validate_media_urls(body.media_urls)
 
     post = models.Post(
         chapter_id=chapter_id,
@@ -300,6 +302,7 @@ async def create_campus_post(
     campus-wide write by someone with no org at all - so it must not keep the
     weaker `user.campus_id == campus_id` check this branch was written against.
     """
+    validate_media_urls(body.media_urls)
     post = models.Post(
         chapter_id=None,
         campus_id=campus_id,
@@ -383,6 +386,7 @@ async def update_post(
     if body.body is not None:
         post.body = body.body
     if body.media_urls is not None:
+        validate_media_urls(body.media_urls)
         post.media_urls = body.media_urls
     await session.commit()
     return PostOut.model_validate(post)
