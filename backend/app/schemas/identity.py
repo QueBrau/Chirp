@@ -72,6 +72,23 @@ class UserOut(_Schema):
     campus_id: uuid.UUID | None = None
     is_ghost: bool
     is_platform_admin: bool
+    # c126: the caller's OWN suspension state. Safe to expose here specifically
+    # because UserOut is used ONLY in self-facing responses (POST /auth/bootstrap,
+    # GET /auth/me via MeOut) — never a view of another user, so this can never
+    # leak a stranger's moderation history. Naming matches the platform-admin view
+    # in schemas/moderation.py. NULL means never suspended; non-null is when. An
+    # account is never auto-unsuspended — only a moderator clears this back to NULL.
+    #
+    # WORTH KNOWING BEFORE RELYING ON THIS: GET /auth/me does NOT go through
+    # get_current_user (see auth.py's get_me docstring — it predates c76 and
+    # resolves the user directly so an unregistered caller gets 404, not 401), so
+    # this route was never suspension-gated and still 200s for a suspended caller.
+    # Every OTHER authenticated route does 403 them via get_current_user. So this
+    # field is reachable live specifically here — it is not, and was never meant to
+    # be, a way to "find out why you got 403'd", since /auth/me never 403s on
+    # suspension in the first place. Whether /auth/me SHOULD 403 too is a separate,
+    # unresolved question — see board c126.
+    suspended_at: datetime | None = None
     created_at: datetime
 
 

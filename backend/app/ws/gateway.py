@@ -24,6 +24,12 @@ router = APIRouter(tags=["ws"])
 # split matters to the client: 4401 should send the user to sign-in, while this
 # should back off and retry, since nothing about the session is wrong.
 WS_REALTIME_UNAVAILABLE = 4503
+# Mirrors HTTP 403 (board c126), and is deliberately NOT 4401: the credentials
+# resolved to a real user, same as middleware/auth.py's get_current_user split —
+# 401 means "who are you", 403 means "I know who you are and it's a no". A client
+# that ever learns to tell these apart should send 4401 to sign-in and this one to
+# a "your account is suspended" screen, not another reconnect attempt.
+WS_ACCOUNT_SUSPENDED = 4403
 
 _TOKEN_QS_RE = re.compile(r"([?&]token=)[^&\s]+")
 
@@ -106,6 +112,16 @@ async def websocket_gateway(
     user = await get_user_by_uid(session, uid)
     if user is None:
         await websocket.close(code=4401)
+        return
+    # c126: mirrors middleware/auth.py's get_current_user, the HTTP precedent —
+    # same field, same "resolved but blocked" meaning. This closes NEW connection
+    # attempts only, matching what the HTTP side does (checked per-request, and a
+    # WS connect is this gateway's equivalent of a request). It does not reach an
+    # already-open socket for someone suspended mid-session — that's a genuinely
+    # different problem (periodic re-check or a suspend-triggered kill) and is
+    # deliberately out of scope here rather than silently pretended-closed.
+    if user.suspended_at is not None:
+        await websocket.close(code=WS_ACCOUNT_SUSPENDED)
         return
 
     await websocket.accept()
