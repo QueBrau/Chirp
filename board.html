@@ -1573,7 +1573,7 @@
       "owner": "J",
       "tag": "bug",
       "area": "feed",
-      "title": "IN PROGRESS Aug 22 - claimed, isolating the nested-button component using the drive's own starting point",
+      "title": "PR #60 OPEN Aug 22 - root cause isolated (accessibilityRole=button -> react-native-web renders a literal <button>), same bug found and fixed in CreateEventSheet too, tripwire proven both directions",
       "detail": "Found Aug 22 during c130's live prod drive, real console error not a synthetic one. Console text verbatim: '<%s> cannot contain a nested %s. See this log for the ancestor stack trace. button <button>' - fired immediately after the compose flow's POST /chapters/{id}/posts succeeded (201) and the compose sheet closed back to the feed. SOURCE NOT YET ISOLATED to a specific component - the drive was gate-focused, not a debugging session, so this is reported as found rather than root-caused. STARTING POINT FOR WHOEVER PICKS THIS UP: the timing (right as the compose sheet dismisses and the feed re-renders) points at the compose flow itself or something in its close transition, not the post card render - the sheet's own trigger button, or an overlay/portal element, is the likely suspect for a button nested inside another button's DOM. React only warns on this, it does not throw, which is why it did not block the drive - but invalid HTML nesting is real (a <button> inside a <button> is undefined browser behavior for click/focus targeting) and worth root-causing before it compounds with more UI built on the same pattern. Reproduce: sign in, Create -> Text, type anything, Post, watch console immediately after the sheet closes."
     },
     {
