@@ -25,6 +25,12 @@ export interface UserOut {
   account_type: AccountType;
   campus_id: string | null;
   is_ghost: boolean;
+  // c126: non-null means suspended (since this timestamp) — never auto-clears
+  // with time, only a moderator restores it to null. Reachable here because
+  // GET /auth/me is (still, as of c126) the one authenticated route that is NOT
+  // suspension-gated; every other route 403s a suspended caller instead of
+  // reaching a response body at all. See schemas/identity.py's UserOut comment.
+  suspended_at: string | null;
   created_at: string;
 }
 

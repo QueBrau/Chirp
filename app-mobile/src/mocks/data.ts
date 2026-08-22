@@ -164,6 +164,7 @@ function user(
     account_type: accountType,
     campus_id: MOCK_CAMPUS.id,
     is_ghost: isGhost,
+    suspended_at: null,
     created_at: "2024-09-01T12:00:00Z",
   };
 }
