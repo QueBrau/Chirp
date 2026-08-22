@@ -37,6 +37,12 @@ export async function getMediaUploadUrl(
  * signed url's own signature is scoped to exactly the content-type and size range
  * the backend issued it for, and adding an Authorization header GCS never asked to
  * sign would only risk a mismatched-signature rejection.
+ *
+ * c133: storage_service.py signs X-Goog-Content-Length-Range as part of the url's
+ * signed headers, which means GCS then REQUIRES that exact header on the PUT itself
+ * — omitting it 400s with MalformedSecurityHeader (found by manager's real-bucket
+ * verification, reproduced and fixed here). Value is derived from MAX_UPLOAD_BYTES,
+ * not a second hardcoded byte count, so it cannot drift from the cap.
  */
 export async function uploadMediaBytes(
   uploadUrl: string,
@@ -45,7 +51,10 @@ export async function uploadMediaBytes(
 ): Promise<void> {
   const response = await fetch(uploadUrl, {
     method: "PUT",
-    headers: { "Content-Type": contentType },
+    headers: {
+      "Content-Type": contentType,
+      "X-Goog-Content-Length-Range": `1,${MAX_UPLOAD_BYTES}`,
+    },
     body: bytes,
   });
   if (!response.ok) {
