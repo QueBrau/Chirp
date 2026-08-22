@@ -22,6 +22,7 @@ from app.schemas.identity import (
     ChapterInviteRevokeRequest,
     ChapterJoinRequest,
     ChapterOut,
+    ChapterUpdate,
     MemberOut,
     MembershipOut,
     MembershipUpdate,
@@ -83,6 +84,41 @@ async def get_chapter(
     chapter = await session.get(models.Chapter, chapter_id)
     if chapter is None:
         raise not_found("chapter_not_found")
+    return ChapterOut.model_validate(chapter)
+
+
+@router.patch("/chapters/{chapter_id}")
+async def update_chapter(
+    chapter_id: uuid.UUID,
+    body: ChapterUpdate,
+    _actor: models.Membership = Depends(require_role(*MEMBERS_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> ChapterOut:
+    """Update org_name/chapter_name; president only (board card c77).
+
+    Client type, schema and a working call site all existed before this route did —
+    ChapterUpdate and updateChapter() were built assuming a PATCH here that was never
+    actually wired up, so every call was a 405. Found by driving the real UI rather
+    than by reading the router file, which is exactly the kind of gap that reading
+    code alone misses: the client-side pieces all looked complete.
+
+    Same partial-update convention as update_member directly below: a field left
+    None is left UNCHANGED, never cleared. That means chapter_name, despite being
+    nullable on the model, cannot be reset to null through this route once it has a
+    value — identical to how update_member already treats pledge_class. Not a new
+    limitation introduced here; matching the one this codebase already shipped and
+    accepted, rather than inventing an exclude-unset convention that would apply to
+    exactly one endpoint.
+    """
+    chapter = await session.get(models.Chapter, chapter_id)
+    if chapter is None:
+        raise not_found("chapter_not_found")
+    if body.org_name is not None:
+        chapter.org_name = body.org_name
+    if body.chapter_name is not None:
+        chapter.chapter_name = body.chapter_name
+    await session.commit()
+    await session.refresh(chapter)
     return ChapterOut.model_validate(chapter)
 
 

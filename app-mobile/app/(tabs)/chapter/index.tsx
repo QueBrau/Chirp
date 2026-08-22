@@ -102,6 +102,13 @@ const TOOLS: Tool[] = [
     description: "Minutes and attendance",
     capability: "minutes_admin",
   },
+  {
+    href: "/chapter/president",
+    icon: "award",
+    title: "President",
+    description: "Roles, status, and chapter details",
+    capability: "members_admin",
+  },
 ];
 
 const ROLE_LABELS: Record<RoleName, string> = {
