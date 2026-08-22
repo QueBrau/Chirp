@@ -380,31 +380,31 @@
     }
   ],
   "cards": [
-      {
-        "id": "c127",
-        "col": "progress",
-        "owner": "J",
-        "tag": "security",
-        "area": "yak",
-        "title": "IN PROGRESS - list_yaks returns the full table unbounded, adding limit/offset",
-        "detail": "Security hardening item 5. GET /campuses/{campus_id}/yaks (backend/app/routers/yaks.py) has no limit or offset - every yak in a campus comes back in one response, unbounded, and grows without limit as a campus accumulates yaks. Checking the house pattern from other list endpoints (feed.py's listCampusFeed and listPosts, meetings.py) before choosing cursor vs offset, to match what already exists rather than invent a third shape. Backend change plus the one client call site in app-mobile/src/api/yaks.ts if the signature changes."
-      },
-      {
-        "id": "c128",
-        "col": "progress",
-        "owner": "J",
-        "tag": "security",
-        "area": "website",
-        "title": "IN PROGRESS - web/firebase.json gets a Content-Security-Policy header block",
-        "detail": "Security hardening item 6. web/ is the static marketing site, no API calls (on the record from the CORS episode - it never talks to chirp-api). Checking what the site actually loads (fonts, analytics, anything third-party) before writing the policy, so it can be as tight as the real asset list allows rather than a generic template. Will verify the deployed preview still renders correctly under the new header before this is done."
-      },
+    {
+      "id": "c127",
+      "col": "progress",
+      "owner": "J",
+      "tag": "security",
+      "area": "yak",
+      "title": "IN PROGRESS - list_yaks returns the full table unbounded, adding limit/offset",
+      "detail": "Security hardening item 5. GET /campuses/{campus_id}/yaks (backend/app/routers/yaks.py) has no limit or offset - every yak in a campus comes back in one response, unbounded, and grows without limit as a campus accumulates yaks. Checking the house pattern from other list endpoints (feed.py's listCampusFeed and listPosts, meetings.py) before choosing cursor vs offset, to match what already exists rather than invent a third shape. Backend change plus the one client call site in app-mobile/src/api/yaks.ts if the signature changes."
+    },
+    {
+      "id": "c128",
+      "col": "progress",
+      "owner": "J",
+      "tag": "security",
+      "area": "website",
+      "title": "IN PROGRESS - web/firebase.json gets a Content-Security-Policy header block",
+      "detail": "Security hardening item 6. web/ is the static marketing site, no API calls (on the record from the CORS episode - it never talks to chirp-api). Checking what the site actually loads (fonts, analytics, anything third-party) before writing the policy, so it can be as tight as the real asset list allows rather than a generic template. Will verify the deployed preview still renders correctly under the new header before this is done."
+    },
     {
       "id": "c124",
-      "col": "progress",
+      "col": "done",
       "owner": "",
       "tag": "backend",
       "area": "meetings",
-      "title": "c124 fix MERGED Aug 22 (#52, c84b327) - GET attendance route live in main, 7-test matrix, CI green. PROD STILL 405s until the next deploy window (imminent); moves to Done on verified-live.",
+      "title": "DONE Aug 22 - VERIFIED LIVE on rev chirp-api-00020-2bj: the secretary attendance 405 is dead. Merged #52 (c84b327), deployed same day; prod went 405 to 401 unauthenticated and 404 authed-unknown-meeting via real Firebase sign-in.",
       "detail": "Found while building and proving c121, cross-validated independently against FastAPI's own app.openapi() output before carding - not a checker artifact. app-mobile/src/api/meetings.ts:77 getAttendance() sends GET to /chapters/{chapter_id}/meetings/{meeting_id}/attendance. backend/app/routers/meetings.py registers that exact path as PUT ONLY (line 160, upsert_attendance) - there is no GET route for it anywhere in the file, confirmed by both a text scan and a live FastAPI route-table dump. getAttendance is not dead code: it is called from app/(tabs)/chapter/secretary.tsx:149, every time that screen loads a meeting's attendance list. So the secretary role's attendance view has been 405ing on every load, silently, for as long as this shape has existed - HANDOFF's earlier claim that the secretary dashboard 'renders fully' (from the c58 walk) evidently never exercised this specific action. Fix is small either way but is a product call, not mine to make unilaterally: either add a GET route on the backend (upsert_attendance already returns the full attendance list, so a GET twin is a small addition), or point getAttendance at a route that already returns it if one exists under a different name. Left unowned and IN PROGRESS-visible on purpose, not backlog - this is live on main today, not a someday cleanup."
     },
     {
