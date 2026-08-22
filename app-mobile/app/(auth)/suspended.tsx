@@ -66,7 +66,7 @@ export default function SuspendedScreen() {
       scroll={false}
       showBack={false}
     >
-      <View style={{ flex: 1, justifyContent: "center", gap: spacing.lg }}>
+      <View style={{ gap: spacing.lg }}>
         <View
           style={{
             width: 56,
