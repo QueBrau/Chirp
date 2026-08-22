@@ -1641,11 +1641,11 @@
     },
     {
       "id": "c139",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "security",
       "area": "orgs",
-      "title": "BUILT Aug 22 (james, branch jose/c139-media-url-validation) - media_urls validated server-side + pickPhoto try/catch fixed",
+      "title": "DONE Aug 22 - MERGED #65. media_urls validated server-side on all 3 write sites: exact-prefix allowlist against settings.media_bucket_name (host baked in, prefix-extension + host-spoof both verified blocked), count cap 1, 512-char bound, fail-closed 503 for claimed-media-no-bucket. pickPhoto silent-failure folded in (try/catch matching treasurer.tsx). 11 tests + sabotage-proof; the read-receipt oracle is closed.",
       "detail": "Security MEDIUM, triage-assigned Aug 22. schemas/social.py:22,42 accept any strings and feed.py:264,308,385 write them straight through; MediaPostCard.tsx:261,408 renders the uri directly. So any authenticated member can post media_urls pointing at a host they control and every viewer's device fetches it - leaking IP, user-agent and view timing. In a chapter (small, identifiable group) that is a working who-read-my-post oracle, using the API exactly as designed. Fix: validator on both write paths - exact prefix match against the backend's own bucket (from settings.media_bucket_name, NOT hardcoded), count cap 1 for alpha, per-URL length bound, 400 with a specific detail each. Tests include the attacker shapes: external https, http, right host wrong bucket, javascript: scheme. Also folded in: CreateSheet.tsx:224-234 pickPhoto()'s native calls sit outside its try and :335 is a bare void call - on the current EAS build tapping Photo is an unhandled rejection and a silent no-op; match treasurer.tsx:380-391's handling. BUILT: storage_service.validate_media_urls() wired into all three write sites (create_post, create_campus_post, update_post). 11 new backend tests (attacker matrix: external https, http scheme, right host wrong bucket, javascript: scheme, plus count/length/bucket-unconfigured/text-only-unaffected/wiring-per-site), sabotage-tested (disabled the prefix check, confirmed exactly the 6 attacker-shaped tests across all 3 sites failed and nothing else did, restored). Full suite 310 passed / 3 skipped / 0 failed. CreateSheet.tsx pickPhoto() native-module calls now wrapped in their own try/catch matching treasurer.tsx exportCsv()'s precedent - live-verified by sabotage (forced the calls to throw, confirmed via headless browser console the catch block is reached with no unhandled rejection, reverted). tsc --noEmit clean. PR incoming."
     },
     {
