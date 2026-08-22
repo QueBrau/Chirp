@@ -131,14 +131,18 @@ export default function TabsLayout() {
   // Auth guard: with real Firebase config, the tabs are members-only — an
   // unauthenticated visitor is redirected to sign-in, and a signed-in-but-
   // unregistered one (bootstrap never finished, e.g. app killed mid-onboarding)
-  // is sent back to account-type instead of stranding here. Demo/mock mode
-  // resolves straight to "ready" and never gates. SessionProvider owns the
-  // loading timeout, so there's no local fallback needed here.
+  // is sent back to account-type instead of stranding here. A suspended
+  // account (c129/c126) is sent to its own screen rather than left to find
+  // out the hard way — every tab underneath this guard hits a 403 on its
+  // first real request. Demo/mock mode resolves straight to "ready" and never
+  // gates. SessionProvider owns the loading timeout, so there's no local
+  // fallback needed here.
   const { status } = useSession();
 
   if (status === "loading") return null;
   if (status === "signedOut") return <Redirect href="/sign-in" />;
   if (status === "unregistered") return <Redirect href="/account-type" />;
+  if (status === "suspended") return <Redirect href="/suspended" />;
 
   return (
     // Provider sits ABOVE <Tabs> so one visibility value is shared by every tab
