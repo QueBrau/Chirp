@@ -380,24 +380,24 @@
     }
   ],
   "cards": [
-      {
-        "id": "c137",
-        "col": "progress",
-        "owner": "J",
-        "tag": "process",
-        "area": "process",
-        "title": "PR #61 OPEN - verify-contract.mjs had a vacuous-pass hole, exact c103 shape, in the gate built to catch c103's shape",
-        "detail": "Found by security's post-c103 addendum sweep, reproduced independently before shipping. failures only incremented inside the loop over extracted client calls, so an empty extraction (regex misses a call style, src/api renamed, request() wrapped) printed ALL PASS and exited 0. Reproduced security's exact scratch-tree repro against the FIXED file: before the fix, an unrecognised call style collapses to 0 calls and exits 0; after, EXTRACTOR FLOOR: only 0 client call(s) found, expected >= 40 / EXIT 1, message naming the actual failure mode so the instinct to lower the floor meets a wall. MIN_CLIENT_CALLS=40 is comfortably below the real count (78 calls, 88 backend routes, confirmed fresh). Real codebase still ALL PASS with the fix in place. PR #61, not merged."
-      },
-      {
-        "id": "c138",
-        "col": "progress",
-        "owner": "J",
-        "tag": "security",
-        "area": "auth",
-        "title": "IN PROGRESS - .edu verification attempt cap defeated by concurrency (security's 7-day-pass HIGH), building the guarded-UPDATE fix + a real concurrency proof",
-        "detail": "Security proved against a real Postgres: 25 concurrent wrong guesses all evaluated against a cap of 5, counter reached only 3 - services/campus_verification.py's attempts += 1 is a Python-side read-modify-write with no row lock, so concurrent guesses each overwrite from a stale read rather than genuinely incrementing. The module docstring's 'dies after a handful of wrong guesses' does not hold under concurrency. Fix is the house pattern (c51/c105/c114 shape, see finance.py's decide_spend_approval): UPDATE ... WHERE attempts < :max ... SET attempts = attempts + 1 ... RETURNING, guard IS the write, rowcount/returned-null distinguishes 'this guess counted' from 'cap already reached'. NOT using a fake asyncio.gather-over-the-ASGI-client test - this codebase already proved that style passes even against a sabotaged build twice (test_moderation_resolve.py, test_spend_approval_decide.py both document it explicitly: the ASGI transport does not interleave concurrent requests inside the critical section, so a gather-based test cannot fail regardless of whether the fix is present). Building a real proof outside that harness instead - genuine OS-thread-level concurrency, each thread its own event loop and its own DB connection, calling the service function directly against a real Postgres - matching the mechanism that let security's own proof actually interleave. Timing matters: delivery is blocked on c73's domain purchase, and this race becomes live the same hour that domain lands - Jose and security both want this merged BEFORE c73, not raced against it."
-      },
+    {
+      "id": "c137",
+      "col": "progress",
+      "owner": "J",
+      "tag": "process",
+      "area": "process",
+      "title": "PR #61 OPEN - verify-contract.mjs had a vacuous-pass hole, exact c103 shape, in the gate built to catch c103's shape",
+      "detail": "Found by security's post-c103 addendum sweep, reproduced independently before shipping. failures only incremented inside the loop over extracted client calls, so an empty extraction (regex misses a call style, src/api renamed, request() wrapped) printed ALL PASS and exited 0. Reproduced security's exact scratch-tree repro against the FIXED file: before the fix, an unrecognised call style collapses to 0 calls and exits 0; after, EXTRACTOR FLOOR: only 0 client call(s) found, expected >= 40 / EXIT 1, message naming the actual failure mode so the instinct to lower the floor meets a wall. MIN_CLIENT_CALLS=40 is comfortably below the real count (78 calls, 88 backend routes, confirmed fresh). Real codebase still ALL PASS with the fix in place. PR #61, not merged."
+    },
+    {
+      "id": "c138",
+      "col": "progress",
+      "owner": "J",
+      "tag": "security",
+      "area": "auth",
+      "title": "IN PROGRESS - .edu verification attempt cap defeated by concurrency (security's 7-day-pass HIGH), building the guarded-UPDATE fix + a real concurrency proof",
+      "detail": "Security proved against a real Postgres: 25 concurrent wrong guesses all evaluated against a cap of 5, counter reached only 3 - services/campus_verification.py's attempts += 1 is a Python-side read-modify-write with no row lock, so concurrent guesses each overwrite from a stale read rather than genuinely incrementing. The module docstring's 'dies after a handful of wrong guesses' does not hold under concurrency. Fix is the house pattern (c51/c105/c114 shape, see finance.py's decide_spend_approval): UPDATE ... WHERE attempts < :max ... SET attempts = attempts + 1 ... RETURNING, guard IS the write, rowcount/returned-null distinguishes 'this guess counted' from 'cap already reached'. NOT using a fake asyncio.gather-over-the-ASGI-client test - this codebase already proved that style passes even against a sabotaged build twice (test_moderation_resolve.py, test_spend_approval_decide.py both document it explicitly: the ASGI transport does not interleave concurrent requests inside the critical section, so a gather-based test cannot fail regardless of whether the fix is present). Building a real proof outside that harness instead - genuine OS-thread-level concurrency, each thread its own event loop and its own DB connection, calling the service function directly against a real Postgres - matching the mechanism that let security's own proof actually interleave. Timing matters: delivery is blocked on c73's domain purchase, and this race becomes live the same hour that domain lands - Jose and security both want this merged BEFORE c73, not raced against it."
+    },
     {
       "id": "c134",
       "col": "progress",
@@ -1196,7 +1196,7 @@
       "owner": "J",
       "tag": "backend",
       "area": "api",
-      "title": "DONE, DEPLOYED - PR #18 (commit 482a004)",
+      "title": "DONE Aug 22 - PURGE IS LIVE ON PROD: Cloud Run job chirp-purge + Cloud Scheduler chirp-purge-daily (09:00 UTC), full chain proven twice end-to-end (manual + scheduler-triggered, exit 0, counts printed). The /privacy 30-day erasure promise is true going forward.",
       "detail": "LIVE ON PROD Aug 16: merged via PR #18, migration 0011 applied to the prod DB, and revision chirp-api-00013-rbg is serving it. Verified end to end rather than from the deploy log - a real signed-in request to GET /auth/me returned 200 (that path reads users.suspended_at, which would have 500'd before 0011 landed), and prod has logged zero 5xx since. The job hard-deletes soft-deleted rows past a configurable retention window, written as a plain function so tests call it directly. /privacy section 14 is rewritten IN THE SAME COMMIT to say what the job actually does - shipping either half alone leaves the page wrong in one direction or the other. MIGRATION 0012 IS RELEASED: claimed for this card, turned out unnecessary, handed back unused rather than silently held. Next free migration number is 0014. ORIGINAL: IN PROGRESS Aug 16 - being built now. MIGRATION 0012 IS CLAIMED FOR THIS CARD (indexes on the soft-delete columns the purge scans). If the job turns out to need no schema change the number goes back on the board unused rather than being silently held. ORIGINAL: BUILD THE PURGE JOB \u2014 the privacy policy now commits to it in writing. Posts, comments and yaks all soft-delete (deleted_at / removed_at) and there is NO job anywhere that erases them; grep finds no DELETE FROM in the app at all. Rather than claim a deletion we do not perform, /privacy section 14 says plainly that deleted content is hidden immediately but not yet erased, and offers a manual email route. That is honest but it is a promise with a person behind it, which does not scale past one campus. Ship a job that hard-deletes soft-deleted rows after a stated window, then UPDATE SECTION 14 in the same PR \u2014 the policy and the code have to move together or the page becomes a lie. Also handle the manual path in the meantime: removal requests arrive at chirp.shared@gmail.com and the policy commits to a 30-day response. HEADS-UP FOR WHOEVER LANDS 0012: migration 0013 already exists on the PR #16 branch (c71) with down_revision = '0010', so the moment 0012 lands there are two migrations parented on 0010 and alembic upgrade head hits multiple heads. The fix belongs on the c71 side \u2014 re-point 0013 at the new head before PR #16 merges, not renumber it \u2014 so just say on the board when 0012 is in and c71 can re-point at the right parent."
     },
     {
@@ -1587,11 +1587,11 @@
     },
     {
       "id": "c131",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "bug",
       "area": "feed",
-      "title": "PR #60 OPEN Aug 22 - root cause isolated (accessibilityRole=button -> react-native-web renders a literal <button>), same bug found and fixed in CreateEventSheet too, tripwire proven both directions",
+      "title": "DONE Aug 22 - MERGED #60. Root cause read out of react-native-web's source: accessibilityRole=\"button\" renders a literal <button>, and the full-screen backdrop wrapped every control. Twin copy in CreateEventSheet fixed too; tripwire proven in both directions.",
       "detail": "Found Aug 22 during c130's live prod drive, real console error not a synthetic one. Console text verbatim: '<%s> cannot contain a nested %s. See this log for the ancestor stack trace. button <button>' - fired immediately after the compose flow's POST /chapters/{id}/posts succeeded (201) and the compose sheet closed back to the feed. SOURCE NOT YET ISOLATED to a specific component - the drive was gate-focused, not a debugging session, so this is reported as found rather than root-caused. STARTING POINT FOR WHOEVER PICKS THIS UP: the timing (right as the compose sheet dismisses and the feed re-renders) points at the compose flow itself or something in its close transition, not the post card render - the sheet's own trigger button, or an overlay/portal element, is the likely suspect for a button nested inside another button's DOM. React only warns on this, it does not throw, which is why it did not block the drive - but invalid HTML nesting is real (a <button> inside a <button> is undefined browser behavior for click/focus targeting) and worth root-causing before it compounds with more UI built on the same pattern. Reproduce: sign in, Create -> Text, type anything, Post, watch console immediately after the sheet closes."
     },
     {
@@ -1620,6 +1620,33 @@
       "area": "orgs",
       "title": "president.tsx has no route-level guard (tile-gated only) - consistency defect, not escalation (security LOW, downgraded from a sweep's HIGH)",
       "detail": "Deep-linking a non-president member to president.tsx renders controls that all 403 server-side (update_member and update_chapter are MEMBERS_ADMIN-gated, verified chapters.py:90-94,186-189; roster read is member-visible anyway). No data or capability gained - but moderation.tsx:84-119 deliberately renders an EmptyState for exactly this deep-link case, and president.tsx should match the house pattern. Small ticket: same EmptyState guard, matching moderation.tsx's shape."
+    },
+    {
+      "id": "c140",
+      "col": "backlog",
+      "owner": "",
+      "tag": "security",
+      "area": "orgs",
+      "title": "REVISIT BEFORE BROAD USE: post photos are world-readable forever by URL, even on org-audience (chapter-private) posts",
+      "detail": "Jose's alpha call Aug 22: option (a) - keep public-read for alpha (small trusted group), revisit before wider use. This card IS the revisit. Security argued (b) or (c) and the argument is on record: PostCreate carries both media_urls and audience, Audience = Literal['org','campus'] - NEITHER value means 'public to the internet', and org is documented in the schema as 'private to a chapter'. So a chapter-private post's photo of real students is world-readable, invisibly to the poster, and deleting the post does not unpublish the photo. Options: (b) signed GET urls + public_access_prevention enforced (breaks MediaPostCard's no-refresh <Image> premise, needs a read-signing route); (c) allow media on campus posts only until signed reads exist. Current state (GET-only, LIST revoked) is a sound interim, NOT an end state. Enumeration was already closed Aug 22 after security caught the manager's over-grant."
+    },
+    {
+      "id": "c141",
+      "col": "backlog",
+      "owner": "",
+      "tag": "frontend",
+      "area": "app-shell",
+      "title": "Sheets have no labeled close control for assistive tech - pre-existing, not a c131 regression",
+      "detail": "Found while fixing c131 (jon): removing accessibilityRole=\"button\" from CreateSheet/CreateEventSheet backdrops was correct - a button announcing 'Close' while containing dozens of real buttons was already broken for screen readers - but neither sheet has a separate close/X affordance, so there is now no labeled dismiss control at all. Small ticket: add a real close control, matching MediaPostCard's dismiss pattern."
+    },
+    {
+      "id": "c139",
+      "col": "progress",
+      "owner": "J",
+      "tag": "security",
+      "area": "orgs",
+      "title": "IN PROGRESS (james, branch jose/c139-media-url-validation) - media_urls is completely unvalidated; card written by manager to unblock the board, james owns the content",
+      "detail": "Security MEDIUM, triage-assigned Aug 22. schemas/social.py:22,42 accept any strings and feed.py:264,308,385 write them straight through; MediaPostCard.tsx:261,408 renders the uri directly. So any authenticated member can post media_urls pointing at a host they control and every viewer's device fetches it - leaking IP, user-agent and view timing. In a chapter (small, identifiable group) that is a working who-read-my-post oracle, using the API exactly as designed. Fix: validator on both write paths - exact prefix match against the backend's own bucket (from settings.media_bucket_name, NOT hardcoded), count cap 1 for alpha, per-URL length bound, 400 with a specific detail each. Tests include the attacker shapes: external https, http, right host wrong bucket, javascript: scheme. Also folded in: CreateSheet.tsx:224-234 pickPhoto()'s native calls sit outside its try and :335 is a bare void call - on the current EAS build tapping Photo is an unhandled rejection and a silent no-op; match treasurer.tsx:380-391's handling."
     }
   ],
   "decisions": [
@@ -1710,7 +1737,8 @@
     "Aug 22 - Product/Security ruling, effective now, Jose can veto: GET /auth/me stays reachable for suspended users, AS A DELIBERATE DECISION rather than the unnoticed c76 gap it was found as (c126). Reasoning: every other authenticated route 403s a suspended caller via get_current_user; /auth/me is the ONE route that does not, and that is exactly what lets a suspended user's client learn 'you are suspended, since when' instead of hitting a wall of unexplained 403s everywhere. The gap becomes the mechanism, on the record, now that c126 gave it something to actually report (MeOut.suspended_at). Client-side work to actually USE this is c129.",
     "Aug 22 - c70 media: bucket is public-read with keyless signed PUT uploads; the designed 24h lifecycle rule was scrapped before applying (age is not reference-ness - it would eat real photos); orphan cleanup deferred to c132. Photo posts require a caption for now - relaxing that is an open product question, not decided silently.",
     "Aug 22 - Security (mid-pass flag): chirps-prod-media was anonymously ENUMERABLE (objectViewer includes list) - manager's over-grant, corrected same hour while the bucket held only test pixels: allUsers swapped to legacyObjectReader (GET-only), verified LIST 401 / GET 200. OPEN FOR TRIAGE with security's batch report: are photo URLs public-forever (current design) or signed-GET (privacy-tighter, needs client+backend rework)? Jose decides.",
-    "Aug 22 - Triage (manager, from security's batch): item 7 (WS token off query string) PULLED FORWARD ahead of c63's realtime wiring - security proved zero WS usage ever, so the coordination stop protects nothing today and the cost inverts the moment c63 lands; braul builds it as PR 0 from security's written plan. media_urls validator assigned (james) before media sees real use. Photo-URL public-vs-signed fork, purge job scheduling, and .edu attempt-cap fix: queued for Jose."
+    "Aug 22 - Triage (manager, from security's batch): item 7 (WS token off query string) PULLED FORWARD ahead of c63's realtime wiring - security proved zero WS usage ever, so the coordination stop protects nothing today and the cost inverts the moment c63 lands; braul builds it as PR 0 from security's written plan. media_urls validator assigned (james) before media sees real use. Photo-URL public-vs-signed fork, purge job scheduling, and .edu attempt-cap fix: queued for Jose.",
+    "Aug 22 - Jose's triage: (1) photo privacy = option (a), public-read stays for alpha, mandatory revisit carded before broad use; (2) purge job APPROVED and now LIVE (daily 09:00 UTC, proven on prod); (3) .edu attempt-cap race fix APPROVED, sally building with a real OS-thread concurrency proof, merging BEFORE c73's domain lands because the race goes live the hour delivery works."
   ]
 }
 </script>
