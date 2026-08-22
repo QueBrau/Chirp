@@ -110,10 +110,6 @@ export interface RoleMetaOut {
   capabilities: Capability[];
 }
 
-export async function listChapters(): Promise<ChapterOut[]> {
-  return request<ChapterOut[]>("/chapters");
-}
-
 /**
  * Caller's own active memberships — GET /me/memberships. This is how role-gated
  * screens learn their real chapter_id (and role) instead of importing
