@@ -15,13 +15,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.core.campus_access import require_campus_member, require_verified_campus
+from app.core.campus_access import (
+    is_campus_verified,
+    require_campus_member,
+    require_verified_campus,
+)
 from app.core.errors import forbidden, not_found
 from app.core.permissions import Role
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.middleware.org_scope import get_current_membership
 from app.schemas.social import (
+    CampusPostCreate,
     FeedPostOut,
     PostCommentCreate,
     PostCommentOut,
@@ -114,6 +119,7 @@ def _feed_post_out(row: Any) -> FeedPostOut:
     return FeedPostOut(
         id=post.id,
         chapter_id=post.chapter_id,
+        campus_id=post.campus_id,
         author_id=post.author_id,
         body=post.body,
         media_urls=post.media_urls,
@@ -129,20 +135,51 @@ def _feed_post_out(row: Any) -> FeedPostOut:
     )
 
 
-async def _post_with_membership(
+async def _readable_post(
     post_id: uuid.UUID,
     user: models.User,
     session: AsyncSession,
-) -> tuple[models.Post, models.Membership]:
-    """Load a live post and the caller's active membership in the post's chapter.
+) -> models.Post:
+    """Load a live post the caller is allowed to interact with (like/comment).
 
-    /posts/{post_id}/* routes have no chapter_id path param, so org scoping is
-    checked through the post's chapter (§8.4 spirit): 404 if the post is missing
-    or soft-deleted, 403 if the caller is not an active member.
+    /posts/{post_id}/* routes have no chapter_id path param, so scoping is checked
+    through the post itself: 404 if missing or soft-deleted, 403 otherwise.
+
+    The rule follows the post's audience, not just its chapter:
+
+    - 'org' - active membership in the post's chapter, unchanged. Org posts stay
+      private to the org.
+    - 'campus' - anyone VERIFIED on the post's campus, OR an active member of the
+      chapter it came from. This is what the campus feed already promises: it serves
+      these posts to every student on the campus, so requiring chapter membership to
+      like one was never coherent. It 403'd every cross-chapter campus post, and since
+      c71 a chapter-less post has no chapter to be a member of, so the old rule
+      would have locked out even its own author. Pre-existing bug, fixed here
+      because c71 cannot ship on top of it.
+
+      The verification half is c88, landed on main while this branch sat. Merging
+      the branch's original `user.campus_id == post.campus_id` would have quietly
+      reopened the bypass campus_access.py exists to close: that column is writable
+      by redeeming a forwarded invite code (c96/c105), so it answers "associated
+      with" and not "proved an address at". Campus content needs the second.
+
+    The membership half of that union is not redundant. users.campus_id and
+    chapters.campus_id are independent columns with nothing keeping them in step,
+    so a member whose own campus_id is unset or stale would otherwise be refused a
+    like on a post their own chapter made. Caught by an existing test doing exactly
+    that (test_counts_present_on_campus_feed_too).
     """
     post = await session.get(models.Post, post_id)
     if post is None or post.deleted_at is not None:
         raise not_found("post_not_found")
+
+    if (
+        post.audience == "campus"
+        and user.campus_id == post.campus_id
+        and is_campus_verified(user)
+    ):
+        return post
+
     result = await session.execute(
         select(models.Membership).where(
             models.Membership.chapter_id == post.chapter_id,
@@ -150,10 +187,11 @@ async def _post_with_membership(
             models.Membership.status == "active",
         )
     )
-    membership = result.scalar_one_or_none()
-    if membership is None:
-        raise forbidden("not_a_member")
-    return post, membership
+    if result.scalar_one_or_none() is None:
+        # A campus post the caller is neither on the campus of nor a member of the
+        # authoring chapter: report the campus mismatch, which is the real reason.
+        raise forbidden("not_your_campus" if post.audience == "campus" else "not_a_member")
+    return post
 
 
 @router.get("/chapters/{chapter_id}/posts")
@@ -189,7 +227,7 @@ async def create_post(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> PostOut:
-    """Create a post authored by the caller.
+    """Create a post authored by the caller, inside a chapter they belong to.
 
     `audience` defaults to 'org' (PostCreate schema default) so a client that
     omits it can never accidentally broadcast a chapter post campus-wide.
@@ -202,22 +240,73 @@ async def create_post(
     unverified member could not READ the campus feed but could still PUBLISH to it,
     which is the worse half of the pair.
 
-    The campus is taken from the CHAPTER, never from the caller's own campus_id — the
-    post lands on the chapter's campus feed, so that is the campus whose gate must be
-    satisfied, and reading it off the user would let a mismatched pair through.
+    campus_id is taken from the CHAPTER, never from the author (c71), and the same
+    chapter is what the gate is checked against. The two are normally the same, but
+    the post belongs where it was made: it must not follow its author onto another
+    campus feed later, and reading the campus off the user would let a mismatched
+    pair through.
+
+    The chapter is loaded for EVERY post, not just campus ones, because c71 stores
+    campus_id on the row itself. That also means an org post naming a chapter that
+    does not exist is now a 404 rather than an integrity error later.
     """
+    chapter = await session.get(models.Chapter, chapter_id)
+    if chapter is None:
+        raise not_found("chapter_not_found")
     if body.audience == "campus":
-        chapter = await session.get(models.Chapter, chapter_id)
-        if chapter is None:
-            raise not_found("chapter_not_found")
         require_verified_campus(user, chapter.campus_id)
 
     post = models.Post(
         chapter_id=chapter_id,
+        campus_id=chapter.campus_id,
         author_id=membership.user_id,
         body=body.body,
         media_urls=body.media_urls,
         audience=body.audience,
+        post_type=body.post_type,
+        duration_sec=body.duration_sec,
+    )
+    session.add(post)
+    await session.commit()
+    await session.refresh(post)
+    return PostOut.model_validate(post)
+
+
+@router.post("/campuses/{campus_id}/posts", status_code=201)
+async def create_campus_post(
+    campus_id: uuid.UUID,
+    body: CampusPostCreate,
+    user: models.User = Depends(require_campus_member),
+    session: AsyncSession = Depends(get_session),
+) -> PostOut:
+    """Post to the campus feed without going through a chapter (c71).
+
+    This is the route for a student who belongs to no org, which the Aug 11
+    product decision says is a first-class Chirp user rather than an edge case.
+    Members can use it too; it simply produces a post with no org attached.
+
+    Two things are structural rather than checked, which is the point of having a
+    separate route instead of relaxing the chapter one:
+
+    - audience is hard-coded to 'campus'. CampusPostCreate has no audience field,
+      so no request body can reach this code asking for an org post.
+    - chapter_id is left NULL, so the post cannot claim to belong to an org the
+      author may not be in. Posting into a chapter still requires the membership
+      check on POST /chapters/{chapter_id}/posts, which is unchanged.
+
+    Authorization is `require_campus_member`, the same c88 dependency the campus
+    FEED read uses: you may only post to your own campus, and only with a current
+    .edu verification. This route is the purest case of what c88 gates - a
+    campus-wide write by someone with no org at all - so it must not keep the
+    weaker `user.campus_id == campus_id` check this branch was written against.
+    """
+    post = models.Post(
+        chapter_id=None,
+        campus_id=campus_id,
+        author_id=user.id,
+        body=body.body,
+        media_urls=body.media_urls,
+        audience="campus",
         post_type=body.post_type,
         duration_sec=body.duration_sec,
     )
@@ -236,9 +325,15 @@ async def list_campus_feed(
     user: models.User = Depends(require_campus_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[FeedPostOut]:
-    """Campus-wide feed: only `audience = 'campus'` posts from chapters on this
-    campus, newest first. 'org' posts NEVER appear here — that is the endpoint's
-    core privacy guarantee (board Decisions log, Aug 14).
+    """Campus-wide feed: only `audience = 'campus'` posts on this campus, newest
+    first. 'org' posts NEVER appear here — that is the endpoint's core privacy
+    guarantee (board Decisions log, Aug 14), and it is still enforced by the
+    audience filter below, which no part of c71 touched.
+
+    Filters posts.campus_id directly rather than joining chapters (c71). The join
+    was an inner join on chapter_id, so once a chapter-less post can exist it would
+    have been dropped from the feed silently — the exact failure mode where the
+    post is created, returns 201, and never appears.
 
     Reverse-chron with a compound (created_at, id) cursor (`before` + `before_id`)
     so rows sharing a timestamp at a page boundary are never skipped, matching
@@ -251,9 +346,8 @@ async def list_campus_feed(
     """
     stmt = (
         _post_counts_select(user.id)
-        .join(models.Chapter, models.Chapter.id == models.Post.chapter_id)
         .where(
-            models.Chapter.campus_id == campus_id,
+            models.Post.campus_id == campus_id,
             models.Post.audience == "campus",
             models.Post.deleted_at.is_(None),
         )
@@ -373,7 +467,7 @@ async def like_post(
     session: AsyncSession = Depends(get_session),
 ) -> PostLikeOut:
     """Like a post (idempotent upsert); scoped through the post's chapter."""
-    await _post_with_membership(post_id, user, session)
+    await _readable_post(post_id, user, session)
     like = await session.get(models.PostLike, (post_id, user.id))
     if like is None:
         like = models.PostLike(post_id=post_id, user_id=user.id)
@@ -399,7 +493,7 @@ async def unlike_post(
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Remove the caller's like (idempotent); scoped through the post's chapter."""
-    await _post_with_membership(post_id, user, session)
+    await _readable_post(post_id, user, session)
     like = await session.get(models.PostLike, (post_id, user.id))
     if like is not None:
         await session.delete(like)
@@ -429,7 +523,7 @@ async def list_comments(
     (remove_content) and never through this query, so that separation holds today —
     keep it that way.
     """
-    await _post_with_membership(post_id, user, session)
+    await _readable_post(post_id, user, session)
     result = await session.execute(
         select(models.PostComment)
         .outerjoin(
@@ -455,7 +549,7 @@ async def create_comment(
     session: AsyncSession = Depends(get_session),
 ) -> PostCommentOut:
     """Comment on a post; author membership checked through the post's chapter."""
-    await _post_with_membership(post_id, user, session)
+    await _readable_post(post_id, user, session)
     comment = models.PostComment(post_id=post_id, author_id=user.id, body=body.body)
     session.add(comment)
     await session.commit()

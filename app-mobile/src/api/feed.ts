@@ -11,6 +11,21 @@ export interface PostCreate {
   media_urls?: string[] | null;
   /** Server defaults to "org" when omitted (routers/feed.py). */
   audience?: PostAudience;
+  /** Server defaults to "text" — text compose omits this; declared now so a future media composer does not widen this type again. */
+  post_type?: PostType;
+  duration_sec?: number | null;
+}
+
+/**
+ * Body for POST /campuses/{campus_id}/posts — the route a student with no chapter
+ * uses (c71). No `audience` field on purpose: the server hard-codes 'campus' there,
+ * because 'org' means chapter-private and this caller may have no chapter at all.
+ */
+export interface CampusPostCreate {
+  body: string;
+  media_urls?: string[] | null;
+  post_type?: PostType;
+  duration_sec?: number | null;
 }
 
 export interface PostUpdate {
@@ -23,7 +38,9 @@ export type PostType = "text" | "photo" | "video";
 
 export interface PostOut {
   id: string;
-  chapter_id: string;
+  /** null when a chapter-less student authored it (c71); always set on an org post. */
+  chapter_id: string | null;
+  campus_id: string;
   author_id: string;
   body: string;
   media_urls: string[] | null;
@@ -97,6 +114,18 @@ export async function listPosts(chapterId: string): Promise<FeedPostOut[]> {
 
 export async function createPost(chapterId: string, body: PostCreate): Promise<PostOut> {
   return request<PostOut>(`/chapters/${chapterId}/posts`, { method: "POST", body });
+}
+
+/**
+ * Post straight to the campus feed, with no chapter involved (c71). This is the
+ * only create route available to a student who belongs to no org, and it always
+ * produces a campus-audience post.
+ */
+export async function createCampusPost(
+  campusId: string,
+  body: CampusPostCreate,
+): Promise<PostOut> {
+  return request<PostOut>(`/campuses/${campusId}/posts`, { method: "POST", body });
 }
 
 export async function deletePost(chapterId: string, postId: string): Promise<void> {

@@ -28,6 +28,22 @@ class PostCreate(_Schema):
     duration_sec: int | None = None  # video posts only
 
 
+class CampusPostCreate(_Schema):
+    """Body for POST /campuses/{campus_id}/posts — the chapter-less path (c71).
+
+    Deliberately has NO `audience` field. A caller on this route may not have a
+    chapter at all, and 'org' means "private to a chapter", so the only audience
+    reachable here is 'campus' and the route hard-codes it. Omitting the field
+    beats accepting one and 422-ing on 'org': there is no request a client could
+    send here that should produce an org post, so the type says so.
+    """
+
+    body: str = Field(min_length=1)
+    media_urls: list[str] | None = None
+    post_type: PostType = "text"
+    duration_sec: int | None = None  # video posts only
+
+
 class PostUpdate(_Schema):
     body: str | None = None
     media_urls: list[str] | None = None
@@ -35,7 +51,10 @@ class PostUpdate(_Schema):
 
 class PostOut(_Schema):
     id: uuid.UUID
-    chapter_id: uuid.UUID
+    # NULL when a chapter-less student authored this (c71); always set on an org
+    # post, which the ck_posts_org_requires_chapter constraint enforces.
+    chapter_id: uuid.UUID | None = None
+    campus_id: uuid.UUID
     author_id: uuid.UUID
     body: str
     media_urls: list[str] | None = None
@@ -55,7 +74,8 @@ class FeedPostOut(_Schema):
     """
 
     id: uuid.UUID
-    chapter_id: uuid.UUID
+    chapter_id: uuid.UUID | None = None
+    campus_id: uuid.UUID
     author_id: uuid.UUID
     body: str
     media_urls: list[str] | None = None

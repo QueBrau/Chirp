@@ -19,11 +19,17 @@ RETENTION_DAYS = 30
 
 
 async def _insert_post(chapter_id: str, author_id: str, *, deleted_at: datetime | None) -> str:
+    # campus_id is NOT NULL since c71 and is read off the CHAPTER here rather than
+    # passed in, for the same reason routers/feed.py create_post does it that way:
+    # the post belongs where it was made. Deriving it in the helper also keeps every
+    # call site below unchanged - the purge job's subject is retention, not campus.
     async with get_session_factory()() as session:
         result = await session.execute(
             text(
-                "INSERT INTO posts (chapter_id, author_id, body, deleted_at) "
-                "VALUES (:chapter_id, :author_id, 'purge test post', :deleted_at) "
+                "INSERT INTO posts (chapter_id, campus_id, author_id, body, deleted_at) "
+                "VALUES (:chapter_id, "
+                "(SELECT campus_id FROM chapters WHERE id = :chapter_id), "
+                ":author_id, 'purge test post', :deleted_at) "
                 "RETURNING id"
             ),
             {"chapter_id": chapter_id, "author_id": author_id, "deleted_at": deleted_at},
