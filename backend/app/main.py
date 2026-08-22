@@ -127,7 +127,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Build the Chirp API app; run with `uvicorn app.main:create_app --factory`."""
     settings = get_settings()
-    app = FastAPI(title="Chirp API", version="0.1.0", lifespan=lifespan)
+    # /docs, /redoc and /openapi.json publish the entire route/schema surface with no
+    # auth of their own. Fine locally; on any real deployment they hand an attacker a
+    # map for free, and they were live on chirps-prod (board finding, Aug 16 audit)
+    # simply because nobody had ever turned them off.
+    docs_enabled = settings.env == "local"
+    app = FastAPI(
+        title="Chirp API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+    )
 
     # SECURITY-REVIEW finding 5: never pair a wildcard origin with credentialed CORS —
     # Starlette reflects any origin, so "*" + credentials lets any website's JS send
