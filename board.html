@@ -949,10 +949,10 @@
     },
     {
       "id": "c49",
-      "col": "progress",
+      "col": "done",
       "owner": "Q",
       "tag": "vert:social-msg",
-      "title": "DEPLOYED Aug 22 (00019-x78) - compose flow live on prod. GATE NOT PASSED until someone creates a post through the app; no phone build exists (c39)",
+      "title": "GATE PASSED Aug 22 (jon's c130 drive) - real post created THROUGH THE APP on prod rev 00020, rendered after hard reload, and manager-verified independently via API GET (post 6acd7692). Compose flow is real.",
       "area": "fyp",
       "detail": "The app can now actually create a post: a real text composer in the Create sheet with an org-vs-campus audience picker, wired to POST /chapters/{chapter_id}/posts at BOTH FAB sites (Home and the org Feed segment, each refetching after a post). Picker defaults to org, mirroring the server-side PostCreate default, so nobody broadcasts campus-wide by accident. ALL THAT IS LEFT is verification on a real device \u2014 none of the mobile half has been run, only typechecked, and that needs the c39 dev build or Expo web. Two known gaps handled but not solved: media is out of scope (c70) and a student with no chapter membership still cannot post at all, so the FAB is hidden for them rather than dead-ending (c71 \u2014 needs a product answer from Jose + Q before TestFlight). SCOPE DECIDED: text compose ships now, media does NOT \u2014 there is no upload pipeline anywhere in the repo (no expo-image-picker, no storage/presign code, every media_urls value today is a picsum placeholder), and adding a picker is a native module that would owe a SECOND EAS dev build on top of c39. So Photo/Video render as visibly disabled 'Soon' rows instead of silently closing, which is the actual bug in the card. Media pipeline carded separately as c70. Original finding: CreateSheet.tsx is a pure mock: its Photo/Video/Text rows just call onClose, and createPost() is never called anywhere in the app (grep confirms only its own definition). So nothing can create a post from the client at all, and the Aug 14 'author picks audience at compose time' decision has no UI to exercise \u2014 the backend accepts audience, nothing sends it. Until this lands the campus feed can only be populated by direct API calls. Needs a real compose screen + an org-vs-campus picker defaulting to org."
     },
@@ -1210,11 +1210,11 @@
     },
     {
       "id": "c77",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "m2",
       "area": "orgs",
-      "title": "THE PRESIDENT HAS NO SCREEN, and is the only role the server grants member admin to",
+      "title": "GATE PASSED Aug 22 (jon's c130 drive) - president tools grid, president screen (chapter form + live 2-person roster), and moderation empty-state all rendered on prod with real 200s. Screenshots on record.",
       "detail": "PATCH /chapters/{chapter_id}/members is require_role(Role.president) and updates role, status and pledge_class \u2014 and updateMember() in src/api/chapters.ts has ZERO call sites anywhere in the repo. members.tsx is read-only: listMembers, grouped by role, role Chips, nothing else. So an elected president cannot promote the incoming treasurer, mark a member inactive when they leave, or set a pledge class from the app; the only way to do any of it today is a raw API call. Two more president powers have the same shape: updateChapter() (PATCH /chapters/{id}, org_name + chapter_name) is uncalled, so chapter identity is frozen at create time, and delete_post in feed.py lets a president soft-delete any post in their chapter while deletePost() has no call site either \u2014 the code-side half of what c76 found in /terms. NEEDS: a President tile in the TOOLS grid of chapter/index.tsx (which today gates tiles to treasurer and secretary only), role and status editing driven off role-meta (c44) instead of a hardcoded list, and a confirm step on role changes because the person granting one can be the person losing it. DESIGN FOR THIS TRAP FIRST: create_chapter is platform-admin-only and the creator auto-becomes president, there is exactly one, and the only other way to mint one is a president minting a president-role invite for someone NOT yet in the chapter. Promoting an EXISTING member needs the endpoint that has no UI. So if the sole president graduates without acting, nobody in that chapter can ever change a role again and recovery is a manual DB edit. Officer turnover is annual, so this is a when, not an if \u2014 see c83 for the lifecycle question this screen depends on."
     },
     {
@@ -1246,11 +1246,11 @@
     },
     {
       "id": "c81",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "m9",
       "area": "orgs",
-      "title": "BUILT Aug 22, PR #48 OPEN - a treasurer can open a dues cycle in the app. Backend was already fully built, only the form was missing. Gated on the dues_admin capability (c80 house rule), not a role check. tsc clean, backend suite 266/3/0 unaffected. NOT VISUALLY VERIFIED - no live render",
+      "title": "GATE PASSED Aug 22 (jon's c130 drive) - dues cycle 'QA drive c130' ($25/member, due Dec 31) opened through the treasurer form on prod, verified on-screen after reload AND manager-verified via API GET (2500 cents).",
       "detail": "BUILT Aug 22, PR #48, branch jose/c81-open-dues-cycle. VERIFIED BEFORE BUILDING rather than assumed: GET/POST /chapters/{id}/dues-cycles both exist in finance.py, gated on require_role(*DUES_ADMIN); createDuesCycle() was already wired in the mobile API client. The actual gap was reading treasurer.tsx: it called listDuesCycles() but never createDuesCycle() - no form existed. FIX: a form (name, amount per member, due date) gated on capabilities.includes('dues_admin') via useOwnChapter().roleMeta - the c80 house rule, not a role check, even though this screen already had its own pre-c80 treasurer/president membership fetch for the ledger calls; the new capability check reads the server independently rather than trusting that older fetch agrees with it. Same Card/SectionHeader/FieldLabel idiom as the existing add-entry form, reusing its helpers. Client-side validation fails the button closed before a 422. New cycle prepends to cycles[0] on success rather than waiting on a refetch. EVIDENCE: tsc clean, no backend change/no migration, backend suite 266 pass / 3 skip / 0 fail on an isolated db (unaffected baseline). NOT VISUALLY VERIFIED - no live render or device check, flagged plainly on the PR; say so if a DESIGN.md craft pass wants a look before merge."
     },
     {
