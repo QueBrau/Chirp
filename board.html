@@ -363,6 +363,24 @@
     }
   ],
   "cards": [
+      {
+        "id": "c124",
+        "col": "progress",
+        "owner": "",
+        "tag": "backend",
+        "area": "meetings",
+        "title": "LIVE BUG - the secretary attendance screen 405s every time it loads, found by c121's contract checker",
+        "detail": "Found while building and proving c121, cross-validated independently against FastAPI's own app.openapi() output before carding - not a checker artifact. app-mobile/src/api/meetings.ts:77 getAttendance() sends GET to /chapters/{chapter_id}/meetings/{meeting_id}/attendance. backend/app/routers/meetings.py registers that exact path as PUT ONLY (line 160, upsert_attendance) - there is no GET route for it anywhere in the file, confirmed by both a text scan and a live FastAPI route-table dump. getAttendance is not dead code: it is called from app/(tabs)/chapter/secretary.tsx:149, every time that screen loads a meeting's attendance list. So the secretary role's attendance view has been 405ing on every load, silently, for as long as this shape has existed - HANDOFF's earlier claim that the secretary dashboard 'renders fully' (from the c58 walk) evidently never exercised this specific action. Fix is small either way but is a product call, not mine to make unilaterally: either add a GET route on the backend (upsert_attendance already returns the full attendance list, so a GET twin is a small addition), or point getAttendance at a route that already returns it if one exists under a different name. Left unowned and IN PROGRESS-visible on purpose, not backlog - this is live on main today, not a someday cleanup."
+      },
+      {
+        "id": "c125",
+        "col": "backlog",
+        "owner": "",
+        "tag": "frontend",
+        "area": "orgs",
+        "title": "Two dead client functions call routes the backend has never had - listChapters and updateChapter",
+        "detail": "Found alongside c124 by c121's contract checker, cross-validated against FastAPI's route table. app-mobile/src/api/chapters.ts:113 listChapters() calls GET /chapters; backend/app/routers/chapters.py has never registered that route (only POST /chapters, for creation). chapters.ts:136 updateChapter() calls PATCH /chapters/${chapterId}; the backend only has GET and POST at that exact shape (PATCH exists at /chapters/{chapter_id}/members, a different path, which is presumably what was meant or what superseded it). Neither function has any caller anywhere in app-mobile - grepped app/ and src/, zero hits outside their own file - so unlike c124 this is not live-broken, it is dead code aimed at a route that was either never built or was renamed out from under it. Same shape as c115's listLikes (c115's own post-merge review already flagged one instance of this pattern). Low urgency: delete the two functions, or build the routes if something still needs them - either resolves it."
+      },
     {
       "id": "c119",
       "col": "done",
@@ -382,14 +400,14 @@
       "detail": "BUILT Aug 22, PR #47, branch jose/c120-chapter-like-catch. Was read-check-then-write with NO catch at all - a failed like/unlike became an unhandled promise rejection. Now mirrors feed/index.tsx exactly: flip state immediately, try the network call, roll back on failure. COORDINATED WITH JAMES FIRST, non-optional per the manager: he checked his own worktree (clean, nothing uncommitted), confirmed c77 is fully built and open as PR #43, c78 hasn't started, and said go ahead - no collision, his PR touches the TOOLS array near the top of the file, this touches toggleLike at line ~275. Whichever of the two PRs merges second needs an ordinary rebase, nothing structural. tsc clean, no backend change."
     },
     {
-      "id": "c121",
-      "col": "backlog",
-      "owner": "",
-      "tag": "process",
-      "area": "process",
-      "title": "Mobile has no integration tests, so a client HTTP-verb mismatch is invisible to CI - c115 shipped broken for that reason",
-      "detail": "Found during the c115 post-merge review, unowned. c115 was a client-only bug: feed.ts called POST on a route the backend only ever registered as PUT (routers/feed.py `like_post`), so every like tap was a 405. TypeScript cannot catch this - the verb is a string literal on both sides, so `tsc --noEmit` (mobile's only CI gate, per repo HANDOFF) has no way to know they disagree, and there is no mobile-side test that actually calls the backend to find out. The backend DOES assert the right verb (backend/tests/test_feed_audience.py calls client.put(...) against the live route), so the contract is tested from exactly one side. Same root cause as c113's original gap on web/ - a surface with no gate reads as fine until someone taps it by hand. Worth a card of its own rather than folding into c115, since the fix (some form of mobile-to-backend contract test, or a shared route-constant/schema both sides import from) is a process change, not a one-line patch."
-    },
+        "id": "c121",
+        "col": "done",
+        "owner": "J",
+        "tag": "process",
+        "area": "process",
+        "title": "DONE Aug 22 - static contract checker built and wired, PR pending. IT DID NOT PASS CLEAN ON THE FIRST RUN - found 3 real mismatches, one of them a LIVE bug (see c124)",
+        "detail": "app-mobile/scripts/verify-contract.mjs statically extracts every request() call in app-mobile/src/api/*.ts (method + path) and diffs it against every @router.<verb>() decorator in backend/app/routers/*.py. No FastAPI boot, no Python, no simulator needed - both sides read as plain text, same philosophy as scripts/board-check. Path templates normalize before comparing (backend's {post_id} and the client's ${id} both collapse to a wildcard segment, verified explicitly with two genuinely different param names, not just a casing difference: PASS), so a rename never trips it, only a real shape or verb mismatch does. Wired into CI next to the Chart math step (c118), same mobile job. THE TICKET ASSUMED THE CURRENT CLIENT PASSES CLEAN. IT DOES NOT, first run against real main: 74 PASS, 3 FAIL. This is not a checker bug - cross-validated independently against FastAPI's own app.openapi() output (`python -c \"from app.main import create_app; print(create_app().openapi()['paths'])\"`), which agrees exactly on all three. GET /chapters (chapters.ts:114, listChapters) - backend only ever registered POST /chapters. PATCH /chapters/${chapterId} (chapters.ts:137, updateChapter) - backend only has GET+POST at that shape. BOTH ARE DEAD CODE - grepped the whole app tree, zero callers of either function, same shape as c115's listLikes. Carded as c125, unowned, low urgency. THE THIRD ONE IS A LIVE BUG, carded separately as c124 because it needs attention now, not backlog attention: GET /chapters/${chapterId}/meetings/${meetingId}/attendance (meetings.ts:77, getAttendance) - backend only ever registered PUT at that path (meetings.py:160, upsert_attendance) - and getAttendance IS called, from app/(tabs)/chapter/secretary.tsx:149, every time the secretary screen loads a meeting's attendance. SABOTAGE TEST, required by the ticket, run on a scratch copy: flipped feed.ts's likePost back to POST (the exact c115 regression). Output: 'FAIL POST /posts/${postId}/likes (feed.ts:143) / no backend route matches POST posts/*/likes / this path IS registered, but only as: PUT, DELETE (in feed.py)' - 4 FAILURE(S), the pre-existing 3 plus exactly this one, on exactly this line. NOT MERGED - court reviews. Branch jose/c121-mobile-contract-check. CI ON THIS BRANCH WILL SHOW RED on the new step, and that is correct, not broken - the 3 pre-existing mismatches are real and the step is supposed to fail loud on them until they are fixed (c124/c125)."
+      },
     {
       "id": "c118",
       "col": "done",
