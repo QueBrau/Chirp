@@ -16,6 +16,7 @@ import { Alert, Linking, Pressable, TextInput, View } from "react-native";
 import { listMembers, myMemberships, type MyMembershipOut } from "@/api/chapters";
 import { ApiError } from "@/api/client";
 import {
+  createDuesCycle,
   createLedgerEntry,
   decideSpendApproval,
   exportLedgerCsv,
@@ -49,6 +50,7 @@ import {
 } from "@/components";
 import { shareCsv } from "@/lib/export";
 import { duesProgress, runningBalance, spendByCategory } from "@/lib/treasury";
+import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 /** Entry types offered in the "Add entry" form — "correction" needs a
@@ -164,6 +166,21 @@ export default function TreasurerScreen() {
   const [entryType, setEntryType] = useState<FormEntryType>("expense");
   const [direction, setDirection] = useState<"in" | "out" | null>(null);
   const [submittingEntry, setSubmittingEntry] = useState(false);
+
+  // Open-a-cycle form state (c81).
+  const [cycleName, setCycleName] = useState("");
+  const [cycleAmountInput, setCycleAmountInput] = useState("");
+  const [cycleDueDate, setCycleDueDate] = useState("");
+  const [submittingCycle, setSubmittingCycle] = useState(false);
+  const [cycleError, setCycleError] = useState<string | null>(null);
+
+  // c80 house rule: ask the server what this caller may DO, never hand-mirror
+  // the treasurer/president role tuple client-side a second time. roleMeta is
+  // null until it resolves, so capabilities defaults to [] and the form below
+  // fails closed (absent, not a 403) exactly like every other capability gate
+  // in this app.
+  const { roleMeta } = useOwnChapter();
+  const canOpenCycle = roleMeta?.capabilities.includes("dues_admin") ?? false;
 
   const chapterId = membership?.chapter_id ?? null;
 
@@ -292,6 +309,47 @@ export default function TreasurerScreen() {
     }
   };
 
+  // c81: open a dues cycle. amount_cents > 0 and a real date are enforced by the
+  // backend schema too (Field(gt=0), a `date`), but failing the button closed
+  // client-side means a treasurer never has to read a 422 to find out why nothing
+  // happened.
+  const parsedCycleCents = parseDollarsToCents(cycleAmountInput);
+  const cycleDueDateValid = /^\d{4}-\d{2}-\d{2}$/.test(cycleDueDate.trim());
+  const canSubmitCycle =
+    canOpenCycle &&
+    cycleName.trim().length > 0 &&
+    parsedCycleCents !== null &&
+    parsedCycleCents > 0 &&
+    cycleDueDateValid &&
+    !submittingCycle;
+
+  const submitCycle = async () => {
+    if (chapterId === null || !canSubmitCycle || parsedCycleCents === null) return;
+    setSubmittingCycle(true);
+    setCycleError(null);
+    try {
+      const created = await createDuesCycle(chapterId, {
+        name: cycleName.trim(),
+        amount_cents: parsedCycleCents,
+        due_date: cycleDueDate.trim(),
+      });
+      // Newest-first, matching listDuesCycles' own ordering — the new cycle
+      // becomes `cycles[0]` immediately rather than waiting on a refetch.
+      setCycles((current) => [created, ...current]);
+      setCycleName("");
+      setCycleAmountInput("");
+      setCycleDueDate("");
+    } catch (error) {
+      setCycleError(
+        error instanceof ApiError
+          ? "Couldn't open that cycle. Check the amount and date and try again."
+          : "Something went wrong. Try again.",
+      );
+    } finally {
+      setSubmittingCycle(false);
+    }
+  };
+
   const parsedCents = parseDollarsToCents(amountInput);
   const canSubmitEntry = parsedCents !== null && direction !== null && !submittingEntry;
 
@@ -390,6 +448,69 @@ export default function TreasurerScreen() {
             ) : null}
           </View>
         </HeroCard>
+
+        {/* c81: open a dues cycle. Gated on the dues_admin CAPABILITY (c80's house
+            rule), not a role check — a screen that already fetches its own
+            treasurer/president membership for the ledger calls still has to ask the
+            server what this caller may DO, because that membership fetch predates
+            c80 and the two must never quietly disagree about who gets the button. */}
+        {canOpenCycle ? (
+          <View>
+            <SectionHeader
+              title="Open a cycle"
+              caption={cycle !== undefined ? "Starts a new cycle — the old one stays as-is" : "No cycle yet — members can't be billed until one exists"}
+            />
+            <Card>
+              <View style={{ gap: spacing.lg }}>
+                <View>
+                  <FieldLabel>Name</FieldLabel>
+                  <TextInput
+                    value={cycleName}
+                    onChangeText={setCycleName}
+                    placeholder="e.g. Fall 2026 dues"
+                    placeholderTextColor={palette.inkFaint}
+                    style={inputStyle}
+                  />
+                </View>
+
+                <View>
+                  <FieldLabel>Amount per member</FieldLabel>
+                  <TextInput
+                    value={cycleAmountInput}
+                    onChangeText={setCycleAmountInput}
+                    placeholder="0.00"
+                    placeholderTextColor={palette.inkFaint}
+                    keyboardType="decimal-pad"
+                    style={inputStyle}
+                  />
+                </View>
+
+                <View>
+                  <FieldLabel>Due date</FieldLabel>
+                  <TextInput
+                    value={cycleDueDate}
+                    onChangeText={setCycleDueDate}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={palette.inkFaint}
+                    style={inputStyle}
+                  />
+                </View>
+
+                {cycleError !== null ? (
+                  <AppText variant="caption" tone="danger">
+                    {cycleError}
+                  </AppText>
+                ) : null}
+
+                <Button
+                  label={submittingCycle ? "Opening…" : "Open cycle"}
+                  onPress={() => void submitCycle()}
+                  disabled={!canSubmitCycle}
+                />
+              </View>
+            </Card>
+          </View>
+        ) : null}
 
         {/*
           ONE zone, not three more cards on the stack (DESIGN §10.1: zones, not card
