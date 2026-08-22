@@ -3,6 +3,16 @@
  * Event frames mirror the backend pubsub contract (app.ws.pubsub):
  * `{"type": "<event_type>", ...payload}`. Events never carry ciphertext beyond
  * the opaque base64 `ciphertext` blob field (CONVENTIONS).
+ *
+ * FOUND WHILE WIRING c129: nothing in app-mobile imports this module. The
+ * `chirpSocket` singleton at the bottom exists but `.connect()` is never
+ * called anywhere — grepped app/ and src/, zero hits. So the realtime gateway
+ * this client talks to (board c21, tested and live server-side) is not
+ * actually turned on in the shipped app. That is a separate, much larger
+ * feature (activating real-time messaging client-side) than a suspension
+ * screen, and is not built here. The 4403 handling below is correct
+ * regardless — a class should behave right whether or not it is used yet —
+ * but is currently inert in practice until something calls `.connect()`.
  */
 
 import { wsUrl } from "../api/client";
@@ -31,7 +41,13 @@ export function isMessageEvent(event: SocketEvent): event is MessageSocketEvent 
   return event.type === "message";
 }
 
-export type SocketStatus = "idle" | "connecting" | "open" | "closed";
+export type SocketStatus = "idle" | "connecting" | "open" | "closed" | "suspended";
+
+// Mirrors ws/gateway.py's WS_ACCOUNT_SUSPENDED (board c126/c129). No shared
+// constants file crosses the backend/mobile boundary in this repo, so this is
+// duplicated rather than imported — kept in sync by the comment on both sides
+// pointing at the same board card.
+const WS_CLOSE_ACCOUNT_SUSPENDED = 4403;
 
 export type SocketEventListener = (event: SocketEvent) => void;
 export type SocketStatusListener = (status: SocketStatus) => void;
@@ -106,8 +122,22 @@ export class ChirpSocket {
       for (const listener of this.eventListeners) listener(event);
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event: { code: number }) => {
       this.ws = null;
+      // c129: a suspended account is never going to succeed on retry — the
+      // condition that closed this connection doesn't clear on its own, only a
+      // moderator's unsuspend does. Reconnecting into it is pointless traffic
+      // and, if a future caller ever surfaces socket status directly, a
+      // confusing "still connecting..." indicator over a state that already
+      // has its own real screen (SessionProvider's "suspended" status, driven
+      // by the same MeOut.suspended_at this mirrors). No consumer reads this
+      // status today (see the module docstring), so this is currently a no-op
+      // in practice — fixed at the class level so it's correct the moment one
+      // does, rather than left for whoever wires this up to rediscover.
+      if (event.code === WS_CLOSE_ACCOUNT_SUSPENDED) {
+        this.setStatus("suspended");
+        return;
+      }
       this.setStatus("closed");
       this.scheduleReconnect();
     };

@@ -8,8 +8,11 @@
  * immediately with no user — the pre-existing mock flow, unchanged.
  *
  * Real Firebase mode: subscribes to onAuthChanged. No Firebase user ->
- * "signedOut". A Firebase user -> fetchMe(): 200 -> "ready" with the backend
- * identity + memberships; 404 "user_not_registered" -> "unregistered".
+ * "signedOut". A Firebase user -> fetchMe(): 200 with suspended_at null ->
+ * "ready" with the backend identity + memberships; 200 with suspended_at set
+ * -> "suspended" (c129/c126) — still carries user/memberships, since the
+ * suspended screen needs the timestamp to render; 404 "user_not_registered" ->
+ * "unregistered".
  *
  * Staleness: every auth event and load bumps a generation counter, and a
  * load's result is discarded unless its generation is still current — a slow
@@ -48,7 +51,12 @@ import { hasFirebaseConfig } from "./config";
 import { getFirebaseAuth } from "./firebase";
 import { onAuthChanged } from "./session";
 
-export type SessionStatus = "loading" | "signedOut" | "unregistered" | "ready";
+// c129: "suspended" sits between "unregistered" and "ready" — a real user with a
+// real backend row, just blocked. MeOut.suspended_at is what drives it, and
+// per the manager's ruling on c126, GET /auth/me is the one route that stays
+// reachable for a suspended caller specifically so this state is reachable at
+// all — every other endpoint 403s them instead of returning a body to read.
+export type SessionStatus = "loading" | "signedOut" | "unregistered" | "suspended" | "ready";
 
 export interface SessionContextValue {
   status: SessionStatus;
@@ -129,7 +137,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (genRef.current !== gen) return false; // superseded mid-flight
       setUser(me.user);
       setMemberships(me.memberships);
-      setStatus("ready");
+      // c129: non-null here means suspended (see the SessionStatus comment) —
+      // never re-derive this from a 403 elsewhere, since MeOut is the one place
+      // that reliably reaches a body at all for a suspended caller.
+      setStatus(me.user.suspended_at !== null ? "suspended" : "ready");
       return true;
     } catch (err) {
       if (genRef.current !== gen) return false;
