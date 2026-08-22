@@ -13,6 +13,7 @@ import { Feather } from "@expo/vector-icons";
 
 import { listConversations, listMessages, type ConversationOut } from "@/api/messages";
 import { AppText, Card, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
+import { chirpSocket, isMessageEvent } from "@/realtime/socket";
 import { useTheme } from "@/theme";
 
 interface ConversationItem {
@@ -53,6 +54,25 @@ export default function MessagesScreen() {
     };
     // Fail soft: matches the repo pattern elsewhere in this stack.
     load().catch(() => setItems([]));
+
+    // c63: flip a row from "No messages yet" to "Message" the moment
+    // something arrives, rather than only on the next full mount of this
+    // screen. No reordering and no real preview text — those need real
+    // content decrypted (m4) or a recency sort this screen doesn't have
+    // today; this only updates the ONE thing that changed and is knowable
+    // without either.
+    const unsubEvent = chirpSocket.onEvent((event) => {
+      if (!isMessageEvent(event)) return;
+      setItems((current) =>
+        (current ?? []).map((item) =>
+          item.conversation.id === event.conversation_id
+            ? { ...item, preview: "Message" }
+            : item,
+        ),
+      );
+    });
+
+    return unsubEvent;
   }, []);
 
   return (
