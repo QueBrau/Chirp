@@ -101,6 +101,41 @@ def validate_upload_request(content_type: str, byte_size: int) -> str:
     return extension
 
 
+MAX_MEDIA_URLS_PER_POST = 1  # alpha scope: matches the compose UI's single-photo cap
+MAX_MEDIA_URL_LENGTH = 512
+
+
+def validate_media_urls(media_urls: list[str] | None) -> None:
+    """400/503 a post write whose media_urls isn't something THIS backend issued.
+
+    Board c139 (security MEDIUM): media_urls was completely unvalidated, so any
+    authenticated member could point a post at an arbitrary external host and every
+    viewer's device would fetch it on load — a working read-receipt oracle in a small
+    chapter, using the API exactly as designed. The fix is an exact-prefix allowlist:
+    a media url is only ever legitimate if it is one THIS backend's generate_upload_url()
+    could have produced, i.e. https://storage.googleapis.com/{configured bucket}/... —
+    checked against settings.media_bucket_name, never a hardcoded string, so a
+    local/test deployment validates against its own bucket rather than prod's.
+
+    No-op for None or an empty list — a text-only post must not require a configured
+    media bucket to save. Only a post that actually CLAIMS media pays the cost of
+    _bucket_name()'s existing fail-closed 503, on the same reasoning as
+    generate_upload_url(): a media url cannot be judged legitimate against a bucket
+    that does not exist, so this refuses with a clear reason rather than accept blind.
+    """
+    if not media_urls:
+        return
+    if len(media_urls) > MAX_MEDIA_URLS_PER_POST:
+        raise HTTPException(status_code=400, detail="too_many_media_urls")
+    bucket_name = _bucket_name()
+    expected_prefix = f"https://storage.googleapis.com/{bucket_name}/"
+    for url in media_urls:
+        if len(url) > MAX_MEDIA_URL_LENGTH:
+            raise HTTPException(status_code=400, detail="media_url_too_long")
+        if not url.startswith(expected_prefix):
+            raise HTTPException(status_code=400, detail="invalid_media_url")
+
+
 def generate_upload_url(user_id: str, content_type: str, byte_size: int) -> SignedUpload:
     """Mint a signed PUT URL for one new object; the caller owns nothing until they
     actually upload to it and the resulting public_url ends up in a post's media_urls.
