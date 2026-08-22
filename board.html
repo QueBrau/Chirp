@@ -381,23 +381,23 @@
   ],
   "cards": [
     {
-        "id": "c127",
-        "col": "done",
-        "owner": "J",
-        "tag": "security",
-        "area": "yak",
-        "title": "DONE Aug 22 - list_yaks paginated matching the house cursor pattern (PR #54, all 4 checks green)",
-        "detail": "Security hardening item 5. GET /campuses/{campus_id}/yaks (backend/app/routers/yaks.py) has no limit or offset - every yak in a campus comes back in one response, unbounded, and grows without limit as a campus accumulates yaks. Checking the house pattern from other list endpoints (feed.py's listCampusFeed and listPosts, meetings.py) before choosing cursor vs offset, to match what already exists rather than invent a third shape. Backend change plus the one client call site in app-mobile/src/api/yaks.ts if the signature changes."
-      },
+      "id": "c127",
+      "col": "done",
+      "owner": "J",
+      "tag": "security",
+      "area": "yak",
+      "title": "DONE Aug 22 - list_yaks paginated matching the house cursor pattern (PR #54, all 4 checks green)",
+      "detail": "Security hardening item 5. GET /campuses/{campus_id}/yaks (backend/app/routers/yaks.py) has no limit or offset - every yak in a campus comes back in one response, unbounded, and grows without limit as a campus accumulates yaks. Checking the house pattern from other list endpoints (feed.py's listCampusFeed and listPosts, meetings.py) before choosing cursor vs offset, to match what already exists rather than invent a third shape. Backend change plus the one client call site in app-mobile/src/api/yaks.ts if the signature changes."
+    },
     {
-        "id": "c128",
-        "col": "done",
-        "owner": "J",
-        "tag": "security",
-        "area": "website",
-        "title": "DONE Aug 22 - web/ CSP shipped, verified with a real browser against the exact deployed header (PR #56, all 4 checks green)",
-        "detail": "Security hardening item 6. web/ is the static marketing site, no API calls (on the record from the CORS episode - it never talks to chirp-api). Checking what the site actually loads (fonts, analytics, anything third-party) before writing the policy, so it can be as tight as the real asset list allows rather than a generic template. Will verify the deployed preview still renders correctly under the new header before this is done."
-      },
+      "id": "c128",
+      "col": "done",
+      "owner": "J",
+      "tag": "security",
+      "area": "website",
+      "title": "DONE Aug 22 - web/ CSP shipped, verified with a real browser against the exact deployed header (PR #56, all 4 checks green)",
+      "detail": "Security hardening item 6. web/ is the static marketing site, no API calls (on the record from the CORS episode - it never talks to chirp-api). Checking what the site actually loads (fonts, analytics, anything third-party) before writing the policy, so it can be as tight as the real asset list allows rather than a generic template. Will verify the deployed preview still renders correctly under the new header before this is done."
+    },
     {
       "id": "c124",
       "col": "done",
@@ -958,10 +958,10 @@
     },
     {
       "id": "c70",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "J",
       "tag": "m5",
-      "title": "NO MEDIA UPLOAD PIPELINE EXISTS",
+      "title": "CLAIMED Aug 22 (james) - c70 media upload pipeline, DESIGN PHASE: plan under manager review before any code. Was: NO MEDIA UPLOAD PIPELINE EXISTS.",
       "area": "fyp",
       "detail": "split out of c49 so text compose could ship. posts.media_urls is a TEXT[] the backend happily stores and MediaPostCard happily renders, but nothing anywhere can PRODUCE a url: no expo-image-picker dependency, no camera permission in app.json, no storage bucket wired, no presign or upload endpoint, and grep finds no upload code at all. Every media_urls value in the app today is a picsum.photos placeholder from the mocks, which is exactly why this looked done. Needs a real decision first: Firebase Storage (chirps-prod already has a storageBucket in its config and the JS SDK is already a dependency) vs GCS signed URLs from the backend. Note the cost: expo-image-picker is a NATIVE module, so this owes an EAS dev build of its own, on top of c39's."
     },
