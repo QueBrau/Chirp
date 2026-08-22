@@ -207,7 +207,8 @@
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
-<script id="board-data" type="application/json">{
+<script id="board-data" type="application/json">
+{
   "updated": 1786864400799,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
@@ -373,12 +374,12 @@
     },
     {
       "id": "c120",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "J",
       "tag": "frontend",
       "area": "fyp",
-      "title": "toggleLike in chapter/index.tsx has no catch, unlike its feed/index.tsx twin",
-      "detail": "Found during the c115 post-merge review, unowned. app-mobile/app/(tabs)/chapter/index.tsx's toggleLike awaits likePost/unlikePost and only updates local state AFTER the call succeeds, with no try/catch; called as `void toggleLike(item)` from onPress, so any failure is an unhandled promise rejection with zero UI feedback - the tap just silently does nothing. app-mobile/app/(tabs)/feed/index.tsx's version is genuinely optimistic: it flips state BEFORE the await and has a catch that rolls the flip back on failure. Pre-dates c115 and c115 doesn't touch either file, so it shipped clean, but the asymmetry between the two nearly-identical screens is real and worth closing - probably by porting feed/index.tsx's pattern into chapter/index.tsx."
+      "title": "BUILT Aug 22, PR #47 OPEN - toggleLike in chapter/index.tsx now mirrors feed's optimistic-update-with-rollback, coordinated with james first (his worktree clean, no collision). tsc clean",
+      "detail": "BUILT Aug 22, PR #47, branch jose/c120-chapter-like-catch. Was read-check-then-write with NO catch at all - a failed like/unlike became an unhandled promise rejection. Now mirrors feed/index.tsx exactly: flip state immediately, try the network call, roll back on failure. COORDINATED WITH JAMES FIRST, non-optional per the manager: he checked his own worktree (clean, nothing uncommitted), confirmed c77 is fully built and open as PR #43, c78 hasn't started, and said go ahead - no collision, his PR touches the TOOLS array near the top of the file, this touches toggleLike at line ~275. Whichever of the two PRs merges second needs an ordinary rebase, nothing structural. tsc clean, no backend change."
     },
     {
       "id": "c121",
@@ -1192,12 +1193,12 @@
     },
     {
       "id": "c81",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "J",
       "tag": "m9",
       "area": "orgs",
-      "title": "NOTHING IN THE APP CAN CREATE A DUES CYCLE",
-      "detail": "Not a re-card of c12, which shipped and is real \u2014 this is one specific hole in it. POST /chapters/{id}/dues-cycles is require_role(treasurer, president) in finance.py and createDuesCycle() sits in src/api/finance.ts with ZERO call sites. treasurer.tsx READS cycles (listDuesCycles) and dues.tsx reads them for the member 'what you owe' view, so both screens render a list the app itself cannot add a row to; the only way a cycle exists today is a raw API call. Everything downstream inherits it \u2014 the Stripe PaymentSheet work in c11 charges against a cycle, so when c39 and c40 finally allow a live test-mode payment, this is the first wall that gets hit. SECOND HOLE, SAME FILE: createSpendApproval() is member-level in finance.py (any active member requests a spend) and also has zero call sites, while decideSpendApproval IS wired into treasurer.tsx. So the approvals queue can be decided but never filled from the app, and for a real chapter it can only ever be empty \u2014 the approve/deny UI c12 built has no way to receive work. WANTS: a create-cycle form (name, amount, due date) on treasurer.tsx, and a request-a-spend entry point on a member-facing screen, since the requester is a member and not the treasurer. Ledger append, CSV export and the decision path are genuinely done \u2014 do not rebuild them."
+      "title": "BUILT Aug 22, PR #48 OPEN - a treasurer can open a dues cycle in the app. Backend was already fully built, only the form was missing. Gated on the dues_admin capability (c80 house rule), not a role check. tsc clean, backend suite 266/3/0 unaffected. NOT VISUALLY VERIFIED - no live render",
+      "detail": "BUILT Aug 22, PR #48, branch jose/c81-open-dues-cycle. VERIFIED BEFORE BUILDING rather than assumed: GET/POST /chapters/{id}/dues-cycles both exist in finance.py, gated on require_role(*DUES_ADMIN); createDuesCycle() was already wired in the mobile API client. The actual gap was reading treasurer.tsx: it called listDuesCycles() but never createDuesCycle() - no form existed. FIX: a form (name, amount per member, due date) gated on capabilities.includes('dues_admin') via useOwnChapter().roleMeta - the c80 house rule, not a role check, even though this screen already had its own pre-c80 treasurer/president membership fetch for the ledger calls; the new capability check reads the server independently rather than trusting that older fetch agrees with it. Same Card/SectionHeader/FieldLabel idiom as the existing add-entry form, reusing its helpers. Client-side validation fails the button closed before a 422. New cycle prepends to cycles[0] on success rather than waiting on a refetch. EVIDENCE: tsc clean, no backend change/no migration, backend suite 266 pass / 3 skip / 0 fail on an isolated db (unaffected baseline). NOT VISUALLY VERIFIED - no live render or device check, flagged plainly on the PR; say so if a DESIGN.md craft pass wants a look before merge."
     },
     {
       "id": "c82",
@@ -1467,6 +1468,24 @@
       "area": "backend",
       "title": "PR #47 OPEN (renumbered from c121 - collided with an existing board card) - container drops root, and the prod safety guard cannot be optimized away. 266 pass / 3 skip / 0 fail.",
       "detail": "Two fixes. Dockerfile: no USER directive existed, so uvicorn ran as root for the container's whole life; the app never writes to /srv at runtime so nothing needs root once the image is built - adds appuser, switches before CMD. main.py: the env!=\"local\" guard against emulated auth + wildcard CORS (SECURITY-REVIEW finding 5) used bare assert, which python -O strips entirely. Proved the actual failure mode: ran create_app() under -O with emulated-auth+production and again with wildcard-CORS+production - both would have booted clean under the old assert. Now raise RuntimeError, verified to still raise correctly under -O. Nothing in the Dockerfile sets -O today; the fix is that it no longer matters if that changes."
+    },
+    {
+      "id": "c124",
+      "col": "progress",
+      "owner": "",
+      "tag": "backend",
+      "area": "meetings",
+      "title": "LIVE BUG - the secretary attendance screen 405s every time it loads, found by c121's contract checker",
+      "detail": "Found while building and proving c121, cross-validated independently against FastAPI's own app.openapi() output before carding - not a checker artifact. app-mobile/src/api/meetings.ts:77 getAttendance() sends GET to /chapters/{chapter_id}/meetings/{meeting_id}/attendance. backend/app/routers/meetings.py registers that exact path as PUT ONLY (line 160, upsert_attendance) - there is no GET route for it anywhere in the file, confirmed by both a text scan and a live FastAPI route-table dump. getAttendance is not dead code: it is called from app/(tabs)/chapter/secretary.tsx:149, every time that screen loads a meeting's attendance list. So the secretary role's attendance view has been 405ing on every load, silently, for as long as this shape has existed - HANDOFF's earlier claim that the secretary dashboard 'renders fully' (from the c58 walk) evidently never exercised this specific action. Fix is small either way but is a product call, not mine to make unilaterally: either add a GET route on the backend (upsert_attendance already returns the full attendance list, so a GET twin is a small addition), or point getAttendance at a route that already returns it if one exists under a different name. Left unowned and IN PROGRESS-visible on purpose, not backlog - this is live on main today, not a someday cleanup."
+    },
+    {
+      "id": "c125",
+      "col": "backlog",
+      "owner": "",
+      "tag": "frontend",
+      "area": "orgs",
+      "title": "A dead client function calls a route the backend has never had - listChapters",
+      "detail": "CORRECTED Aug 22 - this card originally also named updateChapter (PATCH /chapters/${chapterId}) as a second dead-code instance. It is not: c77 (df4ff32) added a real PATCH /chapters/{chapter_id} route before this check last ran, and a fresh run confirms updateChapter now matches cleanly. The original claim came from a check that ran before a rebase and was never re-run after it - caught and fixed against myself, not left standing. What remains, found by c121's contract checker and cross-validated against FastAPI's own route table: app-mobile/src/api/chapters.ts:113 listChapters() calls GET /chapters; backend/app/routers/chapters.py has never registered that route (only POST /chapters, for creation). No caller anywhere in app-mobile - grepped app/ and src/, zero hits outside its own file. Same shape as c115's own listLikes. Low urgency: delete the function, or build the route if something still needs it."
     }
   ],
   "decisions": [
@@ -1551,9 +1570,11 @@
     "Aug 15 \u2014 Product/scope (c49): the compose flow ships TEXT ONLY, and Photo/Video ship as visibly disabled 'Soon' rows. Worth recording because the tempting move was to add expo-image-picker and call it done. Two reasons not to. First, a picker produces a local file URI, and there is nothing in this repo that can turn that into a URL: no storage bucket wired, no presign, no upload endpoint. Every media_urls value in the app today is a picsum placeholder, which is precisely why the media path looked finished. Second, expo-image-picker is a native module, so it owes an EAS dev build of its own on top of the one c39 already owes \u2014 media would have been untestable on arrival. Disabled rows that say so beat a picker that silently drops the photo. Pipeline is c70. Related and more important: the only create-post route requires an active chapter membership, so a student in no org cannot post at all, which directly contradicts the Aug 11 'Chirp is for ALL students' premise. c49 hides the FAB for those users rather than opening a composer that dead-ends, but that is containment; the product decision is c71 and it needs both devs before TestFlight.",
     "Aug 15 \u2014 Process: the migration-number rule caught a REAL collision in real time, not in hindsight. Q read the board, saw 0010 as head, and started writing 0011 for c71; Jose pushed claims for 0011 (c76) and 0012 (c69) about a minute earlier, and the only reason the two did not both ship an 0011 is that git rejected the non-fast-forward push and the rebase forced a re-read of the board. Q moved to 0013. Note what did NOT save us: reading the board at the start of the task. The board was accurate when read and stale by the time the file was written, which is the same shape as the c41 failure. The rule that actually works is re-checking the CURRENT state on origin immediately before writing the file, and treating a rejected push as a signal to re-read rather than an obstacle to retry past.",
     "Aug 15 \u2014 Product (c71): a student who belongs to no chapter CAN post, to their campus. The user's call, and it resolves a contradiction that had been sitting in the schema since the start: the Aug 11 premise is that Chirp is for all students with orgs as an optional thing you join, while posts.chapter_id was NOT NULL and the only create route sat behind a membership check. Shape: posts.campus_id NOT NULL and backfilled, chapter_id relaxed to nullable, and CHECK (audience = 'campus' OR chapter_id IS NOT NULL) so an org post with no org is impossible in the database rather than merely discouraged. Campus was NOT derived from the author on purpose - a transferring student would drag their old posts onto their new campus feed; the post belongs where it was made. The new route hard-codes audience and its request schema has no audience field, so 'org without a membership' is unreachable by construction instead of by validation. Two pre-existing bugs surfaced on the way and had to be fixed to ship coherently: likes and comments were authorized through the post's chapter, which 403'd every cross-chapter campus post the feed was already showing people, and moderation resolved a report's campus by hopping post -> chapter, which would have filed chapter-less reports on the reporter's campus queue. Both were invisible while every post had a chapter.",
-    "Aug 16 \u2014 Moderation: block must actually hide content or the button is theater. Adding a Block control to a surface whose feed query does not filter blocked authors ships an App Store 1.2 checkbox that does nothing. Check the read path filters before adding the write control; yaks.py's anti-join is the pattern."
+    "Aug 16 \u2014 Moderation: block must actually hide content or the button is theater. Adding a Block control to a surface whose feed query does not filter blocked authors ships an App Store 1.2 checkbox that does nothing. Check the read path filters before adding the write control; yaks.py's anti-join is the pattern.",
+    "Aug 22 - Process: c124 and c125 were REAL cards, correctly written in 1407947 and corrected in 7009041, and then silently LOST when 513d134 (c122/c123) was written from a copy of the board that pre-dated both - branched from adf0f33, an ancestor of neither. 125 cards became 123 with no conflict, no error, and no one noticing until board-check's git-id-scan flagged c124/c125 as used in git history with no matching card. This is the SAME failure class as the seven orphaned cards and james's chapter/index.tsx incident earlier this week - a session working from a copy of board.html it fetched before someone else's push landed - and it is exactly what 'pull immediately before editing, push within the minute' exists to prevent. Reconstructed both cards verbatim from 7009041 (the last commit where they were confirmed correct) rather than rewritten from memory, since the original text already carries its own verification history (the updateChapter correction, the sabotage test). c124 (live attendance bug) and c125 (dead listChapters) are both still real and both still unowned."
   ]
-}</script>
+}
+</script>
 <script>
 (function () {
   var DATA = document.getElementById('board-data');
