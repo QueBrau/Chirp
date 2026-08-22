@@ -381,23 +381,23 @@
   ],
   "cards": [
     {
-      "id": "c137",
-      "col": "progress",
-      "owner": "J",
-      "tag": "process",
-      "area": "process",
-      "title": "PR #61 OPEN - verify-contract.mjs had a vacuous-pass hole, exact c103 shape, in the gate built to catch c103's shape",
-      "detail": "Found by security's post-c103 addendum sweep, reproduced independently before shipping. failures only incremented inside the loop over extracted client calls, so an empty extraction (regex misses a call style, src/api renamed, request() wrapped) printed ALL PASS and exited 0. Reproduced security's exact scratch-tree repro against the FIXED file: before the fix, an unrecognised call style collapses to 0 calls and exits 0; after, EXTRACTOR FLOOR: only 0 client call(s) found, expected >= 40 / EXIT 1, message naming the actual failure mode so the instinct to lower the floor meets a wall. MIN_CLIENT_CALLS=40 is comfortably below the real count (78 calls, 88 backend routes, confirmed fresh). Real codebase still ALL PASS with the fix in place. PR #61, not merged."
-    },
+        "id": "c137",
+        "col": "done",
+        "owner": "J",
+        "tag": "process",
+        "area": "process",
+        "title": "DONE Aug 22 - PR #61 open, all 4 checks green. Vacuous-pass hole fixed and reproduced both directions",
+        "detail": "Found by security's post-c103 addendum sweep, reproduced independently before shipping. failures only incremented inside the loop over extracted client calls, so an empty extraction (regex misses a call style, src/api renamed, request() wrapped) printed ALL PASS and exited 0. Reproduced security's exact scratch-tree repro against the FIXED file: before the fix, an unrecognised call style collapses to 0 calls and exits 0; after, EXTRACTOR FLOOR: only 0 client call(s) found, expected >= 40 / EXIT 1, message naming the actual failure mode so the instinct to lower the floor meets a wall. MIN_CLIENT_CALLS=40 is comfortably below the real count (78 calls, 88 backend routes, confirmed fresh). Real codebase still ALL PASS with the fix in place. PR #61, not merged."
+      },
     {
-      "id": "c138",
-      "col": "progress",
-      "owner": "J",
-      "tag": "security",
-      "area": "auth",
-      "title": "IN PROGRESS - .edu verification attempt cap defeated by concurrency (security's 7-day-pass HIGH), building the guarded-UPDATE fix + a real concurrency proof",
-      "detail": "Security proved against a real Postgres: 25 concurrent wrong guesses all evaluated against a cap of 5, counter reached only 3 - services/campus_verification.py's attempts += 1 is a Python-side read-modify-write with no row lock, so concurrent guesses each overwrite from a stale read rather than genuinely incrementing. The module docstring's 'dies after a handful of wrong guesses' does not hold under concurrency. Fix is the house pattern (c51/c105/c114 shape, see finance.py's decide_spend_approval): UPDATE ... WHERE attempts < :max ... SET attempts = attempts + 1 ... RETURNING, guard IS the write, rowcount/returned-null distinguishes 'this guess counted' from 'cap already reached'. NOT using a fake asyncio.gather-over-the-ASGI-client test - this codebase already proved that style passes even against a sabotaged build twice (test_moderation_resolve.py, test_spend_approval_decide.py both document it explicitly: the ASGI transport does not interleave concurrent requests inside the critical section, so a gather-based test cannot fail regardless of whether the fix is present). Building a real proof outside that harness instead - genuine OS-thread-level concurrency, each thread its own event loop and its own DB connection, calling the service function directly against a real Postgres - matching the mechanism that let security's own proof actually interleave. Timing matters: delivery is blocked on c73's domain purchase, and this race becomes live the same hour that domain lands - Jose and security both want this merged BEFORE c73, not raced against it."
-    },
+        "id": "c138",
+        "col": "done",
+        "owner": "J",
+        "tag": "security",
+        "area": "auth",
+        "title": "DONE Aug 22 - PR #62 open, all 4 checks green. Atomic guard fix; real 25-thread concurrency proof matches security's numbers exactly both pre- and post-fix",
+        "detail": "Security proved against a real Postgres: 25 concurrent wrong guesses all evaluated against a cap of 5, counter reached only 3 - services/campus_verification.py's attempts += 1 is a Python-side read-modify-write with no row lock, so concurrent guesses each overwrite from a stale read rather than genuinely incrementing. The module docstring's 'dies after a handful of wrong guesses' does not hold under concurrency. Fix is the house pattern (c51/c105/c114 shape, see finance.py's decide_spend_approval): UPDATE ... WHERE attempts < :max ... SET attempts = attempts + 1 ... RETURNING, guard IS the write, rowcount/returned-null distinguishes 'this guess counted' from 'cap already reached'. NOT using a fake asyncio.gather-over-the-ASGI-client test - this codebase already proved that style passes even against a sabotaged build twice (test_moderation_resolve.py, test_spend_approval_decide.py both document it explicitly: the ASGI transport does not interleave concurrent requests inside the critical section, so a gather-based test cannot fail regardless of whether the fix is present). Building a real proof outside that harness instead - genuine OS-thread-level concurrency, each thread its own event loop and its own DB connection, calling the service function directly against a real Postgres - matching the mechanism that let security's own proof actually interleave. Timing matters: delivery is blocked on c73's domain purchase, and this race becomes live the same hour that domain lands - Jose and security both want this merged BEFORE c73, not raced against it."
+      },
     {
       "id": "c134",
       "col": "progress",
