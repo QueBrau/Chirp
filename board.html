@@ -1566,6 +1566,15 @@
       "area": "infra",
       "title": "Orphaned media objects in chirps-prod-media accumulate forever - the designed 24h lifecycle rule was WRONG and was not applied",
       "detail": "c70's approved design included a 24h GCS lifecycle rule to clean up uploads that never became posts. NOT APPLIED, on purpose (manager catch, Aug 22): lifecycle conditions know object AGE only, not whether any post references the object - the rule would delete every real photo 24h after upload. Nothing in the bucket distinguishes attached from orphaned. Until this card is built, orphans just accumulate (kilobytes each, cheap, harmless). Options for whoever picks this up: (a) upload to a tmp/ prefix and server-side move/copy on post-create, so tmp/ can safely carry an age rule; (b) a periodic job that diffs bucket objects against all media_urls in posts and deletes unreferenced objects older than a day. Do NOT apply a blanket age rule to the bucket root."
+    },
+    {
+      "id": "c133",
+      "col": "backlog",
+      "owner": "J",
+      "tag": "bug",
+      "area": "fyp",
+      "title": "CLAIMED Aug 22, branch jose/c133-signed-put-header - real-bucket second pass found c70's client never sent the signed X-Goog-Content-Length-Range header",
+      "detail": "Manager ran the real-bucket verification after c70 (#58, 9c749ac) merged and deployed (window 00023). Backend signs the PUT with X-Goog-Content-Length-Range as a SIGNED header (correct - that is the server-side size enforcement), which means GCS then REQUIRES that exact header on the PUT request itself. app-mobile/src/api/media.ts's uploadMediaBytes() never sent it. Reproduced precisely: PUT without the header -> 400 MalformedSecurityHeader ('Header was included in signedheaders, but not in the request', parameter x-goog-content-length-range); same PUT with the header added -> 200, and the public_url then served the bytes with a 200. Backend, signing, bucket, and public read are all proven working on prod - only the client's PUT call was missing the one header GCS was told to expect. Fix: uploadMediaBytes() adds the header, value derived from MAX_UPLOAD_BYTES (\"1,\" + MAX_UPLOAD_BYTES) rather than a second hardcoded 10485760, so it cannot drift from the cap if that ever changes. No test framework exists on app-mobile (grepped - no jest/vitest, no existing test/spec files) so this is verified by a real end-to-end PUT+GET against the live prod bucket, same method the manager used to find it, rather than a new mocked test harness introduced just for this one fix."
     }
   ],
   "decisions": [
