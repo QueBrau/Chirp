@@ -49,6 +49,12 @@
           "merchantIdentifier": "",
           "enableGooglePay": false
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Chirp needs access to your photos so you can attach one to a post."
+        }
       ]
     ],
     "extra": {

@@ -22,6 +22,11 @@ dependencies = [
     # dependency via the test client, which is exactly how a runtime import ends up
     # working locally and failing in the Cloud Run image — so it is declared here.
     "httpx",
+    # Signed GCS upload URLs for post media (c70). Base dependency, not the "firebase"
+    # optional extra's shape: there is no config toggle that turns this feature off at
+    # runtime the way auth_mode switches firebase-admin on/off, so it always needs to
+    # be importable once app.routers.media exists.
+    "google-cloud-storage",
 ]
 
 [project.optional-dependencies]

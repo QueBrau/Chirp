@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     # that address, so a student replying to a verification mail reaches a person
     # rather than a sender nobody reads.
     email_reply_to: str | None = None
+    # GCS bucket for post media (board c70). None until the bucket exists and is
+    # granted to the Cloud Run service account — a real, expected state before that
+    # infra step lands, not a misconfiguration. app.services.storage_service fails
+    # closed (503) rather than erroring obscurely, same shape as stripe_service's
+    # _secret_key() for the identical "feature exists in code, infra not live yet"
+    # situation.
+    media_bucket_name: str | None = None
 
 
 @lru_cache
