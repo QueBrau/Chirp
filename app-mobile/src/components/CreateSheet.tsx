@@ -222,20 +222,35 @@ export function CreateSheet({
    * of round-tripping to the server to be told the same thing.
    */
   const pickPhoto = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
+    let permission: ImagePicker.PermissionResponse;
+    let result: ImagePicker.ImagePickerResult;
+    try {
+      permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(
+          "Photo access needed",
+          "Chirp needs access to your photos to attach one. You can allow it in Settings.",
+        );
+        return;
+      }
+
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 0.8,
+        selectionLimit: 1,
+      });
+    } catch {
+      // c139: expo-image-picker is a newly-added native module (c70) - until the EAS
+      // dev build is rebuilt (c39), these calls fail at native-module resolution
+      // rather than resolving to a picker. Previously this was an unhandled
+      // rejection with no message: the user tapped Photo and nothing happened.
+      // Matches treasurer.tsx exportCsv()'s precedent for the identical risk.
       Alert.alert(
-        "Photo access needed",
-        "Chirp needs access to your photos to attach one. You can allow it in Settings.",
+        "Can't attach a photo yet",
+        "Photo attach needs the latest app build. Rebuild the app (EAS dev build) and try again.",
       );
       return;
     }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.8,
-      selectionLimit: 1,
-    });
     if (result.canceled || result.assets.length === 0) return;
     const asset = result.assets[0];
 
