@@ -38,6 +38,25 @@ export async function listReports(): Promise<ContentReportOut[]> {
   return request<ContentReportOut[]>("/moderation/reports");
 }
 
+export type ReportResolution = "actioned" | "dismissed";
+
+/**
+ * Close a report as actioned or dismissed (c78, using c91's route — it shipped with
+ * no client function or call site at all, same shape as c77's chapter-identity gap
+ * in reverse). `reason` is required server-side for the moderation_actions audit
+ * row, same as every other route in this file.
+ */
+export async function resolveReport(
+  reportId: string,
+  status: ReportResolution,
+  reason: string,
+): Promise<ContentReportOut> {
+  return request<ContentReportOut>(`/moderation/reports/${reportId}`, {
+    method: "PATCH",
+    body: { status, reason },
+  });
+}
+
 export async function blockUser(blockedId: string): Promise<UserBlockOut> {
   return request<UserBlockOut>("/moderation/blocks", {
     method: "POST",
