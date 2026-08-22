@@ -374,12 +374,12 @@
       },
       {
         "id": "c125",
-        "col": "backlog",
-        "owner": "",
+        "col": "done",
+        "owner": "J",
         "tag": "frontend",
         "area": "orgs",
-        "title": "A dead client function calls a route the backend has never had - listChapters",
-        "detail": "CORRECTED Aug 22 - this card originally also named updateChapter (PATCH /chapters/${chapterId}) as a second dead-code instance. It is not: c77 (df4ff32) added a real PATCH /chapters/{chapter_id} route before this check last ran, and a fresh run confirms updateChapter now matches cleanly. The original claim came from a check that ran before a rebase and was never re-run after it - caught and fixed against myself, not left standing. What remains, found by c121's contract checker and cross-validated against FastAPI's own route table: app-mobile/src/api/chapters.ts:113 listChapters() calls GET /chapters; backend/app/routers/chapters.py has never registered that route (only POST /chapters, for creation). No caller anywhere in app-mobile - grepped app/ and src/, zero hits outside its own file. Same shape as c115's own listLikes. Low urgency: delete the function, or build the route if something still needs it."
+        "title": "DONE Aug 22 - listChapters DELETED inside PR #46 (da1f104), same precedent as c115's listLikes",
+        "detail": "Dead code, zero callers reconfirmed immediately before deleting. Backend has never registered GET /chapters (only POST, for creation). ChapterOut, its return type, is untouched and still used 7 other places in chapters.ts - only the function itself is gone. tsc --noEmit clean after removal. This closes the second FAIL c121's contract checker found. c124 (the live attendance bug) is the one remaining FAIL and is unowned/assigned separately."
       },
     {
       "id": "c119",
@@ -405,7 +405,7 @@
         "owner": "J",
         "tag": "process",
         "area": "process",
-        "title": "DONE Aug 22 - static contract checker built and wired, PR pending. IT DID NOT PASS CLEAN ON THE FIRST RUN - found 2 real mismatches, one of them a LIVE bug (see c124)",
+        "title": "IN PROGRESS Aug 22 - contract checker built (PR #46), 1 of 2 real findings closed. Waiting on c124 to reach ALL PASS",
         "detail": "app-mobile/scripts/verify-contract.mjs statically extracts every request() call in app-mobile/src/api/*.ts (method + path) and diffs it against every @router.<verb>() decorator in backend/app/routers/*.py. No FastAPI boot, no Python, no simulator needed - both sides read as plain text, same philosophy as scripts/board-check. Path templates normalize before comparing (backend's {post_id} and the client's ${id} both collapse to a wildcard segment, verified explicitly with two genuinely different param names, not just a casing difference: PASS), so a rename never trips it, only a real shape or verb mismatch does. Wired into CI next to the Chart math step (c118), same mobile job. THE TICKET ASSUMED THE CURRENT CLIENT PASSES CLEAN. IT DOES NOT, confirmed on CI's own run against the real merge commit: 75 PASS, 2 FAIL. This is not a checker bug - cross-validated independently against FastAPI's own app.openapi() output, which agrees exactly on both. CORRECTION ON THIS CARD, made against myself, same discipline applied to every other session today: my first local pass found a THIRD mismatch, PATCH /chapters/${chapterId} (updateChapter, chapters.ts:137) - but that check ran BEFORE I rebased onto origin/main, and c77 (df4ff32, unrelated to this ticket) had already added that PATCH route. I committed and pushed without re-running the check after the rebase, so my first PR body overclaimed a third failure that CI correctly did not reproduce. Caught by reading CI's actual output rather than trusting my own notes, and re-verified fresh before fixing this card. GET /chapters (chapters.ts:114, listChapters) - backend only ever registered POST /chapters. DEAD CODE - grepped the whole app tree, zero callers. Carded as c125, unowned, low urgency, corrected to describe only this one function now that updateChapter is confirmed fine. GET /chapters/${chapterId}/meetings/${meetingId}/attendance (meetings.ts:77, getAttendance) - backend only ever registered PUT at that path (meetings.py:160, upsert_attendance), AND getAttendance IS called, from app/(tabs)/chapter/secretary.tsx:149, every time the secretary screen loads attendance. Carded as c124, unowned, urgent - this is live on main today. SABOTAGE TEST, required by the ticket: flipped feed.ts's likePost back to POST (the exact c115 regression) on a scratch copy. Output: 'FAIL POST /posts/${postId}/likes (feed.ts:143) / this path IS registered, but only as: PUT, DELETE (in feed.py)' - 3 FAILURE(S), the 2 real pre-existing ones plus exactly this one, on exactly this line. NOT MERGED - court reviews. Branch jose/c121-mobile-contract-check, PR #46. CI on this branch correctly shows red on the new step - the 2 mismatches are real, and the step is supposed to fail loud on them until c124/c125 are resolved."
       },
     {
@@ -1486,24 +1486,6 @@
       "area": "backend",
       "title": "PR #47 OPEN (renumbered from c121 - collided with an existing board card) - container drops root, and the prod safety guard cannot be optimized away. 266 pass / 3 skip / 0 fail.",
       "detail": "Two fixes. Dockerfile: no USER directive existed, so uvicorn ran as root for the container's whole life; the app never writes to /srv at runtime so nothing needs root once the image is built - adds appuser, switches before CMD. main.py: the env!=\"local\" guard against emulated auth + wildcard CORS (SECURITY-REVIEW finding 5) used bare assert, which python -O strips entirely. Proved the actual failure mode: ran create_app() under -O with emulated-auth+production and again with wildcard-CORS+production - both would have booted clean under the old assert. Now raise RuntimeError, verified to still raise correctly under -O. Nothing in the Dockerfile sets -O today; the fix is that it no longer matters if that changes."
-    },
-    {
-      "id": "c124",
-      "col": "progress",
-      "owner": "",
-      "tag": "backend",
-      "area": "meetings",
-      "title": "LIVE BUG - the secretary attendance screen 405s every time it loads, found by c121's contract checker",
-      "detail": "Found while building and proving c121, cross-validated independently against FastAPI's own app.openapi() output before carding - not a checker artifact. app-mobile/src/api/meetings.ts:77 getAttendance() sends GET to /chapters/{chapter_id}/meetings/{meeting_id}/attendance. backend/app/routers/meetings.py registers that exact path as PUT ONLY (line 160, upsert_attendance) - there is no GET route for it anywhere in the file, confirmed by both a text scan and a live FastAPI route-table dump. getAttendance is not dead code: it is called from app/(tabs)/chapter/secretary.tsx:149, every time that screen loads a meeting's attendance list. So the secretary role's attendance view has been 405ing on every load, silently, for as long as this shape has existed - HANDOFF's earlier claim that the secretary dashboard 'renders fully' (from the c58 walk) evidently never exercised this specific action. Fix is small either way but is a product call, not mine to make unilaterally: either add a GET route on the backend (upsert_attendance already returns the full attendance list, so a GET twin is a small addition), or point getAttendance at a route that already returns it if one exists under a different name. Left unowned and IN PROGRESS-visible on purpose, not backlog - this is live on main today, not a someday cleanup."
-    },
-    {
-      "id": "c125",
-      "col": "backlog",
-      "owner": "",
-      "tag": "frontend",
-      "area": "orgs",
-      "title": "A dead client function calls a route the backend has never had - listChapters",
-      "detail": "CORRECTED Aug 22 - this card originally also named updateChapter (PATCH /chapters/${chapterId}) as a second dead-code instance. It is not: c77 (df4ff32) added a real PATCH /chapters/{chapter_id} route before this check last ran, and a fresh run confirms updateChapter now matches cleanly. The original claim came from a check that ran before a rebase and was never re-run after it - caught and fixed against myself, not left standing. What remains, found by c121's contract checker and cross-validated against FastAPI's own route table: app-mobile/src/api/chapters.ts:113 listChapters() calls GET /chapters; backend/app/routers/chapters.py has never registered that route (only POST /chapters, for creation). No caller anywhere in app-mobile - grepped app/ and src/, zero hits outside its own file. Same shape as c115's own listLikes. Low urgency: delete the function, or build the route if something still needs it."
     }
   ],
   "decisions": [
