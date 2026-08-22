@@ -60,6 +60,11 @@ see what is going on. Update it at EVERY step, not just at the end of a task:
   (brew services is broken). Roles chirp/chirp, dbs chirp + chirp_test.
 - Backend venv: backend/.venv. Expo web: `npx expo start --web` on :8081 (Metro can
   get OOM-killed; just restart). gcloud lives at ~/google-cloud-sdk/bin/gcloud.
+- Metro's transform cache does NOT invalidate on a plain restart — after editing a
+  file, a restarted Metro can keep serving pre-edit bytes for several cycles. Pass
+  `--clear` when a change refuses to show up (cost braul a phantom-bug chase, Aug 22).
+  Port 8081 is also the ONLY origin in prod's CORS allowlist — a prod-pointed web
+  session must own that port; use 8082+ for local-only render checks.
 - Prod runbook + credentials: INFRA-PRIVATE.html at the repo root (gitignored —
   never commit it; Jose shares it dev-to-dev).
 
