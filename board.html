@@ -6,178 +6,194 @@
 <title>Chirp Board</title>
 <style>
   :root {
-    --bg:#F6F7FB; --surface:#FFFFFF; --surface-alt:#EFF1F7; --ink:#101223;
-    --ink-2:#575B75; --ink-3:#9BA0B8; --border:rgba(16,18,35,.08);
+    --bg:#F6F7FB; --surface:#FFFFFF; --surface-alt:#EFF1F7; --ground:#F6F7FB;
+    --ink:#101223; --ink-2:#575B75; --ink-3:#9BA0B8;
+    --line:rgba(16,18,35,.08); --border:rgba(16,18,35,.08);
     --accent:#5B5BF6; --accent-soft:#ECECFE; --success:#17A673; --success-soft:#E3F6EE;
-    --danger:#E5484D; --danger-soft:#FDECEC; --warn:#F5A623;
-    --shadow:0 2px 16px rgba(16,18,35,.06);
+    --danger:#E5484D; --danger-soft:#FDECEC; --warn:#F5A623; --warn-soft:#FDF3E1; --warn-ink:#B87503;
+    --grad:linear-gradient(135deg,#6366F1,#8B5CF6);
+    --shadow:0 1px 3px rgba(16,18,35,.05);
+    --shadow-lift:0 6px 18px rgba(16,18,35,.10);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg:#0C0D14; --surface:#15161F; --surface-alt:#1D1E2A; --ink:#F2F3FA;
-      --ink-2:#A6AAC4; --ink-3:#666B85; --border:rgba(242,243,250,.09);
+      --bg:#0C0D14; --surface:#15161F; --surface-alt:#1D1E2A; --ground:#0C0D14;
+      --ink:#F2F3FA; --ink-2:#A6AAC4; --ink-3:#666B85;
+      --line:rgba(242,243,250,.09); --border:rgba(242,243,250,.09);
       --accent:#7C7CFF; --accent-soft:rgba(124,124,255,.16); --success:#2BD597;
       --success-soft:rgba(43,213,151,.16); --danger:#FF6369; --danger-soft:rgba(255,99,105,.16);
-      --shadow:none;
+      --warn:#FFB84D; --warn-soft:rgba(255,184,77,.16); --warn-ink:#FFB84D;
+      --shadow:none; --shadow-lift:0 6px 18px rgba(0,0,0,.5);
     }
   }
   * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--ink); font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; padding:20px; }
-  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
-  h1 { font-size:26px; font-weight:800; letter-spacing:-.5px; }
-  h1 span { color:var(--accent); }
-  #status { font-size:12.5px; font-weight:500; color:var(--ink-3); flex:1; }
+  html, body { height:100%; }
+  /* App shell: the page never scrolls. Whatever view is active fills the leftover
+     height and scrolls INSIDE itself — that is the whole fix for the wall of
+     scroll this board used to be. */
+  body { display:flex; flex-direction:column; gap:10px; overflow:hidden;
+    background:var(--bg); color:var(--ink); padding:14px 16px 10px;
+    font:13.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  h1 { font-size:17px; font-weight:800; letter-spacing:-.3px; white-space:nowrap; }
+  h1 span { background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #status { font-size:12px; font-weight:500; color:var(--ink-3); flex:1; min-width:150px; text-align:right; }
   #status.dirty { color:var(--warn); }
   /* Only ever visible when a card cannot be drawn — see renderIntegrity(). Loud on
      purpose: the failure it reports is a card that looks filed and is not there. */
   #integrity { background:var(--danger-soft); color:var(--danger); border-radius:12px;
-    padding:12px 16px; margin-bottom:16px; font-size:13px; font-weight:600; line-height:1.5; }
-  button { font:inherit; border:0; cursor:pointer; border-radius:999px; padding:8px 16px; font-size:13px; font-weight:600; }
+    padding:12px 16px; font-size:13px; font-weight:600; line-height:1.5; }
+  button { font:inherit; border:0; cursor:pointer; border-radius:999px; padding:6px 14px; font-size:12px; font-weight:600; }
   .btn-primary { background:var(--accent); color:#fff; }
   .btn-ghost { background:var(--surface-alt); color:var(--ink-2); }
-  #board { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; align-items:start; }
-  @media (max-width:900px){ #board { grid-template-columns:repeat(2,1fr);} }
-  @media (max-width:560px){ #board { grid-template-columns:1fr;} }
-  .col { background:var(--surface-alt); border-radius:20px; padding:12px; min-height:120px; }
-  .col.drag-over { outline:2px dashed var(--accent); outline-offset:-4px; }
-  .col h2 { font-size:11px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--ink-2); padding:4px 8px 10px; display:flex; justify-content:space-between; }
-  .col h2 .count { color:var(--ink-3); }
-  .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow); padding:10px 12px; margin-bottom:8px; cursor:grab; }
+  [hidden] { display:none !important; }
+  .view-toggle { display:inline-flex; background:var(--surface-alt); border-radius:999px; padding:3px; gap:2px; }
+  .view-toggle button { background:none; color:var(--ink-2); padding:5px 12px; }
+  .view-toggle button.on { background:var(--surface); color:var(--ink); box-shadow:var(--shadow); }
+
+  /* Status pills, shared by the drawer, area view and alpha gates. */
+  .st { font-size:9px; font-weight:700; letter-spacing:.4px; text-transform:uppercase;
+    border-radius:999px; padding:2px 7px; white-space:nowrap; }
+  .st-done { background:var(--success-soft); color:var(--success); }
+  .st-progress { background:var(--accent-soft); color:var(--accent); }
+  .st-next { background:var(--warn-soft); color:var(--warn-ink); }
+  .st-backlog { background:var(--surface-alt); color:var(--ink-3); }
+
+  /* Alpha readiness — a strip, not a billboard. Recomputed from the cards on
+     every render, never typed in by hand; the gate list expands on demand. */
+  #alpha { border:1px solid var(--line); border-radius:14px; background:var(--surface);
+    padding:8px 14px; display:flex; flex-direction:column; gap:8px; box-shadow:var(--shadow); }
+  .alpha__row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .alpha__row h2 { font-size:12px; font-weight:800; letter-spacing:-.01em; white-space:nowrap; }
+  .alpha__pct { font-size:16px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .alpha__row .bar { flex:1; min-width:120px; margin:0; height:6px; }
+  .alpha__key { display:flex; gap:12px; font-size:11px; color:var(--ink-3); white-space:nowrap; }
+  .alpha__key i { display:inline-block; width:7px; height:7px; border-radius:2px; margin-right:4px; vertical-align:middle; }
+  .alpha__toggle { background:var(--surface-alt); color:var(--ink-2); padding:4px 11px; font-size:11px; }
+  .alpha__toggle:hover { color:var(--accent); background:var(--accent-soft); }
+  .alpha__sub { font-size:12px; color:var(--ink-3); }
+  .alpha__gates { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr));
+    gap:2px 14px; max-height:38vh; overflow-y:auto; }
+  .alpha__gate { display:grid; grid-template-columns:auto 1fr; gap:8px; align-items:baseline; font-size:12px; padding:2px 0; }
+  .alpha__gate.is-shipped { color:var(--ink-3); }
+
+  /* Columns: each one owns its scroll. */
+  #board { flex:1; min-height:0; display:flex; gap:10px; }
+  #board .col { flex:1 1 0; min-width:0; }
+  .col { display:flex; flex-direction:column; min-height:0; background:var(--surface-alt); border-radius:14px; padding:8px 8px 10px; }
+  .col.drag-over { outline:2px dashed var(--accent); outline-offset:-3px; }
+  .col h2 { font-size:10.5px; font-weight:700; letter-spacing:.5px; text-transform:uppercase;
+    color:var(--ink-2); padding:2px 6px 8px; display:flex; justify-content:space-between; }
+  .col h2 .count { color:var(--ink-3); font-variant-numeric:tabular-nums; }
+  .stack { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding:1px 2px 1px 1px; }
+  .stack::-webkit-scrollbar { width:8px; }
+  .stack::-webkit-scrollbar-thumb { background:var(--line); border-radius:99px; }
+
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow);
+    padding:7px 9px 8px; cursor:pointer; flex:none;
+    transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+  .card:hover { transform:translateY(-1px); box-shadow:var(--shadow-lift); border-color:rgba(91,91,246,.35); }
+  .card:active { transform:none; }
   .card.dragging { opacity:.4; }
-  /* Card id line — monospace and muted so it reads as a label, not a heading.
+  .card .meta { display:flex; gap:6px; align-items:center; min-height:18px; }
+  /* Card id — monospace and muted so it reads as a label, not a heading.
      Selectable so an id can be copied straight out of the board. */
-  .card .card-id { font:600 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.6px;
-    text-transform:uppercase; color:var(--accent); margin-bottom:4px; user-select:text; }
-  .card .title { font-weight:600; font-size:14px; }
-  .card .meta { display:flex; gap:6px; margin-top:8px; align-items:center; }
-  .chip { font-size:11px; font-weight:600; letter-spacing:.3px; border-radius:999px; padding:3px 10px; background:var(--surface-alt); color:var(--ink-2); border:0; cursor:pointer; }
+  .card .card-id { font:700 10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.5px;
+    text-transform:uppercase; color:var(--accent); user-select:text; }
+  /* The card is a headline; the full title and notes live in the drawer. Two
+     clamped lines keeps ninety-odd cards readable as a wall of headlines. */
+  .card .title { margin-top:3px; font-weight:600; font-size:12.5px; line-height:1.4; letter-spacing:-.005em;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .chip { font-size:10px; font-weight:600; letter-spacing:.3px; border-radius:999px; padding:2px 8px;
+    background:var(--surface-alt); color:var(--ink-2); border:0; cursor:pointer; }
   .chip.owner-J { background:var(--accent-soft); color:var(--accent); }
   .chip.owner-Q { background:var(--success-soft); color:var(--success); }
   .chip.tag { cursor:default; }
-  .card .copy { margin-left:auto; background:none; border:0; color:var(--ink-3); font-size:11px; font-weight:600; letter-spacing:.3px; border-radius:999px; padding:3px 9px; cursor:pointer; }
+  /* Row controls earn their pixels only when the pointer is on the card. */
+  .card .copy, .card .del { opacity:0; transition:opacity .1s ease; }
+  .card:hover .copy, .card:hover .del,
+  .card .copy:focus-visible, .card .del:focus-visible { opacity:1; }
+  .card .copy { margin-left:auto; background:none; border:0; color:var(--ink-3); font-size:10px; font-weight:600;
+    letter-spacing:.3px; border-radius:999px; padding:2px 7px; cursor:pointer; }
   .card .copy:hover { color:var(--accent); background:var(--accent-soft); }
-  .card .copy.ok { color:var(--success); background:var(--success-soft); }
-  .card .copy.fail { color:var(--danger); background:var(--danger-soft); }
-  .card .del { background:none; border:0; color:var(--ink-3); font-size:14px; padding:2px 6px; cursor:pointer; }
+  .card .copy.ok { color:var(--success); background:var(--success-soft); opacity:1; }
+  .card .copy.fail { color:var(--danger); background:var(--danger-soft); opacity:1; }
+  .card .del { background:none; border:0; color:var(--ink-3); font-size:12px; padding:1px 5px; cursor:pointer; }
   .card .del:hover { color:var(--danger); }
-  .adder { width:100%; background:transparent; border:1px dashed var(--border); border-radius:12px; padding:9px 12px; font:inherit; font-size:13px; color:var(--ink); outline:none; }
-  .adder::placeholder { color:var(--ink-3); }
-  .adder:focus { border-color:var(--accent); background:var(--surface); }
-  #decisions { margin-top:28px; background:var(--surface); border:1px solid var(--border); border-radius:20px; box-shadow:var(--shadow); padding:16px 20px; }
-  #decisions h2 { font-size:16px; font-weight:700; margin-bottom:10px; }
-  #decisions li { margin:6px 0 6px 18px; color:var(--ink-2); font-size:13.5px; }
-  #decisions li b { color:var(--ink); }
-  #decisions input { width:100%; margin-top:10px; }
-  footer { margin-top:16px; font-size:12px; color:var(--ink-3); }
-  /* Feature-area view: the same cards grouped by what part of the app they
-     build, so progress reads per surface instead of per status column. */
-  /* #board sets display:grid and #areas display:flex, both of which outrank the
-     UA stylesheet's [hidden]{display:none} — so toggling the attribute alone
-     leaves both views stacked on screen. */
-  [hidden] { display:none !important; }
-  .view-toggle { display:inline-flex; background:var(--surface-alt); border-radius:999px; padding:3px; gap:2px; }
-  .view-toggle button { background:none; color:var(--ink-2); padding:6px 14px; }
-  .view-toggle button.on { background:var(--surface); color:var(--ink); box-shadow:var(--shadow); }
-  #areas { display:flex; flex-direction:column; gap:26px; }
-  .area-group > h2 { font-size:11px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:var(--ink-3); margin-bottom:10px; }
-  .area-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; align-items:start; }
-  .area { background:var(--surface); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); padding:14px 15px; }
-  .area.is-empty { opacity:.55; }
-  .area__h { display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }
-  .area__h h3 { font-size:15px; font-weight:700; }
-  .area__n { margin-left:auto; font-size:12px; font-weight:600; color:var(--ink-3); font-variant-numeric:tabular-nums; }
-  /* Alpha readiness. Recomputed from the cards on every render, never typed in
-     by hand — a hardcoded percentage is a number that starts lying the moment
-     someone moves a card. */
-  #alpha { border:1px solid var(--line); border-radius:14px; background:var(--surface); padding:14px 16px; margin-bottom:12px; }
-  .alpha__h { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
-  .alpha__h h2 { font-size:14px; font-weight:800; letter-spacing:-.01em; }
-  .alpha__pct { margin-left:auto; font-size:20px; font-weight:800; font-variant-numeric:tabular-nums; }
-  .alpha__sub { font-size:12.5px; color:var(--ink-3); margin-top:2px; }
-  .alpha__key { display:flex; gap:14px; flex-wrap:wrap; font-size:11.5px; color:var(--ink-3); margin-top:2px; }
-  .alpha__key i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; vertical-align:middle; }
-  .alpha__gates { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:2px 14px; margin-top:10px; }
-  .alpha__gate { display:grid; grid-template-columns:auto 1fr; gap:8px; align-items:baseline; font-size:12.5px; padding:3px 0; }
-  .alpha__gate .st { font-size:9.5px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; border-radius:999px; padding:2px 7px; white-space:nowrap; }
-  .alpha__gate.is-shipped { color:var(--ink-3); }
-
-
-  /* ---- card headline + detail drawer -------------------------------------
-     Cards used to render their entire body text. With ninety-odd cards
-     averaging a couple of thousand characters, four columns of that is a wall,
-     and a board nobody reads is the same as no board. The card is a headline
-     now; everything else is one click away. */
-  .card { cursor: pointer; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
-  .card:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(16,18,35,.09); border-color: rgba(91,91,246,.35); }
-  .card:active { transform: translateY(0); }
-  .card .title { font-size: 13.5px; line-height: 1.45; font-weight: 600; letter-spacing: -.005em; }
-  .card .more {
-    display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700;
-    letter-spacing: .04em; text-transform: uppercase; color: var(--accent);
-    background: var(--accent-soft); border-radius: 999px; padding: 1px 7px;
-    vertical-align: 1px; white-space: nowrap;
-  }
   /* A left rail keyed to the column, so a card's status survives being read out
      of context — in the area view especially, where columns do not exist. */
-  .col[data-col="done"] .card { border-left: 3px solid var(--success); }
-  .col[data-col="progress"] .card { border-left: 3px solid var(--accent); }
-  .col[data-col="next"] .card { border-left: 3px solid #E0A33A; }
-  .col[data-col="backlog"] .card { border-left: 3px solid var(--line); }
+  .col[data-col="done"] .card { border-left:3px solid var(--success); padding:5px 8px 6px; }
+  .col[data-col="done"] .card .title { -webkit-line-clamp:1; }
+  .col[data-col="progress"] .card { border-left:3px solid var(--accent); }
+  .col[data-col="next"] .card { border-left:3px solid var(--warn); }
+  .col[data-col="backlog"] .card { border-left:3px solid var(--warn); }
+  .adder { margin-top:8px; flex:none; width:100%; background:transparent; border:1px dashed var(--line);
+    border-radius:9px; padding:6px 10px; font:inherit; font-size:12px; color:var(--ink); outline:none; }
+  .adder::placeholder { color:var(--ink-3); }
+  .adder:focus { border-color:var(--accent); background:var(--surface); }
+  @media (max-width:900px) {
+    #board { overflow-x:auto; scroll-snap-type:x mandatory; }
+    #board .col { flex:0 0 min(82vw,340px); scroll-snap-align:start; }
+  }
 
-  #drawer-scrim {
-    position: fixed; inset: 0; z-index: 90;
-    background: rgba(16,18,35,.38);
-    backdrop-filter: blur(2px);
-  }
-  #drawer {
-    position: fixed; top: 0; right: 0; bottom: 0; z-index: 91;
-    width: min(660px, 94vw);
-    background: var(--surface);
-    border-left: 1px solid var(--line);
-    box-shadow: -18px 0 50px rgba(16,18,35,.18);
-    display: flex; flex-direction: column; gap: 12px;
-    padding: 20px 22px 18px;
-    transform: translateX(12px); opacity: 0;
-    transition: transform .18s ease, opacity .18s ease;
-  }
-  #drawer.open { transform: translateX(0); opacity: 1; }
-  .drawer__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .drawer__id { font-family: var(--mono, ui-monospace, Menlo, monospace); font-size: 13px; font-weight: 800; color: var(--ink-3); }
-  .drawer__close {
-    margin-left: auto; border: 1px solid var(--line); background: var(--surface-alt);
-    color: var(--ink-2); border-radius: 999px; padding: 6px 14px;
-    font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
-  }
-  .drawer__close:hover { color: var(--ink); }
-  .drawer__title, .drawer__detail {
-    width: 100%; box-sizing: border-box;
-    border: 1px solid var(--line); border-radius: 12px;
-    background: var(--ground); color: var(--ink);
-    font: inherit; padding: 12px 14px; resize: vertical;
-  }
-  .drawer__title { font-size: 16px; font-weight: 700; line-height: 1.35; }
-  .drawer__detail { flex: 1; min-height: 220px; font-size: 13.5px; line-height: 1.65; white-space: pre-wrap; }
-  .drawer__title:focus, .drawer__detail:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
-  .drawer__foot { display: flex; align-items: center; gap: 12px; }
-  .drawer__hint { font-size: 12px; color: var(--ink-3); }
-  @media (max-width: 560px) { #drawer { width: 100vw; padding: 16px; } }
-
-  .bar { height:5px; border-radius:999px; background:var(--surface-alt); overflow:hidden; margin:8px 0 12px; display:flex; }
+  /* Feature-area view: the same cards grouped by what part of the app they
+     build, so progress reads per surface instead of per status column. */
+  #areas { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:22px; padding-bottom:6px; }
+  .area-group > h2 { font-size:10.5px; font-weight:700; letter-spacing:.5px; text-transform:uppercase;
+    color:var(--ink-3); margin-bottom:8px; }
+  .area-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:10px; align-items:start; }
+  .area { background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); padding:12px 13px; }
+  .area.is-empty { opacity:.55; }
+  .area__h { display:flex; align-items:baseline; gap:8px; margin-bottom:2px; }
+  .area__h h3 { font-size:13.5px; font-weight:700; }
+  .area__n { margin-left:auto; font-size:11.5px; font-weight:600; color:var(--ink-3); font-variant-numeric:tabular-nums; }
+  .bar { height:5px; border-radius:999px; background:var(--surface-alt); overflow:hidden; margin:7px 0 10px; display:flex; }
   .bar i { display:block; height:100%; }
   .bar .b-done { background:var(--success); }
   .bar .b-prog { background:var(--accent); }
   .bar .b-next { background:var(--warn); }
-  .area ul { list-style:none; display:flex; flex-direction:column; gap:7px; }
-  .area li { display:grid; grid-template-columns:auto 1fr; gap:8px; align-items:baseline; font-size:13px; }
-  .area li .st { font-size:9.5px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; border-radius:999px; padding:2px 7px; white-space:nowrap; }
-  .st-done { background:var(--success-soft); color:var(--success); }
-  .st-progress { background:var(--accent-soft); color:var(--accent); }
-  .st-next { background:#FDF3E1; color:#B87503; }
-  .st-backlog { background:var(--surface-alt); color:var(--ink-3); }
-  @media (prefers-color-scheme: dark) { .st-next { background:rgba(255,184,77,.16); color:#FFB84D; } }
+  .area ul { list-style:none; display:flex; flex-direction:column; gap:5px; padding:0; }
+  .area li { display:grid; grid-template-columns:auto 1fr; gap:8px; align-items:baseline; font-size:12px; }
   .area li b { font-weight:600; color:var(--ink); }
   .area li span.t { color:var(--ink-2); }
-  .area li .cid { font-size:11px; color:var(--ink-3); font-weight:600; }
+  .area li .cid { font-size:10.5px; color:var(--ink-3); font-weight:600; }
+
+  /* Decisions log — its own tab, newest first, scrolls inside the shell. */
+  #decisions { flex:1; min-height:0; overflow-y:auto; background:var(--surface); border:1px solid var(--line);
+    border-radius:14px; box-shadow:var(--shadow); padding:14px 18px; }
+  #decisions h2 { font-size:14px; font-weight:800; margin-bottom:8px; display:flex; gap:8px; align-items:baseline; }
+  #decisions h2 .count { font-size:11.5px; color:var(--ink-3); font-weight:600; font-variant-numeric:tabular-nums; }
+  #decisions input.adder { margin:0 0 10px; }
+  #decisions ul { list-style:none; padding:0; }
+  #decisions li { margin:0; padding:7px 2px; border-top:1px solid var(--line); color:var(--ink-2);
+    font-size:12.5px; line-height:1.5; }
+  #decisions li:first-child { border-top:0; }
+  footer { flex:none; font-size:11px; color:var(--ink-3); }
+
+  /* Card detail drawer — the card is a headline; everything else lives here. */
+  #drawer-scrim { position:fixed; inset:0; z-index:90; background:rgba(16,18,35,.38); backdrop-filter:blur(2px); }
+  #drawer { position:fixed; top:0; right:0; bottom:0; z-index:91; width:min(660px,94vw);
+    background:var(--surface); border-left:1px solid var(--line); box-shadow:-18px 0 50px rgba(16,18,35,.18);
+    display:flex; flex-direction:column; gap:12px; padding:20px 22px 18px;
+    transform:translateX(12px); opacity:0; transition:transform .18s ease, opacity .18s ease; }
+  #drawer.open { transform:translateX(0); opacity:1; }
+  .drawer__head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .drawer__id { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; font-weight:800; color:var(--accent); }
+  .drawer__close { margin-left:auto; border:1px solid var(--line); background:var(--surface-alt);
+    color:var(--ink-2); border-radius:999px; padding:6px 14px; font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; }
+  .drawer__close:hover { color:var(--ink); }
+  .drawer__title, .drawer__detail { width:100%; box-sizing:border-box; border:1px solid var(--line);
+    border-radius:12px; background:var(--ground); color:var(--ink); font:inherit; padding:12px 14px; resize:vertical; }
+  .drawer__title { font-size:16px; font-weight:700; line-height:1.35; }
+  .drawer__detail { flex:1; min-height:220px; font-size:13.5px; line-height:1.65; white-space:pre-wrap; }
+  .drawer__title:focus, .drawer__detail:focus { outline:2px solid var(--accent); outline-offset:1px; border-color:transparent; }
+  .drawer__foot { display:flex; align-items:center; gap:12px; }
+  .drawer__foot .copy { background:var(--surface-alt); border:0; color:var(--ink-2); font-size:12px;
+    font-weight:600; border-radius:999px; padding:6px 13px; cursor:pointer; }
+  .drawer__foot .copy:hover { color:var(--accent); background:var(--accent-soft); }
+  .drawer__foot .copy.ok { color:var(--success); background:var(--success-soft); }
+  .drawer__hint { font-size:12px; color:var(--ink-3); }
+  @media (max-width:560px) { #drawer { width:100vw; padding:16px; } }
 </style>
 </head>
 <body>
@@ -186,6 +202,7 @@
   <div class="view-toggle" id="view-toggle">
     <button data-view="status" class="on">Status</button>
     <button data-view="area">Feature area</button>
+    <button data-view="log">Decisions</button>
   </div>
   <div id="status">committed state</div>
   <button class="btn-ghost" id="reset">Reset to committed</button>
@@ -197,13 +214,13 @@
 <aside id="drawer" hidden aria-label="Card details"></aside>
 <main id="board"></main>
 <main id="areas" hidden></main>
-<section id="decisions">
-  <h2>Decisions log</h2>
-  <ul id="decision-list"></ul>
+<section id="decisions" hidden>
+  <h2>Decisions log <span class="count" id="decision-count"></span></h2>
   <input class="adder" id="decision-add" placeholder="+ record a decision (date — what we decided)">
+  <ul id="decision-list"></ul>
 </section>
 <footer>
-  How it works: drag cards between columns · click the owner chip to cycle – / J / Q · double-click a title to edit ·
+  Drag cards between columns · click a card for its full title and notes · click the owner chip to cycle – / J / Q ·
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
@@ -363,24 +380,24 @@
     }
   ],
   "cards": [
-      {
-        "id": "c124",
-        "col": "progress",
-        "owner": "",
-        "tag": "backend",
-        "area": "meetings",
-        "title": "LIVE BUG - the secretary attendance screen 405s every time it loads, found by c121's contract checker",
-        "detail": "Found while building and proving c121, cross-validated independently against FastAPI's own app.openapi() output before carding - not a checker artifact. app-mobile/src/api/meetings.ts:77 getAttendance() sends GET to /chapters/{chapter_id}/meetings/{meeting_id}/attendance. backend/app/routers/meetings.py registers that exact path as PUT ONLY (line 160, upsert_attendance) - there is no GET route for it anywhere in the file, confirmed by both a text scan and a live FastAPI route-table dump. getAttendance is not dead code: it is called from app/(tabs)/chapter/secretary.tsx:149, every time that screen loads a meeting's attendance list. So the secretary role's attendance view has been 405ing on every load, silently, for as long as this shape has existed - HANDOFF's earlier claim that the secretary dashboard 'renders fully' (from the c58 walk) evidently never exercised this specific action. Fix is small either way but is a product call, not mine to make unilaterally: either add a GET route on the backend (upsert_attendance already returns the full attendance list, so a GET twin is a small addition), or point getAttendance at a route that already returns it if one exists under a different name. Left unowned and IN PROGRESS-visible on purpose, not backlog - this is live on main today, not a someday cleanup."
-      },
-      {
-        "id": "c125",
-        "col": "done",
-        "owner": "J",
-        "tag": "frontend",
-        "area": "orgs",
-        "title": "DONE Aug 22 - listChapters DELETED inside PR #46 (da1f104), same precedent as c115's listLikes",
-        "detail": "Dead code, zero callers reconfirmed immediately before deleting. Backend has never registered GET /chapters (only POST, for creation). ChapterOut, its return type, is untouched and still used 7 other places in chapters.ts - only the function itself is gone. tsc --noEmit clean after removal. This closes the second FAIL c121's contract checker found. c124 (the live attendance bug) is the one remaining FAIL and is unowned/assigned separately."
-      },
+    {
+      "id": "c124",
+      "col": "progress",
+      "owner": "",
+      "tag": "backend",
+      "area": "meetings",
+      "title": "c124 fix MERGED Aug 22 (#52, c84b327) - GET attendance route live in main, 7-test matrix, CI green. PROD STILL 405s until the next deploy window (imminent); moves to Done on verified-live.",
+      "detail": "Found while building and proving c121, cross-validated independently against FastAPI's own app.openapi() output before carding - not a checker artifact. app-mobile/src/api/meetings.ts:77 getAttendance() sends GET to /chapters/{chapter_id}/meetings/{meeting_id}/attendance. backend/app/routers/meetings.py registers that exact path as PUT ONLY (line 160, upsert_attendance) - there is no GET route for it anywhere in the file, confirmed by both a text scan and a live FastAPI route-table dump. getAttendance is not dead code: it is called from app/(tabs)/chapter/secretary.tsx:149, every time that screen loads a meeting's attendance list. So the secretary role's attendance view has been 405ing on every load, silently, for as long as this shape has existed - HANDOFF's earlier claim that the secretary dashboard 'renders fully' (from the c58 walk) evidently never exercised this specific action. Fix is small either way but is a product call, not mine to make unilaterally: either add a GET route on the backend (upsert_attendance already returns the full attendance list, so a GET twin is a small addition), or point getAttendance at a route that already returns it if one exists under a different name. Left unowned and IN PROGRESS-visible on purpose, not backlog - this is live on main today, not a someday cleanup."
+    },
+    {
+      "id": "c125",
+      "col": "done",
+      "owner": "J",
+      "tag": "frontend",
+      "area": "orgs",
+      "title": "DONE Aug 22 - listChapters DELETED inside PR #46 (da1f104), same precedent as c115's listLikes",
+      "detail": "Dead code, zero callers reconfirmed immediately before deleting. Backend has never registered GET /chapters (only POST, for creation). ChapterOut, its return type, is untouched and still used 7 other places in chapters.ts - only the function itself is gone. tsc --noEmit clean after removal. This closes the second FAIL c121's contract checker found. c124 (the live attendance bug) is the one remaining FAIL and is unowned/assigned separately."
+    },
     {
       "id": "c119",
       "col": "done",
@@ -400,14 +417,14 @@
       "detail": "BUILT Aug 22, PR #47, branch jose/c120-chapter-like-catch. Was read-check-then-write with NO catch at all - a failed like/unlike became an unhandled promise rejection. Now mirrors feed/index.tsx exactly: flip state immediately, try the network call, roll back on failure. COORDINATED WITH JAMES FIRST, non-optional per the manager: he checked his own worktree (clean, nothing uncommitted), confirmed c77 is fully built and open as PR #43, c78 hasn't started, and said go ahead - no collision, his PR touches the TOOLS array near the top of the file, this touches toggleLike at line ~275. Whichever of the two PRs merges second needs an ordinary rebase, nothing structural. tsc clean, no backend change."
     },
     {
-        "id": "c121",
-        "col": "done",
-        "owner": "J",
-        "tag": "process",
-        "area": "process",
-        "title": "DONE Aug 22 - static contract checker built, wired, ALL PASS on real main (PR #46, ready to merge)",
-        "detail": "app-mobile/scripts/verify-contract.mjs statically extracts every request() call in app-mobile/src/api/*.ts (method + path) and diffs it against every @router.<verb>() decorator in backend/app/routers/*.py. No FastAPI boot, no Python, no simulator needed - both sides read as plain text, same philosophy as scripts/board-check. Path templates normalize before comparing (backend's {post_id} and the client's ${id} both collapse to a wildcard segment, verified explicitly with two genuinely different param names, not just a casing difference: PASS), so a rename never trips it, only a real shape or verb mismatch does. Wired into CI next to the Chart math step (c118), same mobile job. THE TICKET ASSUMED THE CURRENT CLIENT PASSES CLEAN. IT DOES NOT, confirmed on CI's own run against the real merge commit: 75 PASS, 2 FAIL. This is not a checker bug - cross-validated independently against FastAPI's own app.openapi() output, which agrees exactly on both. CORRECTION ON THIS CARD, made against myself, same discipline applied to every other session today: my first local pass found a THIRD mismatch, PATCH /chapters/${chapterId} (updateChapter, chapters.ts:137) - but that check ran BEFORE I rebased onto origin/main, and c77 (df4ff32, unrelated to this ticket) had already added that PATCH route. I committed and pushed without re-running the check after the rebase, so my first PR body overclaimed a third failure that CI correctly did not reproduce. Caught by reading CI's actual output rather than trusting my own notes, and re-verified fresh before fixing this card. GET /chapters (chapters.ts:114, listChapters) - backend only ever registered POST /chapters. DEAD CODE - grepped the whole app tree, zero callers. Carded as c125, unowned, low urgency, corrected to describe only this one function now that updateChapter is confirmed fine. GET /chapters/${chapterId}/meetings/${meetingId}/attendance (meetings.ts:77, getAttendance) - backend only ever registered PUT at that path (meetings.py:160, upsert_attendance), AND getAttendance IS called, from app/(tabs)/chapter/secretary.tsx:149, every time the secretary screen loads attendance. Carded as c124, unowned, urgent - this is live on main today. SABOTAGE TEST, required by the ticket: flipped feed.ts's likePost back to POST (the exact c115 regression) on a scratch copy. Output: 'FAIL POST /posts/${postId}/likes (feed.ts:143) / this path IS registered, but only as: PUT, DELETE (in feed.py)' - 3 FAILURE(S), the 2 real pre-existing ones plus exactly this one, on exactly this line. NOT MERGED - court reviews. Branch jose/c121-mobile-contract-check, PR #46. CI on this branch correctly shows red on the new step - the 2 mismatches are real, and the step is supposed to fail loud on them until c124/c125 are resolved."
-      },
+      "id": "c121",
+      "col": "done",
+      "owner": "J",
+      "tag": "process",
+      "area": "process",
+      "title": "DONE Aug 22 - static contract checker built, wired, ALL PASS on real main (PR #46, ready to merge)",
+      "detail": "app-mobile/scripts/verify-contract.mjs statically extracts every request() call in app-mobile/src/api/*.ts (method + path) and diffs it against every @router.<verb>() decorator in backend/app/routers/*.py. No FastAPI boot, no Python, no simulator needed - both sides read as plain text, same philosophy as scripts/board-check. Path templates normalize before comparing (backend's {post_id} and the client's ${id} both collapse to a wildcard segment, verified explicitly with two genuinely different param names, not just a casing difference: PASS), so a rename never trips it, only a real shape or verb mismatch does. Wired into CI next to the Chart math step (c118), same mobile job. THE TICKET ASSUMED THE CURRENT CLIENT PASSES CLEAN. IT DOES NOT, confirmed on CI's own run against the real merge commit: 75 PASS, 2 FAIL. This is not a checker bug - cross-validated independently against FastAPI's own app.openapi() output, which agrees exactly on both. CORRECTION ON THIS CARD, made against myself, same discipline applied to every other session today: my first local pass found a THIRD mismatch, PATCH /chapters/${chapterId} (updateChapter, chapters.ts:137) - but that check ran BEFORE I rebased onto origin/main, and c77 (df4ff32, unrelated to this ticket) had already added that PATCH route. I committed and pushed without re-running the check after the rebase, so my first PR body overclaimed a third failure that CI correctly did not reproduce. Caught by reading CI's actual output rather than trusting my own notes, and re-verified fresh before fixing this card. GET /chapters (chapters.ts:114, listChapters) - backend only ever registered POST /chapters. DEAD CODE - grepped the whole app tree, zero callers. Carded as c125, unowned, low urgency, corrected to describe only this one function now that updateChapter is confirmed fine. GET /chapters/${chapterId}/meetings/${meetingId}/attendance (meetings.ts:77, getAttendance) - backend only ever registered PUT at that path (meetings.py:160, upsert_attendance), AND getAttendance IS called, from app/(tabs)/chapter/secretary.tsx:149, every time the secretary screen loads attendance. Carded as c124, unowned, urgent - this is live on main today. SABOTAGE TEST, required by the ticket: flipped feed.ts's likePost back to POST (the exact c115 regression) on a scratch copy. Output: 'FAIL POST /posts/${postId}/likes (feed.ts:143) / this path IS registered, but only as: PUT, DELETE (in feed.py)' - 3 FAILURE(S), the 2 real pre-existing ones plus exactly this one, on exactly this line. NOT MERGED - court reviews. Branch jose/c121-mobile-contract-check, PR #46. CI on this branch correctly shows red on the new step - the 2 mismatches are real, and the step is supposed to fail loud on them until c124/c125 are resolved."
+    },
     {
       "id": "c118",
       "col": "done",
@@ -1682,6 +1699,9 @@
       var h = document.createElement('h2');
       h.innerHTML = col.title + ' <span class="count">' + cards.length + '</span>';
       colEl.appendChild(h);
+      var stack = document.createElement('div');
+      stack.className = 'stack';
+      colEl.appendChild(stack);
       cards.forEach(function (c) {
         var el = document.createElement('div');
         el.className = 'card'; el.draggable = true; el.dataset.id = c.id;
@@ -1696,13 +1716,7 @@
         // The card shows a headline; everything else lives in the drawer. Card text
         // grew long enough that four columns of it was unreadable — and a board you
         // do not read is the same as no board.
-        if (c.detail) {
-          el.classList.add('has-detail');
-          var more = document.createElement('span');
-          more.className = 'more';
-          more.textContent = 'details';
-          t.appendChild(more);
-        }
+        if (c.detail) { el.classList.add('has-detail'); }
         el.addEventListener('click', function (ev) {
           // Ignore clicks on the meta-row controls, which have their own jobs.
           if (ev.target.closest('.meta')) return;
@@ -1724,10 +1738,10 @@
         del.onclick = function () { if (confirm('Delete card?')) { state.cards = state.cards.filter(function (x) { return x.id !== c.id; }); persist(); } };
         meta.appendChild(del);
         t.ondblclick = function () { var v = prompt('Edit card', c.title); if (v) { c.title = v; persist(); } };
-        el.appendChild(idLine); el.appendChild(t); el.appendChild(meta);
+        meta.insertBefore(idLine, meta.firstChild); el.appendChild(meta); el.appendChild(t);
         el.addEventListener('dragstart', function (ev) { ev.dataTransfer.setData('text/plain', c.id); el.classList.add('dragging'); });
         el.addEventListener('dragend', function () { el.classList.remove('dragging'); });
-        colEl.appendChild(el);
+        stack.appendChild(el);
       });
       var adder = document.createElement('input');
       adder.className = 'adder'; adder.placeholder = '+ add card';
@@ -1755,7 +1769,11 @@
     }
     var dl = document.getElementById('decision-list');
     dl.innerHTML = '';
-    state.decisions.forEach(function (d) { var li = document.createElement('li'); li.textContent = d; dl.appendChild(li); });
+    // Newest first: this is a log you check, not a story you re-read. Display
+    // order only — the data keeps its chronological order for diffs and export.
+    state.decisions.slice().reverse().forEach(function (d) { var li = document.createElement('li'); li.textContent = d; dl.appendChild(li); });
+    var dc = document.getElementById('decision-count');
+    if (dc) dc.textContent = state.decisions.length;
   }
 
   document.getElementById('decision-add').onkeydown = function (ev) {
@@ -1770,7 +1788,17 @@
   document.getElementById('export').onclick = function () {
     var clone = document.documentElement.cloneNode(true);
     clone.querySelector('#board').innerHTML = '';
+    clone.querySelector('#areas').innerHTML = '';
+    clone.querySelector('#alpha').textContent = '';
     clone.querySelector('#decision-list').innerHTML = '';
+    // Export always ships the default view — otherwise whatever panel was open
+    // at export time gets baked into the committed file as its start state.
+    clone.querySelector('#board').hidden = false;
+    clone.querySelector('#areas').hidden = true;
+    clone.querySelector('#decisions').hidden = true;
+    Array.prototype.forEach.call(clone.querySelectorAll('#view-toggle button'), function (b) {
+      b.className = b.dataset.view === 'status' ? 'on' : '';
+    });
     clone.querySelector('#status').textContent = 'committed state';
     clone.querySelector('#status').className = '';
     // The banner is derived state, recomputed on load. Exporting it would bake a
@@ -1891,6 +1919,7 @@
     if (view === 'area') renderAreas();
   }
 
+  var alphaOpen = false;
   function renderAlpha() {
     var host = document.getElementById('alpha');
     var a = state.alpha;
@@ -1912,20 +1941,15 @@
     var total = shipped + gates.length;
     var pct = total ? Math.round((100 * n.done) / total) : 0;
 
-    var head = document.createElement('div');
-    head.className = 'alpha__h';
+    var row = document.createElement('div');
+    row.className = 'alpha__row';
     var h2 = document.createElement('h2');
     h2.textContent = 'Alpha readiness';
+    h2.title = a.goal;
     var pctEl = document.createElement('span');
     pctEl.className = 'alpha__pct';
     pctEl.textContent = pct + '%';
-    head.appendChild(h2); head.appendChild(pctEl);
-    host.appendChild(head);
-
-    var sub = document.createElement('p');
-    sub.className = 'alpha__sub';
-    sub.textContent = a.goal;
-    host.appendChild(sub);
+    row.appendChild(h2); row.appendChild(pctEl);
 
     var bar = document.createElement('div');
     bar.className = 'bar';
@@ -1936,13 +1960,13 @@
       i.style.width = (100 * pair[1]) / total + '%';
       bar.appendChild(i);
     });
-    host.appendChild(bar);
+    row.appendChild(bar);
 
     var key = document.createElement('div');
     key.className = 'alpha__key';
     [['var(--success)', n.done + ' done'],
      ['var(--accent)', n.progress + ' in flight'],
-     ['var(--warn)', n.open + ' not started']].forEach(function (pair) {
+     ['var(--warn)', n.open + ' open']].forEach(function (pair) {
       var span = document.createElement('span');
       var sw = document.createElement('i');
       sw.style.background = pair[0];
@@ -1950,34 +1974,45 @@
       span.appendChild(document.createTextNode(pair[1]));
       key.appendChild(span);
     });
-    var foot = document.createElement('span');
-    foot.textContent = shipped + ' shipped foundations counted, ' + gates.length + ' gates remaining to check';
-    key.appendChild(foot);
-    host.appendChild(key);
+    row.appendChild(key);
+
+    var toggle = document.createElement('button');
+    toggle.className = 'alpha__toggle';
+    toggle.textContent = (alphaOpen ? 'hide' : 'show') + ' ' + total + ' gates';
+    toggle.onclick = function () { alphaOpen = !alphaOpen; renderAlpha(); };
+    row.appendChild(toggle);
+    host.appendChild(row);
+
+    if (!alphaOpen) return;
+
+    var sub = document.createElement('p');
+    sub.className = 'alpha__sub';
+    sub.textContent = a.goal + ' — ' + shipped + ' shipped foundations counted, ' + gates.length + ' gates remaining to check.';
+    host.appendChild(sub);
 
     var grid = document.createElement('div');
     grid.className = 'alpha__gates';
     (a.shipped || []).forEach(function (label) {
-      var row = document.createElement('div');
-      row.className = 'alpha__gate is-shipped';
+      var g0 = document.createElement('div');
+      g0.className = 'alpha__gate is-shipped';
       var st = document.createElement('span');
       st.className = 'st st-done';
       st.textContent = 'shipped';
       var t = document.createElement('span');
       t.textContent = label;
-      row.appendChild(st); row.appendChild(t);
-      grid.appendChild(row);
+      g0.appendChild(st); g0.appendChild(t);
+      grid.appendChild(g0);
     });
     gates.forEach(function (g) {
-      var row = document.createElement('div');
-      row.className = 'alpha__gate';
+      var g1 = document.createElement('div');
+      g1.className = 'alpha__gate';
       var st = document.createElement('span');
       st.className = 'st st-' + (g.col === 'unknown' ? 'backlog' : g.col);
       st.textContent = g.col === 'unknown' ? g.id + '?' : g.id;
       var t = document.createElement('span');
       t.textContent = g.label;
-      row.appendChild(st); row.appendChild(t);
-      grid.appendChild(row);
+      g1.appendChild(st); g1.appendChild(t);
+      grid.appendChild(g1);
     });
     host.appendChild(grid);
   }
@@ -2082,6 +2117,7 @@
     view = next;
     boardEl.hidden = next !== 'status';
     areasEl.hidden = next !== 'area';
+    document.getElementById('decisions').hidden = next !== 'log';
     Array.prototype.forEach.call(document.querySelectorAll('#view-toggle button'), function (b) {
       b.className = b.dataset.view === next ? 'on' : '';
     });
