@@ -62,12 +62,13 @@ routes differently, and the routing is the part most likely to break.
 
 ## Before the first deploy — required
 
-1. **Replace every `CONTACT_EMAIL_PLACEHOLDER`.** There is no confirmed public
-   contact address, so the literal placeholder is used rather than inventing a
-   domain we do not own.
-   ```sh
-   grep -rn CONTACT_EMAIL_PLACEHOLDER src/
-   ```
+1. ~~Replace every `CONTACT_EMAIL_PLACEHOLDER`.~~ Done Aug 16 (board c74) —
+   `src/siteConfig.ts:18` `CONTACT_EMAIL` is a real, centralized value; every
+   page reads that one constant, not a scattered string. Currently Jose's own
+   Gmail, which owns GCP/Firebase/Stripe — that dual-use is the open half of
+   c74, being resolved as of Aug 22 with a second, non-owner address. Update
+   `CONTACT_EMAIL` there once the replacement is confirmed; nothing else in
+   this file needs to change.
 2. **Fill the company paragraph in `src/pages/About.tsx`**, marked with a
    `JOSE:` comment.
 3. **Get `src/pages/Terms.tsx` sections 8, 9 and 10 written by a lawyer.** They

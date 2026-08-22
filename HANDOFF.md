@@ -44,7 +44,9 @@ campus problem" further down.
    Q's vertical (Yak content, campus feed, messaging, treasurer/secretary dashboards,
    CSV export) is still unproven, which is the only reason the card isn't Done.
 2. **c74** — `chirp.shared@gmail.com` is published on the live site *and* owns GCP,
-   Firebase and Stripe. Wants a forwarding alias; **blocked on c73's domain purchase**.
+   Firebase and Stripe. **In progress as of Aug 22**: Jose picked a replacement
+   address (no longer waiting on c73's domain), spelling being confirmed before
+   `src/siteConfig.ts`'s `CONTACT_EMAIL` changes — see board c74.
 3. **c73** — marketing site to `about.<domain>`. **Blocked on buying a domain** (yours).
 4. **c87 → c86 → c88** — transactional email, then `.edu` verification, then the gate.
    Strictly in that order. Previously "hold until after alpha" — **c96 challenges that**.
