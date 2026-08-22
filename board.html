@@ -1668,11 +1668,11 @@
     },
     {
       "id": "c144",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "process",
       "area": "qa",
-      "title": "IN PROGRESS (manager) - verify-contract.mjs is a git-BINARY file (2 embedded NUL bytes), so its own PRs show zero reviewable lines",
+      "title": "DONE Aug 22 - MERGED #64. verify-contract.mjs no longer git-binary: 2 raw NUL sentinel bytes escaped to \\u0000 (runtime-identical) + a .gitattributes text/diff rule. Its PRs render as real line diffs now (this card's own PR was the first reviewable diff of the file); grep sees it too. Confirmed diff:set on main.",
       "detail": "Security LOW-MEDIUM, found while verifying c137: the checker uses a literal NUL byte as its path-parameter sentinel (embedded raw in the source, not an escape), which makes git classify the whole file as binary. PR #61 rendered as 'Bin 8020 -> 9206 bytes, 0 insertions, 0 deletions' - it was merged on written spec, not on a reviewable diff. Same shape as the vacuous-gate bug one level up: the one file whose job is to stop a gate passing vacuously is itself unreviewable, and a future change lowering MIN_CLIENT_CALLS to 0 would sail through as an opaque blob. FIX (better than security's two options): replace the two raw NUL bytes with the escape sequence \\u0000 - byte-identical runtime behavior (same NUL sentinel), but the SOURCE file becomes pure text for git diff AND grep AND every tool, not just git via .gitattributes. The grep breakage that nearly made security misreport c137 as unmerged is fixed at root too."
     }
   ],
