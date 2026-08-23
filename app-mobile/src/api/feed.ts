@@ -8,7 +8,10 @@ export type PostAudience = "org" | "campus";
 
 export interface PostCreate {
   body: string;
-  media_urls?: string[] | null;
+  /** tmp/ object_name(s) from POST /media/upload-url (c132) — NOT a url. The server
+   * moves the referenced tmp/ object to its permanent location and assigns the
+   * resulting media_urls itself. */
+  media_object_names?: string[] | null;
   /** Server defaults to "org" when omitted (routers/feed.py). */
   audience?: PostAudience;
   /** Server defaults to "text" — text compose omits this; declared now so a future media composer does not widen this type again. */
@@ -23,14 +26,14 @@ export interface PostCreate {
  */
 export interface CampusPostCreate {
   body: string;
-  media_urls?: string[] | null;
+  media_object_names?: string[] | null; // see PostCreate.media_object_names
   post_type?: PostType;
   duration_sec?: number | null;
 }
 
 export interface PostUpdate {
   body?: string | null;
-  media_urls?: string[] | null;
+  media_object_names?: string[] | null; // see PostCreate.media_object_names
 }
 
 /** DESIGN §7 FYP: drives which MediaPostCard layout a post renders as. */

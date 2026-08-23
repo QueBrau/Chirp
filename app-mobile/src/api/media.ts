@@ -10,15 +10,21 @@ export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 export interface MediaUploadUrlOut {
   upload_url: string;
-  public_url: string;
+  /** tmp/ location (c132) — fetchable for local preview only, never sent to a post.
+   * A post's real media_urls is server-assigned by finalize_media_object() at
+   * create/update time, from `object_name` below, not from this url. */
+  preview_url: string;
+  object_name: string;
   expires_in_seconds: number;
 }
 
 /**
  * Request a signed PUT url, then PUT the bytes to it directly — this call never
  * touches image bytes itself, matching the backend: client uploads straight to GCS,
- * never proxied through the API. The caller stores `public_url` (not `upload_url`)
- * into a post's media_urls once the PUT below succeeds.
+ * never proxied through the API. The caller keeps `preview_url` only for local
+ * rendering and sends `object_name` (not a url) in a post's media_object_names once
+ * the PUT below succeeds (c132) — the server moves that tmp/ object and assigns the
+ * post's permanent media_urls itself.
  */
 export async function getMediaUploadUrl(
   contentType: AllowedMediaContentType,

@@ -184,9 +184,14 @@ export function CreateSheet({
   // offer and no way for the org default above to apply to them (c71).
   const canChooseAudience = chapterId !== null;
   const effectiveAudience: PostAudience = canChooseAudience ? audience : "campus";
-  // public_url of an uploaded photo, once the pick+upload round trip finishes —
-  // null means "no photo attached," not "still uploading" (see uploadingPhoto).
+  // preview_url of an uploaded photo, once the pick+upload round trip finishes — null
+  // means "no photo attached," not "still uploading" (see uploadingPhoto). Local
+  // rendering ONLY (c132): the tmp/ object this points at is never sent to the
+  // backend, and is not what ends up in the post's media_urls.
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  // The tmp/ object_name actually sent at submit time (c132) — the server moves this
+  // to a permanent location and assigns the post's real media_urls itself.
+  const [photoObjectName, setPhotoObjectName] = useState<string | null>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [posting, setPosting] = useState(false);
   // Belt-and-suspenders alongside `posting` state: a ref is read/written
@@ -200,6 +205,7 @@ export function CreateSheet({
     setBody("");
     setAudience("org");
     setPhotoUrl(null);
+    setPhotoObjectName(null);
     setUploadingPhoto(false);
   };
 
@@ -268,9 +274,13 @@ export function CreateSheet({
     try {
       const typedContentType = contentType as AllowedMediaContentType;
       const bytes = await (await fetch(asset.uri)).blob();
-      const { upload_url, public_url } = await getMediaUploadUrl(typedContentType, bytes.size);
+      const { upload_url, preview_url, object_name } = await getMediaUploadUrl(
+        typedContentType,
+        bytes.size,
+      );
       await uploadMediaBytes(upload_url, bytes, typedContentType);
-      setPhotoUrl(public_url);
+      setPhotoUrl(preview_url);
+      setPhotoObjectName(object_name);
       setStep("compose");
     } catch (error) {
       showApiError(error, "Couldn't upload that photo");
@@ -284,7 +294,10 @@ export function CreateSheet({
     postingRef.current = true;
     setPosting(true);
     try {
-      const media = photoUrl !== null ? { media_urls: [photoUrl], post_type: "photo" as const } : {};
+      const media =
+        photoObjectName !== null
+          ? { media_object_names: [photoObjectName], post_type: "photo" as const }
+          : {};
       if (chapterId !== null) {
         await createPost(chapterId, { body: body.trim(), audience: effectiveAudience, ...media });
       } else if (campusId !== null) {
@@ -397,7 +410,10 @@ export function CreateSheet({
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel="Remove photo"
-                    onPress={() => setPhotoUrl(null)}
+                    onPress={() => {
+                      setPhotoUrl(null);
+                      setPhotoObjectName(null);
+                    }}
                     hitSlop={spacing.sm}
                     style={{
                       position: "absolute",
