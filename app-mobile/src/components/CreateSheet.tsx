@@ -358,6 +358,33 @@ export function CreateSheet({
             }}
           />
 
+          {/* c141: the backdrop's onPress dismisses the sheet, but c131 correctly
+              took accessibilityRole="button" off it (a <button> can't legally
+              contain the real buttons below it) — which also took away the ONLY
+              labeled dismiss control assistive tech ever had here. Matches
+              MediaPostCard's own dismiss overlay: a real, labeled control, not
+              just an unlabeled tappable region. Positioned absolute so it sits in
+              both steps without duplicating it in each branch below. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            onPress={close}
+            hitSlop={spacing.sm}
+            style={{
+              position: "absolute",
+              top: spacing.lg,
+              right: spacing.gutter,
+              width: 28,
+              height: 28,
+              borderRadius: radii.pill,
+              backgroundColor: palette.surfaceAlt,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Feather name="x" size={16} color={palette.inkSecondary} />
+          </Pressable>
+
           {step === "options" ? (
             <>
               <AppText variant="title">Create</AppText>

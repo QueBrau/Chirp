@@ -5,6 +5,7 @@
  * date is a free-text label (e.g. "Sat, Sep 27 · 7:00 PM"), closes on submit.
  */
 
+import { Feather } from "@expo/vector-icons";
 import { useState } from "react";
 import { Image, Modal, Pressable, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -118,6 +119,31 @@ export function CreateEventSheet({ visible, onClose, onCreate }: CreateEventShee
               backgroundColor: palette.border,
             }}
           />
+
+          {/* c141: matches CreateSheet.tsx's fix, same cause — c131 correctly took
+              accessibilityRole="button" off the backdrop, which also took away the
+              only labeled dismiss control assistive tech had. Matches
+              MediaPostCard's own dismiss overlay: a real, labeled control. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            onPress={close}
+            hitSlop={spacing.sm}
+            style={{
+              position: "absolute",
+              top: spacing.lg,
+              right: spacing.gutter,
+              width: 28,
+              height: 28,
+              borderRadius: radii.pill,
+              backgroundColor: palette.surfaceAlt,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Feather name="x" size={16} color={palette.inkSecondary} />
+          </Pressable>
+
           <AppText variant="title">New event</AppText>
 
           <View>
