@@ -265,10 +265,18 @@ def finalize_media_object(user_id: str, tmp_object_name: str) -> str:
     the caller ran that check, on the same "validate again where it actually matters"
     reasoning the double size-enforcement already follows.
 
-    preserve_acl=False is required, not optional: the bucket is uniform-bucket-level-
-    access (no per-object ACLs exist), and copy_blob's default preserve_acl=True calls
-    the object ACL API, which a uniform-access bucket rejects outright. This only shows
-    up against the real bucket - no fake client would surface it.
+    preserve_acl is DELIBERATELY LEFT AT ITS DEFAULT (True) - the opposite of what an
+    earlier version of this function did, and the opposite of what the parameter's own
+    docstring reads like at a glance. Ground truth is the IMPLEMENTATION, not the
+    docstring: copy_blob's body ends with `if not preserve_acl: new_blob.acl.save(...)`
+    - the ACL API call only happens when preserve_acl is FALSE. True (the default) skips
+    it entirely. On a uniform-bucket-level-access bucket, that acl.save call 403s (there
+    is no per-object ACL to touch), so passing preserve_acl=False HERE, as this function
+    used to, made copy_blob's own destination copy succeed and then fail on the ACL call
+    immediately after - manager's real-bucket E2E confirmed this precisely, via SA
+    impersonation: the exact conditional copyTo authorized cleanly (412 destination-
+    exists, not 403), proving the copy itself was never the problem. Do not set
+    preserve_acl=False again without re-reading copy_blob's source first.
 
     if_generation_match=0 on the copy is ALSO required, not optional, and for a subtler
     reason a fake client cannot surface either: it applies to the DESTINATION generation
@@ -318,7 +326,6 @@ def finalize_media_object(user_id: str, tmp_object_name: str) -> str:
             tmp_blob,
             bucket,
             permanent_object_name,
-            preserve_acl=False,
             if_generation_match=0,
         )
     except NotFound:

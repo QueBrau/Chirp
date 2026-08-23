@@ -128,14 +128,18 @@ async def test_own_tmp_object_is_moved_and_the_permanent_url_is_stored(
     assert media_urls == [f"https://storage.googleapis.com/{TEST_BUCKET}/posts/{setup.member.id}/abc123.jpg"]
 
     # the move actually happened: copy from the tmp path to the permanent one, with
-    # preserve_acl=False (uniform-bucket-access) and if_generation_match=0 (asserts the
-    # destination doesn't exist, which only requires create - an unconditional copy
-    # would need delete on posts/, which the service account deliberately lacks; found
-    # live against the real bucket, not by any fake), then the tmp source was deleted.
+    # if_generation_match=0 (asserts the destination doesn't exist, which only requires
+    # create - an unconditional copy would need delete on posts/, which the service
+    # account deliberately lacks; found live against the real bucket, not by any fake).
+    # preserve_acl is deliberately NOT passed - the default (True) is what SKIPS the
+    # object-ACL API call copy_blob's implementation makes when preserve_acl is False,
+    # which is what a uniform-bucket-level-access bucket rejects (second real-bucket-
+    # only finding, also missed by every fake here - see finalize_media_object's
+    # docstring for the full story). Then the tmp source was deleted.
     [call] = captured["copy_blob_calls"]
     assert call["source"] == tmp_name
     assert call["new_name"] == f"posts/{setup.member.id}/abc123.jpg"
-    assert call["kwargs"]["preserve_acl"] is False
+    assert "preserve_acl" not in call["kwargs"]
     assert call["kwargs"]["if_generation_match"] == 0
     assert captured["deleted"] == [tmp_name]
 
