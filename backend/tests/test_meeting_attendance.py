@@ -139,3 +139,99 @@ async def test_a_meeting_from_another_chapter_is_404_not_leaked(
         headers=chapter_b.member.headers,
     )
     assert attempt.status_code == 404, attempt.text
+
+
+# ---- board c149: the upsert became one statement, so these guard its new edges ----
+
+
+async def test_rewriting_the_sheet_updates_rather_than_duplicating(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """PUT twice for the same member updates the row; it does not insert a second one.
+
+    This is the property the old read-then-branch loop provided by hand and that
+    ON CONFLICT DO UPDATE now provides in the database. Worth its own test because
+    losing it would not raise - it would silently return two rows for one member,
+    and the composite primary key means the second insert would actually error, so
+    the failure would surface as a 500 on the secretary's second save.
+    """
+    setup = await make_chapter_with("secretary")
+    meeting_id = await _create_meeting(client, setup)
+    url = f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance"
+
+    first = await client.put(
+        url,
+        json={"entries": [{"user_id": setup.president.id, "status": "present"}]},
+        headers=setup.member.headers,
+    )
+    assert first.status_code == 200, first.text
+
+    second = await client.put(
+        url,
+        json={"entries": [{"user_id": setup.president.id, "status": "excused"}]},
+        headers=setup.member.headers,
+    )
+    assert second.status_code == 200, second.text
+
+    read = await client.get(url, headers=setup.member.headers)
+    assert read.status_code == 200, read.text
+    assert [(r["user_id"], r["status"]) for r in read.json()] == [
+        (setup.president.id, "excused")
+    ], "second PUT should have updated the existing row, not added another"
+
+
+async def test_the_same_member_listed_twice_in_one_sheet_does_not_500(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """A duplicated member within ONE payload resolves to the last status given.
+
+    Postgres cannot apply ON CONFLICT to two rows that collide inside the same
+    statement - it raises `ON CONFLICT DO UPDATE command cannot affect row a second
+    time`. That makes a client-side duplicate a 500 rather than a validation error,
+    so the route collapses duplicates before the insert. Sending the same member
+    twice is a client bug, but it must not take the whole sheet down with it.
+    """
+    setup = await make_chapter_with("secretary")
+    meeting_id = await _create_meeting(client, setup)
+    url = f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance"
+
+    response = await client.put(
+        url,
+        json={
+            "entries": [
+                {"user_id": setup.president.id, "status": "present"},
+                {"user_id": setup.president.id, "status": "absent"},
+            ]
+        },
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert [(r["user_id"], r["status"]) for r in response.json()] == [
+        (setup.president.id, "absent")
+    ]
+
+
+async def test_an_oversized_sheet_is_refused_by_validation(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """`entries` is bounded, so the caller cannot choose how much work the request costs.
+
+    Unbounded, one PUT was an arbitrary number of writes from a single authenticated
+    officer. The bound is deliberately far above any real roster, so this asserts the
+    limit exists rather than pinning a product decision about chapter size.
+    """
+    setup = await make_chapter_with("secretary")
+    meeting_id = await _create_meeting(client, setup)
+
+    response = await client.put(
+        f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance",
+        json={
+            "entries": [
+                {"user_id": setup.president.id, "status": "present"} for _ in range(501)
+            ]
+        },
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 422, response.text
