@@ -1650,11 +1650,11 @@
     },
     {
       "id": "c142",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "security",
       "area": "orgs",
-      "title": "PR #66 OPEN Aug 22 - both bugs fixed (audience-blind tier + chapter-hop over-restriction), tripwire proven both directions, 310/310 backend suite",
+      "title": "DONE Aug 22 - MERGED #66 on security's sign-off (their 8th and last open finding). Moderation tier now follows the target row's audience: yak True, post its own column, comment inherits parent; unresolvable targets fail CLOSED to the stricter tier. Chapter-less campus posts moderatable again (campus_id read off the non-nullable Post column). 10-test matrix incl. both org-tier regression guards. Deploy window 00024 shipping it.",
       "detail": "Claimed Aug 22, branch jose/c142-moderation-tier. VERIFIED AGAINST CURRENT MAIN BEFORE TOUCHING ANYTHING, not taken on trust: grep -c audience backend/app/routers/moderation.py returns 0. Confirmed both cited lines: resolve_report:253 keys campus_content on report.target_type == 'yak' only; remove_content:454 hard-codes campus_content=False on a comment claiming posts/comments are 'both chapter content' - false since c71, which let Post carry audience IN ('org','campus') and publish campus-audience posts to the campus feed (checked the actual CheckConstraint in models/social.py). NET EFFECT, same file, same window: feed.py:257-258 requires require_verified_campus to PUBLISH a campus-audience post; moderation.py requires nothing to REMOVE one. Backwards by c108's own stated reasoning. EXPLOIT CHAIN, traced not assumed: an unverified e-board officer in chapter A on campus X can remove a campus-audience post authored from chapter B, because campus_id resolves via the target row and the verification branch never triggers for target_type='post'. Same hole in resolve_report for dismissals. SECOND BUG, confirmed via the models: Post.campus_id is a first-class, non-nullable column set unconditionally at BOTH create routes in feed.py - remove_content instead hops through Chapter.campus_id, and a chapter-less campus post (audience='campus', chapter_id NULL, allowed by ck_posts_org_requires_chapter) makes that hop yield None, 403ing every officer including verified ones. Over-restrictive, not a bypass, same wrong premise (deriving campus scope from the chapter instead of the post). FIX PLAN: derive campus_content from the loaded post/comment's own audience (comment inherits its parent post's), and derive campus_id from post.campus_id directly - never through Chapter - which closes both bugs with one change, matching the pattern _resolve_report_campus_id already uses for the reports path. Test matrix per security's spec: unverified cross-chapter officer on a campus-audience post refused (both routes), verified officer on the same case succeeds, chapter-less campus post now moderatable by a verified officer, org-audience case still passes on officer role alone (regression guard), yak case unchanged, comment-on-campus-post inherits the tier. Security reviews the diff before the manager merges, per their own finding."
     },
     {
@@ -1681,7 +1681,7 @@
       "owner": "",
       "tag": "security",
       "area": "infra",
-      "title": "INCIDENT Aug 22: 15 log entries with a REAL Firebase token + email (calpules1@icloud.com) in prod Cloud Logging via the old ?token= WS path - source NOT braul's drives",
+      "title": "DOWNGRADED Aug 22 (was INCIDENT): the 15 ?token= log entries are SELF-INFLICTED TEST TRAFFIC - security pulled user agents: ALL are HeadlessChrome/145 on macOS, i.e. our own browser-automation QA with a signed-in account, not a stranger. Remaining: confirm whose login calpules1@icloud.com is (not one of the 3 documented QA accounts), and purge-vs-age-out for the 15 entries (tokens long expired; email persists for retention window). Recurrence already impossible: #63's subprotocol auth is unlogged by Cloud Run.",
       "detail": "The old ?token= path logs the credential verbatim in requestUrl. Manager-verified: 15 entries, 1 distinct token (same account, 15 reconnects), all 403'd but logged regardless. IMPORTANT attribution correction: braul confirmed his c63 verification ran with null authToken/debugFirebaseUid throughout, so his connects sent a BARE /ws URL with no token= param - his traffic is real unauthenticated handshakes, NOT the source of the real credential. So the 15 real-token entries came from a genuinely signed-in client for calpules1@icloud.com (another session's drive, a real login, or Firebase SDK behavior) - that's the open question. CONTAINED: #63 merged (recurrence stopped, header path unlogged), braul stopped all prod /ws drives. FOR JOSE: (1) whose account is calpules1@icloud.com? not one of our 3 QA accounts - real user or tester? (2) tokens self-expire in ~1h (likely expired now) but entries carry a real email for the full retention window - purge via log exclusion/bucket, or age out? Access is restricted to chirps-prod project members so practical exposure is low."
     },
     {
@@ -1692,6 +1692,24 @@
       "area": "infra",
       "title": "Follow-up: a credential-scrubbing log tripwire (NOT just restoring the old token= filter) - author-reviews-own-amendment flagged",
       "detail": "Security's framing (theirs, kept verbatim in intent): the removed _RedactWsTokenFilter is NOT a fallback for the subprotocol fix - that fix is complete. It's a TRIPWIRE for a different failure: any FUTURE client that regresses to a credential in a URL (stale build, third-party integration, a debug curl ?token=). Do NOT reinstate the old filter verbatim - it scrubbed 'token=' specifically; the useful version scrubs any token/access_token/id_token-shaped query param, since the next regression won't reuse the same name. PROCESS NOTE for Jose: security reviewed+signed off #63, and restoring this is an amendment to their own approved change - so it should NOT be security's to author (second pair of eyes on their own review). Assign to any other session, or accept author-reviews-own-amendment as a known tradeoff if nobody has capacity."
+    },
+    {
+      "id": "c147",
+      "col": "backlog",
+      "owner": "",
+      "tag": "security",
+      "area": "orgs",
+      "title": "Hardening: remove_content's campus_content defaults False when the source post is unresolvable - opposite of _report_campus_content's fail-closed True",
+      "detail": "Security's non-blocking note on #66: remove_content sets campus_content = source_post is not None and audience=='campus', i.e. FALSE when unresolvable - the opposite default from _report_campus_content's return True. Safe today only because the campus_id-is-None check fires first inside _require_eboard_for_campus; if anyone ever relaxes that check, this silently becomes fail-open. One-line fix: make both paths default True so safety doesn't depend on evaluation order. Tiny, next batch."
+    },
+    {
+      "id": "c148",
+      "col": "backlog",
+      "owner": "",
+      "tag": "process",
+      "area": "orgs",
+      "title": "POLICY (Jose): does chapter authority end at campus-audience content? delete_post never reads audience",
+      "detail": "Found by security while closing c142, deliberately NOT called a bug: DELETE /chapters/{id}/posts/{post_id} (feed.py:392) allows author OR that chapter's president, never reading audience - so an unverified president can delete their own chapter's campus-audience post using chapter authority alone. Two defensible readings in tension: c108's docstring ('a president who never verified keeps every chapter power, including removing a member's post') vs c142's new principle (tier follows the content's audience, not its location). Blast radius is narrow - president of the OWNING chapter only, not the cross-chapter stranger case c142 closed. Jose decides where chapter authority ends; until then the two routes disagree silently and this card is the record that it's known."
     }
   ],
   "decisions": [
@@ -1784,7 +1802,8 @@
     "Aug 22 - Security (mid-pass flag): chirps-prod-media was anonymously ENUMERABLE (objectViewer includes list) - manager's over-grant, corrected same hour while the bucket held only test pixels: allUsers swapped to legacyObjectReader (GET-only), verified LIST 401 / GET 200. OPEN FOR TRIAGE with security's batch report: are photo URLs public-forever (current design) or signed-GET (privacy-tighter, needs client+backend rework)? Jose decides.",
     "Aug 22 - Triage (manager, from security's batch): item 7 (WS token off query string) PULLED FORWARD ahead of c63's realtime wiring - security proved zero WS usage ever, so the coordination stop protects nothing today and the cost inverts the moment c63 lands; braul builds it as PR 0 from security's written plan. media_urls validator assigned (james) before media sees real use. Photo-URL public-vs-signed fork, purge job scheduling, and .edu attempt-cap fix: queued for Jose.",
     "Aug 22 - Jose's triage: (1) photo privacy = option (a), public-read stays for alpha, mandatory revisit carded before broad use; (2) purge job APPROVED and now LIVE (daily 09:00 UTC, proven on prod); (3) .edu attempt-cap race fix APPROVED, sally building with a real OS-thread concurrency proof, merging BEFORE c73's domain lands because the race goes live the hour delivery works.",
-    "Aug 22 - INCIDENT + fix: item 7 (WS ?token= in logs) went dormant->LIVE when c63's wiring opened the first real prod sockets against the still-unmerged old path. 15 entries carry a real Firebase token for calpules1@icloud.com; braul's own drives were unauthenticated (bare URL) so the real credential is NOT his - source is an open question for Jose. #63 merged urgently on security's sign-off (subprotocol auth, headers unlogged) to stop recurrence. Log purge + account identity to Jose (c145). Credential-scrubbing tripwire carded (c146), explicitly NOT for security to author since they approved #63."
+    "Aug 22 - INCIDENT + fix: item 7 (WS ?token= in logs) went dormant->LIVE when c63's wiring opened the first real prod sockets against the still-unmerged old path. 15 entries carry a real Firebase token for calpules1@icloud.com; braul's own drives were unauthenticated (bare URL) so the real credential is NOT his - source is an open question for Jose. #63 merged urgently on security's sign-off (subprotocol auth, headers unlogged) to stop recurrence. Log purge + account identity to Jose (c145). Credential-scrubbing tripwire carded (c146), explicitly NOT for security to author since they approved #63.",
+    "Aug 22 - c142 merged on security's sign-off: ALL 8 security-pass findings now closed. Incident c145 downgraded: token-bearing requests were all HeadlessChrome (our own QA automation), not a wild client. delete_post audience-vs-chapter-authority tension carded as policy for Jose (c148), remove_content default-agreement hardening carded (c147)."
   ]
 }
 </script>
