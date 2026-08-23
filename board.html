@@ -1623,11 +1623,11 @@
     },
     {
       "id": "c140",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "J",
       "tag": "security",
       "area": "orgs",
-      "title": "REVISIT BEFORE BROAD USE: post photos are world-readable forever by URL, even on org-audience (chapter-private) posts",
+      "title": "IN PROGRESS Aug 23 - ANALYSIS ONLY, NO CODE: writing the decision doc (option b signed reads vs option c campus-only stopgap) for manager+Jose to approve before any implementation. Post photos are world-readable forever by URL, even on org-audience (chapter-private) posts. Design commitment from manager: posts.media_urls stays a stable object identity, signing happens at render time only, so c153's reconciliation diff is unaffected.",
       "detail": "Jose's alpha call Aug 22: option (a) - keep public-read for alpha (small trusted group), revisit before wider use. This card IS the revisit. Security argued (b) or (c) and the argument is on record: PostCreate carries both media_urls and audience, Audience = Literal['org','campus'] - NEITHER value means 'public to the internet', and org is documented in the schema as 'private to a chapter'. So a chapter-private post's photo of real students is world-readable, invisibly to the poster, and deleting the post does not unpublish the photo. Options: (b) signed GET urls + public_access_prevention enforced (breaks MediaPostCard's no-refresh <Image> premise, needs a read-signing route); (c) allow media on campus posts only until signed reads exist. Current state (GET-only, LIST revoked) is a sound interim, NOT an end state. Enumeration was already closed Aug 22 after security caught the manager's over-grant."
     },
     {
