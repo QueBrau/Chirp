@@ -1689,7 +1689,7 @@
       "owner": "J",
       "tag": "security",
       "area": "infra",
-      "title": "IN PROGRESS Aug 22 - claimed. Generalized filter, not token= verbatim - clean pair of hands per the author-reviews-own-amendment flag",
+      "title": "PR #70 OPEN Aug 22 - generalized filter shipped, and it caught a real bug in the ORIGINAL filter's logic along the way (plain-message branch was unreachable)",
       "detail": "Security's framing (theirs, kept verbatim in intent): the removed _RedactWsTokenFilter is NOT a fallback for the subprotocol fix - that fix is complete. It's a TRIPWIRE for a different failure: any FUTURE client that regresses to a credential in a URL (stale build, third-party integration, a debug curl ?token=). Do NOT reinstate the old filter verbatim - it scrubbed 'token=' specifically; the useful version scrubs any token/access_token/id_token-shaped query param, since the next regression won't reuse the same name. PROCESS NOTE for Jose: security reviewed+signed off #63, and restoring this is an amendment to their own approved change - so it should NOT be security's to author (second pair of eyes on their own review). Assign to any other session, or accept author-reviews-own-amendment as a known tradeoff if nobody has capacity."
     },
     {
