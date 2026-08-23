@@ -1740,11 +1740,11 @@
     },
     {
       "id": "c152",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "J",
       "tag": "frontend",
       "area": "messages",
-      "title": "Socket reconnect backoff is too aggressive: ~1863 attempts in one hour (one per ~2s) against a permanently-failing prod",
+      "title": "IN PROGRESS Aug 23 - verifying the phantom-open hypothesis against real code before building, per the manager's instruction. Own hypothesis from the #67 review, refined by the manager into a card",
       "detail": "Observed (manager log count): braul's single client produced ~1863 /ws attempts in under an hour against a 4503-closing gateway - flat ~2s cadence. REFINED HYPOTHESIS (braul, to verify before building): the exponential backoff math already EXISTS (BASE*2^attempts capped at 30s) - the suspected bug is that ws.onopen resets reconnectAttempts to 0, and in the 4503 case accept() genuinely succeeds before the downstream subscribe failure closes the socket, so onopen fires on every attempt and resets the counter each cycle. If confirmed, the honest fix is narrower than 'add backoff': don't count an opened-then-immediately-torn-down connection as a success for backoff-reset purposes (e.g. only reset after the connection survives N seconds). Also still worth considering: repeated 4503 = infra-down, stop until next app foreground. Verify against real code first - neither the original framing nor this hypothesis is confirmed yet."
     },
     {
