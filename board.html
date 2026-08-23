@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1786864400799,
+  "updated": 1787528632513,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1749,11 +1749,11 @@
     },
     {
       "id": "c153",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "J",
       "tag": "infra",
       "area": "infra",
-      "title": "Editing/removing a post's photo via PATCH leaves the old permanent object orphaned forever",
+      "title": "IN PROGRESS - PATCH clear/replace orphans the old posts/ object. Building c153's option (b): a standalone reconciliation job (app.jobs.media_reconcile) that diffs posts/ objects against posts.media_urls and deletes only unreferenced objects older than a 24h safety threshold, DRY-RUN by default (--delete to act). Manager decided the scope: the runtime SA's tmp/-only delete condition is NOT widened - the job runs under a separate SA with its own posts/-conditioned grant, so c132's published-photo immutability for the API identity is kept intact.",
       "detail": "Follow-on from c132 (manager confirmed follow-on, not in scope there). c132's tmp-then-move design fixes orphans from uploads that never became a post, but a DIFFERENT orphan source is untouched: PATCH /chapters/{id}/posts/{id} with media_object_names=[] (clearing a photo) or a new upload (replacing one) leaves the OLD permanent posts/ object with nothing referencing it and no lifecycle rule ever cleaning it up (only tmp/ has an age-based rule, deliberately - see c132's finalize_media_object docstring for why an age rule on posts/ would eat real photos). IMPORTANT FOR WHOEVER PICKS THIS UP: any design here must first re-decide the delete-scope question c132 settled - the service account's delete grant is IAM-conditioned to tmp/ ONLY, specifically so no bug or compromised route can ever delete a published photo. Cleaning up a REPLACED/REMOVED permanent object means either (a) widening the delete grant to cover posts/ under some narrower condition (e.g. only objects this route itself just detached, if that's expressible), which trades away some of that immutability guarantee, or (b) a different mechanism entirely (e.g. a periodic reconciliation job with its own, separately-scoped delete permission, diffing posts/ objects against what posts.media_urls actually reference - same shape as c132's card's own option (b) that lost to tmp-then-move for the upload case, but may be the right one here since posts/ objects are not supposed to be provisional the way tmp/ ones are). Do not just widen the tmp/ IAM condition to cover posts/ without weighing that tradeoff explicitly - c132 was built the way it was specifically to avoid that."
     }
   ],
