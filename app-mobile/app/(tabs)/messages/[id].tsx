@@ -40,12 +40,23 @@ export default function ThreadScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [conversation, setConversation] = useState<ConversationOut | null>(null);
   const [messages, setMessages] = useState<MessageOut[]>([]);
-  // True once this screen has genuinely been "open" before, so a LATER "open"
-  // is a real reconnect and not the first connection completing.
+  // True once this screen has observed (or started inside) an "open" socket,
+  // so a LATER "open" is a real reconnect and not the first connection
+  // completing.
   const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    wasOpenRef.current = false;
+    // NOT unconditionally false. onStatus() only adds a listener — it never
+    // replays the CURRENT status to a new subscriber (see socket.ts) — and
+    // since SessionProvider connects at sign-in, the socket is almost always
+    // already "open" by the time a user taps into a thread minutes later.
+    // Starting this false in that case meant the very next status event this
+    // screen ever saw (the first REAL reconnect after a real outage) was
+    // wrongly treated as "the initial connection completing" and skipped its
+    // catch-up fetch — exactly the outage it existed to catch up on. Reading
+    // the actual current status makes "was it already open when I mounted"
+    // the question, not "have I personally seen an open event yet".
+    wasOpenRef.current = chirpSocket.getStatus() === "open";
 
     const load = async () => {
       const conversations = await listConversations();
