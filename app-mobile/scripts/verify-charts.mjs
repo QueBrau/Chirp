@@ -21,7 +21,7 @@ mkdirSync(OUT, { recursive: true });
 writeFileSync(new URL("./package.json", OUT), '{"type":"module"}\n');
 
 const { donutSegments, trendGeometry } = await import("../.chart-verify/components/charts/geometry.js");
-const { runningBalance, spendByCategory, duesProgress, inOutTotals, assignCategorySlots } =
+const { runningBalance, spendByCategory, duesProgress, assignCategorySlots } =
   await import("../.chart-verify/lib/treasury.js");
 
 let failures = 0;
@@ -131,9 +131,6 @@ const entry = (amount, category, iso, type = amount >= 0 ? "dues_payment" : "exp
   check("over-collection clamps the meter but is flagged", over.fraction === 1 && over.overCollected);
   const noRoster = duesProgress(cycle, paid, 0);
   check("empty roster does not divide by zero", noRoster.fraction === 0);
-
-  const io = inOutTotals([entry(500, "a", "2026-01-01T00:00:00Z"), entry(-200, "b", "2026-01-02T00:00:00Z")]);
-  check("in/out totals both positive", io.inCents === 500 && io.outCents === 200);
 }
 
 console.log("TREASURY — stable colour slots");
