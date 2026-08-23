@@ -144,17 +144,6 @@ export function duesProgress(
   };
 }
 
-/** Totals for the in/out summary beside the trend. Both returned positive. */
-export function inOutTotals(entries: LedgerEntryOut[]): { inCents: number; outCents: number } {
-  let inCents = 0;
-  let outCents = 0;
-  for (const entry of entries) {
-    if (entry.amount_cents >= 0) inCents += entry.amount_cents;
-    else outCents += Math.abs(entry.amount_cents);
-  }
-  return { inCents, outCents };
-}
-
 /**
  * Stable colour-slot per category label.
  *
