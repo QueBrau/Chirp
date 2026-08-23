@@ -68,6 +68,10 @@ class _FakeBucket:
             from google.api_core.exceptions import NotFound
 
             raise NotFound("simulated missing tmp object")
+        if self._captured.get("copy_should_403"):
+            from google.api_core.exceptions import Forbidden
+
+            raise Forbidden("simulated destination delete-permission requirement")
         self._captured.setdefault("copy_blob_calls", []).append(
             {"source": blob.name, "new_name": new_name, "kwargs": kwargs}
         )
@@ -124,12 +128,15 @@ async def test_own_tmp_object_is_moved_and_the_permanent_url_is_stored(
     assert media_urls == [f"https://storage.googleapis.com/{TEST_BUCKET}/posts/{setup.member.id}/abc123.jpg"]
 
     # the move actually happened: copy from the tmp path to the permanent one, with
-    # preserve_acl=False (required against a uniform-bucket-access bucket), then the
-    # tmp source was deleted.
+    # preserve_acl=False (uniform-bucket-access) and if_generation_match=0 (asserts the
+    # destination doesn't exist, which only requires create - an unconditional copy
+    # would need delete on posts/, which the service account deliberately lacks; found
+    # live against the real bucket, not by any fake), then the tmp source was deleted.
     [call] = captured["copy_blob_calls"]
     assert call["source"] == tmp_name
     assert call["new_name"] == f"posts/{setup.member.id}/abc123.jpg"
     assert call["kwargs"]["preserve_acl"] is False
+    assert call["kwargs"]["if_generation_match"] == 0
     assert captured["deleted"] == [tmp_name]
 
 
@@ -265,6 +272,26 @@ async def test_referencing_a_tmp_object_that_does_not_exist_is_a_400(
     )
     assert created.status_code == 400, created.text
     assert created.json()["detail"] == "media_upload_not_found"
+
+
+async def test_an_unexpected_copy_failure_is_a_clean_502_not_a_bare_500(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The manager's real-bucket E2E hit exactly this as an unhandled exception before
+    this catch existed - GCS refused an unconditional copy_blob (403, needs delete on
+    the destination) since the fix (if_generation_match=0) hadn't landed yet. Any
+    non-NotFound copy failure must surface as a clean, specific error, not a 500."""
+    _configure_bucket(monkeypatch)
+    _install_fake_gcs(monkeypatch, {"copy_should_403": True})
+    setup = await make_chapter_with("member")
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/posts",
+        json={"body": "x", "media_object_names": [f"tmp/{setup.member.id}/abc123.jpg"]},
+        headers=setup.member.headers,
+    )
+    assert created.status_code == 502, created.text
+    assert created.json()["detail"] == "media_finalize_failed"
 
 
 async def test_a_failed_tmp_delete_after_a_successful_copy_does_not_fail_the_post(
