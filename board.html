@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787529064450,
+  "updated": 1787529333933,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1731,11 +1731,11 @@
     },
     {
       "id": "c151",
-      "col": "progress",
+      "col": "done",
       "owner": "jose",
       "tag": "backend",
       "area": "orgs",
-      "title": "upsert_attendance accepts entries for ANY user_id - PR #78 OPEN, awaiting manager review: one membership SELECT vs active memberships before the upsert, 422 naming bad ids; 8 tests (5 confirmed failing pre-fix), full suite 357 passed 3 skipped",
+      "title": "DONE Aug 23 - c151 merged as f3f7bfe (#78, squash). One membership SELECT before the upsert; whole-sheet 422 naming offending ids. 8 tests incl mixed-batch zero-write proven via API read-back; revert-and-rerun showed 5 fail pre-fix. CI green on PG16 (357 passed), manager-verified diff. Not yet deployed - rides the next batched redeploy",
       "detail": "Found during the manager's #69 review; security then confirmed both halves independently AND killed their own sharper reading (recorded here so nobody re-derives it: attendance CSV joining users.display_name is NOT a cross-chapter disclosure, because FeedPostOut already exposes author display names to any campus reader - no new information is gained). What actually remains, lead with the records half: (1) RECORDS INTEGRITY - fabricated rows for non-members pollute the chapter's attendance record and CSV export, which officers rely on for dues standing and good-standing decisions; 'this person attended' should not be assertable about a non-member. (2) BAD ERROR PATH - a nonexistent user_id hits the users FK and 500s the whole sheet instead of 422ing. Fix shape (c149's spirit): ONE membership SELECT validating all entries[].user_id against active memberships of the meeting's chapter before the upsert; 422 naming the bad ids closes both. Small ticket. Gap predates c149; no authorization regression there."
     },
     {
@@ -1759,8 +1759,8 @@
     {
       "id": "c154",
       "col": "backlog",
-      "title": "HANDOFF.md is stale relative to the board - header still says Aug 16 state (prod 00013/alembic 0011, 'PR #21 waiting on Jose', 'next free migration 0016') while prod is 00027-hwf and merged PRs run to #77",
-      "owner": "",
+      "title": "HANDOFF.md is stale relative to the board - header still says Aug 16 state (prod 00013/alembic 0011, 'PR #21 waiting on Jose', 'next free migration 0016') while prod is 00027-hwf and merged PRs run to #77 | ASSIGNED to braul 2.0 Aug 23",
+      "owner": "jose",
       "tag": "process",
       "area": "process",
       "detail": "Spotted by security 2.0 during warm-up Aug 23. Whoever picks up a doc-touching card should treat HANDOFF.md as stale relative to board.html until this closes. Refresh from the board JSON + git log, and verify prod rev/alembic head against the live systems (manager runs the live checks - prod is worker-off-limits) before writing numbers down. Small card, but numbers in it get copied into briefs, so wrong is worse than missing."
