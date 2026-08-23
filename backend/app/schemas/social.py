@@ -19,7 +19,10 @@ class _Schema(BaseModel):
 
 class PostCreate(_Schema):
     body: str = Field(min_length=1)
-    media_urls: list[str] | None = None
+    # tmp/ object_name(s) from POST /media/upload-url (c132) - NOT a url. The route
+    # moves the referenced tmp/ object to its permanent location and assigns the
+    # resulting url itself; media_urls is never accepted as client input anywhere.
+    media_object_names: list[str] | None = None
     # Author-chosen at compose time; defaults to 'org' so a client that omits this
     # field can never accidentally broadcast a chapter post campus-wide (board
     # Decisions log, Aug 14).
@@ -39,14 +42,14 @@ class CampusPostCreate(_Schema):
     """
 
     body: str = Field(min_length=1)
-    media_urls: list[str] | None = None
+    media_object_names: list[str] | None = None  # see PostCreate.media_object_names
     post_type: PostType = "text"
     duration_sec: int | None = None  # video posts only
 
 
 class PostUpdate(_Schema):
     body: str | None = None
-    media_urls: list[str] | None = None
+    media_object_names: list[str] | None = None  # see PostCreate.media_object_names
 
 
 class PostOut(_Schema):

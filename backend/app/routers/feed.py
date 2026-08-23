@@ -5,6 +5,7 @@ or 'campus' (also surfaces on GET /campuses/{id}/feed). Chosen by the author at
 compose time (PostCreate.audience), defaulting to 'org' — see board Decisions log,
 Aug 14. "For You" is a ranking over the same campus posts, not a third value.
 """
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -35,9 +36,55 @@ from app.schemas.social import (
     PostOut,
     PostUpdate,
 )
-from app.services.storage_service import validate_media_urls
+from app.services.storage_service import (
+    finalize_media_object,
+    validate_media_object_names,
+    validate_media_urls,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["feed"])
+
+
+def _finalize_media(user_id: uuid.UUID, media_object_names: list[str] | None) -> list[str]:
+    """Validate + move every tmp/ reference to its permanent posts/ location (c132).
+
+    Returns the resulting permanent public urls to store on the post - [] for none.
+    Re-validated by validate_media_urls() as the defensive invariant on what this
+    function itself just built (see that function's docstring), before the caller ever
+    writes the result to a post row.
+    """
+    validate_media_object_names(str(user_id), media_object_names)
+    if not media_object_names:
+        return []
+    urls = [finalize_media_object(str(user_id), name) for name in media_object_names]
+    validate_media_urls(urls)
+    return urls
+
+
+async def _commit_or_log_orphaned_media(session: AsyncSession, media_urls: list[str]) -> None:
+    """await session.commit(), logging any already-moved permanent media loudly before
+    re-raising if the commit fails.
+
+    c132: if media was moved to its permanent posts/ location above and THEN the DB
+    commit fails (rare — e.g. an IntegrityError), the resulting object cannot be
+    compensated away by deleting it - the service account's delete grant is
+    IAM-conditioned to tmp/ only, on purpose (see finalize_media_object()'s docstring).
+    The orphan is logged loudly instead, for a human to hand-delete if it ever actually
+    happens, rather than trading away posts/ immutability to auto-clean a rare failure.
+    """
+    try:
+        await session.commit()
+    except Exception:
+        for url in media_urls:
+            logger.error(
+                "post commit failed after media was already moved to permanent "
+                "storage url=%s - now an orphan with no automatic cleanup, needs "
+                "hand deletion",
+                url,
+            )
+        raise
 
 
 def _post_counts_select(caller_id: uuid.UUID):
@@ -256,20 +303,20 @@ async def create_post(
         raise not_found("chapter_not_found")
     if body.audience == "campus":
         require_verified_campus(user, chapter.campus_id)
-    validate_media_urls(body.media_urls)
+    media_urls = _finalize_media(membership.user_id, body.media_object_names)
 
     post = models.Post(
         chapter_id=chapter_id,
         campus_id=chapter.campus_id,
         author_id=membership.user_id,
         body=body.body,
-        media_urls=body.media_urls,
+        media_urls=media_urls or None,
         audience=body.audience,
         post_type=body.post_type,
         duration_sec=body.duration_sec,
     )
     session.add(post)
-    await session.commit()
+    await _commit_or_log_orphaned_media(session, media_urls)
     await session.refresh(post)
     return PostOut.model_validate(post)
 
@@ -302,19 +349,19 @@ async def create_campus_post(
     campus-wide write by someone with no org at all - so it must not keep the
     weaker `user.campus_id == campus_id` check this branch was written against.
     """
-    validate_media_urls(body.media_urls)
+    media_urls = _finalize_media(user.id, body.media_object_names)
     post = models.Post(
         chapter_id=None,
         campus_id=campus_id,
         author_id=user.id,
         body=body.body,
-        media_urls=body.media_urls,
+        media_urls=media_urls or None,
         audience="campus",
         post_type=body.post_type,
         duration_sec=body.duration_sec,
     )
     session.add(post)
-    await session.commit()
+    await _commit_or_log_orphaned_media(session, media_urls)
     await session.refresh(post)
     return PostOut.model_validate(post)
 
@@ -385,10 +432,11 @@ async def update_post(
         raise forbidden("not_author")
     if body.body is not None:
         post.body = body.body
-    if body.media_urls is not None:
-        validate_media_urls(body.media_urls)
-        post.media_urls = body.media_urls
-    await session.commit()
+    media_urls: list[str] = []
+    if body.media_object_names is not None:
+        media_urls = _finalize_media(membership.user_id, body.media_object_names)
+        post.media_urls = media_urls or None
+    await _commit_or_log_orphaned_media(session, media_urls)
     return PostOut.model_validate(post)
 
 

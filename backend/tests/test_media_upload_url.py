@@ -142,7 +142,7 @@ async def test_exactly_10mb_is_allowed(
     assert response.status_code == 201, response.text
 
 
-async def test_a_valid_request_returns_the_signed_and_public_urls(
+async def test_a_valid_request_returns_the_signed_and_preview_urls(
     client: AsyncClient,
     make_user: MakeUser,
     monkeypatch: pytest.MonkeyPatch,
@@ -161,10 +161,13 @@ async def test_a_valid_request_returns_the_signed_and_public_urls(
     body = response.json()
 
     assert body["upload_url"] == "https://storage.googleapis.com/fake-bucket/signed?sig=abc"
-    # public_url is computed directly, never round-tripped through the (faked) signer -
-    # it must be the deterministic storage.googleapis.com form the docstring promises.
-    assert body["public_url"].startswith("https://storage.googleapis.com/chirps-prod-media/posts/")
-    assert body["public_url"].endswith(".png")
+    # preview_url is computed directly, never round-tripped through the (faked) signer -
+    # it must be the deterministic storage.googleapis.com form, pointed at tmp/ (c132) -
+    # this is NOT what a post's media_urls ends up holding; only a moved object is.
+    assert body["preview_url"].startswith("https://storage.googleapis.com/chirps-prod-media/tmp/")
+    assert body["preview_url"].endswith(".png")
+    assert body["object_name"].startswith("tmp/")
+    assert body["object_name"] in body["preview_url"]
     assert body["expires_in_seconds"] == 15 * 60
 
     # The route actually asked GCS to sign a PUT with the right content-type and the
@@ -186,7 +189,7 @@ async def test_two_uploads_from_the_same_user_get_different_object_names(
     _install_fake_gcs(monkeypatch, {})
     user = await make_user()
 
-    urls = []
+    names = []
     for _ in range(2):
         response = await client.post(
             "/media/upload-url",
@@ -194,6 +197,6 @@ async def test_two_uploads_from_the_same_user_get_different_object_names(
             headers=user.headers,
         )
         assert response.status_code == 201, response.text
-        urls.append(response.json()["public_url"])
+        names.append(response.json()["object_name"])
 
-    assert urls[0] != urls[1]
+    assert names[0] != names[1]
