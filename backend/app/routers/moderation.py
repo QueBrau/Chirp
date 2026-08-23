@@ -95,6 +95,32 @@ async def _resolve_report_campus_id(
     return reporter.campus_id
 
 
+def _content_campus_tier(source_post: models.Post | None) -> bool:
+    """Whether a piece of content is campus-wide, given its (possibly unresolvable)
+    source post, for c108's tier (c139/c142/c147).
+
+    Board card c147 (security's #66): factored out so BOTH call sites — reports
+    (_report_campus_content, below) and admin removal (remove_content) — share one
+    fail-closed default instead of two independently-hand-rolled ones that could
+    silently disagree. They used to: remove_content defaulted to False when a
+    comment's parent post could not be resolved, the OPPOSITE of this function's
+    True. That was safe only by accident of evaluation order — campus_id is also
+    None whenever source_post is, and _require_eboard_for_campus 403s on campus_id
+    being None BEFORE campus_content is ever read, so the wrong default was never
+    actually reachable. It would have become reachable the moment anyone changed
+    that ordering, with nothing here to say the two defaults were coupled.
+
+    A post or comment's tier follows its own `audience` column, not its type — a
+    comment has none of its own, so it inherits its parent post's. An unresolvable
+    source has no chapter-content justification to point to, so it defaults to the
+    STRICTER campus tier rather than assuming it is safe to relax — the burden is
+    on positively proving chapter content, not on disproving campus content.
+    """
+    if source_post is None:
+        return True
+    return source_post.audience == "campus"
+
+
 async def _report_campus_content(
     session: AsyncSession, target_type: str, target_id: uuid.UUID | None
 ) -> bool:
@@ -108,26 +134,19 @@ async def _report_campus_content(
     a campus post requires a verified .edu. Removing/dismissing must never be the
     weaker side of that pair.
 
-    Yaks are campus-wide by definition. A post or comment's tier follows its own
-    `audience` column, not its type — a comment has none of its own, so it
-    inherits its parent post's. Anything else (message_forward, user, or an
-    unresolvable/deleted target) has no chapter-content justification to point
-    to, so it defaults to the STRICTER campus tier rather than assuming it is
-    safe to relax — the burden is on positively proving chapter content, not on
-    disproving campus content.
+    Yaks are campus-wide by definition; anything else defers to _content_campus_tier,
+    which is where the unresolvable-target default actually lives (c147).
     """
     if target_type == "yak":
         return True
     if target_type == "post" and target_id is not None:
         post = await session.get(models.Post, target_id)
-        if post is not None:
-            return post.audience == "campus"
-    elif target_type == "comment" and target_id is not None:
+        return _content_campus_tier(post)
+    if target_type == "comment" and target_id is not None:
         comment = await session.get(models.PostComment, target_id)
         if comment is not None:
             post = await session.get(models.Post, comment.post_id)
-            if post is not None:
-                return post.audience == "campus"
+            return _content_campus_tier(post)
     return True
 
 
@@ -502,8 +521,11 @@ async def remove_content(
     #     for the reports path, for the identical reason.
     #
     # A comment carries neither column itself, so it inherits its parent post's.
+    # campus_content used to be hand-rolled here with the wrong default on an
+    # unresolvable source post - see _content_campus_tier's docstring (c147) for why
+    # that was silent and how it agrees with _report_campus_content now.
     campus_id = source_post.campus_id if source_post is not None else None
-    campus_content = source_post is not None and source_post.audience == "campus"
+    campus_content = _content_campus_tier(source_post)
     await _require_eboard_for_campus(session, moderator, campus_id, campus_content=campus_content)
 
     target.deleted_at = datetime.now(timezone.utc)
