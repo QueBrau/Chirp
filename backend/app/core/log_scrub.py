@@ -15,10 +15,15 @@ it's logged, auth mechanism notwithstanding.
 
 WHY THIS IS NOT THE OLD _RedactWsTokenFilter WITH A NEW NAME: that filter matched
 `token=` literally, because that was the one param the WS handshake actually used.
-The next regression will not necessarily reuse that name — `access_token` and
-`id_token` are exactly as likely, and "the filter only catches the param name we
-already fixed" is not a tripwire, it's a false sense of coverage. This one matches
-the SHAPE (anything ending in `token=`) rather than one literal string.
+The next regression will not necessarily reuse that name. THE FIRST VERSION OF THIS
+FILE MADE THE SAME MISTAKE ONE LEVEL UP: it listed `token`, `access_token` and
+`id_token` as three literal alternatives, which is still a fixed list — a future
+`refresh_token=`, `auth_token=`, `session_token=` or `api_token=` would have sailed
+through unscrubbed, and `refresh_token` is arguably the worst one to miss (long-lived,
+unlike a self-expiring ID token). "The filter only catches the param names we already
+thought of" is not a tripwire, it is a false sense of coverage, regardless of whether
+the list has one entry or three. This version matches the SHAPE — any query param
+whose name ends in `token=` — rather than any enumeration of literals.
 
 SCOPE, deliberately held: this attaches to `uvicorn.access` only, the same target
 the original used, because that is specifically the channel that writes a request's
@@ -32,20 +37,26 @@ from __future__ import annotations
 import logging
 import re
 
-# Matches ?token=, &access_token=, &id_token=, case-insensitive on the param name —
-# query param casing is not guaranteed, and there is no cost to covering it. The
-# value is greedy up to the next & or whitespace, same boundary the original used.
-_CREDENTIAL_QS_RE = re.compile(r"([?&](?:access_)?(?:id_)?token=)[^&\s]+", re.IGNORECASE)
+# Matches [?&]<anything>token=<value> — token, access_token, id_token,
+# refresh_token, auth_token, whatever the next one is named — case-insensitive on
+# the param name, since query param casing is not guaranteed and there is no cost
+# to covering it. The value is greedy up to the next & or whitespace, same
+# boundary the original used. Deliberately NOT an enumerated list of prefixes:
+# that was this file's own first draft, and it repeated the exact mistake it set
+# out to fix one level up (see the module docstring).
+_CREDENTIAL_QS_RE = re.compile(r"([?&][a-z0-9_]*token=)[^&\s]+", re.IGNORECASE)
 
-# Every param this filter targets contains "token" as a substring (token,
-# access_token, id_token all do), so this is a cheap, always-safe fast path: a log
-# line with none of the three can never match the regex, and skips the sub() call
-# entirely on the overwhelming majority of ordinary request lines.
+# This hint is deliberately as broad as the regex's own suffix match, not
+# narrower — "token=" appearing anywhere is necessary for the regex to match
+# ANY param this filter targets, since every one of them ends in that literal.
+# A log line with no "token=" substring at all can never match, so this is a
+# cheap, always-safe fast path that skips the sub() call on the overwhelming
+# majority of ordinary request lines.
 _FAST_PATH_HINT = "token="
 
 
 class _RedactCredentialQueryParamsFilter(logging.Filter):
-    """Redacts token/access_token/id_token query params from a log record in place.
+    """Redacts any *token=-shaped query param from a log record in place.
 
     Mirrors the shape both of uvicorn's access-log call (args tuple) and of a plain
     string message, since either can appear depending on how a record was built.

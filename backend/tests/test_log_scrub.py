@@ -47,14 +47,18 @@ def _emit_and_capture(caplog: pytest.LogCaptureFixture, msg: str, *args: str) ->
 
 @pytest.mark.parametrize(
     "param",
-    ["token", "access_token", "id_token"],
-    ids=["token", "access_token", "id_token"],
+    ["token", "access_token", "id_token", "refresh_token", "weird_token"],
+    ids=["token", "access_token", "id_token", "refresh_token", "weird_token"],
 )
 def test_credential_query_params_are_redacted_in_the_args_tuple(
     caplog: pytest.LogCaptureFixture, param: str
 ) -> None:
-    """THE POINT OF c146: the next regression will not necessarily be named `token`.
-    access_token and id_token must be caught too, or this is coverage theater."""
+    """THE POINT OF c146: the next regression will not necessarily be named `token`,
+    or even pick from a list we thought to enumerate. access_token/id_token cover
+    the params this codebase actually uses today; refresh_token (a longer-lived
+    credential than either, so the worse one to miss) and weird_token (nothing
+    real, chosen specifically because nobody would ever hardcode it) both prove
+    this matches the SHAPE - any param ending in token= - not a guess at names."""
     url = f'GET /ws?{param}=super-secret-value HTTP/1.1" 200'
     emitted = _emit_and_capture(caplog, '%s - "%s', "127.0.0.1:0", url)
 
