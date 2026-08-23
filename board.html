@@ -224,7 +224,8 @@
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
-<script id="board-data" type="application/json">{
+<script id="board-data" type="application/json">
+{
   "updated": 1786864400799,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
@@ -1612,14 +1613,14 @@
       "detail": "Manager ran the real-bucket verification after c70 (#58, 9c749ac) merged and deployed (window 00023). Backend signs the PUT with X-Goog-Content-Length-Range as a SIGNED header (correct - that is the server-side size enforcement), which means GCS then REQUIRES that exact header on the PUT request itself. app-mobile/src/api/media.ts's uploadMediaBytes() never sent it. Reproduced precisely: PUT without the header -> 400 MalformedSecurityHeader ('Header was included in signedheaders, but not in the request', parameter x-goog-content-length-range); same PUT with the header added -> 200, and the public_url then served the bytes with a 200. Backend, signing, bucket, and public read are all proven working on prod - only the client's PUT call was missing the one header GCS was told to expect. Fix: uploadMediaBytes() adds the header, value derived from MAX_UPLOAD_BYTES (\"1,\" + MAX_UPLOAD_BYTES) rather than a second hardcoded 10485760, so it cannot drift from the cap if that ever changes. No test framework exists on app-mobile (grepped - no jest/vitest, no existing test/spec files) so this is verified by a real end-to-end PUT+GET against the live prod bucket, same method the manager used to find it, rather than a new mocked test harness introduced just for this one fix."
     },
     {
-        "id": "c136",
-        "col": "progress",
-        "owner": "J",
-        "tag": "frontend",
-        "area": "orgs",
-        "title": "IN PROGRESS - president.tsx route-level guard, matching moderation.tsx's EmptyState house pattern",
-        "detail": "Deep-linking a non-president member to president.tsx renders controls that all 403 server-side (update_member and update_chapter are MEMBERS_ADMIN-gated, verified chapters.py:90-94,186-189; roster read is member-visible anyway). No data or capability gained - but moderation.tsx:84-119 deliberately renders an EmptyState for exactly this deep-link case, and president.tsx should match the house pattern. Small ticket: same EmptyState guard, matching moderation.tsx's shape."
-      },
+      "id": "c136",
+      "col": "progress",
+      "owner": "J",
+      "tag": "frontend",
+      "area": "orgs",
+      "title": "IN PROGRESS - president.tsx route-level guard, matching moderation.tsx's EmptyState house pattern",
+      "detail": "Deep-linking a non-president member to president.tsx renders controls that all 403 server-side (update_member and update_chapter are MEMBERS_ADMIN-gated, verified chapters.py:90-94,186-189; roster read is member-visible anyway). No data or capability gained - but moderation.tsx:84-119 deliberately renders an EmptyState for exactly this deep-link case, and president.tsx should match the house pattern. Small ticket: same EmptyState guard, matching moderation.tsx's shape."
+    },
     {
       "id": "c140",
       "col": "backlog",
@@ -1693,14 +1694,14 @@
       "detail": "Security's framing (theirs, kept verbatim in intent): the removed _RedactWsTokenFilter is NOT a fallback for the subprotocol fix - that fix is complete. It's a TRIPWIRE for a different failure: any FUTURE client that regresses to a credential in a URL (stale build, third-party integration, a debug curl ?token=). Do NOT reinstate the old filter verbatim - it scrubbed 'token=' specifically; the useful version scrubs any token/access_token/id_token-shaped query param, since the next regression won't reuse the same name. PROCESS NOTE for Jose: security reviewed+signed off #63, and restoring this is an amendment to their own approved change - so it should NOT be security's to author (second pair of eyes on their own review). Assign to any other session, or accept author-reviews-own-amendment as a known tradeoff if nobody has capacity."
     },
     {
-        "id": "c147",
-        "col": "progress",
-        "owner": "J",
-        "tag": "security",
-        "area": "orgs",
-        "title": "PR #68 OPEN - remove_content's default fixed via a shared _content_campus_tier helper, both call sites now agree",
-        "detail": "Security's non-blocking note on #66: remove_content sets campus_content = source_post is not None and audience=='campus', i.e. FALSE when unresolvable - the opposite default from _report_campus_content's return True. Safe today only because the campus_id-is-None check fires first inside _require_eboard_for_campus; if anyone ever relaxes that check, this silently becomes fail-open. One-line fix: make both paths default True so safety doesn't depend on evaluation order. Tiny, next batch."
-      },
+      "id": "c147",
+      "col": "progress",
+      "owner": "J",
+      "tag": "security",
+      "area": "orgs",
+      "title": "PR #68 OPEN - remove_content's default fixed via a shared _content_campus_tier helper, both call sites now agree",
+      "detail": "Security's non-blocking note on #66: remove_content sets campus_content = source_post is not None and audience=='campus', i.e. FALSE when unresolvable - the opposite default from _report_campus_content's return True. Safe today only because the campus_id-is-None check fires first inside _require_eboard_for_campus; if anyone ever relaxes that check, this silently becomes fail-open. One-line fix: make both paths default True so safety doesn't depend on evaluation order. Tiny, next batch."
+    },
     {
       "id": "c148",
       "col": "backlog",
@@ -1712,21 +1713,30 @@
     },
     {
       "id": "c149",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "perf",
       "area": "backend",
-      "title": "CLAIMED - attendance upsert is an N+1 with an unbounded payload: one query per entry, and `entries` had no max_length so the query count was caller-chosen.",
+      "title": "DONE Aug 23 - MERGED #69. Attendance upsert is ONE statement (was 80 round trips for an 80-member roster), entries bounded at 500, intra-statement duplicate collapse (Postgres 'cannot affect row a second time' gotcha, sabotage-verified). Manager-verified no authorization regression: the removed per-entry get fetched attendance, not membership.",
       "detail": "Found in the 7-day security pass. routers/meetings.py upsert_attendance loops body.entries and issues `await session.get(MeetingAttendance, (meeting.id, entry.user_id))` per entry - an 80-member chapter costs 80 sequential round trips where one bulk read plus one INSERT ... ON CONFLICT would do. schemas/meetings.py MeetingAttendanceUpdate.entries was `list[MeetingAttendanceItem]` with no bound, so a secretary/president could choose the query count outright. Gated to MINUTES_ADMIN so it is a privileged-role self-inflicted DoS rather than an anonymous one, and the loop PRE-DATES the 7-day window (verified against 9bfc532) - reported for the perf question, not as a regression. Fix: bound entries, replace the loop with a single upsert."
     },
     {
       "id": "c150",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "cleanup",
       "area": "mobile",
-      "title": "CLAIMED - inOutTotals is exported and tested but rendered by nothing; a function kept alive only by its own test reads as coverage.",
+      "title": "DONE Aug 23 - MERGED #71. inOutTotals deleted, not wired up: the summary element it imagined was never designed. verify:charts + verify:contract both still ALL PASS.",
       "detail": "Found in the 7-day security pass dead-code sweep. app-mobile/src/lib/treasury.ts:148 exports inOutTotals; the only references anywhere in app-mobile are scripts/verify-charts.mjs:24 and :135. No screen imports it. Either wire it into the treasurer dashboard or delete it. Noted at the time: MAX_CATEGORY_SLICES is also exported but IS used as a default parameter inside its own module, so that one is cosmetic and deliberately not in scope here."
+    },
+    {
+      "id": "c151",
+      "col": "backlog",
+      "owner": "",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "upsert_attendance accepts entries for ANY user_id - a non-member gets an attendance row silently; nonexistent user FK-500s the sheet",
+      "detail": "Found during the manager's #69 review while checking whether the removed per-entry session.get had been doing membership validation - it never was (it fetched the attendance row itself), so this gap PREDATES c149 and is unchanged by it. A MINUTES_ADMIN caller can write attendance rows for real users who aren't chapter members (data-integrity wart, small abuse surface given the role gate), and a nonexistent user_id presumably hits the users FK and 500s the whole sheet instead of 400ing cleanly. Fix shape: validate entry user_ids against chapter membership in the same single statement spirit as c149 (one membership SELECT, reject with a 400 naming the bad ids). Small ticket."
     }
   ],
   "decisions": [
@@ -1822,7 +1832,8 @@
     "Aug 22 - INCIDENT + fix: item 7 (WS ?token= in logs) went dormant->LIVE when c63's wiring opened the first real prod sockets against the still-unmerged old path. 15 entries carry a real Firebase token for calpules1@icloud.com; braul's own drives were unauthenticated (bare URL) so the real credential is NOT his - source is an open question for Jose. #63 merged urgently on security's sign-off (subprotocol auth, headers unlogged) to stop recurrence. Log purge + account identity to Jose (c145). Credential-scrubbing tripwire carded (c146), explicitly NOT for security to author since they approved #63.",
     "Aug 22 - c142 merged on security's sign-off: ALL 8 security-pass findings now closed. Incident c145 downgraded: token-bearing requests were all HeadlessChrome (our own QA automation), not a wild client. delete_post audience-vs-chapter-authority tension carded as policy for Jose (c148), remove_content default-agreement hardening carded (c147)."
   ]
-}</script>
+}
+</script>
 <script>
 (function () {
   var DATA = document.getElementById('board-data');
