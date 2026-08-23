@@ -1731,11 +1731,11 @@
     },
     {
       "id": "c151",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "jose",
       "tag": "backend",
       "area": "orgs",
-      "title": "upsert_attendance accepts entries for ANY user_id - a non-member gets an attendance row silently; nonexistent user FK-500s the sheet",
+      "title": "upsert_attendance accepts entries for ANY user_id - IN PROGRESS: one membership SELECT validating entries[].user_id against active memberships before the upsert, 422 naming bad ids; branch jose/c151-attendance-membership-check",
       "detail": "Found during the manager's #69 review; security then confirmed both halves independently AND killed their own sharper reading (recorded here so nobody re-derives it: attendance CSV joining users.display_name is NOT a cross-chapter disclosure, because FeedPostOut already exposes author display names to any campus reader - no new information is gained). What actually remains, lead with the records half: (1) RECORDS INTEGRITY - fabricated rows for non-members pollute the chapter's attendance record and CSV export, which officers rely on for dues standing and good-standing decisions; 'this person attended' should not be assertable about a non-member. (2) BAD ERROR PATH - a nonexistent user_id hits the users FK and 500s the whole sheet instead of 422ing. Fix shape (c149's spirit): ONE membership SELECT validating all entries[].user_id against active memberships of the meeting's chapter before the upsert; 422 naming the bad ids closes both. Small ticket. Gap predates c149; no authorization regression there."
     },
     {
