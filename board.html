@@ -1291,11 +1291,11 @@
     },
     {
       "id": "c82",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "jose",
       "tag": "m9",
       "area": "orgs",
-      "title": "SECRETARY FOLLOW-ON: ATTENDANCE IS READABLE ONLY ONE MEETING AT A TIME, AND A MISTAKEN",
+      "title": "SECRETARY FOLLOW-ON: ATTENDANCE IS READABLE ONLY ONE MEETING AT A TIME, AND A MISTAKEN MEETING IS PERMANENT - IN PROGRESS: per-member attendance aggregate endpoint (one windowed query, MINUTES_ADMIN) plus the deleteMeeting client half; branch jose/c82-attendance-summary",
       "detail": "MEETING IS PERMANENT. Again not a re-card of c12 \u2014 what shipped is real: secretary.tsx does createMeeting, updateMeeting (minutes_md), getAttendance, putAttendance and exportMeetingsCsv, and the sheet already carries present/absent/excused. TWO GAPS. (1) There is no per-member view, so the question a secretary is actually asked \u2014 how many has this person missed this semester, who is about to owe a fine \u2014 cannot be answered without opening every meeting in turn. The client could brute-force it with listMeetings plus getAttendance per meeting, which is an N+1 over a semester of chapter meetings and the wrong shape; the honest fix is a per-member aggregate on the server, so card the endpoint before the screen. (2) DELETE /chapters/{id}/meetings/{meeting_id} exists and is require_role(secretary, president) in meetings.py, but src/api/meetings.ts has no deleteMeeting function at all \u2014 a meeting logged on the wrong date can be edited forever but never removed, and it keeps showing up in the CSV export the chapter hands to nationals. That half is a client function plus a confirm, nothing more."
     },
     {
