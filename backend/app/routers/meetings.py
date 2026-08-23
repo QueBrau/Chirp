@@ -3,6 +3,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -197,18 +198,34 @@ async def upsert_attendance(
 ) -> list[MeetingAttendanceOut]:
     """Bulk-upsert attendance statuses for a meeting; secretary/president only."""
     meeting = await _get_chapter_meeting(session, chapter_id, meeting_id)
-    for entry in body.entries:
-        existing = await session.get(
-            models.MeetingAttendance, (meeting.id, entry.user_id)
-        )
-        if existing is not None:
-            existing.status = entry.status
-        else:
-            session.add(
-                models.MeetingAttendance(
-                    meeting_id=meeting.id, user_id=entry.user_id, status=entry.status
-                )
+
+    # ONE statement, not one per entry (board c149). This used to `session.get` each
+    # (meeting_id, user_id) in a loop and branch on the result, so marking an
+    # 80-member roster cost 80 sequential round trips before the commit - latency that
+    # scales with chapter size, on the screen a secretary uses during a meeting.
+    #
+    # ON CONFLICT DO UPDATE also removes the read-then-branch entirely: the database
+    # decides insert-vs-update atomically, so two secretaries submitting the same sheet
+    # at once cannot race between the SELECT and the INSERT the way the old shape
+    # could. Same reasoning as c51, c105, c91 and c114 - let the constraint arbitrate.
+    if body.entries:
+        # Last write wins within a single payload: a sheet listing the same member
+        # twice is the client's bug, but ON CONFLICT cannot see a row twice in one
+        # statement, so collapse duplicates here rather than fail the whole request.
+        collapsed = {entry.user_id: entry.status for entry in body.entries}
+        await session.execute(
+            pg_insert(models.MeetingAttendance)
+            .values(
+                [
+                    {"meeting_id": meeting.id, "user_id": user_id, "status": status}
+                    for user_id, status in collapsed.items()
+                ]
             )
+            .on_conflict_do_update(
+                index_elements=["meeting_id", "user_id"],
+                set_={"status": pg_insert(models.MeetingAttendance).excluded.status},
+            )
+        )
     await session.commit()
     result = await session.execute(
         select(models.MeetingAttendance)

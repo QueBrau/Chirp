@@ -49,7 +49,10 @@ class MeetingAttendanceItem(_Schema):
 class MeetingAttendanceUpdate(_Schema):
     """Full attendance sheet for one meeting — PUT replaces existing records."""
 
-    entries: list[MeetingAttendanceItem] = Field(default_factory=list)
+    # Bounded because the route writes one row per entry (board c149): an unbounded
+    # list lets the caller choose how much work the request costs. 500 is far above
+    # any real chapter roster and far below a payload that could tie up a connection.
+    entries: list[MeetingAttendanceItem] = Field(default_factory=list, max_length=500)
 
 
 class MeetingAttendanceOut(_Schema):
