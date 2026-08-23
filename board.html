@@ -1613,14 +1613,14 @@
       "detail": "Manager ran the real-bucket verification after c70 (#58, 9c749ac) merged and deployed (window 00023). Backend signs the PUT with X-Goog-Content-Length-Range as a SIGNED header (correct - that is the server-side size enforcement), which means GCS then REQUIRES that exact header on the PUT request itself. app-mobile/src/api/media.ts's uploadMediaBytes() never sent it. Reproduced precisely: PUT without the header -> 400 MalformedSecurityHeader ('Header was included in signedheaders, but not in the request', parameter x-goog-content-length-range); same PUT with the header added -> 200, and the public_url then served the bytes with a 200. Backend, signing, bucket, and public read are all proven working on prod - only the client's PUT call was missing the one header GCS was told to expect. Fix: uploadMediaBytes() adds the header, value derived from MAX_UPLOAD_BYTES (\"1,\" + MAX_UPLOAD_BYTES) rather than a second hardcoded 10485760, so it cannot drift from the cap if that ever changes. No test framework exists on app-mobile (grepped - no jest/vitest, no existing test/spec files) so this is verified by a real end-to-end PUT+GET against the live prod bucket, same method the manager used to find it, rather than a new mocked test harness introduced just for this one fix."
     },
     {
-      "id": "c136",
-      "col": "progress",
-      "owner": "J",
-      "tag": "frontend",
-      "area": "orgs",
-      "title": "IN PROGRESS - president.tsx route-level guard, matching moderation.tsx's EmptyState house pattern",
-      "detail": "Deep-linking a non-president member to president.tsx renders controls that all 403 server-side (update_member and update_chapter are MEMBERS_ADMIN-gated, verified chapters.py:90-94,186-189; roster read is member-visible anyway). No data or capability gained - but moderation.tsx:84-119 deliberately renders an EmptyState for exactly this deep-link case, and president.tsx should match the house pattern. Small ticket: same EmptyState guard, matching moderation.tsx's shape."
-    },
+        "id": "c136",
+        "col": "done",
+        "owner": "J",
+        "tag": "frontend",
+        "area": "orgs",
+        "title": "DONE Aug 23 - PR #72 open, all 4 checks green. Render-checked against real backend with real president + member QA accounts, both states screenshotted",
+        "detail": "Deep-linking a non-president member to president.tsx renders controls that all 403 server-side (update_member and update_chapter are MEMBERS_ADMIN-gated, verified chapters.py:90-94,186-189; roster read is member-visible anyway). No data or capability gained - but moderation.tsx:84-119 deliberately renders an EmptyState for exactly this deep-link case, and president.tsx should match the house pattern. Small ticket: same EmptyState guard, matching moderation.tsx's shape."
+      },
     {
       "id": "c140",
       "col": "backlog",
@@ -1694,14 +1694,14 @@
       "detail": "WIDENED Aug 22, court's review: the first build of this fix (PR #70, already generalized past the literal 'token=') still repeated the exact mistake it set out to fix, one level UP - the regex matched token/access_token/id_token as three enumerated literals while the module's own docstring claimed it matched 'the shape'. A future refresh_token= (arguably the worst one to miss, long-lived unlike a self-expiring ID token), auth_token=, session_token= or api_token= would have sailed through unscrubbed. Fixed to the regex the docstring already promised: any query param whose name ends in token=, case-insensitive - ([?&][a-z0-9_]*token=)[^&\\s]+. Added refresh_token and a nothing-real weird_token case to the test matrix; re-ran the revert-to-old-pattern proof and the failure count updated from 5/9 to 7/11 exactly as it should. Full suite re-verified. ORIGINAL CARD BELOW. Security's framing (theirs, kept verbatim in intent): the removed _RedactWsTokenFilter is NOT a fallback for the subprotocol fix - that fix is complete. It's a TRIPWIRE for a different failure: any FUTURE client that regresses to a credential in a URL (stale build, third-party integration, a debug curl ?token=). Do NOT reinstate the old filter verbatim - it scrubbed 'token=' specifically; the useful version scrubs any token/access_token/id_token-shaped query param, since the next regression won't reuse the same name. PROCESS NOTE for Jose: security reviewed+signed off #63, and restoring this is an amendment to their own approved change - so it should NOT be security's to author (second pair of eyes on their own review). Assign to any other session, or accept author-reviews-own-amendment as a known tradeoff if nobody has capacity."
     },
     {
-      "id": "c147",
-      "col": "progress",
-      "owner": "J",
-      "tag": "security",
-      "area": "orgs",
-      "title": "PR #68 OPEN - remove_content's default fixed via a shared _content_campus_tier helper, both call sites now agree",
-      "detail": "Security's non-blocking note on #66: remove_content sets campus_content = source_post is not None and audience=='campus', i.e. FALSE when unresolvable - the opposite default from _report_campus_content's return True. Safe today only because the campus_id-is-None check fires first inside _require_eboard_for_campus; if anyone ever relaxes that check, this silently becomes fail-open. One-line fix: make both paths default True so safety doesn't depend on evaluation order. Tiny, next batch."
-    },
+        "id": "c147",
+        "col": "done",
+        "owner": "J",
+        "tag": "security",
+        "area": "orgs",
+        "title": "DONE Aug 23 - PR #68 open, all 4 checks green. Shared _content_campus_tier helper, both defaults now agree",
+        "detail": "Security's non-blocking note on #66: remove_content sets campus_content = source_post is not None and audience=='campus', i.e. FALSE when unresolvable - the opposite default from _report_campus_content's return True. Safe today only because the campus_id-is-None check fires first inside _require_eboard_for_campus; if anyone ever relaxes that check, this silently becomes fail-open. One-line fix: make both paths default True so safety doesn't depend on evaluation order. Tiny, next batch."
+      },
     {
       "id": "c148",
       "col": "backlog",
