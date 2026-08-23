@@ -1,7 +1,7 @@
 """Secretary: meetings CRUD (minutes) and bulk attendance upsert."""
 import uuid
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -196,7 +196,13 @@ async def upsert_attendance(
     _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> list[MeetingAttendanceOut]:
-    """Bulk-upsert attendance statuses for a meeting; secretary/president only."""
+    """Bulk-upsert attendance statuses for a meeting; secretary/president only.
+
+    Every entry must name an active member of the chapter, or the whole sheet is
+    refused with a 422 naming the offending ids (board c151) - attendance is a record
+    officers act on, so "this person attended" must not be assertable about someone
+    who is not in the chapter.
+    """
     meeting = await _get_chapter_meeting(session, chapter_id, meeting_id)
 
     # ONE statement, not one per entry (board c149). This used to `session.get` each
@@ -213,6 +219,40 @@ async def upsert_attendance(
         # twice is the client's bug, but ON CONFLICT cannot see a row twice in one
         # statement, so collapse duplicates here rather than fail the whole request.
         collapsed = {entry.user_id: entry.status for entry in body.entries}
+
+        # Every entry must name an ACTIVE member of THIS chapter (board c151).
+        # _get_chapter_meeting above scopes the MEETING to the chapter, but nothing
+        # scoped the ENTRIES, so any user_id at all got a row. One SELECT closes both
+        # halves of that: a real-but-non-member id used to insert silently, fabricating
+        # attendance in the record that export_meetings_csv hands officers for dues and
+        # good-standing calls, and an id belonging to nobody reached the users FK and
+        # 500'd the entire sheet at commit instead of being refused.
+        #
+        # ONE statement for the whole sheet, deliberately not one per entry: c149
+        # rewrote this route to stop paying a round trip per member, and validating in
+        # a loop would hand that cost straight back. Index-backed by
+        # idx_memberships_chapter, which is partial on status = 'active'.
+        requested_ids = sorted(collapsed)
+        result = await session.execute(
+            select(models.Membership.user_id).where(
+                models.Membership.chapter_id == chapter_id,
+                models.Membership.status == "active",
+                models.Membership.user_id.in_(requested_ids),
+            )
+        )
+        active_member_ids = set(result.scalars().all())
+        not_members = [uid for uid in requested_ids if uid not in active_member_ids]
+        if not_members:
+            # `detail` stays a STRING. The mobile client only surfaces detail when it
+            # is one (parseResponse, api/client.ts) and falls back to statusText
+            # otherwise, so a dict here would show the secretary "Unprocessable Entity"
+            # and hide the very ids this error exists to name.
+            raise HTTPException(
+                status_code=422,
+                detail="not_chapter_members: "
+                + ", ".join(str(uid) for uid in not_members),
+            )
+
         await session.execute(
             pg_insert(models.MeetingAttendance)
             .values(
