@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
+from app.core.log_scrub import install_credential_log_scrub
 from app.routers import (
     alumni,
     auth,
@@ -127,6 +128,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     """Build the Chirp API app; run with `uvicorn app.main:create_app --factory`."""
+    # c146: scrub token/access_token/id_token query params from uvicorn's access log
+    # before any request is served. A tripwire, not a fallback for c143's fix — see
+    # app.core.log_scrub for why a FUTURE client putting a credential back in a URL
+    # is what this guards against, not the mechanism c143 already closed.
+    install_credential_log_scrub()
     settings = get_settings()
     # /docs, /redoc and /openapi.json publish the entire route/schema surface with no
     # auth of their own. Fine locally; on any real deployment they hand an attacker a
