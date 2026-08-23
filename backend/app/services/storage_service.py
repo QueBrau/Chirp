@@ -54,6 +54,16 @@ away by deleting it; finalize_media_object's caller must instead log the orphane
 object path loudly (greppable) for a human to hand-delete, and accept that this one rare
 failure mode produces a benign unreferenced object rather than trade away posts/
 immutability to avoid it. Do not add posts/ delete permission back to "fix" this.
+
+THIS ALMOST BROKE THE COPY ITSELF, found live against the real bucket (a fake client
+cannot surface it): GCS requires storage.objects.delete on the DESTINATION for an
+UNCONDITIONAL copy/write, even though it is only ever creating a new object there —
+because an unconditional write CAN overwrite an existing object, and overwrite implies
+delete. finalize_media_object() passes if_generation_match=0 on the copy specifically to
+avoid needing that permission: it asserts "the destination must not exist," which only
+requires create. This is not an unrelated workaround; it is the correct way to express
+"always creates a new, never-before-seen object" to GCS, and it happens to also make
+no-overwrite a server-enforced guarantee instead of a probabilistic one from UUID names.
 """
 
 from __future__ import annotations
@@ -260,6 +270,19 @@ def finalize_media_object(user_id: str, tmp_object_name: str) -> str:
     the object ACL API, which a uniform-access bucket rejects outright. This only shows
     up against the real bucket - no fake client would surface it.
 
+    if_generation_match=0 on the copy is ALSO required, not optional, and for a subtler
+    reason a fake client cannot surface either: it applies to the DESTINATION generation
+    (confirmed against the installed client's own docstring, not assumed), and an
+    UNCONDITIONAL copy destination requires storage.objects.delete on posts/ even though
+    it is only ever creating a new object there - because an unconditional write CAN
+    overwrite an existing one, and overwrite implies delete. Our service account
+    deliberately has create-only on posts/ (see below), so an unconditional copy_blob
+    was refused with a 403 on the real bucket during the manager's E2E pass, even though
+    every fake-backed test here passed. if_generation_match=0 asserts "the destination
+    must not already exist," which only requires create - and, as a bonus, turns
+    no-overwrite from a probabilistic property of UUID naming into a server-enforced
+    guarantee.
+
     A tmp_blob.delete() failure AFTER a successful copy is NOT fatal and does not raise:
     the post still gets its permanent url from the copy, and the leftover tmp/ object
     becomes the tmp/ lifecycle rule's job, the same safety net an abandoned upload
@@ -268,7 +291,10 @@ def finalize_media_object(user_id: str, tmp_object_name: str) -> str:
 
     A copy failure because the tmp object doesn't exist (never uploaded, or the tmp/
     lifecycle rule already reclaimed it) is a 400, not a 500 - the caller sent a
-    reference to something that isn't there to move.
+    reference to something that isn't there to move. Any OTHER copy failure (permission,
+    precondition, transient GCS error) is a 502 media_finalize_failed, not a bare 500 -
+    the manager's E2E pass hit exactly this as an unhandled exception before this catch
+    existed.
 
     THIS FUNCTION NEVER DELETES FROM posts/. The service account's delete grant is
     IAM-conditioned to tmp/ only (manager-run infra step) - deliberately, so no bug,
@@ -288,9 +314,22 @@ def finalize_media_object(user_id: str, tmp_object_name: str) -> str:
     permanent_object_name = f"{PERMANENT_PREFIX}/{user_id}/{suffix}"
 
     try:
-        bucket.copy_blob(tmp_blob, bucket, permanent_object_name, preserve_acl=False)
+        bucket.copy_blob(
+            tmp_blob,
+            bucket,
+            permanent_object_name,
+            preserve_acl=False,
+            if_generation_match=0,
+        )
     except NotFound:
         raise HTTPException(status_code=400, detail="media_upload_not_found")
+    except Exception as exc:
+        logger.error(
+            "media finalize copy failed tmp_object=%s error=%s",
+            tmp_object_name,
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail="media_finalize_failed") from exc
 
     try:
         tmp_blob.delete()
