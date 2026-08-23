@@ -341,3 +341,46 @@ async def test_unverified_officer_can_still_dismiss_a_report_on_their_own_org_po
     )
 
     assert response.status_code == 200, response.text
+
+
+# ---------------------------------------------------------------------------
+# c147 (security's #66): the campus_content default when a comment's parent post
+# cannot be resolved must agree with _report_campus_content's fail-closed default.
+# ---------------------------------------------------------------------------
+
+
+def test_content_campus_tier_defaults_to_campus_when_the_source_post_is_unresolvable() -> None:
+    """Pins the REAL shared function both remove_content and _report_campus_content
+    call - not a copy of its formula, and not a mock of the database.
+
+    Why this is a direct call rather than a request through the API: post_comments.post_id
+    is `NOT NULL REFERENCES posts(id)` with no ON DELETE and not DEFERRABLE (see
+    alembic/versions/0001_initial.py), so Postgres itself refuses any INSERT or UPDATE
+    that would leave a comment's post_id pointing at a row that does not exist - there is
+    no way to construct a genuinely dangling comment through the ORM, the API, or even raw
+    SQL without dropping the constraint for every other test sharing this database. That is
+    exactly why this was reachable only in principle before c147: "safe today only because
+    the campus_id-is-None check fires first."
+
+    c147 extracted `_content_campus_tier(source_post: Post | None) -> bool` specifically so
+    this scenario is testable WITHOUT needing an impossible row and WITHOUT mocking
+    session.get (this project does not mock the database in its tests) - it is a pure
+    function of an optional Post, so the "unresolvable" case is just calling it with None,
+    exactly as remove_content does the moment session.get(Post, ...) finds nothing.
+    """
+    from app.routers.moderation import _content_campus_tier
+
+    assert _content_campus_tier(None) is True, (
+        "an unresolvable source post must default to the STRICTER campus tier, "
+        "matching _report_campus_content - not silently to chapter content"
+    )
+
+
+def test_content_campus_tier_follows_the_resolved_posts_own_audience() -> None:
+    """The non-default cases, so c147's refactor is pinned on both sides, not just
+    the one it fixed."""
+    from app import models
+    from app.routers.moderation import _content_campus_tier
+
+    assert _content_campus_tier(models.Post(audience="campus")) is True
+    assert _content_campus_tier(models.Post(audience="org")) is False
