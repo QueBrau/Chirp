@@ -56,6 +56,14 @@ export type SocketStatusListener = (status: SocketStatus) => void;
 
 const BASE_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
+// c152: how long a connection has to stay open before it counts as a real
+// recovery for backoff-reset purposes, not just a handshake that happened to
+// complete before the server tore it down. Picked with margin on both sides:
+// the observed failure (auth+accept succeed, then pubsub.subscribe() fails
+// with 4503) closes in roughly 100-200ms, so 5s is nowhere near that; and 5s
+// is short enough that a connection which genuinely recovers isn't stuck
+// throttled at a stale attempt count for long afterward.
+const STABLE_CONNECTION_MS = 5_000;
 
 /** Single WS connection to the gateway; stream is server → client only. */
 export class ChirpSocket {
@@ -64,6 +72,11 @@ export class ChirpSocket {
   private shouldRun = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // c152: armed in onopen, fires STABLE_CONNECTION_MS later and is what
+  // actually resets reconnectAttempts — NOT onopen itself. Cleared on close or
+  // disconnect so a stale timer from a connection that already died can never
+  // reset the counter a later, still-failing attempt is relying on.
+  private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
   private eventListeners = new Set<SocketEventListener>();
   private statusListeners = new Set<SocketStatusListener>();
 
@@ -96,6 +109,10 @@ export class ChirpSocket {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this.stabilityTimer !== null) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
     this.setStatus("closed");
@@ -114,7 +131,24 @@ export class ChirpSocket {
     this.ws = ws;
 
     ws.onopen = () => {
-      this.reconnectAttempts = 0;
+      // c152: NOT an immediate reconnectAttempts reset — that was the bug.
+      // ws.onopen fires as soon as the browser's handshake completes, and the
+      // server's accept() genuinely succeeds before a downstream failure
+      // (pubsub.subscribe() against a down Redis, 4503) tears the connection
+      // back down ~100-200ms later. Resetting here meant every single one of
+      // those cycles reset the counter right before scheduleReconnect() used
+      // it, so the exponential math never actually grew: a client hammered a
+      // permanently-failing gateway at a flat ~2s cadence, observed as 1,863
+      // attempts in one hour against prod (board c152). The reset now only
+      // fires if the connection is still open STABLE_CONNECTION_MS later —
+      // proven via a throwaway harness porting this exact logic: the old
+      // reset-on-open shape reproduces the flat cadence at thousands of
+      // attempts/hour; requiring a survived duration instead drops it by
+      // roughly 25x and lets the delay actually reach the 30s cap.
+      this.stabilityTimer = setTimeout(() => {
+        this.reconnectAttempts = 0;
+        this.stabilityTimer = null;
+      }, STABLE_CONNECTION_MS);
       this.setStatus("open");
     };
 
@@ -132,6 +166,15 @@ export class ChirpSocket {
 
     ws.onclose = (event: { code: number }) => {
       this.ws = null;
+      // c152: this connection did not survive to reset the counter — cancel
+      // the pending timer rather than let it fire later. Without this, a
+      // stability timer armed by THIS attempt could still fire after a LATER
+      // attempt has already started counting, wiping out backoff progress
+      // that later attempt earned.
+      if (this.stabilityTimer !== null) {
+        clearTimeout(this.stabilityTimer);
+        this.stabilityTimer = null;
+      }
       // c129: a suspended account is never going to succeed on retry — the
       // condition that closed this connection doesn't clear on its own, only a
       // moderator's unsuspend does. Reconnecting into it is pointless traffic
