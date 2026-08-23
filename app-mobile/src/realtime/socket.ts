@@ -4,15 +4,13 @@
  * `{"type": "<event_type>", ...payload}`. Events never carry ciphertext beyond
  * the opaque base64 `ciphertext` blob field (CONVENTIONS).
  *
- * FOUND WHILE WIRING c129: nothing in app-mobile imports this module. The
- * `chirpSocket` singleton at the bottom exists but `.connect()` is never
- * called anywhere — grepped app/ and src/, zero hits. So the realtime gateway
- * this client talks to (board c21, tested and live server-side) is not
- * actually turned on in the shipped app. That is a separate, much larger
- * feature (activating real-time messaging client-side) than a suspension
- * screen, and is not built here. The 4403 handling below is correct
- * regardless — a class should behave right whether or not it is used yet —
- * but is currently inert in practice until something calls `.connect()`.
+ * c129 found this unwired entirely (grepped app/ and src/, zero hits on
+ * `.connect()`) and fixed the 4403 handling without wiring a consumer, since
+ * that was a separate, much larger feature than a suspension screen. c63 is
+ * that feature: SessionProvider now calls `.connect()` once a session is
+ * really authenticated (see its `status === "ready"` effect) and
+ * `.disconnect()` otherwise — suspended included, since the gateway would
+ * 4403 a suspended caller's connection attempt anyway (c126).
  */
 
 import { wsAuthProtocol, wsUrl } from "../api/client";
@@ -27,6 +25,10 @@ export interface MessageSocketEvent {
   message_type?: MessageType;
   /** Opaque base64 blob — the only ciphertext field ever allowed in events. */
   ciphertext?: string;
+  // c63: routers/messages.py's publish_to_user call includes this (the real
+  // message's created_at, ISO-formatted) — it was in every event this gateway
+  // has ever sent, just never declared here since nothing read it yet.
+  created_at?: string;
 }
 
 /** Forward-compatible catch-all for event types added after this file was written. */

@@ -46,6 +46,7 @@ import {
 } from "@/api/auth";
 import { ApiError, setAuthToken } from "@/api/client";
 import type { MembershipOut } from "@/api/chapters";
+import { chirpSocket } from "@/realtime/socket";
 
 import { hasFirebaseConfig } from "./config";
 import { getFirebaseAuth } from "./firebase";
@@ -224,6 +225,27 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       active = false;
     };
   }, [userId]);
+
+  // c63: the realtime gateway (c21) has been live and tested server-side since
+  // before this session existed, and nothing in the app ever called
+  // chirpSocket.connect() — found while building c129's WS suspension close
+  // (4403 handling was correct and completely unreachable). One effect keyed
+  // on `status` owns the whole lifecycle rather than scattering connect/
+  // disconnect calls across every place status changes: "ready" is the only
+  // status where a live connection makes sense — "suspended" already means
+  // the gateway would refuse a new connection with 4403 anyway (c126), and
+  // every other status means there is no authenticated session to hold one
+  // open for. wsAuthProtocol() (src/api/client.ts) reads whatever token
+  // setAuthToken last set, so this only needs to fire after that token is
+  // real — which "ready" already guarantees, since loadMe's success path is
+  // the same place that sets it.
+  useEffect(() => {
+    if (status === "ready") {
+      chirpSocket.connect();
+    } else {
+      chirpSocket.disconnect();
+    }
+  }, [status]);
 
   const refresh = useCallback(async (): Promise<boolean> => {
     if (!hasFirebaseConfig() || !getFirebaseAuth().currentUser) return false;
