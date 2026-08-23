@@ -265,6 +265,28 @@ export default function PresidentScreen() {
   const knownRoles = roleMeta?.roles ?? [];
   const eboardRoles = roleMeta?.eboard ?? [];
 
+  // Board card c136 (security's consistency finding): this screen was reachable by
+  // direct/deep-link navigation for any chapter member — only the TILE in
+  // chapter/index.tsx's OrgToolsSegment was gated. Both server actions (update_member,
+  // update_chapter) already required MEMBERS_ADMIN (president-only), so this never
+  // leaked data or capability, only rendered controls that would 403 on use. Matches
+  // moderation.tsx's exact pattern: a direct nav re-checks the role itself instead of
+  // trusting the tile alone, and lands on an EmptyState rather than a screen full of
+  // would-be 403s. roleMeta is null while loading OR on a failed fetch — same accepted
+  // ambiguity as moderation.tsx's isEboard check, defaulting to "not eligible" rather
+  // than ever showing the real president's tools before eligibility is confirmed.
+  const isPresident = roleMeta?.capabilities.includes("members_admin") ?? false;
+  if (!isPresident) {
+    return (
+      <Screen title="President" subtitle="Roles, status, and chapter details">
+        <EmptyState
+          title="President only"
+          message="This dashboard is limited to your chapter's president."
+        />
+      </Screen>
+    );
+  }
+
   return (
     <Screen title="President" subtitle="Roles, status, and chapter details">
       {loading ? (
