@@ -14,5 +14,9 @@ class MediaUploadUrlRequest(_Schema):
 
 class MediaUploadUrlOut(_Schema):
     upload_url: str
-    public_url: str
+    # tmp/ location (c132) - fetchable for local preview only, never stored on a post.
+    # The permanent url a post actually persists comes from finalize_media_object() at
+    # create/update time, not from anything this response returns.
+    preview_url: str
+    object_name: str
     expires_in_seconds: int
