@@ -5,7 +5,14 @@ module reveals who voted for what, and `my_option_id` describes only the caller.
 The tally is computed with GROUP BY, so a voter identity is never even loaded into
 memory on the read path. If a future card genuinely needs a named vote, that is a
 different feature with a different table -- do not widen these responses.
+
+THAT RULE EXTENDS TO THE SOCKET. The broadcast payload carries the aggregate poll
+and NOTHING about who voted -- deliberately not even `my_option_id`, which is
+per-viewer and would be wrong in a message every member of the chapter receives.
+Clients keep their own `my_option_id` across an update, which is correct because
+only your own vote can change it.
 """
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -21,6 +28,9 @@ from app.core.permissions import POLLS_ADMIN, require_role
 from app.db import get_session
 from app.middleware.org_scope import get_current_membership
 from app.schemas.polls import PollCreate, PollOptionResult, PollOut, PollVoteIn
+from app.ws.pubsub import publish_to_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["polls"])
 
@@ -41,6 +51,77 @@ async def _get_chapter_poll(
     if poll is None or poll.chapter_id != chapter_id:
         raise not_found("poll_not_found")
     return poll
+
+
+async def _tally(session: AsyncSession, poll_id: uuid.UUID) -> dict[uuid.UUID, int]:
+    """Votes per option. GROUP BY, so no voter identity is loaded."""
+    rows = await session.execute(
+        select(models.PollVote.option_id, func.count())
+        .where(models.PollVote.poll_id == poll_id)
+        .group_by(models.PollVote.option_id)
+    )
+    return {option_id: count for option_id, count in rows}
+
+
+async def _broadcast(
+    session: AsyncSession,
+    poll: models.Poll,
+    action: str,
+    counts: dict[uuid.UUID, int] | None,
+) -> None:
+    """Push a poll change to every ACTIVE member of the chapter.
+
+    Fire-and-forget by design, exactly like the message fan-out: a poll that was
+    recorded but not broadcast is a stale screen, while a broadcast that takes the
+    write down with it loses the vote. Redis being unreachable must never fail a
+    ballot, so every publish is individually guarded.
+
+    The payload is aggregate-only. It cannot contain my_option_id -- one message
+    goes to every member, and that field means something different for each of
+    them.
+    """
+    event: dict = {
+        "type": "poll",
+        "action": action,
+        "chapter_id": str(poll.chapter_id),
+        "poll_id": str(poll.id),
+    }
+    if counts is not None:
+        options = [
+            {
+                "id": str(opt.id),
+                "text": opt.text_,
+                "position": opt.position,
+                "votes": counts.get(opt.id, 0),
+            }
+            for opt in poll.options
+        ]
+        event["poll"] = {
+            "id": str(poll.id),
+            "chapter_id": str(poll.chapter_id),
+            "meeting_id": str(poll.meeting_id) if poll.meeting_id is not None else None,
+            "question": poll.question,
+            "status": poll.status,
+            "created_by": str(poll.created_by),
+            "created_at": poll.created_at.isoformat(),
+            "closed_at": poll.closed_at.isoformat() if poll.closed_at is not None else None,
+            "options": options,
+            "total_votes": sum(opt["votes"] for opt in options),
+        }
+
+    members = await session.execute(
+        select(models.Membership.user_id).where(
+            models.Membership.chapter_id == poll.chapter_id,
+            models.Membership.status == "active",
+        )
+    )
+    for user_id in members.scalars().all():
+        try:
+            await publish_to_user(str(user_id), event)
+        except Exception:
+            logger.warning(
+                "poll fan-out failed poll_id=%s user_id=%s", poll.id, user_id
+            )
 
 
 def _assemble(
@@ -100,6 +181,7 @@ async def create_poll(
     session.add(poll)
     await session.commit()
     poll = await _get_chapter_poll(session, chapter_id, poll.id)
+    await _broadcast(session, poll, "opened", {})
     return _assemble(poll, {}, None)
 
 
@@ -156,12 +238,7 @@ async def list_polls(
 async def _read_one(
     session: AsyncSession, poll: models.Poll, user_id: uuid.UUID
 ) -> PollOut:
-    tally = await session.execute(
-        select(models.PollVote.option_id, func.count())
-        .where(models.PollVote.poll_id == poll.id)
-        .group_by(models.PollVote.option_id)
-    )
-    counts = {option_id: count for option_id, count in tally}
+    counts = await _tally(session, poll.id)
     my_option_id = await session.scalar(
         select(models.PollVote.option_id).where(
             models.PollVote.poll_id == poll.id, models.PollVote.user_id == user_id
@@ -212,7 +289,15 @@ async def cast_vote(
         )
     )
     await session.commit()
-    return await _read_one(session, poll, membership.user_id)
+    counts = await _tally(session, poll.id)
+    await _broadcast(session, poll, "updated", counts)
+    my_option_id = await session.scalar(
+        select(models.PollVote.option_id).where(
+            models.PollVote.poll_id == poll.id,
+            models.PollVote.user_id == membership.user_id,
+        )
+    )
+    return _assemble(poll, counts, my_option_id)
 
 
 @router.post("/chapters/{chapter_id}/polls/{poll_id}/close")
@@ -233,7 +318,10 @@ async def close_poll(
         poll.status = "closed"
         poll.closed_at = datetime.now(timezone.utc)
         await session.commit()
-        await session.refresh(poll)
+        poll = await _get_chapter_poll(session, chapter_id, poll_id)
+        # Only the transition broadcasts. A second officer tapping close must not
+        # re-push an event that says nothing changed.
+        await _broadcast(session, poll, "updated", await _tally(session, poll.id))
     return await _read_one(session, poll, membership.user_id)
 
 
@@ -246,5 +334,8 @@ async def delete_poll(
 ) -> None:
     """Delete a poll and its ballots; secretary/president only."""
     poll = await _get_chapter_poll(session, chapter_id, poll_id)
+    # Broadcast BEFORE the delete: the payload needs chapter_id and the roster
+    # query needs it too, and after the commit the object is expired.
+    await _broadcast(session, poll, "deleted", None)
     await session.delete(poll)
     await session.commit()

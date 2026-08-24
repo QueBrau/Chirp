@@ -50,6 +50,7 @@ import {
   type PollOut,
 } from "@/api/polls";
 import { shareCsv } from "@/lib/export";
+import { chirpSocket, isPollEvent } from "@/realtime/socket";
 import { radii, spacing, typography, useTheme, type Palette } from "@/theme";
 
 interface MeetingItem {
@@ -254,6 +255,46 @@ export default function SecretaryScreen() {
     };
     void init();
   }, [loadDashboard, loadSummary]);
+
+  /**
+   * Live poll updates (c162). Somebody else voting is the ONLY thing that moves a
+   * tally without this screen doing anything, so it is the whole reason the
+   * socket is here.
+   *
+   * The merge deliberately preserves the local `my_option_id`. The broadcast is
+   * aggregate-only and cannot carry it -- one event goes to every member of the
+   * chapter -- and keeping the local value is always right, because only your own
+   * vote changes what you picked.
+   *
+   * Scoped to this chapter: the gateway subscribes per USER, so a member of two
+   * chapters receives both chapters' polls on one socket. Without this check the
+   * other chapter's votes would silently rewrite this screen.
+   */
+  useEffect(() => {
+    if (chapterId === null) return;
+    return chirpSocket.onEvent((event) => {
+      if (!isPollEvent(event) || event.chapter_id !== chapterId) return;
+
+      if (event.action === "deleted") {
+        setPolls((prev) => (prev ?? []).filter((p) => p.id !== event.poll_id));
+        return;
+      }
+      const incoming = event.poll;
+      if (incoming === undefined) return;
+
+      setPolls((prev) => {
+        const current = prev ?? [];
+        const existing = current.find((p) => p.id === incoming.id);
+        if (existing === undefined) {
+          // A poll opened by someone else. Nobody here has voted in it yet.
+          return [{ ...incoming, my_option_id: null }, ...current];
+        }
+        return current.map((p) =>
+          p.id === incoming.id ? { ...incoming, my_option_id: p.my_option_id } : p,
+        );
+      });
+    });
+  }, [chapterId]);
 
   if (membership === null) {
     return (
