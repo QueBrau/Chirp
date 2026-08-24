@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787545829329,
+  "updated": 1787588366258,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -386,16 +386,16 @@
       "owner": "",
       "tag": "bug",
       "area": "orgs",
-      "title": "CONFIRMED BUG - every meeting date renders ONE DAY EARLY for anyone west of UTC. Found on device during c164's sim run; the fix pattern already exists twice in this repo.",
+      "title": "CONFIRMED BUG - meeting dates render ONE DAY EARLY west of UTC (c164 find). Q TAKING IT Aug 24 (his offer, accepted): fix pattern already in-repo at dues.tsx:25 / treasurer.tsx:104 (append T00:00:00, no Z); REQUIRED: regression test pinned to a western TZ (America/New_York) + check treasurer/secretary both render right",
       "detail": "EVIDENCE, not inference. A meeting created through the app with meeting_date 2026-08-24 is stored by the server as 2026-08-24T00:00:00Z (verified via GET /chapters/{id}/meetings) and rendered by the Secretary dashboard as \"Sun, Aug 23\". Same shift on both seeded meetings: 2026-08-17 renders \"Sun, Aug 16\", 2026-08-10 renders \"Sun, Aug 9\". The 2026-08-17 card is self-contradicting on screen - its own title reads \"Chapter Meeting 2026-08-17\" and the line directly under it reads \"Sun, Aug 16\".\n\nCAUSE: app-mobile/app/(tabs)/chapter/secretary.tsx:62. meetingDate() does new Date(iso).toLocaleDateString(...), which parses a UTC INSTANT and then formats it in the device's LOCAL zone. Midnight UTC is the previous evening anywhere west of Greenwich, so the calendar day moves back one. The test machine is America/New_York (UTC-4); every US user sees this, and it gets worse further west.\n\nWHY IT MATTERS beyond cosmetics: a secretary logs Thursday's chapter meeting and the app tells the chapter it was Wednesday. Attendance rows hang off that meeting, so the wrong day is what anyone reads back later.\n\nTHE FIX ALREADY EXISTS IN THIS CODEBASE, twice, which is what makes this a slip rather than a design question: app-mobile/app/(tabs)/chapter/dues.tsx:25 and app-mobile/app/(tabs)/chapter/treasurer.tsx:104 both build a Date from the day string plus T00:00:00 with NO Z, so the value parses as LOCAL midnight and the calendar day survives. secretary.tsx should do the same with the date half of meeting_date.\n\nALSO CHECK, not yet confirmed: app-mobile/app/(tabs)/chapter/treasurer.tsx:100 has the identical new Date(iso).toLocaleDateString(...) shape. Whether it bites depends on whether its iso is a real timestamp (fine) or a date-only value (same bug). Worth one look while the fix is open.\n\nWHY IT SURVIVED: it does not reproduce in the usual dev loop on a machine sitting at UTC - it needs a device or a machine in a western zone to show up - and c156's 446-test backend suite is entirely server-side, where the stored value is correct."
     },
     {
       "id": "c164",
-      "col": "progress",
+      "col": "done",
       "owner": "Q",
       "tag": "qa",
       "area": "qa",
-      "title": "c164 SIM VERIFICATION DONE Aug 24 - c89, c156, c5-display and c79 all PROVEN on native (iPhone 15 Pro sim, iOS 17.4, build a2cea56d against the local seeded stack); c70 proven up to the byte upload only. iOS PHYSICAL device remains impossible for everyone: `eas device:list` says \"No Apple teams found for account quebrau\". FOUND 1 CONFIRMED BUG (c165, meeting dates render a day early) plus a native-only auth-persistence gap. Android dev build is the open path to real hardware.",
+      "title": "DONE Aug 24 - sim verification pass complete (iPhone 15 Pro sim, iOS 17.4, build a2cea56d, seeded local stack): c89/c156/c5-display/c79 proven; found c165 (date bug) + auth-persistence gap (c166) + overlay nits (c168). Device gates that remain are carded on their own tickets",
       "detail": "WHY THIS CARD EXISTS: Jose asked for the device gates to be closed for him since he cannot emulate. Two findings changed the plan. (1) NO AGENT CAN DRIVE A PHYSICAL PHONE - the simulator tooling is simulator-only, so every real-device check is a human holding the phone regardless of anything else. (2) MORE IMPORTANTLY, verified this session: `npx eas-cli device:list --non-interactive` answers \"No Apple teams found for account quebrau\". No paid Apple Developer Program membership is linked to the shared Expo account, so the proposed first step (register the iPhone UDID) cannot be performed by anyone today - it needs enrollment ($99/yr, 24-48h+, an Apple ID credential step no session can do). An iPhone 15 on iOS 17.4 is irrelevant until that exists. Worth noting the coincidence: simulator E2642DD5 from the c39 build IS an iPhone 15 on iOS 17.4, so a claimed physical device of exactly that spec may be a misread of the c39 build log.\n\nTHE GATE LIST WAS MOSTLY WRONG. Only camera QR SCANNING, real Apple/Google auth, push, Apple Pay and c23 (libsignal across two phones) actually need hardware. c70 is testable on the sim (expo-image-picker is configured with a photosPermission string and the sim has a seeded photo library and shows the real permission dialog), and c79 / c140's render / c156 / c89 / c5's Share sheet and QR DISPLAY are all pure app+backend.\n\nCHEAPER REAL-HARDWARE PATH, not taken yet: android.package is set and the `development` profile produces a directly-installable APK with an EAS-generated keystore - no Apple account, no UDID, no enrollment. That is the way to get onto real hardware without waiting on Apple.\n\nSTILL TRUE FROM c39 AND UNCHANGED: Jose cannot build at all. app.json has no `owner` field and projectId is authoritative, so every build resolves to @quebrau/chirp. Adding him to the quebrau account or quebraus-team is free, instant, and the single highest-value item in this thread.\n\nBUILD IS NOT STALE for this run: react-native-qrcode-svg landed on main in this session's pull, but it is pure JS over react-native-svg 15.12.1, which was ALREADY compiled into sim build a2cea56d at commit 152b753. It flows through Metro; no rebuild needed. `npm install` was required locally.\n\nSHARED RESOURCES CLAIMED BY THIS CARD (ports 8000/8081 were already taken): the c162 session owns API :8000 and Metro :8081, both running out of .claude/worktrees/c162 - NOT main's code. This card therefore takes API :8001, Metro :8082 and its own Postgres container `chirp-c164-pg` on host port :5441, so nothing of c162's is disturbed and the app under test is main's tree. Do not reuse 5440 (chirp-dev-pg, c162), 5434 (chirp-test-pg), 5435 (chirp-c71-pg), or 5433/6379 (leadgen).\n\nHONEST LIMIT ON WHAT THIS PROVES: the run is against the LOCAL seeded stack under AUTH_MODE=emulated, so it verifies the app's flows and rendering, not the prod deployment. c140 in particular signs with a local secret, not prod's MEDIA_SIGNING_SECRET, and c70's direct-to-GCS upload leg depends on local credentials - both will be reported for what they actually demonstrate, not more.\n\n=== RESULTS Aug 24 (Q) - iPhone 15 Pro sim F3FADBBF, iOS 17.4, chirp.app from EAS build a2cea56d, Metro :8082, API :8001, pg :5441 ===\n\nc89 CONFIRMED. Sign-in screen renders on native. Apple and Google buttons are visibly disabled under the honest caption \"Apple and Google sign-in are not connected in this build yet. Use Email instead.\" TAPPED BOTH: each returns its own honest message, does NOT crash and does NOT manufacture a session - exactly what src/auth/social.ts promises. Continue with Email renders the email/password form with Sign in disabled until both fields are filled. NOT closed: email sign-in end-to-end runs against the real chirps-prod Firebase project and needs a real credential, which no session can enter - that leg stays a human step. NIT: the per-provider error states the same fact twice in one sentence, on top of the static caption that already said it - three statements of one fact.\n\nc156 CONFIRMED WITH LIVE DATA. Seeded 3 meetings and 8 members with mixed present/absent/excused, then drove the dashboard on device: \"3 meetings this semester\", per-member rows (\"2 present - 0 excused\" with a MISSED tag), the SEMESTER/ALL TIME window toggle, per-meeting chips (6 PRESENT / 1 ABSENT / 1 EXCUSED), Export CSV, and Edit minutes / Take attendance / Delete. Creating a meeting through the UI works. STALE-REFRESH NIT: right after Create meeting the attendance section still read \"0 meetings this semester\" and showed the empty state, while the new meeting was already listed below it and the server already returned it inside the exact client window - the create handler refreshes the meetings list but not the windowed summary. Correct after a reload.\n\nc5 CONFIRMED (display half). Create invite mints a code in-app, shows the https share URL, lists prior codes with c111's TURN OFF, the native iOS Share sheet opens with a real rich link preview fetched from chirps-prod.web.app, and Show QR code renders the QR. Worth recording: react-native-qrcode-svg landed on main mid-session and needed NO rebuild - it is pure JS over react-native-svg 15.12.1, already compiled into a2cea56d at commit 152b753. STILL OPEN and hardware-only: SCANNING a QR needs a camera. Universal links stay blocked by the applinks:chirp.example.com placeholder, which is a config gap, not a device gap.\n\nc79 CONFIRMED END TO END, both identities. As dev-secretary (EBOARD): Family Tree empty state -> Pair a big and little -> searchable roster pickers -> paired Chris Delgado (big) with Tyler Nguyen (little). Graph rendered the pair with a DASHED edge and the footer \"1 unconfirmed - 6 unplaced - pair them\". Restarted Metro as dev-pledge: the Tools screen correctly loses the e-board-only invite panel and the Secretary/Moderation tiles, and Family Tree shows \"YOUR BIG - Is Chris Delgado your big? Only you can confirm this.\" Tapped \"That's my big\" -> prompt gone, footer drops to \"6 unplaced\", server reports confirmed_by_little=true. COLD-RESTARTED THE APP: the pair persists and the edge is now SOLID, matching TreeCanvas.tsx:145 (strokeDasharray only when unconfirmed). Persistence verified, not assumed.\n\nc70 PARTIAL - everything except the bytes. The real iOS permission dialog fires and renders app.json's photosPermission string verbatim (\"Chirp needs access to your photos so you can attach one to a post.\"), Allow Full Access works, the native picker opens with the simulator's photo library, and selecting a photo drives the upload request. It then FAILS CLOSED with the server's honest 503, surfaced as \"Couldn't upload that photo / media_not_configured\" - correct behaviour, because the local stack has no media_bucket_name. The upload+render leg therefore CANNOT be closed against a local stack at all; it needs a configured GCS bucket, i.e. prod, which also means writing a real photo and a real post into production - a call for Jose, not a session. NIT: the alert shows the raw server code media_not_configured to the student rather than human copy, the same class of gap c158 fixed for email.\n\nc39 (this build) - launched, navigated Home / Orgs / Tools / Secretary / Family Tree, and cold-restarted the app four times across three different identities with no crash.\n\nTWO REAL FINDINGS RAISED BY THIS RUN:\n(1) c165 - meeting dates render ONE DAY EARLY. Confirmed visually; see that card.\n(2) FIREBASE AUTH HAS NO PERSISTENCE ON NATIVE. Metro logs a Firebase warning on every launch: auth is initialised without AsyncStorage, so \"Auth state will default to memory persistence and will not persist between sessions\". On web this is invisible; on a phone it means a real signed-in student is signed out every time the app is killed. This run could not feel it because EXPO_PUBLIC_DEV_UID re-establishes the session on each launch, which is likely why it has never been noticed. Needs @react-native-async-storage/async-storage - A NATIVE MODULE, so adding it STALES build a2cea56d and forces a new EAS build. Not filed as its own card yet; raise it before anyone plans the next build.\n\nLAYOUT, on several screens: the floating tab bar and the FAB sit ON TOP of scrollable content rather than above padding - the Orgs feed loses a line of post text under the FAB, and the Secretary member list and Tools grid lose a row under the tab bar. Cosmetic, consistent, and easy to miss on web where the bar is not floating.\n\nSERVICES: the c162 session owns :8000 and :8081 out of .claude/worktrees/c162 and was NOT disturbed; this card used :8001, :8082 and container chirp-c164-pg on :5441, with launch.json configs c164-api / c164-native-signin / c164-native-secretary / c164-native-historian / c164-native-pledge. Switching identity on native costs a full Metro restart with --clear (~90s) because EXPO_PUBLIC_DEV_UID is inlined at transform time - there is no URL bar to do what ?uid= does on web."
     },
     {
@@ -1309,11 +1309,11 @@
     },
     {
       "id": "c79",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "m6",
       "area": "orgs",
-      "title": "DEPLOYED Aug 24 in revision 00029-s4d (main 7aa9b22; feature merge 3b435f8) - Historian tile + lineage create/pair/reassign/confirm flows; full backend suite 446 passed / 3 skipped, prior visual 390x844 + tsc evidence retained. REMAINING: live/device verification; archive/media tile stays parked behind c70/EAS.",
+      "title": "DONE Aug 24 - deployed AND proven end-to-end on native sim, both identities (c164): pair drawn dashed, little-only confirm prompt, confirmed_by_little=true on server, cold-restart persistence verified. Archive half stays parked pending device media",
       "detail": "historian is in EBOARD and is the one e-board role SPEC names a job for (\u00a77 milestone 6: 'lineage CRUD ... little-confirms-big', notes 'Historian/e-board edit rights'). What shipped in c9 is the R: tree.tsx calls getLineage and nothing else. createFamily and createEdge (both require_role(*EBOARD) in lineage.py) and confirmEdge (any member \u2014 the little confirms their own big) all exist in src/api/lineage.ts with ZERO call sites, so from inside the app nobody can start a family, pair a big with a little, or fix a wrong pairing, and the screen prints 'N unconfirmed \u00b7 N unplaced' as dead text with nothing to tap. little-confirms-big is written into the milestone and is currently unreachable by the little. NEEDS: a Historian tile, a pair/reassign flow on the Skia canvas with a list fallback, family create using the color the canvas already renders per family, and confirm surfaced to the little who owes it \u2014 a badge on the tree they already open, not a buried screen. Handle the one-big-per-little 409 from lineage_service as a real reassignment state, not a toast, because fixing a wrong big IS the common case. THE ARCHIVE HALF OF THE JOB IS BLOCKED: composites, event photos and chapter history are what a historian actually keeps, and there is no media upload pipeline anywhere in the repo (c70) \u2014 no picker, no bucket, no presign, and it owes an EAS dev build of its own. Do not put a photos tile on this screen until c70 is answered. STATUS Aug 23: claimed by a court-pool worker session. Two card-vs-code gaps found on read: (1) the tools grid gates tiles on server-named capabilities (c80) and no lineage capability exists yet, so one is being added to CAPABILITIES rather than a client-side role list; (2) there is NO delete/reassign endpoint on lineage edges, so the 409 reassignment state cannot complete without a minimal EBOARD-gated DELETE edge route - flagged to the manager before building. Archive/media half STAYS PARKED: c70 landed the signed-URL pipeline server-side since this card was written, but the EAS dev build is still owed, so no photos tile here yet."
     },
     {
@@ -1390,11 +1390,11 @@
     },
     {
       "id": "c89",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "auth",
       "area": "auth",
-      "title": "IN PROGRESS Aug 24 \u2014 social sign-in bypass guard landed (fc08545); native provider wiring remains",
+      "title": "DONE Aug 24 - social sign-in bypass guard landed (fc08545) and proven honest on native sim: both buttons disabled under honest caption, no manufactured session, email path real. Native Apple/Google provider wiring is FUTURE work -> c169",
       "detail": "Technical guard landed Aug 24 via main commit fc08545: Apple/Google buttons now show an honest unavailable/error state and never route to onboarding without authentication; email flow is unchanged. verify:auth, verify:contract, and typecheck pass. Provider wiring remains blocked on Firebase toggles, native SDK configuration, and Apple Developer/EAS device setup."
     },
     {
@@ -1821,8 +1821,8 @@
     },
     {
       "id": "c156",
-      "col": "progress",
-      "title": "DEPLOYED Aug 24 in revision 00029-s4d (main 7aa9b22; feature merge b02a348) - windowed meetings+attendance bundle; full backend suite 446 passed / 3 skipped; Secretary dashboard drops to two calls. REMAINING: dashboard visual verification.",
+      "col": "done",
+      "title": "DONE Aug 24 - deployed (00029-s4d) AND proven on native sim with live data (c164): 3 meetings/8 members, per-member MISSED tags, window toggle, per-meeting chips, CSV. One nit -> c167 (stale summary after create)",
       "owner": "jose",
       "tag": "backend",
       "area": "orgs",
@@ -1863,6 +1863,51 @@
       "area": "orgs",
       "title": "Vice President dashboard - genuinely does NOT exist. Every other e-board role has a screen; VP has no route, no tile, no capability of its own. Open for Jose or Q.",
       "detail": "app/(tabs)/chapter/ has president.tsx, secretary.tsx, treasurer.tsx, historian.tsx, alumni/, moderation.tsx and members.tsx. There is NO vice-president screen and no /chapter/vice-president route. \n\nThis is not an oversight nobody noticed - core/permissions.py says it out loud: 'vice_president and historian are in EBOARD and got no tools at all'. Historian has since got a screen (c79). VP still has not, so a VP today sees exactly what a plain member sees plus moderation and lineage rights inherited from EBOARD. \n\nBEFORE BUILDING, decide what a VP actually DOES here - SPEC lists the role (section 12, milestone 2) but never defines a VP dashboard, so there is no spec to implement and inventing one is the real work. Whatever it becomes, add a capability to the CAPABILITIES dict in core/permissions.py and gate on it. Do NOT hardcode a role list in the client: c80 is exactly that bug, where chapter/index.tsx kept its own copy of the taxonomy, drifted from the server, and failed silently. \n\nDependency worth knowing: dev-vice-president (Andre Coleman) already exists as a seeded account from c159, so the screen is viewable at EXPO_PUBLIC_DEV_UID=dev-vice-president the moment it has anything to show."
+    },
+    {
+      "id": "c166",
+      "col": "backlog",
+      "owner": "",
+      "tag": "mobile",
+      "area": "auth",
+      "title": "Firebase auth has NO persistence on native - a real signed-in student is signed out every time the app is killed. Masked in dev because EXPO_PUBLIC_DEV_UID recreates the session each launch",
+      "detail": "Found by c164's sim run (Metro warns on every launch: auth initialises without AsyncStorage). Fix: @react-native-async-storage/async-storage + initializeAuth with RN persistence. THE CATCH: it is a NATIVE module, so it stales sim build a2cea56d and forces a new EAS build - sequence it WITH the next planned build (Android dev build is the cheap real-hardware path while iOS has no Apple team). Highest-priority mobile fix after c165; alpha on real phones is unusable without it."
+    },
+    {
+      "id": "c167",
+      "col": "backlog",
+      "owner": "",
+      "tag": "frontend",
+      "area": "orgs",
+      "title": "c156 follow-on: after creating a meeting the windowed attendance summary stays stale until reload - the list refreshes, the denominator does not",
+      "detail": "c164 sim find. Server already has the meeting; loadSummary is just not re-called after createMeeting (it IS re-called after delete - c82 did that half). Small: call loadSummary(chapterId, windowKey) in the create path, matching the delete path's refetch-not-subtract comment."
+    },
+    {
+      "id": "c168",
+      "col": "backlog",
+      "owner": "",
+      "tag": "frontend",
+      "area": "social",
+      "title": "Floating tab bar and FAB sit ON TOP of scroll content - lower rows of Secretary list, Tools grid and post text hide under the overlays on several screens",
+      "detail": "c164 sim find, consistent across screens. Cosmetic but before broad device testing: scroll containers need bottom padding sized to the floating elements (content inset), not just a translucent bar. DESIGN.md binding - the fix is padding, not removing the floating treatment."
+    },
+    {
+      "id": "c169",
+      "col": "backlog",
+      "owner": "",
+      "tag": "mobile",
+      "area": "auth",
+      "title": "Native Apple/Google sign-in providers - real provider wiring (the c89 guard made the stubs honest; this makes them real)",
+      "detail": "Needs Firebase provider config (Apple requires the Apple Developer team that also blocks device builds; Google needs SHA/plist setup), native modules, and a fresh EAS build. Post-alpha unless Jose pulls it forward; sequence with c166's build. Apple half blocked on Apple Developer enrollment."
+    },
+    {
+      "id": "c170",
+      "col": "backlog",
+      "owner": "",
+      "tag": "process",
+      "area": "infra",
+      "title": "npm audit: 9 high / 13 moderate, all in the Expo/Metro build toolchain - fix requires a PLANNED major Expo upgrade, never audit fix --force",
+      "detail": "From the Aug 24 security review. The forced-fix path does a major Expo bump blind and breaks the native builds. Plan: review the exact advisories, schedule an Expo SDK upgrade as its own milestone, rebuild sim+Android artifacts, re-run the full mobile check suite, re-audit. No urgency signal today - toolchain, not runtime, exposure."
     }
   ],
   "decisions": [
@@ -1982,7 +2027,8 @@
     "Aug 23 - grep-before-build promoted to TRIAGE: the manager runs git log --oneline --grep='^<card-id>' plus a surface grep BEFORE assigning any card older than a couple of days. Adopted after c90 became the third consecutive stale-premise assignment (c78, c90, c154's six stale titles) - the c90 assignment was made without the check c78 had just taught. Board sweep carded as c157 to flush the remaining false backlog.",
     "Aug 23 - worktree mobile-tooling refinement (james 2.0): the node_modules SYMLINK satisfies tsc but BREAKS Metro (serverRoot resolution); an APFS clone (cp -c) of node_modules works for both. Joins the queued CLAUDE.md edit.",
     "Aug 23 - c157 board sweep verified and applied: c80/c110/c108/c8 closed as done-by-prior-work (each verified in code by manager, not just commit subject); c117/c120 title-stale closed; c122/c123 had WRONG PR attributions (renumbering kept the pre-renumber PR numbers) - fixed with prev-ids recorded. CONVENTION ADOPTED: a renumbered card carries 'PREV-ID: cX' in its detail in fixed form, because commits and branches keep the old id and id-greps (including the manager's triage grep) miss the work entirely - the sweep's method finding.",
-    "Aug 23 - shared-tree board-edit atomicity (raised by security 2.0 after the third benign sweep of the day; james 2.0 and the manager hit the same race): a board edit in the shared tree is EDIT + ADD + COMMIT with no verification step between - the uncommitted window is where a peer's add sweeps your lines or, worse, a peer's stale-copy commit drops them. Order is now: edit, commit immediately, board-check the COMMITTED state, fix-and-amend if it fails, push, board-check --pushed. Joins the queued CLAUDE.md edit."
+    "Aug 23 - shared-tree board-edit atomicity (raised by security 2.0 after the third benign sweep of the day; james 2.0 and the manager hit the same race): a board edit in the shared tree is EDIT + ADD + COMMIT with no verification step between - the uncommitted window is where a peer's add sweeps your lines or, worse, a peer's stale-copy commit drops them. Order is now: edit, commit immediately, board-check the COMMITTED state, fix-and-amend if it fails, push, board-check --pushed. Joins the queued CLAUDE.md edit.",
+    "Aug 24 - manager back online post-handoff (Codex era reviewed): closed c156/c79/c164/c89 on Q's sim evidence, accepted Q's offer to fix c165, carded the sim run's findings (c166 auth persistence - highest mobile priority, c167 stale summary, c168 overlays), carded c169 native providers + c170 Expo audit. Security fixes on main (conversation authz, lineage targets, log scrub, rate limiting, WS suspension, email redaction) are NOT yet deployed - deploy-only release ready, no migration (head 0013 = prod), CI green on main today."
   ]
 }
 </script>
