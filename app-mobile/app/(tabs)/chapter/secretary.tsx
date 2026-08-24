@@ -1,8 +1,8 @@
 /**
  * Secretary per DESIGN §7: meetings as cards — title, date caption, minutes
  * preview, attendance Chips. Adds the secretary's write surface: create a
- * meeting, edit its minutes, take attendance against the chapter roster, and
- * export all minutes as CSV.
+ * meeting, edit its minutes, take attendance against the chapter roster,
+ * run live polls (c162), and export all minutes as CSV.
  *
  * Role-gated (SPEC §8.4/§8.2): only the chapter's secretary or president may
  * hit the meetings/attendance endpoints, which the backend enforces via
@@ -38,9 +38,17 @@ import {
   EmptyState,
   GradientAvatar,
   ListRow,
+  PollCard,
   Screen,
   SectionHeader,
 } from "@/components";
+import {
+  castVote,
+  closePoll,
+  createPoll,
+  listPolls,
+  type PollOut,
+} from "@/api/polls";
 import { shareCsv } from "@/lib/export";
 import { radii, spacing, typography, useTheme, type Palette } from "@/theme";
 
@@ -51,6 +59,14 @@ interface MeetingItem {
 
 /** Which per-meeting panel (if any) is expanded — only one at a time, across all cards. */
 type ExpandedPanel = { meetingId: string; kind: "minutes" | "attendance" } | null;
+
+/**
+ * Fixed option slots on the new-poll form. Blanks are ignored, so a Yes/No poll
+ * is two taps and nobody has to remove empty rows. Four covers Yes/No/Abstain
+ * plus one; the server accepts up to ten, so a dynamic add-a-row form is a later
+ * change here and needs nothing on the backend.
+ */
+const POLL_OPTION_SLOTS = 4;
 
 const ATTENDANCE_OPTIONS: { key: AttendanceStatus; label: string; short: string }[] = [
   { key: "present", label: "present", short: "P" },
@@ -166,6 +182,17 @@ export default function SecretaryScreen() {
 
   const [exportingCsv, setExportingCsv] = useState(false);
 
+  // Live polls (c162).
+  const [polls, setPolls] = useState<PollOut[] | null>(null);
+  const [newQuestion, setNewQuestion] = useState("");
+  const [newOptions, setNewOptions] = useState<string[]>(
+    Array.from({ length: POLL_OPTION_SLOTS }, () => ""),
+  );
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [creatingPoll, setCreatingPoll] = useState(false);
+  // Which poll has a request in flight, so only that card disables.
+  const [busyPollId, setBusyPollId] = useState<string | null>(null);
+
   // Roster attendance totals (board c82) — one server call for the whole chapter.
   const [summary, setSummary] = useState<ChapterAttendanceSummary | null>(null);
   const [windowKey, setWindowKey] = useState<WindowKey>("semester");
@@ -200,12 +227,14 @@ export default function SecretaryScreen() {
    * past date must not jump to the top.
    */
   const loadDashboard = useCallback(async (id: string) => {
-    const [withAttendance, members] = await Promise.all([
+    const [withAttendance, members, chapterPolls] = await Promise.all([
       listMeetingsWithAttendance(id),
       listMembers(id),
+      listPolls(id),
     ]);
     setRoster(members.filter((m) => m.status === "active"));
     setItems(withAttendance);
+    setPolls(chapterPolls);
   }, []);
 
   useEffect(() => {
@@ -228,7 +257,7 @@ export default function SecretaryScreen() {
 
   if (membership === null) {
     return (
-      <Screen title="Secretary" subtitle="Minutes and attendance">
+      <Screen title="Secretary" subtitle="Minutes, polls, and attendance">
         <EmptyState
           title="Secretary/president only"
           message="This dashboard is limited to the chapter's secretary or president."
@@ -433,8 +462,70 @@ export default function SecretaryScreen() {
     }
   };
 
+  const handleCreatePoll = async () => {
+    if (chapterId === null) return;
+    const question = newQuestion.trim();
+    const options = newOptions.map((o) => o.trim()).filter((o) => o.length > 0);
+    // Validated here as well as on the server so the common mistakes answer
+    // instantly and in words, rather than as a 422 the form has to translate.
+    if (question.length === 0) {
+      setPollError("Give the poll a question.");
+      return;
+    }
+    if (options.length < 2) {
+      setPollError("A poll needs at least two options.");
+      return;
+    }
+    if (new Set(options.map((o) => o.toLowerCase())).size !== options.length) {
+      setPollError("Two options read the same — the vote would split between them.");
+      return;
+    }
+
+    setPollError(null);
+    setCreatingPoll(true);
+    try {
+      const created = await createPoll(chapterId, { question, options });
+      setPolls((prev) => [created, ...(prev ?? [])]);
+      setNewQuestion("");
+      setNewOptions(Array.from({ length: POLL_OPTION_SLOTS }, () => ""));
+    } catch (error) {
+      showApiError(error, "Couldn't open the poll");
+    } finally {
+      setCreatingPoll(false);
+    }
+  };
+
+  /** Both vote and close return the whole poll, so the card re-renders from the
+   * server's tally rather than from a guess made locally. */
+  const replacePoll = (updated: PollOut) =>
+    setPolls((prev) => (prev ?? []).map((p) => (p.id === updated.id ? updated : p)));
+
+  const handleVote = async (pollId: string, optionId: string) => {
+    if (chapterId === null) return;
+    setBusyPollId(pollId);
+    try {
+      replacePoll(await castVote(chapterId, pollId, optionId));
+    } catch (error) {
+      showApiError(error, "Couldn't record your vote");
+    } finally {
+      setBusyPollId(null);
+    }
+  };
+
+  const handleClosePoll = async (pollId: string) => {
+    if (chapterId === null) return;
+    setBusyPollId(pollId);
+    try {
+      replacePoll(await closePoll(chapterId, pollId));
+    } catch (error) {
+      showApiError(error, "Couldn't close the poll");
+    } finally {
+      setBusyPollId(null);
+    }
+  };
+
   return (
-    <Screen title="Secretary" subtitle="Minutes and attendance">
+    <Screen title="Secretary" subtitle="Minutes, polls, and attendance">
       <View style={{ gap: spacing.xl }}>
         <View>
           <SectionHeader title="New meeting" caption="Title and date — take minutes and attendance after" />
@@ -472,6 +563,71 @@ export default function SecretaryScreen() {
               />
             </View>
           </Card>
+        </View>
+
+        <View>
+          <SectionHeader
+            title="Polls"
+            caption="Open a vote — results update as members tap"
+          />
+          <Card style={{ marginBottom: spacing.md }}>
+            <View style={{ gap: spacing.lg }}>
+              <View>
+                <FieldLabel>Question</FieldLabel>
+                <TextInput
+                  value={newQuestion}
+                  onChangeText={setNewQuestion}
+                  placeholder="e.g. Approve the spring formal budget?"
+                  placeholderTextColor={palette.inkFaint}
+                  style={inputStyle}
+                />
+              </View>
+              <View style={{ gap: spacing.sm }}>
+                <FieldLabel>Options (blanks are ignored)</FieldLabel>
+                {newOptions.map((value, index) => (
+                  <TextInput
+                    key={index}
+                    value={value}
+                    onChangeText={(text) =>
+                      setNewOptions((prev) =>
+                        prev.map((existing, i) => (i === index ? text : existing)),
+                      )
+                    }
+                    placeholder={index === 0 ? "Yes" : index === 1 ? "No" : "Optional"}
+                    placeholderTextColor={palette.inkFaint}
+                    style={inputStyle}
+                  />
+                ))}
+              </View>
+              {pollError !== null ? (
+                <AppText variant="caption" tone="danger">
+                  {pollError}
+                </AppText>
+              ) : null}
+              <Button
+                label={creatingPoll ? "Opening…" : "Open poll"}
+                onPress={() => void handleCreatePoll()}
+                disabled={creatingPoll}
+              />
+            </View>
+          </Card>
+
+          {polls !== null && polls.length === 0 ? (
+            <EmptyState
+              title="No polls yet"
+              message="Open one to take a vote during the meeting."
+            />
+          ) : (
+            (polls ?? []).map((poll) => (
+              <PollCard
+                key={poll.id}
+                poll={poll}
+                busy={busyPollId === poll.id}
+                onVote={(optionId) => void handleVote(poll.id, optionId)}
+                onClose={() => void handleClosePoll(poll.id)}
+              />
+            ))
+          )}
         </View>
 
         <View>
