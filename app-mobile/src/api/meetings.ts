@@ -42,6 +42,12 @@ export interface MeetingAttendanceOut {
   status: AttendanceStatus;
 }
 
+/** A meeting with the attendance recorded against it — GET .../meetings/with-attendance. */
+export interface MeetingWithAttendance {
+  meeting: MeetingOut;
+  attendance: MeetingAttendanceOut[];
+}
+
 /** One active member's totals over the requested window — GET .../attendance-summary. */
 export interface MemberAttendanceSummary {
   user_id: string;
@@ -68,6 +74,11 @@ export interface AttendanceWindow {
   end?: string;
 }
 
+/**
+ * Meetings without their sheets — member-readable, unlike the officer-gated bundle.
+ * Call-site-free since c156 moved the secretary dashboard onto listMeetingsWithAttendance;
+ * kept because this is the only meetings read a plain member is allowed to make.
+ */
 export async function listMeetings(chapterId: string): Promise<MeetingOut[]> {
   return request<MeetingOut[]>(`/chapters/${chapterId}/meetings`);
 }
@@ -121,6 +132,27 @@ export async function getAttendanceSummary(
   });
 }
 
+/**
+ * Every meeting plus its attendance sheet in ONE request — replaces listMeetings
+ * followed by getAttendance per meeting, which cost a request per meeting on every
+ * dashboard load and grew with chapter history (board c156). Most recent first, same
+ * order as listMeetings.
+ */
+export async function listMeetingsWithAttendance(
+  chapterId: string,
+  window: AttendanceWindow = {},
+): Promise<MeetingWithAttendance[]> {
+  return request<MeetingWithAttendance[]>(`/chapters/${chapterId}/meetings/with-attendance`, {
+    query: { start: window.start, end: window.end },
+  });
+}
+
+/**
+ * One meeting's sheet. Call-site-free since c156 moved the dashboard onto the bundle
+ * above — kept because the route is live and officer-gated, and a single-meeting
+ * refresh is the obvious next caller. Do NOT reintroduce it in a loop over meetings;
+ * that loop is the bug c156 removed.
+ */
 export async function getAttendance(
   chapterId: string,
   meetingId: string,

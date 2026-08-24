@@ -61,6 +61,21 @@ class MeetingAttendanceOut(_Schema):
     status: AttendanceStatus
 
 
+# ---- meetings + their sheets in one read (GET .../meetings/with-attendance) ----
+
+
+class MeetingWithAttendanceOut(_Schema):
+    """One meeting and the attendance recorded against it (board c156).
+
+    Shaped as {meeting, attendance} rather than a flattened row per (meeting, member)
+    because that is the shape the secretary screen already holds in state - the client
+    that used to build it with an N+1 can now assign the response straight through.
+    """
+
+    meeting: MeetingOut
+    attendance: list[MeetingAttendanceOut]
+
+
 # ---- per-member aggregate (GET /chapters/{chapter_id}/meetings/attendance-summary) ----
 
 
