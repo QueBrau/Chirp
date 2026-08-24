@@ -1,6 +1,7 @@
 /** Chapters API: CRUD, member management, invites, join-by-code — mirrors routers/chapters.py. */
 
 import { request } from "./client";
+import type { AttendanceWindow } from "./meetings";
 
 export type RoleName =
   | "president"
@@ -178,4 +179,89 @@ export async function revokeInvite(chapterId: string, code: string): Promise<Cha
 /** Redeem an invite code (deep link `chirp://join-chapter?code=...`). */
 export async function joinChapter(code: string): Promise<MembershipOut> {
   return request<MembershipOut>("/chapters/join", { method: "POST", body: { code } });
+}
+
+// ---- president overview (board card c171) ----
+
+/** How many ACTIVE members hold one role. Roles nobody holds are omitted. */
+export interface RoleCount {
+  role: RoleName;
+  count: number;
+}
+
+export interface RosterOverview {
+  active: number;
+  inactive: number;
+  /** Active members only, so these sum to `active` and never to active + inactive. */
+  by_role: RoleCount[];
+}
+
+/**
+ * The current dues cycle and how far through collecting it the chapter is.
+ * Every field is null/zero before a chapter has ever opened a cycle.
+ *
+ * `paid_members + outstanding_members === roster.active`, always — both are spined on
+ * the current active roster. `collected_cents` deliberately is NOT: it counts money
+ * that came in, including from members who have since gone inactive.
+ */
+export interface DuesOverview {
+  cycle_id: string | null;
+  cycle_name: string | null;
+  amount_cents: number | null;
+  due_date: string | null;
+  paid_members: number;
+  outstanding_members: number;
+  collected_cents: number;
+}
+
+/** Active members with at least one recorded ABSENT in the window. Excused is not an absence. */
+export interface AttendanceOverview {
+  meetings_in_window: number;
+  members_with_absence: number;
+  window_start: string | null;
+  window_end: string | null;
+}
+
+export interface LineageOverview {
+  unconfirmed_edges: number;
+}
+
+/** Codes that could still be redeemed: not revoked, not expired, uses < max_uses (c105). */
+export interface InviteOverview {
+  live_codes: number;
+  remaining_uses: number;
+}
+
+/**
+ * One request's worth of chapter health for the President dashboard.
+ *
+ * Chapter-scoped throughout. There is deliberately no moderation count: content
+ * reports are scoped by CAMPUS, not chapter, so a number here would be campus data
+ * wearing a chapter label. The Moderation tile owns that question.
+ */
+export interface ChapterOverview {
+  chapter_id: string;
+  generated_at: string;
+  roster: RosterOverview;
+  dues: DuesOverview;
+  attendance: AttendanceOverview;
+  lineage: LineageOverview;
+  invites: InviteOverview;
+}
+
+/**
+ * Chapter health in one call; president only (board card c171).
+ *
+ * Replaces walking into the Treasurer, Secretary and Historian screens one at a time
+ * to answer "are dues collected" and "is anyone failing attendance". Pass the same
+ * window the Secretary dashboard computes so the meeting counts on the two screens
+ * cannot disagree; omit it for all time.
+ */
+export async function getChapterOverview(
+  chapterId: string,
+  window: AttendanceWindow = {},
+): Promise<ChapterOverview> {
+  return request<ChapterOverview>(`/chapters/${chapterId}/overview`, {
+    query: { start: window.start, end: window.end },
+  });
 }

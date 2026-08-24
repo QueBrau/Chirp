@@ -1,7 +1,7 @@
 """Identity & org schemas: users, campuses, chapters, memberships, invites."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -237,3 +237,98 @@ class ChapterJoinRequest(_Schema):
 
 
 ChapterJoin = ChapterJoinRequest
+
+
+# ---- president overview (board card c171) ----
+
+
+class RoleCount(_Schema):
+    """How many ACTIVE members hold one role."""
+
+    role: RoleName
+    count: int
+
+
+class RosterOverview(_Schema):
+    """Who is on the roster right now.
+
+    `by_role` counts active members only, so the counts sum to `active` and never to
+    `active + inactive` — a breakdown that silently included inactive members would
+    make the two numbers on screen disagree with no way to tell which was wrong.
+    Roles nobody holds are omitted rather than reported as zero.
+    """
+
+    active: int
+    inactive: int
+    by_role: list[RoleCount]
+
+
+class DuesOverview(_Schema):
+    """The current dues cycle and how far through collecting it the chapter is.
+
+    Every field is None/zero when the chapter has never opened a cycle, which is a
+    real state for a new chapter and not an error.
+
+    `paid_members` + `outstanding_members` == RosterOverview.active, always: both are
+    spined on the current active roster (see the endpoint docstring for why that
+    matters, and why `collected_cents` is deliberately NOT spined the same way).
+    """
+
+    cycle_id: uuid.UUID | None = None
+    cycle_name: str | None = None
+    amount_cents: int | None = None
+    due_date: date | None = None
+    paid_members: int = 0
+    outstanding_members: int = 0
+    collected_cents: int = 0
+
+
+class AttendanceOverview(_Schema):
+    """Meeting attendance over the same window the Secretary dashboard uses.
+
+    `members_with_absence` counts active members with at least one recorded ABSENT in
+    the window. Deliberately not "members below X%": there is no attendance policy in
+    the schema, so any percentage would be this endpoint inventing a rule the chapter
+    never agreed to.
+    """
+
+    meetings_in_window: int = 0
+    members_with_absence: int = 0
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+
+
+class LineageOverview(_Schema):
+    """Big/little pairs still waiting on the little to confirm (board c79)."""
+
+    unconfirmed_edges: int = 0
+
+
+class InviteOverview(_Schema):
+    """Invite codes that could still be redeemed right now.
+
+    Live means all three of: not revoked, not expired, and uses < max_uses — the same
+    three conditions c105 made a code carry. `remaining_uses` is how many more people
+    could walk in on codes already in circulation, which is the number that matters
+    when deciding whether to revoke something.
+    """
+
+    live_codes: int = 0
+    remaining_uses: int = 0
+
+
+class ChapterOverview(_Schema):
+    """One request's worth of chapter health, for the President dashboard (c171).
+
+    Chapter-scoped throughout. Moderation is absent on purpose: content_reports
+    carries campus_id, not chapter_id, so an "open reports" count here would be campus
+    data wearing a chapter label.
+    """
+
+    chapter_id: uuid.UUID
+    generated_at: datetime
+    roster: RosterOverview
+    dues: DuesOverview
+    attendance: AttendanceOverview
+    lineage: LineageOverview
+    invites: InviteOverview
