@@ -208,7 +208,7 @@ printf "CREATE ROLE chirp_media_reconcile LOGIN PASSWORD '%s';\n" "$RECONCILE_DB
 PGPASSWORD="$PGPASS" psql -h 127.0.0.1 -p 5433 -U chirp -d chirp -c "GRANT CONNECT ON DATABASE chirp TO chirp_media_reconcile"
 PGPASSWORD="$PGPASS" psql -h 127.0.0.1 -p 5433 -U chirp -d chirp -c "GRANT USAGE ON SCHEMA public TO chirp_media_reconcile"
 PGPASSWORD="$PGPASS" psql -h 127.0.0.1 -p 5433 -U chirp -d chirp -c "GRANT SELECT (media_urls) ON TABLE posts TO chirp_media_reconcile"
-printf 'postgresql+asyncpg://chirp_media_reconcile:%s@/chirp?host=/cloudsql/%s:%s:chirp-db' "$RECONCILE_DBPASS" "$PROJECT" "$REGION" | gcloud secrets create MEDIA_RECONCILE_DATABASE_URL --data-file=-
+printf 'postgresql+asyncpg://chirp_media_reconcile:%s@/chirp?host=/cloudsql/%s:%s:chirp-db' "$RECONCILE_DBPASS" "$PROJECT" "$REGION" | gcloud secrets create MEDIA_RECONCILE_DATABASE_URL --project=$PROJECT --data-file=-
 unset RECONCILE_DBPASS
 ```
 
