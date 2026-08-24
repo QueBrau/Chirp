@@ -1,6 +1,6 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 23 2026 (board card c154)._
+_Last updated: Aug 23 2026 (local consolidation of c79, c153, c156)._
 
 **This file deliberately contains almost no numbers.** The previous version rotted
 within a week because it hardcoded the prod revision, the open-PR list, the migration
