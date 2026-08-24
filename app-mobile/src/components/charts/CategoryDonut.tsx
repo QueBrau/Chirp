@@ -32,8 +32,8 @@ export function CategoryDonut({
   slices,
   format,
   centerCaption,
-  size = 168,
-  thickness = 36,
+  size = 140,
+  thickness = 26,
 }: CategoryDonutProps) {
   const palette = useTheme();
 
@@ -117,7 +117,10 @@ export function CategoryDonut({
               variant="caption"
               tone="secondary"
               numberOfLines={1}
-              style={{ flex: 1, textTransform: "capitalize" }}
+              // minWidth 0 is what actually lets a flex child shrink instead of
+              // being pinned to its content width; without it the row overflows
+              // and the label truncates while empty space sits to its right.
+              style={{ flex: 1, minWidth: 0, textTransform: "capitalize" }}
             >
               {slice.label}
             </AppText>

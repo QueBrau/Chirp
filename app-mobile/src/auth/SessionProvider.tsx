@@ -44,11 +44,12 @@ import {
   type CampusVerificationStatus,
   type UserOut,
 } from "@/api/auth";
-import { ApiError, setAuthToken } from "@/api/client";
+import { ApiError, setAuthToken, setDebugFirebaseUid } from "@/api/client";
 import type { MembershipOut } from "@/api/chapters";
 import { chirpSocket } from "@/realtime/socket";
 
 import { hasFirebaseConfig } from "./config";
+import { devAuthUid } from "./devAuth";
 import { getFirebaseAuth } from "./firebase";
 import { onAuthChanged } from "./session";
 
@@ -108,11 +109,18 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 /** If onAuthChanged never fires AND Firebase knows no user, stop waiting. */
 const LOADING_TIMEOUT_MS = 10_000;
 /** Bounded retry for transient fetchMe failures while a Firebase user exists. */
+// Read once, at module load. Null in every normal run and in every release build
+// (see ./devAuth). When set, Firebase is bypassed entirely and the session is
+// whatever the seeded backend says that uid is.
+const DEV_UID = devAuthUid();
+
 const RETRY_DELAY_MS = 3_000;
 const MAX_RETRIES = 3;
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<SessionStatus>(hasFirebaseConfig() ? "loading" : "ready");
+  const [status, setStatus] = useState<SessionStatus>(
+    DEV_UID !== null || hasFirebaseConfig() ? "loading" : "ready",
+  );
   const [user, setUser] = useState<UserOut | null>(null);
   const [memberships, setMemberships] = useState<MembershipOut[]>([]);
   const [campus, setCampus] = useState<CampusOut | null>(null);
@@ -153,8 +161,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       }
       // Transient/network failure. If Firebase still has a user, retry rather
       // than stranding them; never assert "signedOut" while a session exists.
-      const firebaseUser = getFirebaseAuth().currentUser;
-      if (firebaseUser && attempt < MAX_RETRIES) {
+      const hasSession = DEV_UID !== null || getFirebaseAuth().currentUser !== null;
+      if (hasSession && attempt < MAX_RETRIES) {
         clearRetry();
         retryTimerRef.current = setTimeout(() => {
           if (genRef.current === gen) void loadMe(attempt + 1);
@@ -163,7 +171,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       }
       // Out of retries: only the never-left-"loading" case falls to signedOut
       // (the app must not hang); otherwise keep the prior status.
-      setStatus((prev) => (prev === "loading" && !firebaseUser ? "signedOut" : prev));
+      setStatus((prev) => (prev === "loading" && !hasSession ? "signedOut" : prev));
       return false;
     }
   }, []);
@@ -264,7 +272,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [loadMe],
   );
 
+  // Impersonated session (dev only). Sets the debug header and asks the backend
+  // who that is; Firebase is never consulted.
   useEffect(() => {
+    if (DEV_UID === null) return;
+    setDebugFirebaseUid(DEV_UID);
+    setAuthToken(null); // no bearer token exists for an emulated identity
+    void loadMe();
+  }, [loadMe]);
+
+  useEffect(() => {
+    // Stand down when an impersonated uid owns the session, or the listener would
+    // immediately overwrite it with "signedOut" (Firebase has no user here).
+    if (DEV_UID !== null) return;
     if (!hasFirebaseConfig()) return;
 
     const timeout = setTimeout(() => {
