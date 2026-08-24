@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787610914565,
+  "updated": 1787611441688,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1929,11 +1929,11 @@
     },
     {
       "id": "c173",
-      "col": "progress",
+      "col": "done",
       "owner": "jose",
       "tag": "backend",
       "area": "orgs",
-      "title": "c102 follow-up (Jose's call Aug 24): inactive members become READ-ONLY on the chapter-public tier - like/comment revert to active-only; the read gate stays as c102 built it. Subagent building",
+      "title": "DONE Aug 24 - merged (#96): inactive members are READ-ONLY on the chapter-public tier. _readable_post org branch back to active-only (one shared filter for org/org_actives/campus), read gate untouched, docstrings record the ruling. 54-test regression sweep across every _readable_post consumer, CI green. Rides the next deploy with the rest of the wave",
       "detail": "c102's #94 made read-implies-react: _readable_post's 'org' branch accepted any non-removed membership, so inactive members could like/comment chapter-public posts. Jose chose read-only instead. Fix: list_posts keeps get_current_chapter_member (active OR inactive may READ); _readable_post's org branch goes back to ACTIVE membership only, so like/comment/reactions refuse inactive members. Tests: inactive member reads chapter-public but 403s on like and comment; active member unaffected; org_actives tier unaffected."
     }
   ],
