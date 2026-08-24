@@ -176,6 +176,13 @@ def create_app() -> FastAPI:
         allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
+        # expose_headers is an ALLOWLIST for which response headers browser JS may
+        # read via fetch() — allow_headers=["*"] above only covers REQUEST headers.
+        # Without this, GET /chapters/{id}/posts' X-Actives-Only-Hidden signal
+        # (board c102) would be present on the wire but invisible to Expo web's
+        # fetch(); native iOS/Android fetch has no CORS concept and was never
+        # affected either way.
+        expose_headers=["X-Actives-Only-Hidden"],
     )
 
     for module in (

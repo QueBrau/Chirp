@@ -395,7 +395,13 @@ export function MediaPostCard({
           <View style={{ flexShrink: 1 }}>
             <CompactHeader name={authorName} time={timeLabel} photoUrl={authorPhotoUrl} />
           </View>
-          <OverflowButton onPress={openMenu} />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+            {/* Tier indicator (board c102): a viewer only ever receives this post
+                at all if they're active, so the badge is purely informative — it
+                tells them WHY this post reads differently, not a gate. */}
+            {post.audience === "org_actives" ? <Chip label="Actives only" variant="accent" /> : null}
+            <OverflowButton onPress={openMenu} />
+          </View>
         </View>
         <AppText>{post.body}</AppText>
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.lg }}>
@@ -518,6 +524,16 @@ export function MediaPostCard({
           <Chip
             label={formatDuration(post.duration_sec)}
             style={{ position: "absolute", top: spacing.md, right: spacing.md }}
+          />
+        ) : null}
+
+        {/* Tier indicator (board c102), top-left mirroring the duration Chip's
+            top-right — purely informative, see the text-variant comment above. */}
+        {post.audience === "org_actives" ? (
+          <Chip
+            label="Actives only"
+            variant="accent"
+            style={{ position: "absolute", top: spacing.md, left: spacing.md }}
           />
         ) : null}
       </View>

@@ -277,6 +277,7 @@ export default function FeedScreen() {
           chapterId={chapterId}
           campusId={campusId}
           campusName={campus?.name ?? null}
+          isActiveMember={memberships[0]?.status === "active"}
           onPosted={() => void load()}
         />
       ) : null}

@@ -30,10 +30,15 @@ export interface FabProps {
   /** The caller's campus — the create route for a chapter-less student (c71). */
   campusId: string | null;
   campusName?: string | null;
+  /** True iff the caller's OWN membership in `chapterId` has status=='active'
+   * (board c102) — gates whether CreateSheet's compose picker offers the
+   * actives-only audience choice at all. Undefined/false for a chapter-less
+   * caller, who has no chapter membership to be active in. */
+  isActiveMember?: boolean;
   onPosted?: () => void;
 }
 
-export function Fab({ chapterId, campusId, campusName, onPosted }: FabProps) {
+export function Fab({ chapterId, campusId, campusName, isActiveMember, onPosted }: FabProps) {
   const palette = useTheme();
   const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
@@ -74,6 +79,7 @@ export function Fab({ chapterId, campusId, campusName, onPosted }: FabProps) {
         chapterId={chapterId}
         campusId={campusId}
         campusName={campusName}
+        isActiveMember={isActiveMember ?? false}
         onPosted={onPosted}
       />
     </>

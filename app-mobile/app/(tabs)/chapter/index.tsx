@@ -235,6 +235,10 @@ function OrgFeedSegment({
 }) {
   const { user } = useSession();
   const [items, setItems] = useState<OrgFeedItem[] | null>(null);
+  // Honest signal (board c102): true only for a non-active viewer when this
+  // chapter genuinely has actives-only content they cannot see. Never true for an
+  // active member, who already sees everything.
+  const [activesOnlyHidden, setActivesOnlyHidden] = useState(false);
 
   // ONE round trip: GET /chapters/{id}/posts returns FeedPostOut, which already
   // carries the author's display identity and batched like/comment counts (c43).
@@ -245,7 +249,8 @@ function OrgFeedSegment({
   // blockAuthor's refetch below without that refetch masquerading as a block failure.
   const load = useCallback(async () => {
     try {
-      const posts = await listPosts(chapterId);
+      const { posts, activesOnlyHidden: hidden } = await listPosts(chapterId);
+      setActivesOnlyHidden(hidden);
       setItems(
         posts.map((post) => ({
           post,
@@ -318,17 +323,28 @@ function OrgFeedSegment({
     }
   };
 
+  // Shown ABOVE both the empty state and the list (board c102's named failure
+  // mode): a non-active viewer who sees zero posts must still be able to tell
+  // that's because the chapter-public tier is genuinely empty, not because an
+  // actives-only tier exists and is simply invisible to them. Gating this behind
+  // items.length > 0 would silently recreate exactly that ambiguity.
+  const hiddenNotice = activesOnlyHidden ? <ActivesOnlyHiddenNotice /> : null;
+
   if (items !== null && items.length === 0) {
     return (
-      <EmptyState
-        title="Nothing posted yet"
-        message={`Chapter-only posts land here — only ${orgName} members ever see this feed.`}
-      />
+      <View style={{ gap: spacing.md }}>
+        {hiddenNotice}
+        <EmptyState
+          title="Nothing posted yet"
+          message={`Chapter-only posts land here — only ${orgName} members ever see this feed.`}
+        />
+      </View>
     );
   }
 
   return (
     <View style={{ gap: spacing.md }}>
+      {hiddenNotice}
       {(items ?? []).map((item) => (
         <MediaPostCard
           key={item.post.id}
@@ -345,6 +361,37 @@ function OrgFeedSegment({
           canBlock={user !== null && item.post.author_id !== user.id}
         />
       ))}
+    </View>
+  );
+}
+
+/** Honest-signal row (board c102's named failure mode): tells a non-active member
+ * a fuller, actives-only tier exists in this chapter, rather than leaving them
+ * reading an indistinguishable-from-quiet feed. Modest — one row, no dismiss,
+ * matches the "stated, not offered" info box CreateSheet uses for its own
+ * audience-picker constraint. */
+function ActivesOnlyHiddenNotice() {
+  const palette = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: spacing.md,
+        padding: spacing.md,
+        borderRadius: radii.input,
+        backgroundColor: palette.surfaceAlt,
+        borderWidth: 1,
+        borderColor: palette.border,
+      }}
+    >
+      <Feather name="eye-off" size={18} color={palette.inkFaint} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <AppText variant="bodyBold">Actives-only posts are hidden</AppText>
+        <AppText variant="caption" tone="secondary">
+          Some posts here are visible only to active members.
+        </AppText>
+      </View>
     </View>
   );
 }
@@ -974,6 +1021,7 @@ export default function OrgsScreen() {
           chapterId={membership.chapter_id}
           campusId={campus?.id ?? null}
           campusName={campus?.name ?? null}
+          isActiveMember={membership.status === "active"}
           onPosted={() => setFeedRefreshKey((key) => key + 1)}
         />
       ) : null}

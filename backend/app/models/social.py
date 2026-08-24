@@ -13,8 +13,14 @@ from app.db import Base
 class Post(Base):
     __tablename__ = "posts"
     __table_args__ = (
+        # 'org_actives' added by migration 0019 (board c102): a third value layered
+        # ON TOP of 'org' rather than a fourth privacy dimension - it is still
+        # chapter-scoped exactly like 'org' (ck_posts_org_requires_chapter below
+        # still applies, since its OR clause only exempts 'campus'), just visible to
+        # a narrower slice of the same chapter. See routers/feed.py list_posts for
+        # the actual gate.
         CheckConstraint(
-            "audience IN ('org', 'campus')",
+            "audience IN ('org', 'campus', 'org_actives')",
             name="ck_posts_audience",
         ),
         CheckConstraint(
@@ -74,9 +80,11 @@ class Post(Base):
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
     media_urls: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
-    # 'org' (private to the chapter) or 'campus' (visible campus-wide); author-chosen
-    # at compose time, defaults to 'org' so a client that omits it never accidentally
-    # broadcasts (board Decisions log, Aug 14).
+    # 'org' (chapter-public - any non-removed member), 'campus' (visible campus-wide),
+    # or 'org_actives' (chapter-scoped like 'org', but only a viewer whose OWN
+    # membership.status == 'active' sees it - board c102). Author-chosen at compose
+    # time, defaults to 'org' so a client that omits it never accidentally broadcasts
+    # (board Decisions log, Aug 14).
     audience: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'org'")
     )
