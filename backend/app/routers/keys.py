@@ -257,7 +257,7 @@ async def fetch_prekey_bundle(
     OTK consumption semantics below; it only gates whether this call is allowed to happen.
     """
     rate_limit_key = f"prekey_bundle:{user.id}:{user_id}"
-    if not rate_limit_allow(
+    if not await rate_limit_allow(
         rate_limit_key,
         max_calls=_PREKEY_BUNDLE_RATE_LIMIT_MAX_CALLS,
         window_seconds=_PREKEY_BUNDLE_RATE_LIMIT_WINDOW_SECONDS,

@@ -79,13 +79,22 @@ export async function sendMessage(
   });
 }
 
-/** Ciphertext history, newest-first pagination via `before` (ISO timestamp) + `limit`. */
+/** Cursor options for ciphertext history, newest-first. */
+export interface ListMessagesOptions {
+  /** created_at cursor — messages older than this. */
+  before?: string;
+  /** id tie-break for rows sharing the same created_at as `before`. */
+  before_id?: string;
+  limit?: number;
+}
+
+/** Ciphertext history, newest-first pagination via the compound `(before, before_id)` cursor. */
 export async function listMessages(
   conversationId: string,
-  options: { before?: string; limit?: number } = {},
+  options: ListMessagesOptions = {},
 ): Promise<MessageOut[]> {
   return request<MessageOut[]>(`/conversations/${conversationId}/messages`, {
-    query: { before: options.before, limit: options.limit },
+    query: { before: options.before, before_id: options.before_id, limit: options.limit },
   });
 }
 

@@ -1,4 +1,4 @@
-"""Scrub credential-shaped query params from uvicorn's access log (c146).
+"""Scrub credential-shaped URLs from uvicorn's access log (c146/c140).
 
 THIS IS A TRIPWIRE, NOT A FALLBACK. The mechanism it originally covered — WS auth
 via `?token=<firebase-id-token>` in the URL — is gone; c143 moved that onto the
@@ -8,10 +8,11 @@ filter never fires again, that is the fix working, not this file being dead code
 What this actually guards against is a DIFFERENT failure: some future client putting
 a credential back into a URL — a stale mobile build still on the old query-string
 scheme, a third-party integration bolted on later, a developer's debug curl with
-`?token=` pasted in by habit. uvicorn's access log writes the full request line,
-query string included, to stdout — which on Cloud Run means Cloud Logging, readable
-by anyone with log access. A credential that lands there is compromised the moment
-it's logged, auth mechanism notwithstanding.
+`?token=` pasted in by habit, or a capability URL being requested from `/media/<token>`.
+uvicorn's access log writes the full request line, path and query string included, to
+stdout — which on Cloud Run means Cloud Logging, readable by anyone with log access.
+A credential or bearer capability that lands there is compromised the moment it's
+logged, auth mechanism notwithstanding.
 
 WHY THIS IS NOT THE OLD _RedactWsTokenFilter WITH A NEW NAME: that filter matched
 `token=` literally, because that was the one param the WS handshake actually used.
@@ -28,9 +29,11 @@ whose name ends in `token=` — rather than any enumeration of literals.
 SCOPE, deliberately held: this attaches to `uvicorn.access` only, the same target
 the original used, because that is specifically the channel that writes a request's
 full URL unprompted — every request, whether the app's own code ever logs anything
-or not. Scrubbing arbitrary application log calls for credential-shaped strings is a
-different, much larger feature (what counts as a credential in a log message is not
-a regex problem) and is not what this card asked for.
+or not. The path rule is deliberately limited to the app-owned `/media/<payload>.<sig>`
+shape; `/media/upload-url` and other ordinary paths pass through. Scrubbing arbitrary
+application log calls for credential-shaped strings is a different, much larger
+feature (what counts as a credential in a log message is not a regex problem) and is
+not what this card asked for.
 """
 from __future__ import annotations
 
@@ -46,17 +49,34 @@ import re
 # out to fix one level up (see the module docstring).
 _CREDENTIAL_QS_RE = re.compile(r"([?&][a-z0-9_]*token=)[^&\s]+", re.IGNORECASE)
 
-# This hint is deliberately as broad as the regex's own suffix match, not
-# narrower — "token=" appearing anywhere is necessary for the regex to match
-# ANY param this filter targets, since every one of them ends in that literal.
-# A log line with no "token=" substring at all can never match, so this is a
-# cheap, always-safe fast path that skips the sub() call on the overwhelming
-# majority of ordinary request lines.
-_FAST_PATH_HINT = "token="
+# Capability URLs are bearer credentials in the PATH, not a query parameter:
+# media_capability_url() emits `/media/<base64url-payload>.<base64url-signature>`.
+# Keep this exact enough that the public upload endpoint (`/media/upload-url`) and
+# unrelated `/media/...` paths remain visible in access logs. The lookahead preserves
+# the request-line boundary while allowing a query string after a capability path.
+_MEDIA_CAPABILITY_PATH_RE = re.compile(
+    r"(/media/)[a-z0-9_-]+\.[a-z0-9_-]+(?=[?\s\"']|$)",
+    re.IGNORECASE,
+)
+
+# These hints are deliberately broad enough to cover each regex's entry shape:
+# "token=" for credential query params and "/media/" for capability paths. A log
+# line with neither substring can never match, so this remains a cheap, always-safe
+# fast path that skips both substitutions on the overwhelming majority of requests.
+_FAST_PATH_HINTS = ("token=", "/media/")
+
+
+def _redact_url_material(value: str) -> str:
+    """Redact query credentials and media capability paths from one log value."""
+    lower = value.lower()
+    if not any(hint in lower for hint in _FAST_PATH_HINTS):
+        return value
+    value = _CREDENTIAL_QS_RE.sub(r"\1[REDACTED]", value)
+    return _MEDIA_CAPABILITY_PATH_RE.sub(r"\1[REDACTED]", value)
 
 
 class _RedactCredentialQueryParamsFilter(logging.Filter):
-    """Redacts any *token=-shaped query param from a log record in place.
+    """Redacts token-shaped query params and media capability paths in place.
 
     Mirrors the shape both of uvicorn's access-log call (args tuple) and of a plain
     string message, since either can appear depending on how a record was built.
@@ -71,13 +91,11 @@ class _RedactCredentialQueryParamsFilter(logging.Filter):
         # isinstance((), tuple) is True - the args branch "wins" the elif and does
         # nothing, since it has zero elements to iterate. Caught by this file's own
         # plain-message test failing against that exact structure.
-        if isinstance(record.msg, str) and _FAST_PATH_HINT in record.msg.lower():
-            record.msg = _CREDENTIAL_QS_RE.sub(r"\1[REDACTED]", record.msg)
+        if isinstance(record.msg, str):
+            record.msg = _redact_url_material(record.msg)
         if isinstance(record.args, tuple):
             record.args = tuple(
-                _CREDENTIAL_QS_RE.sub(r"\1[REDACTED]", value)
-                if isinstance(value, str) and _FAST_PATH_HINT in value.lower()
-                else value
+                _redact_url_material(value) if isinstance(value, str) else value
                 for value in record.args
             )
         return True

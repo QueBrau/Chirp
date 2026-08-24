@@ -18,6 +18,12 @@ export { withInviteCode, inviteShareUrl, WEB_BASE_URL } from "./inviteLink";
 export { useCampus } from "./useCampus";
 export { useCampusAccess, type CampusAccess } from "./useCampusAccess";
 export {
+  getSocialAuthStatus,
+  socialAuthUnavailableMessage,
+  type SocialAuthProvider,
+  type SocialAuthStatus,
+} from "./social";
+export {
   type SessionContextValue,
   type SessionStatus,
 } from "./SessionProvider";

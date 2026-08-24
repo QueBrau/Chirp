@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,14 +68,35 @@ async def create_conversation(
 ) -> ConversationOut:
     """Create a dm/group conversation; the creator is always added as a member."""
     member_ids = {user.id, *body.member_user_ids}
-    users_count = await session.execute(
-        select(func.count()).select_from(models.User).where(models.User.id.in_(member_ids))
+    users_result = await session.execute(
+        select(models.User.id, models.User.is_ghost).where(models.User.id.in_(member_ids))
     )
-    if int(users_count.scalar_one()) != len(member_ids):
+    users = {user_id: is_ghost for user_id, is_ghost in users_result.all()}
+    if len(users) != len(member_ids):
         raise not_found("user_not_found")
     if body.chapter_id is not None:
         if await session.get(models.Chapter, body.chapter_id) is None:
             raise not_found("chapter_not_found")
+        active_memberships = await session.execute(
+            select(models.Membership.user_id).where(
+                models.Membership.chapter_id == body.chapter_id,
+                models.Membership.status == "active",
+                models.Membership.user_id.in_(member_ids),
+            )
+        )
+        active_member_ids = set(active_memberships.scalars())
+        if user.id not in active_member_ids:
+            raise forbidden("not_a_member")
+        # Ghost users are historical placeholders, not live chapter accounts. They
+        # are the explicit exception that lets a chapter conversation retain them
+        # alongside its active members without creating a membership row.
+        non_ghost_ids = {
+            member_id
+            for member_id in member_ids
+            if member_id != user.id and not users[member_id]
+        }
+        if not non_ghost_ids.issubset(active_member_ids):
+            raise forbidden("not_a_member")
 
     conversation = models.Conversation(
         chapter_id=body.chapter_id, kind=body.kind, title=body.title

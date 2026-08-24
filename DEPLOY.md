@@ -7,7 +7,7 @@ is already Cloud Run-ready (listens on `$PORT`, uvicorn factory). Pairs with
 
 Set once (`PROJECT` is your GCP project id):
 ```bash
-export PROJECT=chirp-prod
+export PROJECT=chirps-prod
 export REGION=us-central1
 gcloud config set project $PROJECT
 ```
@@ -49,16 +49,38 @@ Note the **connection name** (`$PROJECT:$REGION:chirp-db`) — you need it below
 > `host:5432` URL will fail on Cloud Run.
 
 ## 2. Memorystore — Redis (needs a VPC connector)
-Cloud Run reaches private Redis only through a Serverless VPC connector. Step 4
-reads the instance's internal IP back out, so there is nothing to copy down here:
+
+Cloud Run reaches private Redis only through a Serverless VPC connector. Production
+is already provisioned; these read-only commands are the normal verification path:
+
 ```bash
-gcloud redis instances create chirp-redis --size=1 --region=$REGION --redis-version=redis_7_0
+gcloud compute networks vpc-access connectors describe chirp-vpc --project=$PROJECT --region=$REGION
+gcloud redis instances describe chirp-redis --project=$PROJECT --region=$REGION
+```
+
+The production shape verified on Aug 24 is `chirp-vpc` on the default network,
+`10.8.0.0/28`, `e2-micro`, min 2/max 3 instances, and `chirp-redis` Basic tier,
+1 GiB, Redis 7.0. Both resources are `READY`. The connector is deliberately capped
+at three instances because connectors do not scale back in after scaling out.
+
+The following creation commands are first-provisioning reference only. Do not rerun
+them against `chirps-prod`; the names already exist. Creating the connector first
+reserves its requested range before Memorystore chooses its own private block:
+
+```bash
 gcloud compute networks vpc-access connectors create chirp-vpc \
-  --region=$REGION --range=10.8.0.0/28
+  --project=$PROJECT --region=$REGION --network=default --range=10.8.0.0/28 \
+  --machine-type=e2-micro --min-instances=2 --max-instances=3
+gcloud redis instances create chirp-redis \
+  --project=$PROJECT --region=$REGION --network=default --tier=basic --size=1 \
+  --redis-version=redis_7_0
 ```
 Redis is fan-out only (never storage) — the app already degrades gracefully if
-Redis is down, so this can come second. **Not provisioned on prod today** (board
-c61), which is why the three websocket fan-out tests skip locally (c92).
+Redis is down. c63 bound both resources to `chirp-api-00030-m97` and proved a real
+Firebase-authenticated HTTP-message-to-WebSocket round-trip. The on-demand estimate
+is approximately $35.77/month for Redis plus $12.23/month for the connector at its
+two-instance floor: about $48/month before network transfer. Three connector
+instances raise that estimate to roughly $54/month.
 
 ## 3. Firebase Auth
 Do `SETUP-FIREBASE.md` first (Email + Google + Apple). Use the SAME GCP project so
@@ -73,12 +95,25 @@ Redis IP is captured rather than hand-copied — a literal `INTERNAL_IP` in this
 secret does not error, it just silently disables realtime fan-out.
 ```bash
 printf 'postgresql+asyncpg://chirp:%s@/chirp?host=/cloudsql/%s:%s:chirp-db' "$DBPASS" "$PROJECT" "$REGION" \
-  | gcloud secrets create DATABASE_URL --data-file=-
-export REDIS_HOST=$(gcloud redis instances describe chirp-redis --region=$REGION --format='value(host)')
-printf 'redis://%s:6379/0' "$REDIS_HOST" | gcloud secrets create REDIS_URL --data-file=-
+  | gcloud secrets create DATABASE_URL --project=$PROJECT --data-file=-
+export REDIS_HOST=$(gcloud redis instances describe chirp-redis --project=$PROJECT --region=$REGION --format='value(host)')
+printf 'redis://%s:6379/0' "$REDIS_HOST" | gcloud secrets create REDIS_URL --project=$PROJECT --data-file=-
+gcloud secrets add-iam-policy-binding REDIS_URL --project=$PROJECT \
+  --member=serviceAccount:chirp-api-run@${PROJECT}.iam.gserviceaccount.com \
+  --role=roles/secretmanager.secretAccessor
 ```
 If you are back in a fresh shell and `$DBPASS` is gone, recover it from the secret
 with the decompose recipe in section 5 rather than guessing.
+
+`REDIS_URL` version 1 already exists in production and points at the discovered
+Memorystore host. c63 used the merge-safe update below; `--update-secrets` preserves
+every existing secret mount, while `--set-secrets` would replace them:
+
+```bash
+gcloud run services update chirp-api --project=$PROJECT --region=$REGION \
+  --vpc-connector=chirp-vpc \
+  --update-secrets=REDIS_URL=REDIS_URL:latest
+```
 
 Stripe keys come later (milestone 8).
 
@@ -176,9 +211,22 @@ endpoint — see the warning in section 5.
 | `REDIS_URL` | for realtime | `redis://10.x.x.x:6379/0` |
 | `ENV` | prod | `production` (forces firebase + real CORS) |
 | `AUTH_MODE` | prod | `firebase` |
-| `FIREBASE_PROJECT_ID` | prod | `chirp-prod` |
+| `FIREBASE_PROJECT_ID` | prod | `chirps-prod` |
 | `CORS_ORIGINS` | prod | `["https://app.chirp..."]` (JSON array) |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | milestone 8 | — |
+
+## Media privacy cutover gate (pending)
+
+The signed-media route and `MEDIA_SIGNING_SECRET` are deployed and survived the c63
+revision update, but `chirps-prod-media` intentionally remains publicly readable.
+Do not enforce Public Access Prevention or remove the `allUsers` grant yet. The
+cutover has two independent gates: a signed-media capability URL must render a real
+uploaded photo through the shared EAS app on a physical device, and Jose must approve
+the exact privacy mutation after seeing that proof.
+
+Redis readiness does not close this gate. After approval, use the private runbook in
+`INFRA-PRIVATE.html`, then prove both sides: the capability route still renders and a
+direct unauthenticated object URL no longer does.
 
 ## 8. Permanent-media reconciliation job
 

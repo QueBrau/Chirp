@@ -17,7 +17,8 @@ import { useRouter, type Href } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Image, Pressable, View, type ViewStyle } from "react-native";
+import { Alert, Image, Pressable, Share, View, type ViewStyle } from "react-native";
+import QRCode from "react-native-qrcode-svg";
 
 import {
   createInvite,
@@ -507,9 +508,10 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
  * (c44) — the server applies the create_invite rule (any e-board mints
  * member/pledge/alumni, president additionally mints e-board roles), so this
  * file no longer mirrors permissions.py. Then a "Create invite" Button mints
- * the code and shows it prominently with the deep-link share text.
- * expo-clipboard isn't a project dependency yet, so the code/link render as
- * selectable text instead of adding a copy button + new dependency.
+ * the code and shows it prominently with the public link, native share sheet,
+ * and an on-device QR code. Universal-link association files remain an
+ * external release setup task; the QR always encodes the same https hand-off
+ * page so it is useful before those files exist.
  */
 /** What a code is right now, in the order that decides it (c111).
  *
@@ -533,6 +535,8 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
   const [error, setError] = useState<string | null>(null);
   const [existing, setExisting] = useState<ChapterInviteOut[] | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [showQr, setShowQr] = useState(false);
+  const [sharing, setSharing] = useState(false);
 
   // c111: the codes already out there. Fails soft to absent rather than showing a
   // broken shell — the mint half of this card has to keep working if the list
@@ -555,6 +559,7 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
     try {
       const created = await createInvite(chapterId, { role: inviteRole });
       setInvite(created);
+      setShowQr(false);
       void refreshExisting();
     } catch {
       setError("Couldn't create the invite. Try again.");
@@ -611,6 +616,7 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
               onPress={() => {
                 setInviteRole(option);
                 setInvite(null);
+                setShowQr(false);
               }}
               style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
             >
@@ -641,7 +647,7 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
             }}
           >
             <AppText variant="caption" tone="secondary">
-              Invite code · tap and hold to copy
+              Invite code · selectable or shareable
             </AppText>
             <AppText variant="stat" selectable>
               {invite.code}
@@ -652,6 +658,47 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
             <AppText variant="caption" tone="tertiary" selectable>
               {inviteShareUrl(invite.code)}
             </AppText>
+            <View style={{ gap: spacing.sm, marginTop: spacing.sm }}>
+              <Button
+                label={sharing ? "Opening share sheet..." : "Share invite"}
+                variant="secondary"
+                disabled={sharing}
+                onPress={() => {
+                  const url = inviteShareUrl(invite.code);
+                  setSharing(true);
+                  void Share.share({
+                    title: "Join us on Chirp",
+                    message: `Join our org on Chirp: ${url}`,
+                    url,
+                  }).catch(() => {
+                    setError("Couldn't open the share sheet. You can still copy the link above.");
+                  }).finally(() => setSharing(false));
+                }}
+              />
+              <Button
+                label={showQr ? "Hide QR code" : "Show QR code"}
+                variant="ghost"
+                onPress={() => setShowQr((visible) => !visible)}
+              />
+            </View>
+            {showQr ? (
+              <View
+                accessible
+                accessibilityLabel="QR code for this Chirp invite"
+                style={{ alignItems: "center", gap: spacing.sm, paddingTop: spacing.sm }}
+              >
+                <QRCode
+                  value={inviteShareUrl(invite.code)}
+                  size={184}
+                  color={palette.ink}
+                  backgroundColor={palette.surface}
+                  quietZone={spacing.sm}
+                />
+                <AppText variant="caption" tone="secondary" style={{ textAlign: "center" }}>
+                  Scan this code to open the invite page.
+                </AppText>
+              </View>
+            ) : null}
           </View>
         ) : null}
 

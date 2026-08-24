@@ -4,15 +4,14 @@
  * legal line.
  *
  * Real auth (milestone 1): "Continue with Email" reveals an email/password form
- * wired to src/auth/session.ts (Firebase Auth). Apple/Google stay visual-only —
- * expo-auth-session / expo-apple-authentication need native config that only
- * works in a dev build, so they still fall through to the mock flow for now
- * (see the caption under those buttons and /SETUP-FIREBASE.md).
+ * wired to src/auth/session.ts (Firebase Auth). Apple/Google remain explicitly
+ * unavailable until their native provider configuration lands. They must never
+ * fall through to the mock onboarding flow: an unavailable provider is not an
+ * authenticated session (c89).
  *
- * No Firebase project exists yet, so hasFirebaseConfig() is false today: the
- * email form's submit falls back to the same mock flow, with a small caption
- * making that explicit. The screen's resting state (before any tap) is
- * unchanged from the pre-auth mock version.
+ * When Firebase is unavailable, the email form keeps its existing demo-mode
+ * behavior. Social buttons use a separate honest error state so they cannot
+ * accidentally grant access while that native setup is pending.
  */
 
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -24,6 +23,8 @@ import {
   signInWithEmail,
   signOutUser,
   signUpWithEmail,
+  socialAuthUnavailableMessage,
+  type SocialAuthProvider,
   useSession,
   withInviteCode,
 } from "@/auth";
@@ -54,6 +55,7 @@ export default function SignInScreen() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [socialError, setSocialError] = useState<string | null>(null);
   /**
    * Non-null between "Firebase accepted the credential" and "the session
    * resolved" — navigation is deferred across that window — and it holds the
@@ -79,6 +81,15 @@ export default function SignInScreen() {
   // New identities keep the invite code in tow through account-type, which
   // forwards it to join-chapter after bootstrap.
   const continueToOnboarding = () => router.push(withInviteCode("/account-type", inviteCode));
+
+  /**
+   * Social auth is deliberately a no-op until native provider credentials are
+   * configured.  In particular, do not call continueToOnboarding() here: that
+   * would make a button that looks like authentication silently bypass it.
+   */
+  const handleUnavailableSocialProvider = (provider: SocialAuthProvider) => {
+    setSocialError(socialAuthUnavailableMessage(provider));
+  };
 
   /**
    * Post sign-in/up routing. "Sign in" means a returning user: with an invite
@@ -171,6 +182,7 @@ export default function SignInScreen() {
     }
     setShowEmailForm(false);
     setError(null);
+    setSocialError(null);
     setSubmitting(false);
     setSubmittedMode(null);
   };
@@ -299,12 +311,31 @@ export default function SignInScreen() {
           </View>
         ) : (
           <View style={{ gap: spacing.md }}>
-            <Button label="Continue with Apple" variant="secondary" onPress={continueToOnboarding} />
-            <Button label="Continue with Google" variant="secondary" onPress={continueToOnboarding} />
+            <Button
+              label="Continue with Apple"
+              variant="secondary"
+              onPress={() => handleUnavailableSocialProvider("apple")}
+            />
+            <Button
+              label="Continue with Google"
+              variant="secondary"
+              onPress={() => handleUnavailableSocialProvider("google")}
+            />
             <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
-              Apple and Google sign-in arrive with the dev build.
+              Apple and Google sign-in are not connected in this build yet. Use Email instead.
             </AppText>
-            <Button label="Continue with Email" onPress={() => setShowEmailForm(true)} />
+            {socialError !== null ? (
+              <AppText variant="caption" tone="danger" style={{ textAlign: "center" }}>
+                {socialError}
+              </AppText>
+            ) : null}
+            <Button
+              label="Continue with Email"
+              onPress={() => {
+                setSocialError(null);
+                setShowEmailForm(true);
+              }}
+            />
           </View>
         )}
 
