@@ -15,15 +15,6 @@ import { cardShadow, metrics, radii, spacing, typography, useTheme } from "@/the
 
 import { CreateSheet } from "./CreateSheet";
 
-const FAB_SIZE = 56;
-
-/**
- * The floating tab bar (app/(tabs)/_layout.tsx) sizes itself from content and
- * exports no height token, so this approximates its rendered height (icon +
- * vertical padding) to place the FAB a clean `spacing.md` (12) above it.
- */
-const TAB_BAR_APPROX_HEIGHT = 64;
-
 export interface FabProps {
   /** Chapter to post into, or null when the caller belongs to no chapter. */
   chapterId: string | null;
@@ -38,7 +29,7 @@ export function Fab({ chapterId, campusId, campusName, onPosted }: FabProps) {
   const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
 
-  const bottom = Math.max(insets.bottom, metrics.tabBarInsetBottom) + TAB_BAR_APPROX_HEIGHT + spacing.md;
+  const bottom = Math.max(insets.bottom, metrics.tabBarInsetBottom) + metrics.tabBarBoxHeight + spacing.md;
 
   // Hidden only when there is genuinely nowhere to post: no chapter AND no campus.
   // A chapter-less student keeps the button and posts to their campus (c71) — the
@@ -56,8 +47,8 @@ export function Fab({ chapterId, campusId, campusName, onPosted }: FabProps) {
           position: "absolute",
           right: metrics.tabBarInsetX,
           bottom,
-          width: FAB_SIZE,
-          height: FAB_SIZE,
+          width: metrics.fabSize,
+          height: metrics.fabSize,
           borderRadius: radii.pill,
           backgroundColor: palette.accent,
           alignItems: "center",

@@ -34,7 +34,7 @@ import {
   SCROLL_TOP_THRESHOLD,
   useTabBarVisibility,
 } from "@/nav/TabBarVisibility";
-import { metrics, radii, spacing, TAB_BAR_CLEARANCE, useTheme } from "@/theme";
+import { metrics, radii, spacing, useOverlayClearance, useTheme } from "@/theme";
 
 import { AppText } from "./AppText";
 
@@ -54,6 +54,14 @@ export interface ScreenProps {
   backgroundColor?: string;
   /** Wrap content in a ScrollView (default true — most screens are lists). */
   scroll?: boolean;
+  /**
+   * Pass `true` when this screen also renders a sibling `<Fab/>` (Home, Orgs)
+   * so the scroll content reserves clearance for BOTH floating overlays, not
+   * just the tab bar (c168 — the FAB floats further above the tab bar than
+   * the tab bar alone needs room for, and previously nothing accounted for
+   * that difference).
+   */
+  hasFab?: boolean;
   /**
    * Show the back control. Defaults to `router.canGoBack()`, which is the right
    * answer almost everywhere: false on tab roots, true on pushed screens. Pass
@@ -78,6 +86,7 @@ export function Screen({
   accentBarColor,
   backgroundColor,
   scroll = true,
+  hasFab = false,
   showBack,
   onBack,
   backTint,
@@ -85,6 +94,7 @@ export function Screen({
   const palette = useTheme();
   const router = useRouter();
   const tabBar = useTabBarVisibility();
+  const overlayClearance = useOverlayClearance(hasFab);
 
   // Hooks can't be conditional, but the provider is absent outside the tabs
   // subtree (the (auth) stack also renders <Screen>). Local fallbacks keep the
@@ -190,7 +200,7 @@ export function Screen({
           contentContainerStyle={{
             paddingHorizontal: spacing.gutter,
             paddingTop: spacing.xl,
-            paddingBottom: TAB_BAR_CLEARANCE,
+            paddingBottom: overlayClearance,
           }}
           showsVerticalScrollIndicator={false}
           onScroll={scrollHandler}
