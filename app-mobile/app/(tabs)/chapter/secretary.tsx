@@ -18,12 +18,16 @@ import { listMembers, myMemberships, type MemberOut, type MyMembershipOut } from
 import { ApiError } from "@/api/client";
 import {
   createMeeting,
+  deleteMeeting,
   exportMeetingsCsv,
   getAttendance,
+  getAttendanceSummary,
   listMeetings,
   putAttendance,
   updateMeeting,
   type AttendanceStatus,
+  type AttendanceWindow,
+  type ChapterAttendanceSummary,
   type MeetingAttendanceOut,
   type MeetingOut,
 } from "@/api/meetings";
@@ -94,6 +98,30 @@ function parseMeetingDate(raw: string): string | null {
   return parsed.toISOString();
 }
 
+/** Which attendance window the roster report is showing. */
+type WindowKey = "semester" | "all";
+
+const WINDOW_OPTIONS: { key: WindowKey; label: string }[] = [
+  { key: "semester", label: "Semester" },
+  { key: "all", label: "All time" },
+];
+
+/**
+ * The current academic term as an inclusive ISO window: fall is August through
+ * December, spring is January through July. A chapter calendar does not exist in
+ * the schema, so this is a client-side convention rather than a fact the server
+ * knows — which is exactly why the toggle to "All time" sits next to it, and why
+ * the caption always states the meeting count the numbers are drawn from.
+ */
+function currentSemesterWindow(now: Date): AttendanceWindow {
+  const year = now.getFullYear();
+  const isFall = now.getMonth() >= 7;
+  return {
+    start: new Date(Date.UTC(year, isFall ? 7 : 0, 1)).toISOString(),
+    end: new Date(Date.UTC(year, isFall ? 11 : 6, 31, 23, 59, 59)).toISOString(),
+  };
+}
+
 function statusTagColors(palette: Palette, status: AttendanceStatus): { bg: string; fg: string } {
   switch (status) {
     case "present":
@@ -139,7 +167,29 @@ export default function SecretaryScreen() {
 
   const [exportingCsv, setExportingCsv] = useState(false);
 
+  // Roster attendance totals (board c82) — one server call for the whole chapter.
+  const [summary, setSummary] = useState<ChapterAttendanceSummary | null>(null);
+  const [windowKey, setWindowKey] = useState<WindowKey>("semester");
+  const [deletingMeetingId, setDeletingMeetingId] = useState<string | null>(null);
+
   const chapterId = membership?.chapter_id ?? null;
+
+  /**
+   * Deliberately swallows its own errors instead of throwing to the caller: a failed
+   * totals call must not take the minutes and attendance surfaces down with it, which
+   * is what happens if this rejects inside init() below.
+   */
+  const loadSummary = useCallback(async (id: string, key: WindowKey) => {
+    try {
+      const totals = await getAttendanceSummary(
+        id,
+        key === "semester" ? currentSemesterWindow(new Date()) : {},
+      );
+      setSummary(totals);
+    } catch (error) {
+      showApiError(error, "Couldn't load attendance totals");
+    }
+  }, []);
 
   const loadDashboard = useCallback(async (id: string) => {
     const [meetings, members] = await Promise.all([listMeetings(id), listMembers(id)]);
@@ -164,13 +214,14 @@ export default function SecretaryScreen() {
         setMembership(eligible);
         if (eligible === null) return; // role-gated: no meetings/attendance calls
         await loadDashboard(eligible.chapter_id);
+        await loadSummary(eligible.chapter_id, "semester");
       } catch (error) {
         showApiError(error, "Couldn't load the secretary dashboard");
         setMembership(null);
       }
     };
     void init();
-  }, [loadDashboard]);
+  }, [loadDashboard, loadSummary]);
 
   if (membership === null) {
     return (
@@ -184,6 +235,23 @@ export default function SecretaryScreen() {
   }
 
   const activeRoster = roster ?? [];
+
+  // The summary carries display_name but no photo; the roster call the attendance
+  // sheet already makes carries both, so the avatar comes from there rather than
+  // from widening the endpoint.
+  const avatarFor = (userId: string): string | null =>
+    activeRoster.find((m) => m.user_id === userId)?.avatar_url ?? null;
+
+  // Ranked by absences, not alphabetically: the screen is answering "who is about to
+  // owe a fine", so the person the secretary needs is at the top rather than wherever
+  // their name happens to sort. The server orders by name because a server has no
+  // opinion about which question is being asked.
+  const rankedMembers = [...(summary?.members ?? [])].sort(
+    (a, b) =>
+      b.absent - a.absent ||
+      b.excused - a.excused ||
+      a.display_name.localeCompare(b.display_name),
+  );
 
   const inputStyle = {
     ...typography.body,
@@ -285,6 +353,56 @@ export default function SecretaryScreen() {
     }
   };
 
+  const changeWindow = (key: WindowKey) => {
+    if (chapterId === null || key === windowKey) return;
+    setWindowKey(key);
+    setSummary(null); // never show the previous window's numbers under the new label
+    void loadSummary(chapterId, key);
+  };
+
+  /**
+   * Delete is the one irreversible action on this screen: the meeting's attendance
+   * rows go with it and it leaves the CSV the chapter hands to nationals. So it
+   * confirms against the meeting's own title and date rather than a generic "are you
+   * sure" — a secretary deleting the wrong duplicate is the mistake this whole card
+   * exists to let them fix, and it must not become a second unfixable mistake.
+   */
+  const confirmDeleteMeeting = (meeting: MeetingOut) => {
+    if (chapterId === null || deletingMeetingId !== null) return;
+    Alert.alert(
+      "Delete this meeting?",
+      `"${meeting.title}" on ${meetingDate(meeting.meeting_date)} and its attendance ` +
+        "will be removed for everyone, and it will drop out of the CSV export. " +
+        "This cannot be undone.",
+      [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => void removeMeeting(meeting),
+        },
+      ],
+    );
+  };
+
+  const removeMeeting = async (meeting: MeetingOut) => {
+    if (chapterId === null || deletingMeetingId !== null) return; // double-submit guard
+    setDeletingMeetingId(meeting.id);
+    try {
+      await deleteMeeting(chapterId, meeting.id);
+      setItems((current) => (current ?? []).filter((it) => it.meeting.id !== meeting.id));
+      // Close any editor still pointed at the meeting that no longer exists.
+      setExpanded((current) => (current?.meetingId === meeting.id ? null : current));
+      // The totals counted this meeting in their denominator; refetch rather than
+      // try to subtract it locally.
+      await loadSummary(chapterId, windowKey);
+    } catch (error) {
+      showApiError(error, "Couldn't delete meeting");
+    } finally {
+      setDeletingMeetingId(null);
+    }
+  };
+
   const exportCsv = async () => {
     if (chapterId === null || exportingCsv) return;
     setExportingCsv(true);
@@ -351,6 +469,99 @@ export default function SecretaryScreen() {
               />
             </View>
           </Card>
+        </View>
+
+        <View>
+          <SectionHeader
+            title="Attendance by member"
+            caption={
+              summary === null
+                ? "Counting…"
+                : `${summary.meetings_in_window} ${
+                    summary.meetings_in_window === 1 ? "meeting" : "meetings"
+                  } ${windowKey === "semester" ? "this semester" : "on record"}`
+            }
+            right={
+              <View style={{ flexDirection: "row", gap: spacing.xs }}>
+                {WINDOW_OPTIONS.map((option) => {
+                  const selected = windowKey === option.key;
+                  return (
+                    <Pressable
+                      key={option.key}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Show ${option.label}`}
+                      accessibilityState={{ selected }}
+                      onPress={() => changeWindow(option.key)}
+                      hitSlop={spacing.xs}
+                      style={{
+                        paddingHorizontal: spacing.md,
+                        paddingVertical: spacing.xs,
+                        borderRadius: radii.pill,
+                        backgroundColor: selected ? palette.accentSoft : palette.surfaceAlt,
+                      }}
+                    >
+                      <AppText
+                        variant="micro"
+                        style={{ color: selected ? palette.accent : palette.inkSecondary }}
+                      >
+                        {option.label}
+                      </AppText>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            }
+          />
+          {summary === null ? (
+            <AppText variant="caption" tone="tertiary">
+              Loading attendance totals…
+            </AppText>
+          ) : summary.meetings_in_window === 0 ? (
+            <EmptyState
+              title="No meetings in this window"
+              message={
+                windowKey === "semester"
+                  ? "Nothing has been logged this semester yet. Switch to All time to see earlier meetings."
+                  : "Create a meeting and take attendance to start building the record."
+              }
+            />
+          ) : (
+            <Card>
+              {rankedMembers.map((member, index) => {
+                const unmarked = summary.meetings_in_window - member.recorded;
+                const detail = [
+                  `${member.present} present`,
+                  `${member.excused} excused`,
+                  // Not an absence, and must never be shown as one: nobody took a
+                  // sheet for that meeting, or took one without this member on it.
+                  unmarked > 0 ? `${unmarked} unmarked` : null,
+                ]
+                  .filter((part): part is string => part !== null)
+                  .join(" · ");
+                return (
+                  <ListRow
+                    key={member.user_id}
+                    title={member.display_name}
+                    subtitle={detail}
+                    left={
+                      <GradientAvatar
+                        name={member.display_name}
+                        size={32}
+                        photoUrl={avatarFor(member.user_id)}
+                      />
+                    }
+                    divider={index < rankedMembers.length - 1}
+                    right={
+                      <Chip
+                        label={`${member.absent} missed`}
+                        variant={member.absent > 0 ? "danger" : "neutral"}
+                      />
+                    }
+                  />
+                );
+              })}
+            </Card>
+          )}
         </View>
 
         <View>
@@ -442,6 +653,25 @@ export default function SecretaryScreen() {
                         >
                           <AppText variant="bodyBold" tone="accent">
                             {attendanceOpen ? "Close" : "Take attendance"}
+                          </AppText>
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete ${meeting.title}`}
+                          accessibilityState={{ disabled: deletingMeetingId !== null }}
+                          disabled={deletingMeetingId !== null}
+                          onPress={() => confirmDeleteMeeting(meeting)}
+                          hitSlop={spacing.sm}
+                          // Pushed away from the two routine actions on purpose: the
+                          // irreversible one should not sit a thumb-width from "Take
+                          // attendance" during a meeting.
+                          style={{ marginLeft: "auto" }}
+                        >
+                          <AppText
+                            variant="bodyBold"
+                            tone={deletingMeetingId === meeting.id ? "tertiary" : "danger"}
+                          >
+                            {deletingMeetingId === meeting.id ? "Deleting…" : "Delete"}
                           </AppText>
                         </Pressable>
                       </View>
