@@ -90,6 +90,35 @@ def test_a_second_credential_param_further_in_the_query_string_is_also_redacted(
     assert "debug=1" in emitted, "unrelated params must survive untouched"
 
 
+def test_media_capability_path_token_is_redacted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Capability URLs carry the bearer token in `/media/<payload>.<signature>`.
+
+    Query-string scrubbing alone cannot protect this route: uvicorn logs the path
+    even when there is no query string. Keep the route visible while removing both
+    token components from the emitted access line.
+    """
+    token = "cG9zdHMvdXNlci9waG90by5qcGcA.2QeY5Qf0QY8Q6d2j7w3z9A"
+    url = f'GET /media/{token}?cache=1 HTTP/1.1" 302'
+    emitted = _emit_and_capture(caplog, '%s - "%s', "127.0.0.1:0", url)
+
+    assert token not in emitted
+    assert "/media/[REDACTED]" in emitted
+    assert "?cache=1" in emitted, "unrelated query params must survive path redaction"
+
+
+def test_media_upload_path_is_not_redacted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The regular authenticated upload endpoint is not a bearer capability path."""
+    url = 'POST /media/upload-url HTTP/1.1" 201'
+    emitted = _emit_and_capture(caplog, '%s - "%s', "127.0.0.1:0", url)
+
+    assert "/media/upload-url" in emitted
+    assert "[REDACTED]" not in emitted
+
+
 # ---------------------------------------------------------------------------
 # The plain-message branch — a direct logger.info(f"...") call, not %s-args.
 # ---------------------------------------------------------------------------
