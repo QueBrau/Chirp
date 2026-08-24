@@ -57,6 +57,10 @@ CAPABILITIES: dict[str, frozenset[Role]] = {
     "minutes_admin": MINUTES_ADMIN,
     "members_admin": MEMBERS_ADMIN,
     "moderation": EBOARD,
+    # Lineage writes (families, big/little edges) — routers/lineage.py gates on
+    # require_role(*EBOARD), the same set this maps to (c79). SPEC names the
+    # historian for the job, but edit rights are "Historian/e-board" (§7 m6).
+    "lineage_admin": EBOARD,
 }
 
 

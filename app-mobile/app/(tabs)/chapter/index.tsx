@@ -89,6 +89,13 @@ const TOOLS: Tool[] = [
     description: "What you owe, and how to pay it",
   },
   {
+    href: "/chapter/historian",
+    icon: "book-open",
+    title: "Historian",
+    description: "Families, bigs, and littles",
+    capability: "lineage_admin",
+  },
+  {
     href: "/chapter/treasurer",
     icon: "dollar-sign",
     title: "Treasurer",

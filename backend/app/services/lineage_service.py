@@ -159,7 +159,11 @@ async def create_lineage_edge(
     body: LineageEdgeCreate,
     created_by: uuid.UUID,
 ) -> LineageEdgeOut:
-    """Create a big→little edge. Each little may have only one big in a chapter."""
+    """Create a big→little edge. Each little may have only one big in a chapter.
+
+    With body.replace_existing, an existing edge for the little is atomically
+    replaced instead of raising 409 (c79's reassignment path).
+    """
     if body.big_user_id == body.little_user_id:
         raise HTTPException(status_code=422, detail="big_and_little_identical")
 
@@ -174,15 +178,34 @@ async def create_lineage_edge(
             models.LineageEdge.little_user_id == body.little_user_id,
         )
     )
-    if existing.scalar_one_or_none() is not None:
+    current_edge = existing.scalar_one_or_none()
+    if current_edge is not None and not body.replace_existing:
         # SPEC: UNIQUE (little_user_id, chapter_id) — one big per little.
         raise conflict("little_already_has_big")
 
     chapter_edges = await session.execute(
         select(models.LineageEdge).where(models.LineageEdge.chapter_id == chapter_id)
     )
-    if _would_create_cycle(list(chapter_edges.scalars().all()), body.big_user_id, body.little_user_id):
+    # A replace validates the cycle against the tree as it will be AFTER the old
+    # edge is gone, or a legitimate reassignment inside one family would 422.
+    edges_after = [
+        e
+        for e in chapter_edges.scalars().all()
+        if current_edge is None or e.id != current_edge.id
+    ]
+    if _would_create_cycle(edges_after, body.big_user_id, body.little_user_id):
         raise HTTPException(status_code=422, detail="lineage_cycle")
+
+    if current_edge is not None:
+        # Reassignment (c79): delete + insert in ONE transaction so a failure
+        # leaves the old pairing intact — the little is never left big-less by a
+        # half-applied replace. The new row starts unconfirmed by construction.
+        # The flush forces the DELETE to hit the DB before the INSERT below;
+        # unflushed, SQLAlchemy orders INSERTs first and the (little, chapter)
+        # unique constraint rejects the replacement. Still pre-commit, so a
+        # later failure rolls the whole thing back.
+        await session.delete(current_edge)
+        await session.flush()
 
     edge = models.LineageEdge(
         chapter_id=chapter_id,
@@ -200,6 +223,20 @@ async def create_lineage_edge(
         raise conflict("little_already_has_big")
     await session.refresh(edge)
     return LineageEdgeOut.model_validate(edge)
+
+
+async def delete_lineage_edge(
+    session: AsyncSession,
+    *,
+    chapter_id: uuid.UUID,
+    edge_id: uuid.UUID,
+) -> None:
+    """Remove a big/little edge outright (pure unpair, no replacement)."""
+    edge = await session.get(models.LineageEdge, edge_id)
+    if edge is None or edge.chapter_id != chapter_id:
+        raise not_found("edge_not_found")
+    await session.delete(edge)
+    await session.commit()
 
 
 async def confirm_lineage_edge(

@@ -52,13 +52,26 @@ async def create_edge(
     membership: models.Membership = Depends(require_role(*EBOARD)),
     session: AsyncSession = Depends(get_session),
 ) -> LineageEdgeOut:
-    """Create a big/little edge; e-board (incl. historian). One big per little → 409."""
+    """Create a big/little edge; e-board (incl. historian). One big per little → 409,
+    unless body.replace_existing atomically reassigns (new edge starts unconfirmed)."""
     return await lineage_service.create_lineage_edge(
         session,
         chapter_id=chapter_id,
         body=body,
         created_by=membership.user_id,
     )
+
+
+@router.delete("/chapters/{chapter_id}/lineage/edges/{edge_id}", status_code=204)
+async def delete_edge(
+    chapter_id: uuid.UUID,
+    edge_id: uuid.UUID,
+    _membership: models.Membership = Depends(require_role(*EBOARD)),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Remove a big/little edge (pure unpair); e-board only. Reassignment should
+    use POST with replace_existing instead — one atomic call, never two."""
+    await lineage_service.delete_lineage_edge(session, chapter_id=chapter_id, edge_id=edge_id)
 
 
 @router.post("/chapters/{chapter_id}/lineage/edges/{edge_id}/confirm")

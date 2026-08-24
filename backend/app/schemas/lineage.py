@@ -33,6 +33,10 @@ class LineageEdgeCreate(_Schema):
     little_user_id: uuid.UUID
     family_id: uuid.UUID | None = None
     pledge_class: str | None = None
+    # Reassignment (c79): atomically replace the little's existing edge in the same
+    # transaction instead of raising 409. The new edge starts unconfirmed — the
+    # little confirms the NEW big; the old confirmation never carries over.
+    replace_existing: bool = False
 
 
 class LineageEdgeOut(_Schema):

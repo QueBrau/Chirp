@@ -43,13 +43,15 @@ async def test_plain_member_holds_none(
 @pytest.mark.parametrize(
     "role,expected",
     [
-        ("treasurer", {"dues_admin", "moderation"}),
-        ("secretary", {"minutes_admin", "moderation"}),
+        ("treasurer", {"dues_admin", "moderation", "lineage_admin"}),
+        ("secretary", {"minutes_admin", "moderation", "lineage_admin"}),
         # The two roles the old hardcoded grid forgot entirely. They are e-board, so
         # they moderate — and they are NOT dues/minutes/members admins, which is the
         # half a "just show e-board everything" fix would have got wrong.
-        ("vice_president", {"moderation"}),
-        ("historian", {"moderation"}),
+        ("vice_president", {"moderation", "lineage_admin"}),
+        # lineage_admin is EBOARD-wide (edit rights are "Historian/e-board", SPEC §7
+        # m6), but the historian is the role the job is named for (c79).
+        ("historian", {"moderation", "lineage_admin"}),
     ],
 )
 async def test_each_officer_gets_exactly_what_the_server_grants(
