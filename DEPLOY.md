@@ -180,6 +180,101 @@ endpoint — see the warning in section 5.
 | `CORS_ORIGINS` | prod | `["https://app.chirp..."]` (JSON array) |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | milestone 8 | — |
 
+## 8. Permanent-media reconciliation job
+
+`python -m app.jobs.media_reconcile` compares objects below `posts/` with every
+value still referenced by `posts.media_urls`. It is a dry run unless `--delete` is
+explicitly supplied. This job must never use the API runtime service account:
+`chirp-api-run` deliberately cannot delete `posts/` objects, and its existing
+`tmp/`-only IAM condition must remain unchanged.
+
+The reconciler requires a dedicated identity and a dedicated read-only database
+credential. Do not reuse the application's `DATABASE_URL`: doing so would give a
+compromised cleanup container the application's write privileges even though the
+current job code only issues a `SELECT`.
+
+The commands in this section change production infrastructure. They are manager
+steps, not part of a normal backend deploy. Run them from a reviewed shell with the
+same `PROJECT=chirps-prod` and `REGION=us-central1` values used above.
+
+Create the database login through the Cloud SQL proxy from section 5. A hexadecimal
+password is used so it can be embedded in a URL without percent-encoding ambiguity.
+The role can connect, use the public schema, and read only the one column the job
+queries.
+
+```bash
+export RECONCILE_DBPASS=$(openssl rand -hex 24)
+printf "CREATE ROLE chirp_media_reconcile LOGIN PASSWORD '%s';\n" "$RECONCILE_DBPASS" | PGPASSWORD="$PGPASS" psql -h 127.0.0.1 -p 5433 -U chirp -d chirp
+PGPASSWORD="$PGPASS" psql -h 127.0.0.1 -p 5433 -U chirp -d chirp -c "GRANT CONNECT ON DATABASE chirp TO chirp_media_reconcile"
+PGPASSWORD="$PGPASS" psql -h 127.0.0.1 -p 5433 -U chirp -d chirp -c "GRANT USAGE ON SCHEMA public TO chirp_media_reconcile"
+PGPASSWORD="$PGPASS" psql -h 127.0.0.1 -p 5433 -U chirp -d chirp -c "GRANT SELECT (media_urls) ON TABLE posts TO chirp_media_reconcile"
+printf 'postgresql+asyncpg://chirp_media_reconcile:%s@/chirp?host=/cloudsql/%s:%s:chirp-db' "$RECONCILE_DBPASS" "$PROJECT" "$REGION" | gcloud secrets create MEDIA_RECONCILE_DATABASE_URL --data-file=-
+unset RECONCILE_DBPASS
+```
+
+Create a dedicated service account. Use custom roles because the predefined
+Storage object-admin roles also authorize object creation and replacement. Listing
+is bucket-scoped and therefore has a separate unconditioned binding; deletion is
+the only object mutation granted, and its condition is restricted to `posts/`.
+
+```bash
+gcloud iam service-accounts create chirp-media-reconcile --project=$PROJECT --display-name="Chirp media reconciler"
+gcloud iam roles create chirpMediaObjectLister --project=$PROJECT --title="Chirp media object lister" --permissions=storage.objects.list --stage=GA
+gcloud iam roles create chirpMediaPostsDeleter --project=$PROJECT --title="Chirp posts object deleter" --permissions=storage.objects.delete --stage=GA
+gcloud storage buckets add-iam-policy-binding gs://chirps-prod-media --member=serviceAccount:chirp-media-reconcile@${PROJECT}.iam.gserviceaccount.com --role=projects/${PROJECT}/roles/chirpMediaObjectLister
+gcloud storage buckets add-iam-policy-binding gs://chirps-prod-media --member=serviceAccount:chirp-media-reconcile@${PROJECT}.iam.gserviceaccount.com --role=projects/${PROJECT}/roles/chirpMediaPostsDeleter --condition='title=posts-prefix-only,description=c153 delete only below posts/,expression=resource.name.startsWith("projects/_/buckets/chirps-prod-media/objects/posts/")'
+gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:chirp-media-reconcile@${PROJECT}.iam.gserviceaccount.com --role=roles/cloudsql.client
+gcloud secrets add-iam-policy-binding MEDIA_RECONCILE_DATABASE_URL --project=$PROJECT --member=serviceAccount:chirp-media-reconcile@${PROJECT}.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor
+```
+
+Pin the job to the exact image currently serving the API, rather than a mutable tag.
+The stored job definition remains dry-run-only: it has neither `--delete` nor a
+scheduler, uses one task, and does not retry automatically.
+
+```bash
+export RECONCILE_IMAGE=$(gcloud run services describe chirp-api --region=$REGION --project=$PROJECT --format='value(spec.template.spec.containers[0].image)')
+printf '%s\n' "$RECONCILE_IMAGE"
+gcloud run jobs create chirp-media-reconcile --project=$PROJECT --region=$REGION --image="$RECONCILE_IMAGE" --service-account=chirp-media-reconcile@${PROJECT}.iam.gserviceaccount.com --set-cloudsql-instances=${PROJECT}:${REGION}:chirp-db --set-secrets=DATABASE_URL=MEDIA_RECONCILE_DATABASE_URL:latest --set-env-vars=ENV=production,MEDIA_BUCKET_NAME=chirps-prod-media --command=python --args=-m,app.jobs.media_reconcile --tasks=1 --max-retries=0 --task-timeout=10m
+```
+
+Before the first execution, classify legacy values. The last count combines valid
+references to another bucket with shapes that need manual inspection; classify each
+of those rows before permitting deletion. Any value the dry run itself reports as
+unparsed is a stop signal: teach the resolver that shape first. A zero `our_bucket`
+count while media URLs exist is also a stop signal and normally means the job points
+at the wrong bucket.
+
+```sql
+SELECT
+  count(*) AS total,
+  count(*) FILTER (WHERE media_url LIKE 'https://storage.googleapis.com/chirps-prod-media/%') AS canonical,
+  count(*) FILTER (WHERE media_url LIKE '%chirps-prod-media%') AS our_bucket,
+  count(*) FILTER (WHERE media_url NOT LIKE '%chirps-prod-media%') AS noncanonical_or_foreign
+FROM posts
+CROSS JOIN LATERAL unnest(coalesce(media_urls, ARRAY[]::text[])) AS media_url;
+```
+
+The manager's first pass is dry-run only. Execute it, wait for success, and read the
+complete logs. Record `scanned`, `referenced`, `too_young`, `eligible`, unresolved
+values, raw-match protections, and every proposed object name. Independently compare
+that list with the database query and `posts/` inventory. Also verify the runner can
+list the bucket but cannot create or replace a `posts/` object, cannot access `tmp/`,
+and that `chirp-api-run` still cannot delete from `posts/`.
+
+```bash
+gcloud run jobs execute chirp-media-reconcile --project=$PROJECT --region=$REGION --wait
+```
+
+Do not add a schedule or change the stored job to destructive mode. An actual cleanup
+requires explicit manager approval of that exact dry-run output. After approval, use
+a one-off execution override so the persistent job remains safe by default, then
+inspect the execution logs and rerun the normal dry run to prove the approved objects
+are gone and no additional candidates appeared.
+
+```bash
+gcloud run jobs execute chirp-media-reconcile --project=$PROJECT --region=$REGION --args=-m,app.jobs.media_reconcile,--delete --wait
+```
+
 ## Fast path for go-live testing (before full GCP)
 The board's "shared backend" blocker doesn't strictly need Cloud Run day one — you
 can run the backend locally and expose it with `ngrok http 8000`, point the app's

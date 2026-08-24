@@ -89,6 +89,23 @@ DEFAULT_MIN_AGE_HOURS = 24
 PUBLIC_URL_HOSTS = ("storage.googleapis.com", "storage.cloud.google.com")
 
 
+def _positive_hours(value: str) -> int:
+    """Parse a strictly positive age floor for the destructive CLI.
+
+    Zero or a negative value would make every unreferenced object eligible regardless
+    of age, defeating the guard against the move-before-commit race described above.
+    Keep that state unrepresentable at argument parsing time rather than relying on an
+    operator to notice a dangerous value in a command line.
+    """
+    try:
+        hours = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if hours <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return hours
+
+
 class ReconcileAborted(RuntimeError):
     """Refuse to run at all rather than act on a delete set we don't trust."""
 
@@ -425,7 +442,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--min-age-hours",
-        type=int,
+        type=_positive_hours,
         default=DEFAULT_MIN_AGE_HOURS,
         help=(
             "never delete an object younger than this, even if unreferenced "

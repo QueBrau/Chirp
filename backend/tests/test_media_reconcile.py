@@ -16,6 +16,7 @@ a green fake-backed suite.
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,17 @@ from tests.conftest import MakeChapterWith
 TEST_BUCKET = "chirps-prod-media"
 OTHER_BUCKET = "some-other-bucket"
 NOW = datetime(2026, 8, 23, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "-24", "not-a-number"])
+def test_cli_rejects_a_non_positive_or_invalid_age_floor(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        media_reconcile._positive_hours(value)
+
+
+@pytest.mark.parametrize("value, expected", [("1", 1), ("24", 24), ("168", 168)])
+def test_cli_accepts_a_positive_age_floor(value: str, expected: int) -> None:
+    assert media_reconcile._positive_hours(value) == expected
 
 
 def _url(object_name: str, bucket: str = TEST_BUCKET) -> str:
