@@ -29,6 +29,9 @@ WS_REALTIME_UNAVAILABLE = 4503
 # that ever learns to tell these apart should send 4401 to sign-in and this one to
 # a "your account is suspended" screen, not another reconnect attempt.
 WS_ACCOUNT_SUSPENDED = 4403
+# Keep an already-open session from surviving a moderation suspension indefinitely.
+# This is intentionally coarse; HTTP requests still check suspension on every request.
+WS_SUSPENSION_POLL_SECONDS = 30.0
 
 
 def _offered_protocol(websocket: WebSocket) -> str | None:
@@ -161,8 +164,22 @@ async def websocket_gateway(
             # Drain client frames purely to detect disconnect; the stream is server -> client.
             await websocket.receive_text()
 
+    async def _watch_suspension() -> None:
+        """Close the socket shortly after moderation suspends this account."""
+        while True:
+            await asyncio.sleep(WS_SUSPENSION_POLL_SECONDS)
+            result = await session.execute(
+                select(models.User.suspended_at).where(models.User.id == user.id)
+            )
+            if result.scalar_one_or_none() is not None:
+                logger.info("ws closed for suspended account user_id=%s", user.id)
+                with contextlib.suppress(Exception):
+                    await websocket.close(code=WS_ACCOUNT_SUSPENDED)
+                return
+
     forward_task = asyncio.create_task(_forward(), name="ws-forward")
     drain_task = asyncio.create_task(_drain(), name="ws-drain")
+    suspension_task = asyncio.create_task(_watch_suspension(), name="ws-suspension-watch")
 
     try:
         # Race the two: whichever ends first ends the connection. Awaiting only
@@ -172,7 +189,8 @@ async def websocket_gateway(
         # which is the same "looks like a flaky client" symptom c62 exists to
         # kill, just moved from connect time to steady state.
         done, _ = await asyncio.wait(
-            {forward_task, drain_task}, return_when=asyncio.FIRST_COMPLETED
+            {forward_task, drain_task, suspension_task},
+            return_when=asyncio.FIRST_COMPLETED,
         )
 
         if forward_task in done:
@@ -187,9 +205,9 @@ async def websocket_gateway(
             with contextlib.suppress(Exception):
                 await websocket.close(code=WS_REALTIME_UNAVAILABLE)
     finally:
-        for task in (forward_task, drain_task):
+        for task in (forward_task, drain_task, suspension_task):
             task.cancel()
-        for task in (forward_task, drain_task):
+        for task in (forward_task, drain_task, suspension_task):
             # Both Exception and CancelledError, deliberately. Awaiting a task
             # re-raises whatever it stored, and CancelledError is a
             # BaseException — suppressing only one of them lets the other escape

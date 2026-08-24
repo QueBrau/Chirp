@@ -98,7 +98,7 @@ async def start_verification(
     address, domain = normalize_email(raw_email)
     campus = await resolve_campus(session, domain)
 
-    if not rate_limit.allow(
+    if not await rate_limit.allow(
         f"campus_verify_send:{user.id}",
         max_calls=SEND_MAX_PER_WINDOW,
         window_seconds=SEND_WINDOW_SECONDS,
