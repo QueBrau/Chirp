@@ -27,7 +27,7 @@
 
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Image, Modal, Pressable, View, type ViewStyle } from "react-native";
 
 import type { PostOut } from "@/api/feed";
@@ -261,6 +261,18 @@ export function MediaPostCard({
   const mediaUrl = post.media_urls?.[0];
   const type = mediaUrl ? post.post_type ?? "text" : "text";
   const [sheet, setSheet] = useState<{ title: string; options: SheetOption[] } | null>(null);
+  // Media that failed to load (board c140). Before this existed, a photo the device
+  // could not fetch rendered as an EMPTY BOX with the author row floating over nothing —
+  // no error, no retry, nothing to tell the user or us that anything went wrong. That
+  // matters much more now that media urls are capability urls with a finite life: an
+  // expired one 403s, and silence is the worst possible response to a state we know how
+  // to explain.
+  const [mediaFailed, setMediaFailed] = useState(false);
+  // Reset per url, not per mount. These cards are re-rendered constantly (the feed
+  // replaces every post object on each load and this component is not memoized), and a
+  // capability url legitimately changes when its signing window rolls over — a stale
+  // `true` would keep showing the fallback over a url that now works perfectly.
+  useEffect(() => setMediaFailed(false), [mediaUrl]);
 
   const openReportReasons = () => {
     setSheet({
@@ -405,29 +417,61 @@ export function MediaPostCard({
   return (
     <View style={cardBase}>
       <View style={{ height: MEDIA_HEIGHT }}>
-        <Image source={{ uri: mediaUrl }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+        {mediaFailed ? (
+          /* Unavailable-photo state. Deliberately NOT the scrim treatment: the scrim
+             exists to float white text over a photo, and with no photo underneath it
+             would put low-contrast white on a pale surface. So this state drops the
+             scrim entirely and switches the author row back to normal ink tones
+             (`onScrim` below follows `!mediaFailed` for exactly that reason). */
+          <View
+            style={{
+              width: "100%",
+              height: "100%",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: spacing.sm,
+              backgroundColor: palette.surfaceAlt,
+            }}
+          >
+            <Feather name="image" size={22} color={palette.inkFaint} />
+            <AppText variant="caption" tone="tertiary">
+              Photo unavailable
+            </AppText>
+          </View>
+        ) : (
+          <Image
+            source={{ uri: mediaUrl }}
+            style={{ width: "100%", height: "100%" }}
+            resizeMode="cover"
+            onError={() => setMediaFailed(true)}
+          />
+        )}
 
         {/* Layered translucent-ink scrim (NOT a heavy black gradient) — carries the white author row. */}
-        <View
-          style={{
-            position: "absolute",
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: 132,
-            backgroundColor: withAlpha(light.ink, 0.22),
-          }}
-        />
-        <View
-          style={{
-            position: "absolute",
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: 76,
-            backgroundColor: withAlpha(light.ink, 0.34),
-          }}
-        />
+        {!mediaFailed ? (
+          <>
+            <View
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: 132,
+                backgroundColor: withAlpha(light.ink, 0.22),
+              }}
+            />
+            <View
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: 76,
+                backgroundColor: withAlpha(light.ink, 0.34),
+              }}
+            />
+          </>
+        ) : null}
         <View
           style={{
             position: "absolute",
@@ -440,12 +484,17 @@ export function MediaPostCard({
           }}
         >
           <View style={{ flexShrink: 1 }}>
-            <AuthorRow name={authorName} time={timeLabel} photoUrl={authorPhotoUrl} onScrim />
+            <AuthorRow
+              name={authorName}
+              time={timeLabel}
+              photoUrl={authorPhotoUrl}
+              onScrim={!mediaFailed}
+            />
           </View>
-          <OverflowButton onPress={openMenu} onScrim />
+          <OverflowButton onPress={openMenu} onScrim={!mediaFailed} />
         </View>
 
-        {type === "video" ? (
+        {type === "video" && !mediaFailed ? (
           <View
             pointerEvents="none"
             style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center" }}
@@ -465,7 +514,7 @@ export function MediaPostCard({
           </View>
         ) : null}
 
-        {type === "video" && post.duration_sec ? (
+        {type === "video" && post.duration_sec && !mediaFailed ? (
           <Chip
             label={formatDuration(post.duration_sec)}
             style={{ position: "absolute", top: spacing.md, right: spacing.md }}

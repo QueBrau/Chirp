@@ -38,6 +38,9 @@ from app.schemas.social import (
 )
 from app.services.storage_service import (
     finalize_media_object,
+    media_capability_url,
+    media_signing_enabled,
+    object_name_from_stored_url,
     validate_media_object_names,
     validate_media_urls,
 )
@@ -45,6 +48,48 @@ from app.services.storage_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["feed"])
+
+
+def _serialize_media_urls(
+    media_urls: list[str] | None, viewer_id: uuid.UUID
+) -> list[str] | None:
+    """Turn STORED media urls into what this viewer should actually fetch (board c140).
+
+    THE STORED VALUE IS NEVER REWRITTEN. posts.media_urls keeps holding the canonical
+    permanent url finalize_media_object() assigned; this is a read-time transform only.
+    That is a deliberate invariant, not an implementation detail - c153's reconciliation
+    job diffs bucket objects against that column, and it stays correct precisely because
+    nothing here writes back.
+
+    Falls through unchanged when signing is not configured, which is the state every
+    deployment is in until the c140 cutover flips the bucket private. That makes this
+    change additive: it flips nothing on its own.
+
+    Foreign-host urls (possible only on pre-c139 rows, when media_urls was unvalidated
+    client input) are passed through unchanged and logged. They are not ours to sign, and
+    making our bucket private does not affect them.
+    """
+    if not media_urls or not media_signing_enabled():
+        return media_urls
+    serialized: list[str] = []
+    for url in media_urls:
+        object_name = object_name_from_stored_url(url)
+        if object_name is None:
+            logger.warning(
+                "media url is not in the configured bucket, serving it unsigned url=%s",
+                url,
+            )
+            serialized.append(url)
+            continue
+        serialized.append(media_capability_url(object_name, str(viewer_id)))
+    return serialized
+
+
+def _post_out(post: models.Post, viewer_id: uuid.UUID) -> PostOut:
+    """PostOut for a single post, with media_urls transformed for this viewer (c140)."""
+    out = PostOut.model_validate(post)
+    out.media_urls = _serialize_media_urls(out.media_urls, viewer_id)
+    return out
 
 
 def _finalize_media(user_id: uuid.UUID, media_object_names: list[str] | None) -> list[str]:
@@ -161,8 +206,12 @@ def _post_counts_select(caller_id: uuid.UUID):
     )
 
 
-def _feed_post_out(row: Any) -> FeedPostOut:
-    """Build a FeedPostOut from one row of `_post_counts_select`."""
+def _feed_post_out(row: Any, viewer_id: uuid.UUID) -> FeedPostOut:
+    """Build a FeedPostOut from one row of `_post_counts_select`.
+
+    viewer_id is threaded in for c140's media serialization - capability urls are minted
+    per viewer, so this cannot be built without knowing who is asking.
+    """
     post, display_name, avatar_url, like_count, comment_count, liked_by_me = row
     return FeedPostOut(
         id=post.id,
@@ -170,7 +219,7 @@ def _feed_post_out(row: Any) -> FeedPostOut:
         campus_id=post.campus_id,
         author_id=post.author_id,
         body=post.body,
-        media_urls=post.media_urls,
+        media_urls=_serialize_media_urls(post.media_urls, viewer_id),
         audience=post.audience,
         post_type=post.post_type,
         duration_sec=post.duration_sec,
@@ -264,7 +313,7 @@ async def list_posts(
         .order_by(models.Post.created_at.desc())
     )
     result = await session.execute(stmt)
-    return [_feed_post_out(row) for row in result.all()]
+    return [_feed_post_out(row, membership.user_id) for row in result.all()]
 
 
 @router.post("/chapters/{chapter_id}/posts", status_code=201)
@@ -318,7 +367,7 @@ async def create_post(
     session.add(post)
     await _commit_or_log_orphaned_media(session, media_urls)
     await session.refresh(post)
-    return PostOut.model_validate(post)
+    return _post_out(post, membership.user_id)
 
 
 @router.post("/campuses/{campus_id}/posts", status_code=201)
@@ -363,7 +412,7 @@ async def create_campus_post(
     session.add(post)
     await _commit_or_log_orphaned_media(session, media_urls)
     await session.refresh(post)
-    return PostOut.model_validate(post)
+    return _post_out(post, user.id)
 
 
 @router.get("/campuses/{campus_id}/feed")
@@ -413,7 +462,7 @@ async def list_campus_feed(
     ).limit(limit)
 
     result = await session.execute(stmt)
-    return [_feed_post_out(row) for row in result.all()]
+    return [_feed_post_out(row, user.id) for row in result.all()]
 
 
 @router.patch("/chapters/{chapter_id}/posts/{post_id}")
@@ -437,7 +486,7 @@ async def update_post(
         media_urls = _finalize_media(membership.user_id, body.media_object_names)
         post.media_urls = media_urls or None
     await _commit_or_log_orphaned_media(session, media_urls)
-    return PostOut.model_validate(post)
+    return _post_out(post, membership.user_id)
 
 
 @router.delete("/chapters/{chapter_id}/posts/{post_id}", status_code=204)
