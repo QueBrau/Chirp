@@ -52,7 +52,7 @@ system. Do not promote a board-sourced line to verified without re-checking it.
 | Deployed route checks | `/_health` 200, `/auth/me` 401, lineage/attendance auth routes 401, malformed `/media/{token}` 403, `/openapi.json` 404 | **verified Aug 24** against the live revision |
 | Mobile/release static checks | TypeScript, API contract verifier (82 client calls / 92 backend routes), Expo public config, Python syntax, and c156's two-call dashboard wiring pass | **delegated GPT-5.6 QA audit Aug 24**; fresh backend pytest is blocked by a local Python 3.11/pytest startup segfault, not a test assertion |
 | c153 reconciliation operations | Code is deployed and dry-run by default; CLI rejects non-positive age floors; the dedicated-runner design/runbook is now in `DEPLOY.md`, but no production runner SA/Job/scheduler exists yet | **verified Aug 24** via merged c153 hardening commit and direct 7-case validation; production IAM/resource creation and `--delete` remain explicitly unrun |
-| GitHub push/CI | `git push --dry-run origin main` succeeds; public Actions run 472 still fails every job at startup | **verified Aug 24**; failure remains the c160 billing/account gate, not a code verdict |
+| GitHub push/CI | `git push --dry-run origin main` succeeds; Actions run **473** for `8ecf96d` passed web build, mobile tsc, Alembic single-head, and backend pytest | **verified Aug 24** after the repository was made public; the prior c160 billing/startup refusal is cleared |
 
 The prod DB line is the one to distrust. It is the only row here that describes a system
 nobody re-read this session, and it is also the row that breaks things silently when it
