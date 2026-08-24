@@ -20,9 +20,8 @@ import {
   createMeeting,
   deleteMeeting,
   exportMeetingsCsv,
-  getAttendance,
   getAttendanceSummary,
-  listMeetings,
+  listMeetingsWithAttendance,
   putAttendance,
   updateMeeting,
   type AttendanceStatus,
@@ -191,16 +190,20 @@ export default function SecretaryScreen() {
     }
   }, []);
 
+  /**
+   * Exactly two requests, whatever the chapter's history looks like (board c156).
+   * This used to be listMeetings followed by getAttendance PER MEETING inside a
+   * Promise.all — a semester of meetings meant a semester of requests every time the
+   * dashboard opened, and it grew with the archive rather than with anything the
+   * secretary asked for. The server returns most-recent-first, so there is no sort
+   * here any more; the create path below still sorts, because a meeting logged for a
+   * past date must not jump to the top.
+   */
   const loadDashboard = useCallback(async (id: string) => {
-    const [meetings, members] = await Promise.all([listMeetings(id), listMembers(id)]);
-    const withAttendance = await Promise.all(
-      meetings.map(async (meeting) => ({
-        meeting,
-        attendance: await getAttendance(id, meeting.id),
-      })),
-    );
-    // Most recent first.
-    withAttendance.sort((a, b) => b.meeting.meeting_date.localeCompare(a.meeting.meeting_date));
+    const [withAttendance, members] = await Promise.all([
+      listMeetingsWithAttendance(id),
+      listMembers(id),
+    ]);
     setRoster(members.filter((m) => m.status === "active"));
     setItems(withAttendance);
   }, []);

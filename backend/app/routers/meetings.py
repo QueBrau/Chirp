@@ -1,6 +1,7 @@
 """Secretary: meetings CRUD (minutes), bulk attendance upsert, roster attendance totals."""
 import uuid
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import and_, delete, func, select
@@ -20,6 +21,7 @@ from app.schemas.meetings import (
     MeetingCreate,
     MeetingOut,
     MeetingUpdate,
+    MeetingWithAttendanceOut,
     MemberAttendanceSummary,
 )
 
@@ -34,6 +36,30 @@ async def _get_chapter_meeting(
     if meeting is None or meeting.chapter_id != chapter_id:
         raise not_found("meeting_not_found")
     return meeting
+
+
+def _meeting_window(
+    chapter_id: uuid.UUID, start: datetime | None, end: datetime | None
+) -> list[Any]:
+    """Filters selecting a chapter's meetings inside an inclusive [start, end] window.
+
+    Shared by the two windowed reads (attendance_summary, board c82;
+    list_meetings_with_attendance, board c156) so they cannot drift apart on what a
+    window means. Two endpoints answering "this semester" with different boundary
+    rules would be a bug nobody would think to look for - the numbers would simply
+    disagree by one meeting.
+
+    Both bounds inclusive: a meeting exactly on the boundary belongs to the window
+    rather than falling between two semesters queried back to back.
+    """
+    if start is not None and end is not None and start > end:
+        raise HTTPException(status_code=422, detail="invalid_window")
+    window: list[Any] = [models.Meeting.chapter_id == chapter_id]
+    if start is not None:
+        window.append(models.Meeting.meeting_date >= start)
+    if end is not None:
+        window.append(models.Meeting.meeting_date <= end)
+    return window
 
 
 @router.get("/chapters/{chapter_id}/meetings")
@@ -90,6 +116,73 @@ async def export_meetings_csv(
     return csv_response(f"meetings_{chapter_id}.csv", header, rows)
 
 
+@router.get("/chapters/{chapter_id}/meetings/with-attendance")
+async def list_meetings_with_attendance(
+    chapter_id: uuid.UUID,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> list[MeetingWithAttendanceOut]:
+    """Every meeting in the window with its attendance sheet, in ONE read (board c156).
+
+    The secretary dashboard used to build this client-side: list_meetings, then
+    get_attendance once per meeting inside a Promise.all. A semester of meetings was a
+    semester of requests on every dashboard load, and it grew with chapter history
+    rather than with anything the secretary asked for. c82's aggregate deliberately did
+    not fix this - the per-meeting present/absent/excused chips need per-meeting rows,
+    not totals - so this is the other half.
+
+    ONE query, not one per meeting: a LEFT JOIN from meetings to their attendance rows,
+    grouped in Python. The join direction is what makes it safe - the spine is this
+    chapter's meetings, so attendance can only arrive through a meeting that already
+    passed the chapter filter. That is the opposite situation from attendance_summary
+    below, where the spine is members and a careless join CAN pull in another chapter's
+    rows; worth stating so nobody "makes them consistent" in the wrong direction.
+
+    LEFT, not inner: a meeting with no sheet taken yet must come back with an empty
+    list. An inner join would silently drop it, and a meeting that vanishes from the
+    dashboard is worse than one showing zero attendance - the secretary would think
+    they never created it.
+
+    Declared above the /{meeting_id} routes, same constraint as export.csv and
+    attendance-summary: below them, "with-attendance" parses as meeting_id: uuid.UUID.
+
+    Gated MINUTES_ADMIN, matching get_attendance - this returns exactly what that route
+    returns, for several meetings at once, so it cannot be gated more loosely.
+    """
+    window = _meeting_window(chapter_id, start, end)
+    result = await session.execute(
+        select(models.Meeting, models.MeetingAttendance)
+        .outerjoin(
+            models.MeetingAttendance,
+            models.MeetingAttendance.meeting_id == models.Meeting.id,
+        )
+        .where(*window)
+        # Most recent meeting first, matching list_meetings so the two reads cannot
+        # disagree about order. id breaks ties: two meetings can share a date, and
+        # without it their relative order changes between calls.
+        .order_by(
+            models.Meeting.meeting_date.desc(),
+            models.Meeting.id,
+            models.MeetingAttendance.user_id,
+        )
+    )
+
+    bundles: dict[uuid.UUID, MeetingWithAttendanceOut] = {}
+    for meeting, attendance in result.all():
+        bundle = bundles.get(meeting.id)
+        if bundle is None:
+            bundle = MeetingWithAttendanceOut(
+                meeting=MeetingOut.model_validate(meeting), attendance=[]
+            )
+            bundles[meeting.id] = bundle
+        if attendance is not None:
+            bundle.attendance.append(MeetingAttendanceOut.model_validate(attendance))
+    # dicts preserve insertion order, so this is still the ORDER BY above.
+    return list(bundles.values())
+
+
 @router.get("/chapters/{chapter_id}/meetings/attendance-summary")
 async def attendance_summary(
     chapter_id: uuid.UUID,
@@ -135,14 +228,7 @@ async def attendance_summary(
     owes a fine, who is at risk of losing good standing - and the CSV is the historical
     record. test_attendance_summary.py asserts both halves so neither can flip alone.
     """
-    if start is not None and end is not None and start > end:
-        raise HTTPException(status_code=422, detail="invalid_window")
-
-    window = [models.Meeting.chapter_id == chapter_id]
-    if start is not None:
-        window.append(models.Meeting.meeting_date >= start)
-    if end is not None:
-        window.append(models.Meeting.meeting_date <= end)
+    window = _meeting_window(chapter_id, start, end)
 
     meetings_in_window = await session.scalar(
         select(func.count()).select_from(models.Meeting).where(*window)
