@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787533740397,
+  "updated": 1787534169114,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -463,11 +463,11 @@
     },
     {
       "id": "c120",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "frontend",
       "area": "fyp",
-      "title": "BUILT Aug 22, PR #47 OPEN - toggleLike in chapter/index.tsx now mirrors feed's optimistic-update-with-rollback, coordinated with james first (his worktree clean, no collision). tsc clean",
+      "title": "DONE (merged #47 Aug 22, 8284b0e via 5a7260f): toggleLike in chapter/index.tsx now mirrors feed's optimistic-update-with-rollback. Title said OPEN until the c157 sweep caught it",
       "detail": "BUILT Aug 22, PR #47, branch jose/c120-chapter-like-catch. Was read-check-then-write with NO catch at all - a failed like/unlike became an unhandled promise rejection. Now mirrors feed/index.tsx exactly: flip state immediately, try the network call, roll back on failure. COORDINATED WITH JAMES FIRST, non-optional per the manager: he checked his own worktree (clean, nothing uncommitted), confirmed c77 is fully built and open as PR #43, c78 hasn't started, and said go ahead - no collision, his PR touches the TOOLS array near the top of the file, this touches toggleLike at line ~275. Whichever of the two PRs merges second needs an ordinary rebase, nothing structural. tsc clean, no backend change."
     },
     {
@@ -508,12 +508,12 @@
     },
     {
       "id": "c117",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "process",
       "area": "process",
-      "title": "PR #33 OPEN (Jose) - pin backend dependencies with a lockfile and make CI install from it. RENUMBERED from c113, whose branch and PR title still say 113 | STALE-TITLE FIX Aug 23: PR #33 MERGED Aug 20 (per gh)",
-      "detail": "Adds backend/requirements.lock and requirements-dev.lock (~3.1k lines between them), points CI and backend/Dockerfile at them, so a build installs the versions that were actually tested instead of whatever resolves that day. RENUMBERED FROM c113 ON THE BOARD ONLY, Aug 18, as part of c116: two different pieces of Jose's work were both called c113, and the other one (gate web/ in CI) is the one that MERGED, so it keeps the number. The branch jose/c113-dep-pinning and the PR #33 title still say c113 and were deliberately NOT touched - renaming another dev's open PR to satisfy the board is worse than the board carrying the note. If Jose would rather this keep 113 and the merged one move, say so and the two cards swap; the point is only that one id cannot mean two things."
+      "title": "DONE (merged #33 Aug 20): backend dependencies pinned with a lockfile, CI installs from it. prev-id c113 - the branch and PR carry the old id, which is why id-greps miss it",
+      "detail": "Adds backend/requirements.lock and requirements-dev.lock (~3.1k lines between them), points CI and backend/Dockerfile at them, so a build installs the versions that were actually tested instead of whatever resolves that day. RENUMBERED FROM c113 ON THE BOARD ONLY, Aug 18, as part of c116: two different pieces of Jose's work were both called c113, and the other one (gate web/ in CI) is the one that MERGED, so it keeps the number. The branch jose/c113-dep-pinning and the PR #33 title still say c113 and were deliberately NOT touched - renaming another dev's open PR to satisfy the board is worse than the board carrying the note. If Jose would rather this keep 113 and the merged one move, say so and the two cards swap; the point is only that one id cannot mean two things. PREV-ID: c113 (renumbered; commits/branch carry c113)."
     },
     {
       "id": "c115",
@@ -814,8 +814,8 @@
     },
     {
       "id": "c8",
-      "col": "backlog",
-      "title": "Feed + Yak on real API, moderation flows",
+      "col": "done",
+      "title": "CLOSED Aug 23 (c157 sweep): epic stub whose every named constituent shipped - feed on real API (c34/de-mock), report/block/remove + resolve (c35, 6673ec0). No acceptance criteria remained to hold it open; a fresh m5 epic needs fresh criteria if Jose wants one",
       "owner": "",
       "tag": "m5",
       "area": "fyp",
@@ -1273,11 +1273,11 @@
     },
     {
       "id": "c80",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "m2",
       "area": "orgs",
-      "title": "THE TOOLS GRID HAND-MIRRORS THE ROLE TAXONOMY",
+      "title": "CLOSED Aug 23 (c157 sweep, manager-verified in code): fixed by 2afbac0 'the tools grid asks the server what it may do' - no hardcoded role list remains in chapter/index.tsx, tiles filter on roleMeta.capabilities, permissions.py CAPABILITIES cites c80 by name",
       "detail": "the exact thing c44 built GET /chapters/{id}/role-meta to stop. The TOOLS array in chapter/index.tsx hardcodes roles: ['treasurer','president'] and ['secretary','president'] client-side, while the invite card in the same file reads roleMeta.invitable off the server: one half of one screen trusts the backend, the other keeps a private copy. That copy is already wrong \u2014 vice_president and historian are in the server's EBOARD and get no tools at all (c78, c79) \u2014 and it will drift again every time permissions.py changes, silently, because nothing fails when it does. The taxonomy is duplicated three more times client-side: RoleName in src/api/chapters.ts, ROLE_LABELS in chapter/index.tsx, ROLE_LABELS plus ROLE_CHIP_LABELS in members.tsx, each carrying its own prettify-the-unknown-role fallback that exists precisely because the author knew the list could go stale. BE PRECISE ABOUT WHAT THIS IS: the client filter is COSMETIC. The real gate is require_role on the server and it is correct \u2014 every one of these endpoints 403s a member who calls it directly \u2014 so a hidden tile is not a security control and this must not be written up as a security fix. What it buys is that adding a role, or moving one into EBOARD, becomes one server change instead of a grep across screens. Cheapest honest shape: gate tiles off roleMeta.eboard rather than literal role arrays, or let role-meta carry tool visibility outright and keep the labels in one module."
     },
     {
@@ -1506,11 +1506,11 @@
     },
     {
       "id": "c108",
-      "col": "backlog",
+      "col": "done",
       "owner": "J",
       "tag": "security",
       "area": "yak",
-      "title": "DOES MODERATING CAMPUS CONTENT REQUIRE .EDU? THREE endpoints, one function, one decision. Question for Jose - and c105 just weakened half the argument",
+      "title": "CLOSED Aug 23 (c157 sweep): ruled AND shipped Aug 16 - moderation.py records it verbatim: 'c108, Jose's call Aug 16: MODERATING CAMPUS content requires a verified .edu, not merely an officer role' (stricter than the card's own recommendation). Refined since by c139/c142/c147. The question this card holds open was answered four days ago",
       "detail": "UPDATED Aug 16 after c91 merged and c105 landed. Both changed this card, in opposite directions. SCOPE IS BIGGER THAN FIRST WRITTEN, and better: it is not one endpoint, it is THREE, all routed through the SAME function, _require_eboard_for_campus in moderation.py. Verified against origin/main: PATCH /moderation/reports/{id} (line 214, new with c91), POST /moderation/yaks/{id}/remove (330), and the generic remove_content (386). That is good news, not bad - whatever Jose decides is a change in one function rather than a hunt through three handlers, which is exactly the property c88's gate was built for and the reason c91's new endpoint inherited the same semantics for free instead of growing a fourth hand-rolled copy. THE ARGUMENT FOR REQUIRING .edu IS NOW WEAKER, and it should be recorded honestly rather than left overstated: this card originally leaned on c105, that an invite code was an unlimited-use bearer token with no revocation, so a forwarded e-board invite was an unbounded path to moderation powers. c105 has since landed max_uses, expiry and revocation. The path is now BOUNDED - one deliberate mint still creates an officer who can remove campus content without ever proving an .edu, but that is a chapter officer making a deliberate choice about a specific person, not a link propagating. SO THE QUESTION NARROWS to something cleaner: is an officer role in a chapter on that campus sufficient evidence to ACT on campus-wide content, or does acting require the same .edu proof that c88 now requires to READ it? Note what is NOT in question - _require_eboard_for_campus is a genuinely strong check and is NOT the c104 bypass. Nobody should card it as one. FOR: an officer was vouched for by other officers, which is the same reasoning that grants chapter content with no email at all, and moderators are the people you least want locked out during an incident. AGAINST: Jose's ruling was explicit that the Yak board is the surface where a stranger costs something, and removing someone else's post is a more powerful act than reading it. RECOMMENDATION IF JOSE WANTS ONE: leave it e-board-scoped. c105 bounded the exposure, the check already requires a real role on that specific campus, and locking a moderator out of an active incident because their yearly re-check lapsed is a worse failure than the one being prevented. Cheap to revisit - one function. SCOPE NOTE: block_yak_author in the same file DID carry a literal fourth copy of the old campus_id comparison and was fixed under c88. This card is only about the e-board paths."
     },
     {
@@ -1524,11 +1524,11 @@
     },
     {
       "id": "c110",
-      "col": "backlog",
+      "col": "done",
       "owner": "J",
       "tag": "frontend",
       "area": "auth",
-      "title": "DO NOT DEPLOY c88 BEFORE THE CLIENT KNOWS ABOUT VERIFICATION - both tabs would show a generic ERROR, which is worse than today",
+      "title": "CLOSED Aug 23 (c157 sweep): obsolete deploy-blocker - the client HAS known about verification since Aug 16 (useCampusAccess with c110's own docstring, both tabs branch on it, 83b884a/c8c8d88), and c88 has been live on prod since then. Was reading as an active DO-NOT-DEPLOY in backlog; same class as c104",
       "detail": "Found Aug 16 while starting c90, and it is a DEPLOY-ORDER hazard rather than a bug in either half. PR #26 is correct and safe to MERGE. It is not safe to DEPLOY on its own, and the reason is on the client. THE CLIENT MAKES THE EXACT MISTAKE THE SERVER JUST STOPPED MAKING. app-mobile feed/index.tsx:77 and yak/index.tsx:76 both branch on `user.campus_id ?? null` - if campus_id exists they call the endpoint, if it is null they render a designed empty state. That was right when campus_id was the whole gate. Since c88 it is not: a chapter-joined user HAS a campus_id and is still refused, so they take the call-the-endpoint path and hit a 403. WHAT THE USER ACTUALLY SEES: feed/index.tsx load() is `catch { setLoadState(\"error\") }` - one bare catch, no status inspection. So campus_unverified renders as a GENERIC ERROR, indistinguishable from the wifi being down. That is strictly worse than today's honest 'your account isn't linked to a campus' empty state, and it is precisely the outcome Jose ruled against on Aug 16 when he asked for a real verify screen rather than an empty feed or a bare error toast. SO THE DEPLOY SEQUENCE IS THREE THINGS, NOT TWO. c104 already says c96 must not deploy without c88. This card adds the other end: c88 must not deploy without a client that can tell campus_unverified from a network failure. Deploying c96+c88 alone converts a clear dead end into a confusing one. THE MINIMAL FIX IS MUCH SMALLER THAN c90, and worth separating: read GET /auth/campus-verification (it exists, it ships in PR #26, and it returns verified plus verified_at precisely so the client can branch) and render a designed empty state for unverified. That unblocks the deploy. The FULL c90 screen - the form on the screen that refused you, with all six states - is the real destination and can follow. NOTE FOR WHOEVER TAKES IT: the status endpoint returns verified_at even when verified is false, on purpose, so a LAPSED yearly re-check gets 'your verification expired' rather than 'verify your .edu'. A returning student should not be told they have never been here. Do not collapse those two states."
     },
     {
@@ -1542,21 +1542,21 @@
     },
     {
       "id": "c122",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "security",
       "area": "backend",
-      "title": "PR #46 OPEN (renumbered from c120 - collided with an existing board card) - /docs, /redoc and /openapi.json closed off any real deployment. 266 pass / 3 skip / 0 fail. | STALE-TITLE FIX Aug 23: PR #46 MERGED Aug 22 (per gh)",
-      "detail": "main.py:130. docs_url/redoc_url/openapi_url None unless env==\"local\", mirroring the CORS/auth guard two lines below. Both endpoints were live-checked returning 200 unauthenticated on prod during the Aug 16 audit - anyone got the full route and schema surface for free. Verified directly: create_app() under ENV=local shows all three routes, under ENV=production shows None/None/None. No test touched any of the three paths and none set ENV explicitly, so coverage could not have silently broken."
+      "title": "DONE (64cc841 on main): /docs, /redoc and /openapi.json closed off any real deployment. ATTRIBUTION FIX Aug 23: this card previously claimed PR #46, which is c121's contract-check PR - the renumber (c120->c122) kept the wrong number. prev-id c120",
+      "detail": "main.py:130. docs_url/redoc_url/openapi_url None unless env==\"local\", mirroring the CORS/auth guard two lines below. Both endpoints were live-checked returning 200 unauthenticated on prod during the Aug 16 audit - anyone got the full route and schema surface for free. Verified directly: create_app() under ENV=local shows all three routes, under ENV=production shows None/None/None. No test touched any of the three paths and none set ENV explicitly, so coverage could not have silently broken. PREV-ID: c120 (renumbered; do not confuse with the CURRENT c120 like-catch card)."
     },
     {
       "id": "c123",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "security",
       "area": "backend",
-      "title": "PR #47 OPEN (renumbered from c121 - collided with an existing board card) - container drops root, and the prod safety guard cannot be optimized away. 266 pass / 3 skip / 0 fail. | STALE-TITLE FIX Aug 23: PR #47 MERGED Aug 22 (per gh)",
-      "detail": "Two fixes. Dockerfile: no USER directive existed, so uvicorn ran as root for the container's whole life; the app never writes to /srv at runtime so nothing needs root once the image is built - adds appuser, switches before CMD. main.py: the env!=\"local\" guard against emulated auth + wildcard CORS (SECURITY-REVIEW finding 5) used bare assert, which python -O strips entirely. Proved the actual failure mode: ran create_app() under -O with emulated-auth+production and again with wildcard-CORS+production - both would have booted clean under the old assert. Now raise RuntimeError, verified to still raise correctly under -O. Nothing in the Dockerfile sets -O today; the fix is that it no longer matters if that changes."
+      "title": "DONE (e86477d on main): container drops root, prod safety guard un-strippable. ATTRIBUTION FIX Aug 23: previously claimed PR #47, which is the like-catch PR belonging to (current) c120 - the renumber (c121->c123) kept the wrong number. prev-id c121",
+      "detail": "Two fixes. Dockerfile: no USER directive existed, so uvicorn ran as root for the container's whole life; the app never writes to /srv at runtime so nothing needs root once the image is built - adds appuser, switches before CMD. main.py: the env!=\"local\" guard against emulated auth + wildcard CORS (SECURITY-REVIEW finding 5) used bare assert, which python -O strips entirely. Proved the actual failure mode: ran create_app() under -O with emulated-auth+production and again with wildcard-CORS+production - both would have booted clean under the old assert. Now raise RuntimeError, verified to still raise correctly under -O. Nothing in the Dockerfile sets -O today; the fix is that it no longer matters if that changes. PREV-ID: c121 (renumbered; commits/branch carry c121)."
     },
     {
       "id": "c126",
@@ -1906,7 +1906,8 @@
     "Aug 23 - pool rule adopted from braul 2.0's c78 stop (second stale-premise card in a day): before building from any card older than a couple of days, grep for the thing the card says does not exist and git-log the files it names - a card's factual claims are dated the day they were written. c78 would have shipped a duplicate screen without this. Goes into the queued CLAUDE.md edit alongside the typecheck and pipe-exit-code lessons when Jose approves.",
     "Aug 23 - suite-contention protocol (manager, after load hit 152 on the 8-core box with five concurrent full suites and a clean suite ran past a 10-min tool timeout on contention alone; raised by jon 2.0): full backend-suite runs are SERIALIZED via scripts/with-suite-lock; targeted test files stay unlocked during development; the full suite runs only pre-PR under the lock; a suite that timed out under load is rerun under the lock, not reported as a hang.",
     "Aug 23 - grep-before-build promoted to TRIAGE: the manager runs git log --oneline --grep='^<card-id>' plus a surface grep BEFORE assigning any card older than a couple of days. Adopted after c90 became the third consecutive stale-premise assignment (c78, c90, c154's six stale titles) - the c90 assignment was made without the check c78 had just taught. Board sweep carded as c157 to flush the remaining false backlog.",
-    "Aug 23 - worktree mobile-tooling refinement (james 2.0): the node_modules SYMLINK satisfies tsc but BREAKS Metro (serverRoot resolution); an APFS clone (cp -c) of node_modules works for both. Joins the queued CLAUDE.md edit."
+    "Aug 23 - worktree mobile-tooling refinement (james 2.0): the node_modules SYMLINK satisfies tsc but BREAKS Metro (serverRoot resolution); an APFS clone (cp -c) of node_modules works for both. Joins the queued CLAUDE.md edit.",
+    "Aug 23 - c157 board sweep verified and applied: c80/c110/c108/c8 closed as done-by-prior-work (each verified in code by manager, not just commit subject); c117/c120 title-stale closed; c122/c123 had WRONG PR attributions (renumbering kept the pre-renumber PR numbers) - fixed with prev-ids recorded. CONVENTION ADOPTED: a renumbered card carries 'PREV-ID: cX' in its detail in fixed form, because commits and branches keep the old id and id-greps (including the manager's triage grep) miss the work entirely - the sweep's method finding."
   ]
 }
 </script>
