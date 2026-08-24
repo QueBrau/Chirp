@@ -4,8 +4,36 @@ from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 
 from tests.conftest import MakeChapterWith, MakeUser
+
+
+async def _set_ghost(user_id: str) -> None:
+    """Mark a fixture user as a historical lineage placeholder."""
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text("UPDATE users SET is_ghost = true WHERE id = :user_id"),
+            {"user_id": user_id},
+        )
+        await session.commit()
+
+
+async def _set_membership_status(user_id: str, chapter_id: str, status: str) -> None:
+    """Set a fixture membership status for active/inactive authorization checks."""
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text(
+                "UPDATE memberships SET status = :status "
+                "WHERE user_id = :user_id AND chapter_id = :chapter_id"
+            ),
+            {"status": status, "user_id": user_id, "chapter_id": chapter_id},
+        )
+        await session.commit()
 
 
 async def _create_family(client: AsyncClient, chapter_id: str, headers: dict, name: str) -> str:
@@ -234,6 +262,98 @@ async def _edges_for(client: AsyncClient, setup, little_id: str) -> list[dict]:
     tree = await client.get(f"/chapters/{setup.chapter_id}/lineage", headers=setup.member.headers)
     assert tree.status_code == 200, tree.text
     return [e for e in tree.json()["edges"] if e["little_user_id"] == little_id]
+
+
+@pytest.mark.asyncio
+async def test_lineage_rejects_nonmembers_cross_chapter_and_inactive_targets(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    """Both endpoints of an edge must be active members of its chapter."""
+    setup = await make_chapter_with("historian")
+    other = await make_chapter_with("historian")
+    outsider = await make_user("Lineage Outsider")
+    inactive = await make_user("Inactive Lineage Member")
+    await _join_as_member(client, setup, inactive)
+    await _set_membership_status(inactive.id, setup.chapter_id, "inactive")
+
+    nonmember_big = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={"big_user_id": outsider.id, "little_user_id": setup.member.id},
+        headers=setup.member.headers,
+    )
+    assert nonmember_big.status_code == 422
+    assert nonmember_big.json()["detail"] == "lineage_target_not_in_chapter"
+
+    cross_chapter_little = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={"big_user_id": setup.member.id, "little_user_id": other.member.id},
+        headers=setup.member.headers,
+    )
+    assert cross_chapter_little.status_code == 422
+    assert cross_chapter_little.json()["detail"] == "lineage_target_not_in_chapter"
+
+    inactive_little = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={"big_user_id": setup.member.id, "little_user_id": inactive.id},
+        headers=setup.member.headers,
+    )
+    assert inactive_little.status_code == 422
+    assert inactive_little.json()["detail"] == "lineage_target_not_in_chapter"
+
+
+@pytest.mark.asyncio
+async def test_lineage_allows_ghost_targets_without_memberships(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    """Historical ghost users are the explicit exception to active membership."""
+    setup = await make_chapter_with("historian")
+    ghost_big = await make_user("Historical Big")
+    ghost_little = await make_user("Historical Little")
+    await _set_ghost(ghost_big.id)
+    await _set_ghost(ghost_little.id)
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={"big_user_id": ghost_big.id, "little_user_id": ghost_little.id},
+        headers=setup.member.headers,
+    )
+    assert created.status_code == 201, created.text
+
+
+@pytest.mark.asyncio
+async def test_lineage_replace_rejects_cross_chapter_big_and_keeps_old_edge(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    """Reassignment validates the new endpoint before replacing the old edge."""
+    setup = await make_chapter_with("historian")
+    other = await make_chapter_with("historian")
+    old_big = await make_user("Old Big")
+    little = await make_user("Lineage Little")
+    await _join_as_member(client, setup, old_big)
+    await _join_as_member(client, setup, little)
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={"big_user_id": old_big.id, "little_user_id": little.id},
+        headers=setup.member.headers,
+    )
+    assert created.status_code == 201, created.text
+
+    rejected = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={
+            "big_user_id": other.member.id,
+            "little_user_id": little.id,
+            "replace_existing": True,
+        },
+        headers=setup.member.headers,
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"] == "lineage_target_not_in_chapter"
+    survivors = await _edges_for(client, setup, little.id)
+    assert len(survivors) == 1
+    assert survivors[0]["id"] == created.json()["id"]
+    assert survivors[0]["big_user_id"] == old_big.id
 
 
 @pytest.mark.asyncio

@@ -88,6 +88,35 @@ def _depths_and_families(
     return depths, families
 
 
+async def _validate_lineage_targets(
+    session: AsyncSession,
+    *,
+    chapter_id: uuid.UUID,
+    user_ids: set[uuid.UUID],
+) -> None:
+    """Require each edge endpoint to belong to this chapter or be an allowed ghost."""
+    users_result = await session.execute(
+        select(models.User.id, models.User.is_ghost).where(models.User.id.in_(user_ids))
+    )
+    users = {user_id: is_ghost for user_id, is_ghost in users_result.all()}
+    if len(users) != len(user_ids):
+        raise HTTPException(status_code=422, detail="lineage_target_not_in_chapter")
+
+    non_ghost_ids = {user_id for user_id, is_ghost in users.items() if not is_ghost}
+    if not non_ghost_ids:
+        return
+    active_memberships = await session.execute(
+        select(models.Membership.user_id).where(
+            models.Membership.chapter_id == chapter_id,
+            models.Membership.status == "active",
+            models.Membership.user_id.in_(non_ghost_ids),
+        )
+    )
+    active_ids = set(active_memberships.scalars())
+    if not non_ghost_ids.issubset(active_ids):
+        raise HTTPException(status_code=422, detail="lineage_target_not_in_chapter")
+
+
 async def build_lineage_tree(session: AsyncSession, chapter_id: uuid.UUID) -> LineageTreeOut:
     """Assemble nodes + edges + families for the interactive tree render."""
     members_result = await session.execute(
@@ -166,6 +195,12 @@ async def create_lineage_edge(
     """
     if body.big_user_id == body.little_user_id:
         raise HTTPException(status_code=422, detail="big_and_little_identical")
+
+    await _validate_lineage_targets(
+        session,
+        chapter_id=chapter_id,
+        user_ids={body.big_user_id, body.little_user_id},
+    )
 
     if body.family_id is not None:
         family = await session.get(models.Family, body.family_id)
