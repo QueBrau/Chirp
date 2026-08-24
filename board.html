@@ -1798,7 +1798,7 @@
       "owner": "jose",
       "tag": "frontend",
       "area": "auth",
-      "title": "verify-campus sendError has no branch for 503 email_not_configured - falls through to a generic retry, the exact loop the file's own docstring rails against for 502 - IN PROGRESS Aug 23 (braul 2.0): one mapper branch with configuration-blaming copy matching the 502 treatment; branch jose/c158-email-not-configured",
+      "title": "verify-campus sendError had no branch for 503 email_not_configured - PR #83 OPEN, awaiting manager review: one branch covering 502+503 (identical user situation, one sentence to keep in sync) with configuration-blaming copy. Server contract VERIFIED not assumed - overrode settings to email_provider=resend with no key and called the real email_service.send_email, got status=503 detail='email_not_configured'. tsc 5.9.3 --noEmit exit 0, node_modules via cp -Rc per the APFS note. Reachability unchanged and stated in the PR: needs a misconfigured deploy, robustness fix not a live defect. NOT rendered - the state needs a misconfigured backend and mobile CI is tsc-only",
       "detail": "Found by braul 2.0 during the c90 staleness check, reachability honestly sized: email_provider defaults to 'log' locally and prod has a key (c135 proved Resend reached), so it needs a misconfigured deploy to surface - robustness nit, not a live defect. Fix: a branch in the start-flow error mapper for 503 email_not_configured with copy that blames configuration, not the student's typing, matching the 502 email_send_failed treatment. Raised at email_service.py:52 (_resend_api_key)."
     }
   ],
