@@ -100,6 +100,17 @@ is a hole in the sequence, not a missing file.
 - **Mobile CI is `tsc` only.** There is no mobile test harness at all, so a green mobile
   check means "it compiles" and never "it works". Anything user-facing needs a real
   render.
+- **`npx tsc` in a worktree with no `node_modules` does not run the TypeScript compiler.**
+  It fetches the npm placeholder package called `tsc` and prints "This is not the tsc
+  command you are looking for". Symlink `node_modules` from the main checkout before any
+  mobile check in a worktree (`.gitignore` already documents the symlink and why it must
+  never be committed). **Cite `tsc --version` in your evidence** — a type-check whose
+  output does not include a version number did not type-check anything.
+  Measured, because the distinction changes what you watch for: the placeholder exits
+  **1**, not 0, on npm 10.8.2 / node 20.20.0. So this is a loud failure, not a silent
+  false green — a `&&` chain or a CI step stops on it. The way it actually costs you time
+  is a human skimming the red box, reading it as an environment hiccup, and reporting
+  "tsc ran" — not a gate that wrongly passes.
 - **A green signal can answer a question nobody asked.** A CI gate is a property of the
   RUN, not of the PR: it only protects a merge if the check is newer than both the gate's
   existence and the base's last move. When branches move fast, re-check the merge result
