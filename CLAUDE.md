@@ -82,6 +82,32 @@ see what is going on. Update it at EVERY step, not just at the end of a task:
 - The EAS dev build is STALE: expo-file-system, expo-sharing and
   @stripe/stripe-react-native were all added after it was cut (board c39).
 
+## Multi-session lessons (Aug 23-24, Jose-approved) — ALWAYS ON
+
+- **Worktree mobile checks.** A fresh worktree has no node_modules; `npx tsc` there
+  fetches the npm PLACEHOLDER package named `tsc`, prints a red banner, exits 1, and
+  type-checks NOTHING — the danger is a human misreading the red as an environment
+  hiccup and reporting "tsc ran". Copy node_modules in with an APFS clone
+  (`cp -Rc` from the main checkout) — a symlink satisfies tsc but BREAKS Metro's
+  serverRoot. Any typecheck claim must cite `tsc --version`; no version, no check.
+- **Never read an exit code through a pipe.** A pipeline reports its LAST stage's
+  status — `cmd | head` returning 0 proves nothing about cmd. Capture unpiped or use
+  PIPESTATUS. This exact mistake produced a false bug report once already.
+- **Grep before build.** Cards record what was true the day they were written. Before
+  designing from any card older than a couple of days: grep for the thing the card
+  says does not exist, and `git log --oneline --grep` the card id AND its PREV-ID
+  (renumbered cards' commits carry the old id). Three same-day tickets were already
+  done on main; two commands would have caught each in minutes.
+- **Board edits are edit+commit in one breath.** In the shared tree, the uncommitted
+  window between editing board.html and committing is where a concurrent session's
+  `git add` sweeps your lines into their commit — or a stale-copy commit drops them.
+  Order: edit, commit immediately, `scripts/board-check` the COMMITTED state, amend
+  if it fails, push, `board-check --pushed`.
+- **Full test suites are serialized.** Five concurrent suites drove load to 384 and
+  made clean runs blow 10-minute timeouts. Full backend runs go through
+  `scripts/with-suite-lock`; targeted files run unlocked during development; a suite
+  that timed out under load is a rerun, not a failure.
+
 ## Conventions that keep biting
 
 - No emojis anywhere in code, UI, docs, or commits.
