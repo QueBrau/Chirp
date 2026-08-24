@@ -381,6 +381,15 @@
   ],
   "cards": [
     {
+      "id": "c159",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "qa",
+      "area": "qa",
+      "title": "IN PROGRESS Aug 23 (Q) - THERE IS NO WAY TO SEE WHAT ANY ROLE'S DASHBOARD ACTUALLY LOOKS LIKE without a real prod login. Seeding a local dev stack: one account per user type, plus TEST-ACCOUNTS.md",
+      "detail": "Asked for by Jose: test accounts for every type of user, readily available in a file, so each role's dashboard can be looked at. TODAY THERE IS NO WAY TO DO THIS. The app is hardwired to the chirps-prod Firebase project (src/auth/config.ts) and points at the live Cloud Run backend, so seeing the treasurer view means being a real treasurer of a real chapter in prod. Eight roles exist in app/core/permissions.py (president, vice_president, treasurer, secretary, historian, member, pledge, alumni) and nobody has ever seen six of them rendered. NOT DOING IT WITH PROD FIREBASE ACCOUNTS, deliberately, for three reasons: it means creating accounts and handling passwords; it seeds fake people into prod, which is exactly what c97/c99/c100 spent a session removing; and since c88 a fake account still could not see campus content without a real .edu, so most of the dashboards would be wrong anyway. INSTEAD: the backend already supports AUTH_MODE=emulated, which trusts an X-Debug-Firebase-Uid header and has NO passwords anywhere in the flow, and src/api/client.ts already knows how to send that header - nothing has ever called it. So this is a local Postgres + local API + a seed script that creates one user per role in Sigma Chi, a chapter-less campus student (c71's first-class user), an UNVERIFIED student (the c88 gate state that c90's screen exists for), a platform admin (c28) and a president of a second chapter so org colour scoping is provable. Seeded with enough real finance data that the c118 treasurer charts have shape. TWO INDEPENDENT LOCKS keep this out of prod: the client switch is gated on __DEV__, and the server ignores the header entirely unless AUTH_MODE=emulated, which the ENV guard (SECURITY-REVIEW finding 5) forbids in production."
+    },
+    {
       "id": "c137",
       "col": "done",
       "owner": "J",
