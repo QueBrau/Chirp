@@ -253,12 +253,18 @@ async def _readable_post(
 
     The rule follows the post's audience, not just its chapter:
 
-    - 'org' - any non-removed membership in the post's chapter (active OR inactive,
-      board c102). Consistent with the read gate in list_posts: whoever can see the
-      chapter-public tier can also like/comment on it.
-    - 'org_actives' - membership status=='active' specifically (board c102). A
-      viewer who cannot READ this tier must not be able to like/comment on it
-      either, so the write/like/comment paths mirror the read gate exactly.
+    - 'org' - membership status=='active' in the post's chapter (board c173,
+      ruled by Jose Aug 24, reversing c102/#94 on this one point). list_posts'
+      read gate is deliberately looser (active OR inactive, unchanged — see its
+      own docstring) so inactive members keep chapter-public READ access; this
+      gate is not that gate. c102 had made the two match, on the theory that
+      whoever can see a tier can also act on it. Jose's ruling is narrower:
+      inactive members are read-only across the board, full stop, so seeing a
+      chapter-public post must not imply liking or commenting on it.
+    - 'org_actives' - membership status=='active' specifically (board c102,
+      untouched by c173). A viewer who cannot READ this tier must not be able
+      to like/comment on it either, so the write/like/comment paths mirror the
+      read gate exactly.
     - 'campus' - anyone VERIFIED on the post's campus, OR an active member of the
       chapter it came from (unchanged by c102 - that ruling only reaches 'org' vs
       'org_actives'). This is what the campus feed already promises: it serves
@@ -291,15 +297,16 @@ async def _readable_post(
     ):
         return post
 
-    # 'org' accepts active OR inactive (c102: the chapter-public tier); 'org_actives'
-    # and the 'campus' fallback both stay active-only (org_actives BY DEFINITION,
-    # campus because c102's ruling never touched it - see the docstring above).
-    required_statuses = ("active", "inactive") if post.audience == "org" else ("active",)
+    # 'org', 'org_actives', and the 'campus' fallback are all active-only here
+    # (c173 reverts 'org' to active-only for like/comment; org_actives BY
+    # DEFINITION; campus because c102's ruling never touched it - see the
+    # docstring above). Only list_posts' READ gate still admits inactive
+    # members on the 'org' tier.
     result = await session.execute(
         select(models.Membership).where(
             models.Membership.chapter_id == post.chapter_id,
             models.Membership.user_id == user.id,
-            models.Membership.status.in_(required_statuses),
+            models.Membership.status == "active",
         )
     )
     if result.scalar_one_or_none() is None:
