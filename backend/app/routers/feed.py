@@ -71,8 +71,14 @@ async def _commit_or_log_orphaned_media(session: AsyncSession, media_urls: list[
     commit fails (rare — e.g. an IntegrityError), the resulting object cannot be
     compensated away by deleting it - the service account's delete grant is
     IAM-conditioned to tmp/ only, on purpose (see finalize_media_object()'s docstring).
-    The orphan is logged loudly instead, for a human to hand-delete if it ever actually
-    happens, rather than trading away posts/ immutability to auto-clean a rare failure.
+    The orphan is logged loudly instead, rather than trading away posts/ immutability
+    to auto-clean a rare failure.
+
+    c153 changed what happens to it AFTERWARDS, not what happens here: an unreferenced
+    posts/ object is now reclaimed by app.jobs.media_reconcile once it is past that
+    job's age floor, so this no longer strands an object forever waiting on a human.
+    The loud log stays anyway - it is the only signal that a commit failed at all, and
+    it names the object immediately instead of on the reconciler's next run.
     """
     try:
         await session.commit()
@@ -80,8 +86,9 @@ async def _commit_or_log_orphaned_media(session: AsyncSession, media_urls: list[
         for url in media_urls:
             logger.error(
                 "post commit failed after media was already moved to permanent "
-                "storage url=%s - now an orphan with no automatic cleanup, needs "
-                "hand deletion",
+                "storage url=%s - now an orphan; this route cannot delete it "
+                "(posts/ is immutable to this identity by design), "
+                "app.jobs.media_reconcile reclaims it on a later run",
                 url,
             )
         raise

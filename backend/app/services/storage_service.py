@@ -51,9 +51,19 @@ this identity — a stronger guarantee than "the code doesn't currently do that"
 consequence: if the GCS move for a post succeeds but the DB commit that follows fails
 (rare — e.g. an IntegrityError), the resulting permanent object CANNOT be compensated
 away by deleting it; finalize_media_object's caller must instead log the orphaned
-object path loudly (greppable) for a human to hand-delete, and accept that this one rare
-failure mode produces a benign unreferenced object rather than trade away posts/
-immutability to avoid it. Do not add posts/ delete permission back to "fix" this.
+object path loudly (greppable), and accept that this one rare failure mode produces a
+benign unreferenced object rather than trade away posts/ immutability to avoid it. Do
+not add posts/ delete permission back to "fix" this.
+
+UNREFERENCED posts/ OBJECTS ARE RECLAIMED OUT OF BAND (board c153), which is what keeps
+the paragraph above a bounded trade rather than a permanent leak. PATCH clearing or
+replacing a photo detaches the old permanent object for exactly the same reason — this
+identity cannot delete it — so app.jobs.media_reconcile diffs posts/ against every url
+the posts table actually references and removes what nothing points at, running as a
+SEPARATE service account whose delete grant is IAM-conditioned to posts/. The runtime
+identity's tmp/-only condition is deliberately left alone (manager decision on c153):
+the ability to delete a published photo belongs to a scheduled job, never to the account
+serving requests.
 
 THIS ALMOST BROKE THE COPY ITSELF, found live against the real bucket (a fake client
 cannot surface it): GCS requires storage.objects.delete on the DESTINATION for an
@@ -311,6 +321,8 @@ def finalize_media_object(user_id: str, tmp_object_name: str) -> str:
     returns successfully, the resulting permanent object cannot be compensated away by
     deleting it; the caller must log the orphaned path loudly instead. Do not add
     posts/ delete permission back to "fix" that rare case - see the module docstring.
+    The same constraint is why PATCH cannot delete the photo it replaces; both orphans
+    are collected later by app.jobs.media_reconcile (c153), under a different account.
     """
     expected_prefix = f"{TMP_PREFIX}/{user_id}/"
     if not tmp_object_name.startswith(expected_prefix):

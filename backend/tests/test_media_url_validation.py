@@ -452,3 +452,97 @@ async def test_update_post_route_clears_media_with_an_empty_list(
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["media_urls"] is None
+
+
+# ---------------------------------------------------------------------------
+# The orphan source app.jobs.media_reconcile exists to clean (board c153).
+#
+# These two are CHARACTERIZING tests, not bug reports: they assert what PATCH
+# does today and deliberately lock it in. The route detaching a photo without
+# deleting the object is not an oversight to fix here — deleting it inline is
+# exactly what c132 made impossible on purpose, since the API's service account
+# has no delete grant on posts/ so that no bug or compromised route can ever
+# destroy a published photo. The orphan is the accepted cost of that guarantee,
+# and the reconciliation job is where it gets paid off, out of band and under a
+# different identity. If either of these ever starts failing because the route
+# learned to delete, that is a REGRESSION of c132's immutability property, not
+# progress — read finalize_media_object's docstring before "fixing" it.
+# ---------------------------------------------------------------------------
+
+
+async def test_patch_clearing_a_photo_leaves_the_old_permanent_object_orphaned(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First orphan source: media_object_names=[] detaches the photo and nothing,
+    anywhere, ever deletes the posts/ object it was pointing at."""
+    _configure_bucket(monkeypatch)
+    captured: dict = {}
+    _install_fake_gcs(monkeypatch, captured)
+    setup = await make_chapter_with("member")
+    tmp_name = f"tmp/{setup.member.id}/cleared.jpg"
+    permanent_name = f"posts/{setup.member.id}/cleared.jpg"
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/posts",
+        json={"body": "a photo i am about to remove", "media_object_names": [tmp_name]},
+        headers=setup.member.headers,
+    )
+    assert created.status_code == 201, created.text
+    post_id = created.json()["id"]
+    assert created.json()["media_urls"] == [
+        f"https://storage.googleapis.com/{TEST_BUCKET}/{permanent_name}"
+    ]
+
+    cleared = await client.patch(
+        f"/chapters/{setup.chapter_id}/posts/{post_id}",
+        json={"media_object_names": []},
+        headers=setup.member.headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["media_urls"] is None
+
+    # The only delete the whole flow issued was the tmp/ source of the original
+    # move. The permanent object is now referenced by nothing in the database and
+    # sits under a prefix with no lifecycle rule — orphaned until the job runs.
+    assert captured["deleted"] == [tmp_name]
+    assert permanent_name not in captured["deleted"]
+
+
+async def test_patch_replacing_a_photo_leaves_the_previous_permanent_object_orphaned(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Second orphan source: attaching a NEW upload overwrites media_urls in place,
+    so the object the column used to name is dropped on the floor rather than
+    deleted — same orphan as clearing, reached by the more common path."""
+    _configure_bucket(monkeypatch)
+    captured: dict = {}
+    _install_fake_gcs(monkeypatch, captured)
+    setup = await make_chapter_with("member")
+    first_tmp = f"tmp/{setup.member.id}/first.jpg"
+    first_permanent = f"posts/{setup.member.id}/first.jpg"
+    second_tmp = f"tmp/{setup.member.id}/second.png"
+    second_permanent = f"posts/{setup.member.id}/second.png"
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/posts",
+        json={"body": "first photo", "media_object_names": [first_tmp]},
+        headers=setup.member.headers,
+    )
+    assert created.status_code == 201, created.text
+    post_id = created.json()["id"]
+
+    replaced = await client.patch(
+        f"/chapters/{setup.chapter_id}/posts/{post_id}",
+        json={"media_object_names": [second_tmp]},
+        headers=setup.member.headers,
+    )
+    assert replaced.status_code == 200, replaced.text
+    assert replaced.json()["media_urls"] == [
+        f"https://storage.googleapis.com/{TEST_BUCKET}/{second_permanent}"
+    ]
+
+    # Both tmp/ sources were cleaned up by their own moves; neither permanent
+    # object was touched, so the FIRST one is now unreferenced and unreclaimable
+    # by anything except the reconciliation job.
+    assert captured["deleted"] == [first_tmp, second_tmp]
+    assert first_permanent not in captured["deleted"]
