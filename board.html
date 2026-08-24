@@ -1354,11 +1354,11 @@
     },
     {
       "id": "c90",
-      "col": "backlog",
+      "col": "progress",
       "owner": "jose",
       "tag": "frontend",
       "area": "auth",
-      "title": "THE VERIFY-YOUR-EDU SCREEN | ASSIGNED to braul 2.0 Aug 23 - c86/c88 endpoints live on prod (proven via c135), server-side dependency satisfied; delivery-to-owner-only is a QA constraint, not a build blocker",
+      "title": "c90 PREMISE IS STALE - NOTHING BUILT, NOTHING TO BUILD (braul 2.0, Aug 23). THIRD stale card in a row. The screen shipped Aug 16 as commit 83b884a, titled 'c90: the verify-your-.edu screen, and the button c110 deliberately left out' - app/(auth)/verify-campus.tsx, 258 lines. Every state the card asks for is a real screen state: enter-edu, code-sent, code-wrong, code-expired, rate-limited, verified, PLUS the lapsed variant with its own copy ('Confirm your school again' / 'It has been a year'), driven by useCampusAccess's deliberate four states. Client error branches were checked against the service line by line and MATCH what the server actually raises: 400 invalid_email, 400 unrecognized_edu_domain, 429 verification_rate_limited, 404 no_pending_verification, 403 verification_expired, 403 verification_code_invalid, 429 verification_attempts_exhausted, 502 email_send_failed. The c88 403 redirect is wired at BOTH call sites - feed/index.tsx:231 and yak/index.tsx:256 both push /(auth)/verify-campus with lapsed-aware copy. ONE REAL GAP, marginal: sendError has no branch for 503 email_not_configured, so it would read 'Something went wrong. Try again.' - the exact loop the file's own docstring rails against. NOT reachable today: email_provider defaults to 'log' locally and prod has a key (c135), so it needs a misconfigured deploy. Offered to manager as an optional one-branch fix, not built unilaterally on a complete feature. RECOMMEND: verify and close as done-by-83b884a/c110",
       "detail": "the designed destination for the 403 that c88 introduces, carded separately because the server side can and should land first. Jose's call Aug 16 was explicit: an unverified user opening Yak or the campus feed sees a real screen explaining they need to confirm an .edu for their school, with the form ON that screen, rather than an empty feed (indistinguishable from a broken app) or a bare error toast. DESIGN.md is binding here and this is a brand moment in the same family as sign-in - dark canvas, one clear action, no default-looking form. It needs the states a code flow actually has and each is a real screen, not a toast: enter your .edu, code sent, code wrong, code expired, rate-limited, verified. Also the yearly re-check case (c86) lands on this same screen with different copy - your verification expired rather than you have never verified - and treating those as one state is how a returning student gets told they do not go here. Depends on c86 for the endpoints and c88 for the 403 to catch."
     },
     {
@@ -1776,8 +1776,8 @@
     },
     {
       "id": "c156",
-      "col": "backlog",
-      "title": "secretary.tsx loadDashboard is an N+1 - listMeetings then getAttendance PER MEETING in a Promise.all, a semester of meetings = a semester of calls on every dashboard load",
+      "col": "progress",
+      "title": "secretary.tsx loadDashboard is an N+1 - listMeetings then getAttendance PER MEETING in a Promise.all, a semester of meetings = a semester of calls on every dashboard load - IN PROGRESS: one windowed meetings+attendance bundle route (MINUTES_ADMIN, declared above /{meeting_id}), loadDashboard drops to two calls; branch jose/c156-attendance-bundle",
       "owner": "jose",
       "tag": "backend",
       "area": "orgs",
