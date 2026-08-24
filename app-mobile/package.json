@@ -8,6 +8,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
+    "verify:auth": "node scripts/verify-auth.mjs",
     "verify:charts": "tsc -p tsconfig.chart-verify.json && node scripts/verify-charts.mjs",
     "verify:contract": "node scripts/verify-contract.mjs"
   },
