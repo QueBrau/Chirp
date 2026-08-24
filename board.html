@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787588366258,
+  "updated": 1787588870440,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -2028,7 +2028,8 @@
     "Aug 23 - worktree mobile-tooling refinement (james 2.0): the node_modules SYMLINK satisfies tsc but BREAKS Metro (serverRoot resolution); an APFS clone (cp -c) of node_modules works for both. Joins the queued CLAUDE.md edit.",
     "Aug 23 - c157 board sweep verified and applied: c80/c110/c108/c8 closed as done-by-prior-work (each verified in code by manager, not just commit subject); c117/c120 title-stale closed; c122/c123 had WRONG PR attributions (renumbering kept the pre-renumber PR numbers) - fixed with prev-ids recorded. CONVENTION ADOPTED: a renumbered card carries 'PREV-ID: cX' in its detail in fixed form, because commits and branches keep the old id and id-greps (including the manager's triage grep) miss the work entirely - the sweep's method finding.",
     "Aug 23 - shared-tree board-edit atomicity (raised by security 2.0 after the third benign sweep of the day; james 2.0 and the manager hit the same race): a board edit in the shared tree is EDIT + ADD + COMMIT with no verification step between - the uncommitted window is where a peer's add sweeps your lines or, worse, a peer's stale-copy commit drops them. Order is now: edit, commit immediately, board-check the COMMITTED state, fix-and-amend if it fails, push, board-check --pushed. Joins the queued CLAUDE.md edit.",
-    "Aug 24 - manager back online post-handoff (Codex era reviewed): closed c156/c79/c164/c89 on Q's sim evidence, accepted Q's offer to fix c165, carded the sim run's findings (c166 auth persistence - highest mobile priority, c167 stale summary, c168 overlays), carded c169 native providers + c170 Expo audit. Security fixes on main (conversation authz, lineage targets, log scrub, rate limiting, WS suspension, email redaction) are NOT yet deployed - deploy-only release ready, no migration (head 0013 = prod), CI green on main today."
+    "Aug 24 - manager back online post-handoff (Codex era reviewed): closed c156/c79/c164/c89 on Q's sim evidence, accepted Q's offer to fix c165, carded the sim run's findings (c166 auth persistence - highest mobile priority, c167 stale summary, c168 overlays), carded c169 native providers + c170 Expo audit. Security fixes on main (conversation authz, lineage targets, log scrub, rate limiting, WS suspension, email redaction) are NOT yet deployed - deploy-only release ready, no migration (head 0013 = prod), CI green on main today.",
+    "Aug 24 - SECURITY-FIX RELEASE DEPLOYED (manager, Jose's 'deploy'): revision chirp-api-00031-vtg serving 100%, built from pinned worktree at 8af4740, deploy-only (head 0013 = prod, no migration), section-7 command with no env flags. Ships: conversation authz, lineage target validation, media capability-path log scrub, Redis rate limiting, suspended-WS recheck, email log redaction. Live smoke: /auth/me 401 with bogus-path 404 control, /docs 404 (c122 holds), /media/<garbage> 403 (signing live, forged token rejected), digest pinned. NOT re-driven live: authenticated WS round-trip (proven on 00030, gateway change additive) and cross-instance rate limiting - both ride the next QA-credentialed pass."
   ]
 }
 </script>
