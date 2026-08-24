@@ -293,6 +293,9 @@ export default function SecretaryScreen() {
       });
       setNewTitle("");
       setNewDateText("");
+      // The totals' denominator counts meetings in the window; refetch rather than
+      // try to add this one in locally (mirrors removeMeeting below).
+      await loadSummary(chapterId, windowKey);
     } catch (error) {
       showApiError(error, "Couldn't create meeting");
     } finally {
@@ -324,6 +327,9 @@ export default function SecretaryScreen() {
     setSavingMinutes(true);
     try {
       const trimmed = minutesDraft.trim();
+      // MeetingUpdate.meeting_date exists on the type, but this screen never edits
+      // it — only minutes_md is patched here, so the attendance window's membership
+      // can't shift as a side effect of this call and loadSummary need not rerun.
       const updated = await updateMeeting(chapterId, meeting.id, {
         minutes_md: trimmed.length > 0 ? trimmed : null,
       });
