@@ -49,6 +49,20 @@ class Settings(BaseSettings):
     # _secret_key() for the identical "feature exists in code, infra not live yet"
     # situation.
     media_bucket_name: str | None = None
+    # HMAC key for post-media capability tokens (board c140). Secret Manager only, never
+    # a file on disk — same rule the GCS upload signing already follows (see
+    # app.services.storage_service's module docstring on keyless signing).
+    #
+    # None means "this deployment has not turned signed media reads on yet", and that is
+    # a REAL, EXPECTED state, not a misconfiguration: the bucket is public-read until the
+    # c140 cutover flips public_access_prevention, and until then a stored url is already
+    # fetchable as-is. So the serializer falls back to emitting the stored url unchanged
+    # rather than failing closed — the build is additive and flips nothing on its own.
+    #
+    # AFTER the flip, unsetting this does NOT reopen public access; it makes every photo
+    # visibly break instead, because the emitted urls would 403 against a private bucket.
+    # That is the intended failure direction: loud and harmless, never silent and open.
+    media_signing_secret: str | None = None
 
 
 @lru_cache
