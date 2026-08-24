@@ -248,6 +248,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // real — which "ready" already guarantees, since loadMe's success path is
   // the same place that sets it.
   useEffect(() => {
+    // An impersonated session has no bearer token, and a browser cannot put a
+    // header on a WebSocket — the gateway authenticates via the subprotocol
+    // (wsAuthProtocol reads whatever setAuthToken last set, which is null here).
+    // So this connection could only ever fail; attempting it just prints a
+    // console error on every dev page load and teaches people to ignore the
+    // console. Realtime is simply not part of what the seeded accounts cover.
+    if (DEV_UID !== null) {
+      chirpSocket.disconnect();
+      return;
+    }
     if (status === "ready") {
       chirpSocket.connect();
     } else {

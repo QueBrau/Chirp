@@ -106,6 +106,21 @@ c97/c99/c100 spent a session removing), and since c88 a fake account still could
 not see campus content without a real `.edu` — so most of the dashboards would
 have been wrong anyway.
 
+## What these accounts do not cover
+
+**Realtime.** An impersonated session has no bearer token, and a browser cannot
+put a header on a WebSocket — the gateway authenticates through the subprotocol,
+which reads that token. So the socket is deliberately not connected under a
+`?uid=` session rather than attempting a connection that can only fail and
+printing a console error on every page load. Messages will render; live delivery
+is not part of what this covers.
+
+**Keep the branch checked out.** Until PR #86 merges, this only works on
+`q/c159-dev-test-accounts`. Switching the working tree to `main` deletes
+`src/auth/devAuth.ts` out from under Metro, and the running app goes to a blank
+black screen — the bundle references a module that is no longer on disk. If that
+happens, check the branch back out and reload; nothing is broken.
+
 ## Re-seeding
 
 The script is idempotent, so re-running it after a migration is safe and updates
