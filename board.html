@@ -381,12 +381,21 @@
   ],
   "cards": [
     {
+      "id": "c160",
+      "col": "progress",
+      "owner": "",
+      "tag": "infra",
+      "area": "infra",
+      "title": "BLOCKER - GITHUB ACTIONS IS REFUSING TO START ANY JOB ACROSS THE WHOLE REPO. Billing, not code. Nothing has been CI-verified since 01:24 UTC Aug 24",
+      "detail": "Every job on every branch fails in 1-3 seconds with the annotation: 'The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings.' NOT A CODE PROBLEM AND NOT SPECIFIC TO ONE BRANCH - runs on main fail identically, and so does jose/c156-attendance-bundle. Last green runs were 01:24 UTC; everything from about 01:53 onward is refused. WHAT THIS MEANS RIGHT NOW: the four checks (backend pytest, alembic single head, mobile tsc, web build) are giving a RED that says nothing about the code, so a red check is currently unreadable in both directions - it cannot be trusted as a failure, and green cannot be waited for. Anything merged during this window is merged on local verification only. ONLY JOSE CAN FIX THIS: it needs the GitHub account's Billing & plans settings, which is a payment matter and not something an agent should touch. Until then, state plainly in each PR what was verified locally instead of implying CI passed."
+    },
+    {
       "id": "c159",
       "col": "progress",
       "owner": "Q",
       "tag": "qa",
       "area": "qa",
-      "title": "IN PROGRESS Aug 23 (Q) - THERE IS NO WAY TO SEE WHAT ANY ROLE'S DASHBOARD ACTUALLY LOOKS LIKE without a real prod login. Seeding a local dev stack: one account per user type, plus TEST-ACCOUNTS.md",
+      "title": "PR #86 OPEN - 12 local test accounts, one per user type, + TEST-ACCOUNTS.md. Walked all 12 by hand (treasurer charts on real seeded money, ADPi azure, the .edu gate). CI COULD NOT RUN - see c160, GitHub billing",
       "detail": "Asked for by Jose: test accounts for every type of user, readily available in a file, so each role's dashboard can be looked at. TODAY THERE IS NO WAY TO DO THIS. The app is hardwired to the chirps-prod Firebase project (src/auth/config.ts) and points at the live Cloud Run backend, so seeing the treasurer view means being a real treasurer of a real chapter in prod. Eight roles exist in app/core/permissions.py (president, vice_president, treasurer, secretary, historian, member, pledge, alumni) and nobody has ever seen six of them rendered. NOT DOING IT WITH PROD FIREBASE ACCOUNTS, deliberately, for three reasons: it means creating accounts and handling passwords; it seeds fake people into prod, which is exactly what c97/c99/c100 spent a session removing; and since c88 a fake account still could not see campus content without a real .edu, so most of the dashboards would be wrong anyway. INSTEAD: the backend already supports AUTH_MODE=emulated, which trusts an X-Debug-Firebase-Uid header and has NO passwords anywhere in the flow, and src/api/client.ts already knows how to send that header - nothing has ever called it. So this is a local Postgres + local API + a seed script that creates one user per role in Sigma Chi, a chapter-less campus student (c71's first-class user), an UNVERIFIED student (the c88 gate state that c90's screen exists for), a platform admin (c28) and a president of a second chapter so org colour scoping is provable. Seeded with enough real finance data that the c118 treasurer charts have shape. TWO INDEPENDENT LOCKS keep this out of prod: the client switch is gated on __DEV__, and the server ignores the header entirely unless AUTH_MODE=emulated, which the ENV guard (SECURITY-REVIEW finding 5) forbids in production."
     },
     {
