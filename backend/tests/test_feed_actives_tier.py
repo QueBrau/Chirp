@@ -142,17 +142,15 @@ async def test_like_and_comment_gating_matches_read_gating(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
     """Write-adjacent (like/comment) gating on an org_actives post mirrors the read
-    gate exactly: active can act on it, non-active cannot — but a non-active member
-    can still like/comment on the chapter-public 'org' tier."""
+    gate exactly: active can act on it, non-active cannot. (The chapter-public
+    'org' tier is NOT symmetric with its read gate — see board c173 and
+    test_feed_c173_inactive_readonly.py: reading it does not imply reacting to it.)"""
     setup = await make_chapter_with("member")
-    public_post = await _create_post(
-        client, setup.chapter_id, setup.president.headers, "public", "org"
-    )
     actives_post = await _create_post(
         client, setup.chapter_id, setup.president.headers, "actives", "org_actives"
     )
 
-    # Still active: member can like/comment on both tiers.
+    # Still active: member can like/comment on the actives-only tier.
     liked = await client.put(f"/posts/{actives_post['id']}/likes", headers=setup.member.headers)
     assert liked.status_code == 200, liked.text
     commented = await client.post(
@@ -166,7 +164,7 @@ async def test_like_and_comment_gating_matches_read_gating(
         client, setup.chapter_id, setup.president.headers, setup.member.id, "inactive"
     )
 
-    # Now inactive: refused on the actives-only post...
+    # Now inactive: refused on the actives-only post, exactly like the read gate.
     like_denied = await client.put(
         f"/posts/{actives_post['id']}/likes", headers=setup.member.headers
     )
@@ -177,18 +175,6 @@ async def test_like_and_comment_gating_matches_read_gating(
         headers=setup.member.headers,
     )
     assert comment_denied.status_code == 403, comment_denied.text
-
-    # ...but still allowed on the chapter-public post, consistent with the read gate.
-    like_allowed = await client.put(
-        f"/posts/{public_post['id']}/likes", headers=setup.member.headers
-    )
-    assert like_allowed.status_code == 200, like_allowed.text
-    comment_allowed = await client.post(
-        f"/posts/{public_post['id']}/comments",
-        json={"body": "still fine"},
-        headers=setup.member.headers,
-    )
-    assert comment_allowed.status_code == 201, comment_allowed.text
 
 
 async def test_create_post_still_requires_active_membership(
