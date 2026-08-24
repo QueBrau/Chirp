@@ -209,7 +209,7 @@ export default function ProfileScreen() {
       return;
     }
     listPosts(chapterId)
-      .then((posts) => setPostCount(posts.filter((post) => post.author_id === userId).length))
+      .then(({ posts }) => setPostCount(posts.filter((post) => post.author_id === userId).length))
       .catch(() => setPostCount(0));
   }, [memberships, chapterId, userId]);
 

@@ -80,6 +80,14 @@ export interface CreateSheetProps {
    */
   campusName?: string | null;
   /**
+   * True iff the caller's own membership in `chapterId` currently has
+   * status=='active' (board c102). Gates the "Actives only" audience choice —
+   * offering it to a non-active member would let them pick a tier they
+   * themselves cannot read back, which is worse than not offering it at all.
+   * Meaningless (and ignored) when chapterId is null.
+   */
+  isActiveMember?: boolean;
+  /**
    * Called after the post is confirmed created server-side, so a screen that
    * owns a feed list (Home, the org Feed segment) can refresh it. No global
    * refetch mechanism exists in this app, so this is opt-in per caller.
@@ -170,6 +178,7 @@ export function CreateSheet({
   chapterId,
   campusId,
   campusName,
+  isActiveMember = false,
   onPosted,
 }: CreateSheetProps) {
   const palette = useTheme();
@@ -531,6 +540,19 @@ export function CreateSheet({
                     description="Public to your whole campus — people outside your chapter can see it too."
                     selected={audience === "campus"}
                     onPress={() => setAudience("campus")}
+                  />
+                ) : null}
+                {/* Actives only (board c102) — offered ONLY to a caller whose own
+                    membership is active. Not shown at all otherwise, same "stated,
+                    not offered" reasoning as the no-chapter case above: a disabled
+                    row a non-active member could never enable reads as a locked
+                    feature, not as what it actually is. */}
+                {canChooseAudience && isActiveMember ? (
+                  <AudienceChoice
+                    title="Actives only"
+                    description="Private — only active members of your chapter can see it."
+                    selected={audience === "org_actives"}
+                    onPress={() => setAudience("org_actives")}
                   />
                 ) : null}
               </View>

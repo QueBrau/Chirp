@@ -1,10 +1,12 @@
 /** Feed API: campus FYP, chapter/org posts, likes, comments — routers/feed.py. */
 
-import { request } from "./client";
+import { request, requestWithHeaders } from "./client";
 
-/** Who can see a post. 'org' (default) = chapter-private, never on the FYP.
- * 'campus' = surfaces on the public GET /campuses/{campus_id}/feed. */
-export type PostAudience = "org" | "campus";
+/** Who can see a post. 'org' (default) = chapter-public, visible to any member.
+ * 'campus' = surfaces on the public GET /campuses/{campus_id}/feed. 'org_actives'
+ * (board c102) = chapter-scoped like 'org', but only for a viewer whose OWN
+ * membership is active — never offer this choice to a non-active member. */
+export type PostAudience = "org" | "campus" | "org_actives";
 
 export interface PostCreate {
   body: string;
@@ -110,9 +112,29 @@ export async function listCampusFeed(
   });
 }
 
-/** Reverse-chron chapter/org feed (any audience) — the org's own posts, FeedPostOut shape. */
-export async function listPosts(chapterId: string): Promise<FeedPostOut[]> {
-  return request<FeedPostOut[]>(`/chapters/${chapterId}/posts`);
+/** Result of listPosts (board c102) — the posts, plus the honest-signal flag for a
+ * non-active viewer: whether this chapter has actives-only content they cannot see.
+ * Always false for an active member, who already sees everything there is. */
+export interface ChapterFeedResult {
+  posts: FeedPostOut[];
+  activesOnlyHidden: boolean;
+}
+
+/**
+ * Reverse-chron chapter/org feed (any audience the caller can see) — the org's own
+ * posts, FeedPostOut shape.
+ *
+ * The response BODY is still the bare FeedPostOut[] it always was (matches the
+ * backend's own list[FeedPostOut] return type and every existing pytest
+ * assertion) — `activesOnlyHidden` rides the X-Actives-Only-Hidden response
+ * header instead, via requestWithHeaders, precisely so this stays a drop-in
+ * shape and the only thing that changes is one new field on the result.
+ */
+export async function listPosts(chapterId: string): Promise<ChapterFeedResult> {
+  const { data, headers } = await requestWithHeaders<FeedPostOut[]>(
+    `/chapters/${chapterId}/posts`,
+  );
+  return { posts: data, activesOnlyHidden: headers.get("x-actives-only-hidden") === "true" };
 }
 
 export async function createPost(chapterId: string, body: PostCreate): Promise<PostOut> {

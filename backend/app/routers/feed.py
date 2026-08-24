@@ -1,16 +1,18 @@
 """Chapter feed + campus feed: posts CRUD (soft delete), likes, comments.
 
-Post audience: 'org' (private to the chapter, never leaves /chapters/{id}/posts)
-or 'campus' (also surfaces on GET /campuses/{id}/feed). Chosen by the author at
-compose time (PostCreate.audience), defaulting to 'org' — see board Decisions log,
-Aug 14. "For You" is a ranking over the same campus posts, not a third value.
+Post audience: 'org' (chapter-public, never leaves /chapters/{id}/posts), 'campus'
+(also surfaces on GET /campuses/{id}/feed), or 'org_actives' (chapter-scoped like
+'org', but only for a viewer whose own membership in that chapter has
+status=='active' — board c102). Chosen by the author at compose time
+(PostCreate.audience), defaulting to 'org' — see board Decisions log, Aug 14.
+"For You" is a ranking over the same campus posts, not a fourth value.
 """
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +27,7 @@ from app.core.errors import forbidden, not_found
 from app.core.permissions import Role
 from app.db import get_session
 from app.middleware.auth import get_current_user
-from app.middleware.org_scope import get_current_membership
+from app.middleware.org_scope import get_current_chapter_member, get_current_membership
 from app.schemas.social import (
     CampusPostCreate,
     FeedPostOut,
@@ -251,10 +253,15 @@ async def _readable_post(
 
     The rule follows the post's audience, not just its chapter:
 
-    - 'org' - active membership in the post's chapter, unchanged. Org posts stay
-      private to the org.
+    - 'org' - any non-removed membership in the post's chapter (active OR inactive,
+      board c102). Consistent with the read gate in list_posts: whoever can see the
+      chapter-public tier can also like/comment on it.
+    - 'org_actives' - membership status=='active' specifically (board c102). A
+      viewer who cannot READ this tier must not be able to like/comment on it
+      either, so the write/like/comment paths mirror the read gate exactly.
     - 'campus' - anyone VERIFIED on the post's campus, OR an active member of the
-      chapter it came from. This is what the campus feed already promises: it serves
+      chapter it came from (unchanged by c102 - that ruling only reaches 'org' vs
+      'org_actives'). This is what the campus feed already promises: it serves
       these posts to every student on the campus, so requiring chapter membership to
       like one was never coherent. It 403'd every cross-chapter campus post, and since
       c71 a chapter-less post has no chapter to be a member of, so the old rule
@@ -284,11 +291,15 @@ async def _readable_post(
     ):
         return post
 
+    # 'org' accepts active OR inactive (c102: the chapter-public tier); 'org_actives'
+    # and the 'campus' fallback both stay active-only (org_actives BY DEFINITION,
+    # campus because c102's ruling never touched it - see the docstring above).
+    required_statuses = ("active", "inactive") if post.audience == "org" else ("active",)
     result = await session.execute(
         select(models.Membership).where(
             models.Membership.chapter_id == post.chapter_id,
             models.Membership.user_id == user.id,
-            models.Membership.status == "active",
+            models.Membership.status.in_(required_statuses),
         )
     )
     if result.scalar_one_or_none() is None:
@@ -301,26 +312,70 @@ async def _readable_post(
 @router.get("/chapters/{chapter_id}/posts")
 async def list_posts(
     chapter_id: uuid.UUID,
-    membership: models.Membership = Depends(get_current_membership),
+    response: Response,
+    membership: models.Membership = Depends(get_current_chapter_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[FeedPostOut]:
     """List the chapter's posts, newest first, excluding soft-deleted ones.
+
+    TWO TIERS (board c102, ruled by Jose Aug 24 — 'active' means
+    Membership.status == 'active', the existing status flag; NOT a new
+    pledge/member model, NOT dues-paid standing): 'org' is chapter-public, visible
+    to any non-removed member; 'org_actives' additionally requires the VIEWER'S OWN
+    membership.status == 'active'. Entry to this route is get_current_chapter_member
+    (active OR inactive), deliberately looser than every other /chapters/{id}/...
+    route's get_current_membership (active-only) — this is the one place a
+    non-active member is let in at all, precisely so the chapter-public tier means
+    something for them.
+
+    The split is a WHERE-clause predicate computed once from the caller's own
+    already-fetched membership row (`visible_audiences` below), not a per-post
+    Python filter over a fully-fetched list — no per-row cost, no N+1.
+
+    HONEST SIGNAL (the card's named failure mode): a non-active viewer must be able
+    to tell a fuller tier exists rather than reading an indistinguishable-from-quiet
+    feed. Carried as the X-Actives-Only-Hidden response header — deliberately NOT a
+    change to this endpoint's long-established list body shape, which multiple
+    existing tests and the one real client call site (app-mobile's listPosts)
+    already parse as a bare array. True only when the caller is non-active AND this
+    chapter genuinely has at least one live org_actives post they cannot see, so a
+    chapter that is actually quiet for actives too still reads as quiet, not as
+    "something is being hidden from you when nothing is."
 
     Includes author identity and batched like/comment counts in one round trip
     (c43) — see `_post_counts_select` for why this isn't a join-and-COUNT(DISTINCT).
     Posts by an author the caller has blocked are silently absent (c35) — see
     `_post_counts_select` for the anti-join.
     """
+    is_active = membership.status == "active"
+    visible_audiences: tuple[str, ...] = ("org", "org_actives") if is_active else ("org",)
     stmt = (
         _post_counts_select(membership.user_id)
         .where(
             models.Post.chapter_id == chapter_id,
             models.Post.deleted_at.is_(None),
+            models.Post.audience.in_(visible_audiences),
         )
         .order_by(models.Post.created_at.desc())
     )
     result = await session.execute(stmt)
-    return [_feed_post_out(row, membership.user_id) for row in result.all()]
+    posts = [_feed_post_out(row, membership.user_id) for row in result.all()]
+
+    actives_only_hidden = False
+    if not is_active:
+        hidden_stmt = (
+            select(models.Post.id)
+            .where(
+                models.Post.chapter_id == chapter_id,
+                models.Post.audience == "org_actives",
+                models.Post.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        actives_only_hidden = (await session.execute(hidden_stmt)).first() is not None
+    response.headers["X-Actives-Only-Hidden"] = "true" if actives_only_hidden else "false"
+
+    return posts
 
 
 @router.post("/chapters/{chapter_id}/posts", status_code=201)
@@ -335,6 +390,12 @@ async def create_post(
 
     `audience` defaults to 'org' (PostCreate schema default) so a client that
     omits it can never accidentally broadcast a chapter post campus-wide.
+
+    'org_actives' (board c102) needs no extra check here: this route's entry
+    dependency is get_current_membership, which already requires status=='active',
+    so every caller who can reach this route at all already qualifies for the tier
+    they'd be posting into — there is no write-side gap to close, unlike the read
+    side (list_posts), which deliberately admits non-active members too.
 
     THE CAMPUS GATE APPLIES HERE TOO, and this is the route it was missing (c88). The
     path is chapter-scoped, so it never went through `require_campus_member` and read
