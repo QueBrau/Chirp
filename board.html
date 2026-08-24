@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787589841009,
+  "updated": 1787603398403,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -734,7 +734,7 @@
     {
       "id": "c35",
       "col": "progress",
-      "title": "Moderation UI \u2014 PR #17 MERGED to main Aug 16 (d43c819). Q: verify live, then move to Done and the alpha bar moves with it",
+      "title": "c35 GATE DEPENDENCY CORRECTED Aug 24: the live prod pass (file report -> queue -> resolve) requires a moderator with a VERIFIED .EDU (Jose's own c108 ruling) - no QA account has one, and .edu code delivery is blocked on the domain chain (c73/c134). Two unblock paths: Jose runs a one-row verification UPDATE for the QA president (SQL on request), or the domain lands and a real .edu inbox receives a code. Code itself is shipped + sim-proven. Moderation UI \u2014 PR #17 MERGED to main Aug 16 (d43c819). Q: verify live, then move to Done and the alpha bar moves with it",
       "owner": "Q",
       "tag": "vert:social-msg",
       "area": "yak",
@@ -1866,20 +1866,20 @@
     },
     {
       "id": "c166",
-      "col": "backlog",
+      "col": "done",
       "owner": "",
       "tag": "mobile",
       "area": "auth",
-      "title": "Firebase auth has NO persistence on native - a real signed-in student is signed out every time the app is killed. Masked in dev because EXPO_PUBLIC_DEV_UID recreates the session each launch",
+      "title": "CODE DONE Aug 24 - merged (#92): platform-aware auth init - web untouched (getAuth), native gets initializeAuth + AsyncStorage persistence. AsyncStorage pinned to Expo 54's bundled 2.2.0; runtime export verified in installed @firebase/auth dist/rn; types quirk documented with a self-removing suppression. NOT LIVE ON DEVICE until the next EAS build (native module stales a2cea56d) - that build is the remaining step",
       "detail": "Found by c164's sim run (Metro warns on every launch: auth initialises without AsyncStorage). Fix: @react-native-async-storage/async-storage + initializeAuth with RN persistence. THE CATCH: it is a NATIVE module, so it stales sim build a2cea56d and forces a new EAS build - sequence it WITH the next planned build (Android dev build is the cheap real-hardware path while iOS has no Apple team). Highest-priority mobile fix after c165; alpha on real phones is unusable without it."
     },
     {
       "id": "c167",
-      "col": "backlog",
+      "col": "done",
       "owner": "",
       "tag": "frontend",
       "area": "orgs",
-      "title": "c156 follow-on: after creating a meeting the windowed attendance summary stays stale until reload - the list refreshes, the denominator does not",
+      "title": "DONE Aug 24 - merged (#91). Create path now refetches the attendance summary, mirroring the delete path; update path proven safe (only minutes_md is ever patched from this screen, comment pins it). Manager-verified diff, CI green",
       "detail": "c164 sim find. Server already has the meeting; loadSummary is just not re-called after createMeeting (it IS re-called after delete - c82 did that half). Small: call loadSummary(chapterId, windowKey) in the create path, matching the delete path's refetch-not-subtract comment."
     },
     {
@@ -2032,7 +2032,8 @@
     "Aug 24 - manager back online post-handoff (Codex era reviewed): closed c156/c79/c164/c89 on Q's sim evidence, accepted Q's offer to fix c165, carded the sim run's findings (c166 auth persistence - highest mobile priority, c167 stale summary, c168 overlays), carded c169 native providers + c170 Expo audit. Security fixes on main (conversation authz, lineage targets, log scrub, rate limiting, WS suspension, email redaction) are NOT yet deployed - deploy-only release ready, no migration (head 0013 = prod), CI green on main today.",
     "Aug 24 - SECURITY-FIX RELEASE DEPLOYED (manager, Jose's 'deploy'): revision chirp-api-00031-vtg serving 100%, built from pinned worktree at 8af4740, deploy-only (head 0013 = prod, no migration), section-7 command with no env flags. Ships: conversation authz, lineage target validation, media capability-path log scrub, Redis rate limiting, suspended-WS recheck, email log redaction. Live smoke: /auth/me 401 with bogus-path 404 control, /docs 404 (c122 holds), /media/<garbage> 403 (signing live, forged token rejected), digest pinned. NOT re-driven live: authenticated WS round-trip (proven on 00030, gateway change additive) and cross-instance rate limiting - both ride the next QA-credentialed pass.",
     "Aug 24 - Jose's ruling batch: c70 photo test GO + c140/c155 flip GO (manager executing); actives-only == existing active status flag, dues irrelevant (c102 unblocked); NO branch protection, manual discipline stays (c112 closed); manual Stripe dashboard charges ARE a supported payment path - webhook's permissive matching is product behavior, signature requirement stays; c162 deletion policy delegated to manager and ruled (close-not-delete once ballots exist); CLAUDE.md multi-session lessons batch APPROVED and committed; Android parked; WORKER POOL RESTRUCTURED - manager-spawned Sonnet subagents, max 5 concurrent, manager does all board edits and merges.",
-    "Aug 24 - c70 GATE PASSED + c140/c155 FLIP EXECUTED on Jose's go. En-route discovery: capability URLs are minted on app_public_base_url (chirps-prod.web.app) but Hosting had NO /media/** rewrite - every photo URL served the SPA's index.html. Fixed: firebase.json /media/** -> Cloud Run rewrite (ordered before the catch-all), hosting deployed, byte-exact serving verified before AND after the flip. Direct GCS access now 403s. Alpha = 16/20."
+    "Aug 24 - c70 GATE PASSED + c140/c155 FLIP EXECUTED on Jose's go. En-route discovery: capability URLs are minted on app_public_base_url (chirps-prod.web.app) but Hosting had NO /media/** rewrite - every photo URL served the SPA's index.html. Fixed: firebase.json /media/** -> Cloud Run rewrite (ordered before the catch-all), hosting deployed, byte-exact serving verified before AND after the flip. Direct GCS access now 403s. Alpha = 16/20.",
+    "Aug 24 - #91 (c167) and #92 (c166) manager-verified and merged. c166's persistence is code-complete but device-inert until the next EAS build. c35's live pass found domain/verification-blocked (c108 gate) - honest correction recorded, two unblock paths on the card. Resend domain add cannot be API-driven (stored key is send-only restricted) - Jose does the dashboard add for josedev.app."
   ]
 }
 </script>
