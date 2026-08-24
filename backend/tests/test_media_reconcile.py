@@ -20,6 +20,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from google.api_core.exceptions import NotFound
@@ -330,9 +331,15 @@ async def test_media_urls_that_all_name_a_different_bucket_abort_the_run(
             await _reconcile(delete=True)
 
     assert captured.get("delete_attempts") is None
+    # The abort has to be diagnosable from job logs alone: both counts, the bucket it
+    # was actually configured with, and a pointer to what to do next.
     logged = "\n".join(r.getMessage() for r in caplog.records)
-    assert "1 url(s) and 0 of them resolve" in logged
+    assert "holds 1 url(s)" in logged
+    assert "0 of them in a form this job could not parse" in logged
+    assert "0 resolve to bucket" in logged
     assert TEST_BUCKET in logged
+    assert "runbook" in logged
+    assert "c153" in logged
 
 
 async def test_one_row_naming_another_bucket_is_ignored_without_aborting(
@@ -410,3 +417,144 @@ async def test_an_unconfigured_bucket_aborts_before_touching_anything(
 
     with pytest.raises(ReconcileAborted):
         await _reconcile(delete=True)
+
+
+# ---------------------------------------------------------------------------
+# Legacy url forms. posts.media_urls has three eras and only the newest one is a
+# format guarantee: pre-c139 rows were never validated, c139..c132 rows were
+# validated against the BUCKET ROOT only. A reference this job fails to parse is
+# not a harmless miss - it is a live photo that looks unreferenced and gets
+# deleted, so every one of these is a data-loss test, not a parsing test.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "stored_form",
+    [
+        "https://storage.cloud.google.com/{bucket}/{name}",
+        "https://{bucket}.storage.googleapis.com/{name}",
+        "gs://{bucket}/{name}",
+        "https://storage.googleapis.com/{bucket}/{name}?generation=1700000000000000",
+        # JSON API form. The object name is PERCENT-ENCODED here (posts%2Fu%2Fa.jpg),
+        # so a resolver that returns the literal path segment protects nothing.
+        "https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_name}",
+        "https://storage.googleapis.com/download/storage/v1/b/{bucket}/o/{encoded_name}?alt=media",
+    ],
+    ids=[
+        "authenticated-host",
+        "virtual-hosted",
+        "gs-uri",
+        "with-query-string",
+        "json-api-encoded",
+        "json-api-download-encoded",
+    ],
+)
+async def test_an_alternate_url_form_still_protects_its_object(
+    make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch, stored_form: str
+) -> None:
+    """Each of these can name a real object in our bucket, and a client could have
+    stored any of them before c132. None may be read as 'references nothing'."""
+    setup = await make_chapter_with("member")
+    name = f"posts/{setup.member.id}/legacy-form.jpg"
+    await _insert_post(
+        setup.chapter_id,
+        setup.member.id,
+        media_urls=[
+            stored_form.format(
+                bucket=TEST_BUCKET, name=name, encoded_name=quote(name, safe="")
+            )
+        ],
+    )
+
+    captured: dict = {}
+    _install_fake_gcs(monkeypatch, [_blobs(captured, (name, NOW - timedelta(days=30)))], captured)
+
+    result = await _reconcile(delete=True)
+
+    assert result.deleted == ()
+    assert captured.get("delete_attempts") is None
+
+
+async def test_an_external_url_row_neither_crashes_nor_orphans_anything(
+    make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-c139 row can hold an arbitrary external url. It references nothing in our
+    bucket, so it protects nothing and endangers nothing - but it must be counted as
+    unresolved rather than silently treated as a clean 'no reference'."""
+    setup = await make_chapter_with("member")
+    live = f"posts/{setup.member.id}/live.jpg"
+    orphan = f"posts/{setup.member.id}/orphan.jpg"
+    await _insert_post(setup.chapter_id, setup.member.id, media_urls=[_url(live)])
+    await _insert_post(
+        setup.chapter_id, setup.member.id, media_urls=["https://evil.example.com/tracker.png"]
+    )
+
+    old = NOW - timedelta(days=30)
+    captured: dict = {}
+    _install_fake_gcs(monkeypatch, [_blobs(captured, (live, old), (orphan, old))], captured)
+
+    result = await _reconcile(delete=True)
+
+    assert result.referenced == 1
+    assert result.unresolved_values == 1
+    assert result.deleted == (orphan,)
+
+
+async def test_a_malformed_stored_value_is_logged_and_skipped_without_crashing(
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pre-c139 means literally anything, including strings that are not urls."""
+    setup = await make_chapter_with("member")
+    live = f"posts/{setup.member.id}/live.jpg"
+    await _insert_post(setup.chapter_id, setup.member.id, media_urls=[_url(live)])
+    await _insert_post(setup.chapter_id, setup.member.id, media_urls=["not a url at all"])
+
+    captured: dict = {}
+    _install_fake_gcs(monkeypatch, [_blobs(captured, (live, NOW - timedelta(days=30)))], captured)
+
+    with caplog.at_level(logging.WARNING, logger=media_reconcile.logger.name):
+        result = await _reconcile(delete=True)
+
+    assert result.unresolved_values == 1
+    assert result.deleted == ()
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "not a recognized GCS reference" in logged
+    assert "not a url at all" in logged
+
+
+async def test_an_unparsed_value_still_protects_an_object_by_raw_match(
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The last backstop, for a url form nobody enumerated. The object name appears
+    verbatim inside the stored value, so it is protected even though the resolver
+    returned nothing for that value - and the run says so, because the backstop firing
+    means the resolver has a gap worth closing."""
+    setup = await make_chapter_with("member")
+    name = f"posts/{setup.member.id}/unknown-form.jpg"
+    await _insert_post(
+        setup.chapter_id,
+        setup.member.id,
+        media_urls=[f"https://cdn.example.net/proxy?target={TEST_BUCKET}/{name}"],
+    )
+    # A second, canonical row so the abort guard (zero of N urls resolve) does not
+    # fire first - this test is about the backstop, not about the guard.
+    await _insert_post(
+        setup.chapter_id, setup.member.id, media_urls=[_url(f"posts/{setup.member.id}/other.jpg")]
+    )
+
+    captured: dict = {}
+    _install_fake_gcs(monkeypatch, [_blobs(captured, (name, NOW - timedelta(days=30)))], captured)
+
+    with caplog.at_level(logging.WARNING, logger=media_reconcile.logger.name):
+        result = await _reconcile(delete=True)
+
+    assert result.protected_by_raw_match == 1
+    assert result.deleted == ()
+    assert captured.get("delete_attempts") is None
+    assert "resolve_object_names() should learn this form" in "\n".join(
+        r.getMessage() for r in caplog.records
+    )
