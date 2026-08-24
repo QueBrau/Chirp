@@ -59,3 +59,36 @@ class MeetingAttendanceOut(_Schema):
     meeting_id: uuid.UUID
     user_id: uuid.UUID
     status: AttendanceStatus
+
+
+# ---- per-member aggregate (GET /chapters/{chapter_id}/meetings/attendance-summary) ----
+
+
+class MemberAttendanceSummary(_Schema):
+    """One active member's attendance totals over the requested window (board c82)."""
+
+    user_id: uuid.UUID
+    display_name: str
+    role: str
+    present: int
+    absent: int
+    excused: int
+    # present + absent + excused. Sent rather than left to the client because the
+    # useful number is the one it does NOT equal: meetings_in_window - recorded is
+    # how many meetings nobody marked this member either way, which reads very
+    # differently from an absence and must not be shown as one.
+    recorded: int
+
+
+class ChapterAttendanceSummary(_Schema):
+    """Roster-wide attendance totals: the "how many has this person missed" answer.
+
+    `meetings_in_window` is the denominator and is deliberately part of the payload:
+    three absences out of four meetings and three out of thirty are opposite facts,
+    and a client holding only the numerator can render either one.
+    """
+
+    meetings_in_window: int
+    start: datetime | None = None
+    end: datetime | None = None
+    members: list[MemberAttendanceSummary]

@@ -42,6 +42,32 @@ export interface MeetingAttendanceOut {
   status: AttendanceStatus;
 }
 
+/** One active member's totals over the requested window — GET .../attendance-summary. */
+export interface MemberAttendanceSummary {
+  user_id: string;
+  display_name: string;
+  role: string;
+  present: number;
+  absent: number;
+  excused: number;
+  /** present + absent + excused. `meetings_in_window - recorded` is "never marked". */
+  recorded: number;
+}
+
+export interface ChapterAttendanceSummary {
+  /** The denominator: how many meetings fall in the window at all. */
+  meetings_in_window: number;
+  start: string | null;
+  end: string | null;
+  members: MemberAttendanceSummary[];
+}
+
+/** ISO date-times bounding an attendance window; both ends inclusive, both optional. */
+export interface AttendanceWindow {
+  start?: string;
+  end?: string;
+}
+
 export async function listMeetings(chapterId: string): Promise<MeetingOut[]> {
   return request<MeetingOut[]>(`/chapters/${chapterId}/meetings`);
 }
@@ -67,6 +93,31 @@ export async function updateMeeting(
   return request<MeetingOut>(`/chapters/${chapterId}/meetings/${meetingId}`, {
     method: "PATCH",
     body,
+  });
+}
+
+/**
+ * Delete a meeting and its attendance rows — DELETE /chapters/{id}/meetings/{id},
+ * secretary/president only, 204 with no body. Destructive and not undoable: the
+ * attendance recorded against it goes too, and it stops appearing in the CSV the
+ * chapter hands to nationals. Always confirm before calling.
+ */
+export async function deleteMeeting(chapterId: string, meetingId: string): Promise<void> {
+  await request<void>(`/chapters/${chapterId}/meetings/${meetingId}`, { method: "DELETE" });
+}
+
+/**
+ * Per-member attendance totals for the whole roster in one call — the "how many has
+ * this person missed this semester" question. Replaces listMeetings + getAttendance
+ * per meeting, which was an N+1 over a semester of meetings and made the client
+ * aggregate the answer itself.
+ */
+export async function getAttendanceSummary(
+  chapterId: string,
+  window: AttendanceWindow = {},
+): Promise<ChapterAttendanceSummary> {
+  return request<ChapterAttendanceSummary>(`/chapters/${chapterId}/meetings/attendance-summary`, {
+    query: { start: window.start, end: window.end },
   });
 }
 
