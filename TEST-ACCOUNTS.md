@@ -52,6 +52,16 @@ a live toggle, so no screen is ever left holding the previous account's data.
 | Alex Moreno | http://localhost:8081/?uid=dev-unverified | — | no org, **no .edu** |
 | Platform Admin | http://localhost:8081/?uid=dev-admin | — | **platform admin** |
 
+**The choice sticks.** Once you open one of those URLs, a bare route like
+`/feed` or `/chapter/treasurer` keeps the same account — you do not have to carry
+`?uid=` around, and editing the path will not silently drop you at the sign-in
+screen. The account you are currently wearing is shown in the browser tab title
+(`dev-treasurer · Chirp (dev)`), because a sticky session you cannot see is its
+own kind of confusion.
+
+To switch, put a different `?uid=` in the URL. To stop impersonating and get the
+real sign-in screen back, use **`?uid=off`**.
+
 On a phone build there is no URL bar, so it comes from the environment instead:
 `EXPO_PUBLIC_DEV_UID=dev-treasurer`.
 

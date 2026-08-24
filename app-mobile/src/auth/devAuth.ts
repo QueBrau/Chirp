@@ -8,6 +8,9 @@
  *
  *     http://localhost:8081/?uid=dev-treasurer
  *
+ * The choice sticks: once set, a bare route like /feed keeps the same account.
+ * `?uid=off` clears it and hands you back the real sign-in screen.
+ *
  * NO PASSWORD IS INVOLVED. The uid is sent as `X-Debug-Firebase-Uid`, which the
  * backend only honours under AUTH_MODE=emulated.
  *
@@ -35,15 +38,63 @@
  */
 declare const __DEV__: boolean;
 
+/**
+ * Where a chosen uid is remembered between page loads, so it survives typing a
+ * bare route into the address bar.
+ *
+ * The first version of this read the uid ONLY from the query string, which meant
+ * `/feed` signed you out and bounced you to the sign-in screen while `/feed?uid=x`
+ * worked — the guard behaving correctly, but indistinguishable from the app being
+ * broken. Anyone reading a dashboard and then editing the path lost their session
+ * for no visible reason.
+ */
+const STORAGE_KEY = "chirp.devAuthUid";
+
+/** Passing this as the uid clears the impersonation and hands you back sign-in. */
+const CLEAR_VALUES = new Set(["", "off", "none", "clear", "signout"]);
+
+function readStored(): string | null {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    return stored !== null && stored.trim().length > 0 ? stored.trim() : null;
+  } catch {
+    // localStorage throws in some privacy modes. A dev convenience is not worth
+    // taking the whole app down over, so fall back to query-only behaviour.
+    return null;
+  }
+}
+
+function writeStored(uid: string | null): void {
+  try {
+    if (uid === null) window.localStorage.removeItem(STORAGE_KEY);
+    else window.localStorage.setItem(STORAGE_KEY, uid);
+  } catch {
+    /* see readStored */
+  }
+}
+
 /** The impersonated uid for this session, or null in any normal run. */
 export function devAuthUid(): string | null {
   if (!__DEV__) return null;
 
-  // Web: ?uid=dev-treasurer. This is the ergonomic half — one bookmarkable URL
-  // per account, which is what makes the whole cast "readily available".
+  // Web: ?uid=dev-treasurer. One bookmarkable URL per account, which is what
+  // makes the whole cast "readily available" — and the query string always wins,
+  // so switching account is just editing the URL.
   if (typeof window !== "undefined" && typeof window.location?.search === "string") {
-    const fromQuery = new URLSearchParams(window.location.search).get("uid");
-    if (fromQuery !== null && fromQuery.trim().length > 0) return fromQuery.trim();
+    const raw = new URLSearchParams(window.location.search).get("uid");
+    if (raw !== null) {
+      const fromQuery = raw.trim();
+      if (CLEAR_VALUES.has(fromQuery.toLowerCase())) {
+        writeStored(null);
+        return null;
+      }
+      writeStored(fromQuery);
+      return fromQuery;
+    }
+    // No uid in the URL: fall back to the last one chosen, so a bare route keeps
+    // the session instead of silently dropping you at sign-in.
+    const remembered = readStored();
+    if (remembered !== null) return remembered;
   }
 
   // Native: there is no URL bar, so it comes from the environment instead.
