@@ -1759,7 +1759,7 @@
     {
       "id": "c154",
       "col": "progress",
-      "title": "HANDOFF.md is stale relative to the board (header still Aug 16: prod 00013/alembic 0011, 'PR #21 waiting on Jose', 'next free migration 0016') - IN PROGRESS Aug 23 (braul 2.0): rewriting to current truth with an explicit verified-vs-board-sourced split, and restructuring fast-changing state (open PRs, current rev, who-is-on-what) into pointers to board.html so it cannot rot the same way again; branch jose/c154-handoff-refresh",
+      "title": "HANDOFF.md stale vs board - PR #80 OPEN, awaiting manager review: rewritten so fast-changing state (open PRs, serving rev, migration head, who-is-on-what) is a POINTER to its live source instead of prose, with an explicit verified vs board-sourced split on the one dated snapshot. Verified while writing: alembic head is 0013 not the highest number, next free 0018, 0013's parent has been 0016 since Aug 18 so the Aug 22 apply walked the whole chain. Deleted 5 provably-obsolete sections. Also documents the npx-tsc-in-a-worktree trap (security 2.0's find), CORRECTED: it exits 1 not 0, so it is a loud failure not a false green",
       "owner": "jose",
       "tag": "process",
       "area": "process",
