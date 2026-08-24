@@ -115,11 +115,12 @@ which reads that token. So the socket is deliberately not connected under a
 printing a console error on every page load. Messages will render; live delivery
 is not part of what this covers.
 
-**Keep the branch checked out.** Until PR #86 merges, this only works on
-`q/c159-dev-test-accounts`. Switching the working tree to `main` deletes
-`src/auth/devAuth.ts` out from under Metro, and the running app goes to a blank
-black screen — the bundle references a module that is no longer on disk. If that
-happens, check the branch back out and reload; nothing is broken.
+**Switching branches under a running dev server.** This is all on `main` now, so
+the everyday case is fine. But it is worth knowing why it fails when it fails:
+if you check out a branch that does not have `src/auth/devAuth.ts`, Metro keeps
+serving a bundle that references a module no longer on disk and the app goes to a
+blank black screen with nothing useful in the console. Check the branch back out
+and reload — nothing is broken.
 
 ## Re-seeding
 
