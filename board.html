@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787533379466,
+  "updated": 1787533740397,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1354,11 +1354,11 @@
     },
     {
       "id": "c90",
-      "col": "progress",
+      "col": "done",
       "owner": "jose",
       "tag": "frontend",
       "area": "auth",
-      "title": "c90 PREMISE IS STALE - NOTHING BUILT, NOTHING TO BUILD (braul 2.0, Aug 23). THIRD stale card in a row. The screen shipped Aug 16 as commit 83b884a, titled 'c90: the verify-your-.edu screen, and the button c110 deliberately left out' - app/(auth)/verify-campus.tsx, 258 lines. Every state the card asks for is a real screen state: enter-edu, code-sent, code-wrong, code-expired, rate-limited, verified, PLUS the lapsed variant with its own copy ('Confirm your school again' / 'It has been a year'), driven by useCampusAccess's deliberate four states. Client error branches were checked against the service line by line and MATCH what the server actually raises: 400 invalid_email, 400 unrecognized_edu_domain, 429 verification_rate_limited, 404 no_pending_verification, 403 verification_expired, 403 verification_code_invalid, 429 verification_attempts_exhausted, 502 email_send_failed. The c88 403 redirect is wired at BOTH call sites - feed/index.tsx:231 and yak/index.tsx:256 both push /(auth)/verify-campus with lapsed-aware copy. ONE REAL GAP, marginal: sendError has no branch for 503 email_not_configured, so it would read 'Something went wrong. Try again.' - the exact loop the file's own docstring rails against. NOT reachable today: email_provider defaults to 'log' locally and prod has a key (c135), so it needs a misconfigured deploy. Offered to manager as an optional one-branch fix, not built unilaterally on a complete feature. RECOMMEND: verify and close as done-by-83b884a/c110",
+      "title": "CLOSED Aug 23 as DONE-BY-PRIOR-WORK (braul 2.0 stopped before duplicating, manager verified): the screen shipped Aug 16 as 83b884a - verify-campus.tsx, 258 lines, all six states + the lapsed variant (useCampusAccess four-state), all eight server error codes mapped, both 403 call sites wired (c110). One robustness nit found during the check -> c158",
       "detail": "the designed destination for the 403 that c88 introduces, carded separately because the server side can and should land first. Jose's call Aug 16 was explicit: an unverified user opening Yak or the campus feed sees a real screen explaining they need to confirm an .edu for their school, with the form ON that screen, rather than an empty feed (indistinguishable from a broken app) or a bare error toast. DESIGN.md is binding here and this is a brand moment in the same family as sign-in - dark canvas, one clear action, no default-looking form. It needs the states a code flow actually has and each is a real screen, not a toast: enter your .edu, code sent, code wrong, code expired, rate-limited, verified. Also the yearly re-check case (c86) lands on this same screen with different copy - your verification expired rather than you have never verified - and treating those as one state is how a returning student gets told they do not go here. Depends on c86 for the endpoints and c88 for the 403 to catch."
     },
     {
@@ -1782,6 +1782,24 @@
       "tag": "backend",
       "area": "orgs",
       "detail": "Surfaced by security 2.0 while building c82 (loadDashboard, secretary.tsx:144 pre-c82; the per-meeting present/absent/excused chips need per-meeting rows, so c82's aggregate endpoint deliberately did not remove the N+1). Fix shape: one server call returning per-meeting attendance rows for a chapter (windowed), the same single-query discipline as c82's summary - then loadDashboard makes exactly two calls (meetings+attendance bundle, members). Same MINUTES_ADMIN gate and route-ordering constraint as the summary endpoint (declare above /{meeting_id} routes). ASSIGNED to security 2.0 Aug 23 - they know this surface cold from c82."
+    },
+    {
+      "id": "c157",
+      "col": "backlog",
+      "owner": "jose",
+      "tag": "process",
+      "area": "process",
+      "title": "BOARD SWEEP: for every backlog/in-progress card, grep main's commit subjects for its id - three consecutive assignments (c78, c90, plus c154's six stale PR titles) were for work already on main. ASSIGNED to braul 2.0 Aug 23",
+      "detail": "The board records what was true when a card was written and nothing walks cards forward when another session's merge falsifies them. Sweep shape (braul 2.0's proposal, adopted): for each backlog/progress card, git log --oneline --grep on the card id in main's subjects; a card id in a merged commit subject is near-conclusive evidence of prior completion. Output: a list of candidate-stale cards with the falsifying commit, NOT self-closed - manager verifies each and closes. Companion rule now in force at TRIAGE: manager runs the same two commands before ASSIGNING any card older than a couple of days (this rule exists because the manager assigned c90 without it after c78 had already demonstrated it)."
+    },
+    {
+      "id": "c158",
+      "col": "backlog",
+      "owner": "jose",
+      "tag": "frontend",
+      "area": "auth",
+      "title": "verify-campus sendError has no branch for 503 email_not_configured - falls through to a generic retry, the exact loop the file's own docstring rails against for 502. Four-line mapper fix. ASSIGNED to braul 2.0 Aug 23 (after c157)",
+      "detail": "Found by braul 2.0 during the c90 staleness check, reachability honestly sized: email_provider defaults to 'log' locally and prod has a key (c135 proved Resend reached), so it needs a misconfigured deploy to surface - robustness nit, not a live defect. Fix: a branch in the start-flow error mapper for 503 email_not_configured with copy that blames configuration, not the student's typing, matching the 502 email_send_failed treatment. Raised at email_service.py:52 (_resend_api_key)."
     }
   ],
   "decisions": [
@@ -1886,7 +1904,9 @@
     "Aug 23 - tsc-placeholder trap corrected before permanent ink: the npx placeholder EXITS 1 (loud red), not 0 - braul 2.0 measured three ways, manager reproduced independently. The real trap is a human misreading the red as an environment hiccup plus a worktree with no node_modules never type-checking at all. Symlink node_modules first; any tsc evidence must cite the compiler version. CLAUDE.md edit queued for Jose's approve (instruction-layer changes are not peer-authorizable - braul's refusal was correct process).",
     "Aug 23 - exit-code house rule sharpened by security 2.0's own post-mortem of the tsc mismeasure: a pipeline reports its LAST stage's status, so `cmd | head` reading as exit 0 proves nothing about cmd. NEVER read an exit code through a pipe - capture it unpiped or via PIPESTATUS. Goes into the queued CLAUDE.md edit alongside braul's correction when Jose approves.",
     "Aug 23 - pool rule adopted from braul 2.0's c78 stop (second stale-premise card in a day): before building from any card older than a couple of days, grep for the thing the card says does not exist and git-log the files it names - a card's factual claims are dated the day they were written. c78 would have shipped a duplicate screen without this. Goes into the queued CLAUDE.md edit alongside the typecheck and pipe-exit-code lessons when Jose approves.",
-    "Aug 23 - suite-contention protocol (manager, after load hit 152 on the 8-core box with five concurrent full suites and a clean suite ran past a 10-min tool timeout on contention alone; raised by jon 2.0): full backend-suite runs are SERIALIZED via scripts/with-suite-lock; targeted test files stay unlocked during development; the full suite runs only pre-PR under the lock; a suite that timed out under load is rerun under the lock, not reported as a hang."
+    "Aug 23 - suite-contention protocol (manager, after load hit 152 on the 8-core box with five concurrent full suites and a clean suite ran past a 10-min tool timeout on contention alone; raised by jon 2.0): full backend-suite runs are SERIALIZED via scripts/with-suite-lock; targeted test files stay unlocked during development; the full suite runs only pre-PR under the lock; a suite that timed out under load is rerun under the lock, not reported as a hang.",
+    "Aug 23 - grep-before-build promoted to TRIAGE: the manager runs git log --oneline --grep='^<card-id>' plus a surface grep BEFORE assigning any card older than a couple of days. Adopted after c90 became the third consecutive stale-premise assignment (c78, c90, c154's six stale titles) - the c90 assignment was made without the check c78 had just taught. Board sweep carded as c157 to flush the remaining false backlog.",
+    "Aug 23 - worktree mobile-tooling refinement (james 2.0): the node_modules SYMLINK satisfies tsc but BREAKS Metro (serverRoot resolution); an APFS clone (cp -c) of node_modules works for both. Joins the queued CLAUDE.md edit."
   ]
 }
 </script>
