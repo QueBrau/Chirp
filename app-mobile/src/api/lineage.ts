@@ -19,6 +19,10 @@ export interface LineageEdgeCreate {
   little_user_id: string;
   family_id?: string | null;
   pledge_class?: string | null;
+  /** Atomically replace the little's existing edge instead of 409ing (c79's
+   * reassignment path). The new edge starts unconfirmed — the little confirms
+   * the NEW big; the old confirmation never carries over. */
+  replace_existing?: boolean;
 }
 
 export interface LineageEdgeOut {
@@ -65,6 +69,12 @@ export async function createEdge(
   body: LineageEdgeCreate,
 ): Promise<LineageEdgeOut> {
   return request<LineageEdgeOut>(`/chapters/${chapterId}/lineage/edges`, { method: "POST", body });
+}
+
+/** Remove an edge outright (pure unpair, e-board only). Reassignment should use
+ * createEdge with replace_existing instead — one atomic call, never two. */
+export async function deleteEdge(chapterId: string, edgeId: string): Promise<void> {
+  await request<void>(`/chapters/${chapterId}/lineage/edges/${edgeId}`, { method: "DELETE" });
 }
 
 /** Little confirms their big — flips confirmed_by_little. */

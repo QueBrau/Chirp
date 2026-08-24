@@ -215,3 +215,206 @@ async def test_rejects_self_edge_and_cycle(
     )
     assert cycle.status_code == 422
     assert cycle.json()["detail"] == "lineage_cycle"
+
+
+async def _join_as_member(client: AsyncClient, setup, user) -> None:
+    invite = await client.post(
+        f"/chapters/{setup.chapter_id}/invites",
+        json={"role": "member"},
+        headers=setup.president.headers,
+    )
+    assert invite.status_code == 201, invite.text
+    joined = await client.post(
+        "/chapters/join", json={"code": invite.json()["code"]}, headers=user.headers
+    )
+    assert joined.status_code == 201, joined.text
+
+
+async def _edges_for(client: AsyncClient, setup, little_id: str) -> list[dict]:
+    tree = await client.get(f"/chapters/{setup.chapter_id}/lineage", headers=setup.member.headers)
+    assert tree.status_code == 200, tree.text
+    return [e for e in tree.json()["edges"] if e["little_user_id"] == little_id]
+
+
+@pytest.mark.asyncio
+async def test_replace_existing_reassigns_atomically_and_resets_confirmation(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    """c79: fixing a wrong big is ONE call — and the little confirms the NEW big."""
+    setup = await make_chapter_with("historian")
+    wrong_big = await make_user("Wrong Big")
+    right_big = await make_user("Right Big")
+    little = await make_user("Little")
+    for user in (wrong_big, right_big, little):
+        await _join_as_member(client, setup, user)
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={"big_user_id": wrong_big.id, "little_user_id": little.id},
+        headers=setup.member.headers,
+    )
+    assert created.status_code == 201, created.text
+    # The little confirmed the WRONG pairing; the replace must not inherit this.
+    confirmed = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges/{created.json()['id']}/confirm",
+        headers=little.headers,
+    )
+    assert confirmed.status_code == 200
+
+    replaced = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={
+            "big_user_id": right_big.id,
+            "little_user_id": little.id,
+            "replace_existing": True,
+        },
+        headers=setup.member.headers,
+    )
+    assert replaced.status_code == 201, replaced.text
+    assert replaced.json()["big_user_id"] == right_big.id
+    assert replaced.json()["confirmed_by_little"] is False
+
+    edges = await _edges_for(client, setup, little.id)
+    assert len(edges) == 1  # one big per little held through the replace
+    assert edges[0]["big_user_id"] == right_big.id
+    assert edges[0]["confirmed_by_little"] is False
+
+
+@pytest.mark.asyncio
+async def test_replace_that_would_cycle_leaves_old_edge_intact(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    """A rejected replace must not half-apply: the old pairing survives untouched."""
+    setup = await make_chapter_with("historian")
+    big = await make_user("Big")
+    mid = await make_user("Mid")
+    grandlittle = await make_user("Grandlittle")
+    for user in (big, mid, grandlittle):
+        await _join_as_member(client, setup, user)
+
+    for big_id, little_id in ((big.id, mid.id), (mid.id, grandlittle.id)):
+        response = await client.post(
+            f"/chapters/{setup.chapter_id}/lineage/edges",
+            json={"big_user_id": big_id, "little_user_id": little_id},
+            headers=setup.member.headers,
+        )
+        assert response.status_code == 201, response.text
+
+    # Reassigning mid's big to mid's own little is a cycle even as a replace.
+    cycle = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={
+            "big_user_id": grandlittle.id,
+            "little_user_id": mid.id,
+            "replace_existing": True,
+        },
+        headers=setup.member.headers,
+    )
+    assert cycle.status_code == 422
+    assert cycle.json()["detail"] == "lineage_cycle"
+
+    edges = await _edges_for(client, setup, mid.id)
+    assert len(edges) == 1
+    assert edges[0]["big_user_id"] == big.id
+
+
+@pytest.mark.asyncio
+async def test_replace_within_family_chain_is_legal(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    """Moving a little one generation up their own chain must NOT read as a cycle —
+    the cycle check has to run against the tree as it is AFTER the old edge is gone."""
+    setup = await make_chapter_with("historian")
+    grand = await make_user("Grand")
+    parent = await make_user("Parent")
+    little = await make_user("Little")
+    for user in (grand, parent, little):
+        await _join_as_member(client, setup, user)
+
+    for big_id, little_id in ((grand.id, parent.id), (parent.id, little.id)):
+        response = await client.post(
+            f"/chapters/{setup.chapter_id}/lineage/edges",
+            json={"big_user_id": big_id, "little_user_id": little_id},
+            headers=setup.member.headers,
+        )
+        assert response.status_code == 201, response.text
+
+    moved = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={"big_user_id": grand.id, "little_user_id": little.id, "replace_existing": True},
+        headers=setup.member.headers,
+    )
+    assert moved.status_code == 201, moved.text
+    edges = await _edges_for(client, setup, little.id)
+    assert len(edges) == 1
+    assert edges[0]["big_user_id"] == grand.id
+
+
+@pytest.mark.asyncio
+async def test_delete_edge_unpairs_and_is_eboard_gated(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    setup = await make_chapter_with("historian")
+    big = await make_user("Big")
+    little = await make_user("Little")
+    for user in (big, little):
+        await _join_as_member(client, setup, user)
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/lineage/edges",
+        json={"big_user_id": big.id, "little_user_id": little.id},
+        headers=setup.member.headers,
+    )
+    assert created.status_code == 201
+    edge_id = created.json()["id"]
+
+    # A plain member (the little themselves) cannot unpair.
+    denied = await client.delete(
+        f"/chapters/{setup.chapter_id}/lineage/edges/{edge_id}",
+        headers=little.headers,
+    )
+    assert denied.status_code == 403
+
+    deleted = await client.delete(
+        f"/chapters/{setup.chapter_id}/lineage/edges/{edge_id}",
+        headers=setup.member.headers,
+    )
+    assert deleted.status_code == 204
+    assert await _edges_for(client, setup, little.id) == []
+
+    # Gone means gone: a second delete is a 404, not a silent 204.
+    again = await client.delete(
+        f"/chapters/{setup.chapter_id}/lineage/edges/{edge_id}",
+        headers=setup.member.headers,
+    )
+    assert again.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_edge_is_chapter_scoped(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    """An e-board of chapter B reaching for chapter A's edge gets A's-shape 404."""
+    owner = await make_chapter_with("historian")
+    other = await make_chapter_with("historian")
+    big = await make_user("Big")
+    little = await make_user("Little")
+    for user in (big, little):
+        await _join_as_member(client, owner, user)
+
+    created = await client.post(
+        f"/chapters/{owner.chapter_id}/lineage/edges",
+        json={"big_user_id": big.id, "little_user_id": little.id},
+        headers=owner.member.headers,
+    )
+    assert created.status_code == 201
+    edge_id = created.json()["id"]
+
+    crossed = await client.delete(
+        f"/chapters/{other.chapter_id}/lineage/edges/{edge_id}",
+        headers=other.member.headers,
+    )
+    assert crossed.status_code == 404
+
+    survivors = await _edges_for(client, owner, little.id)
+    assert len(survivors) == 1

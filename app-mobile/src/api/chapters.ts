@@ -101,7 +101,12 @@ export interface MyMembershipOut extends MembershipOut {
  * permission change moves the server and the UI together. Deriving a capability from
  * `roles` client-side rebuilds exactly the drift these cards exist to delete.
  */
-export type Capability = "dues_admin" | "minutes_admin" | "members_admin" | "moderation";
+export type Capability =
+  | "dues_admin"
+  | "minutes_admin"
+  | "members_admin"
+  | "moderation"
+  | "lineage_admin";
 
 export interface RoleMetaOut {
   roles: RoleName[];
