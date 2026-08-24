@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787543927810,
+  "updated": 1787545829329,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -380,6 +380,15 @@
     }
   ],
   "cards": [
+    {
+      "id": "c164",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "qa",
+      "area": "qa",
+      "title": "CLAIMED Aug 24 - device-gate verification on the iPhone 15 simulator, because the iOS PHYSICAL-device path is hard-blocked: `eas device:list` returns \"No Apple teams found for account quebrau\", so there is no Apple Developer Program team, no UDID registration and no installable iOS device artifact for anyone, phone or not. Running c70 / c79 / c140-render / c156 / c89 / c5-display against the local seeded stack on the sim instead.",
+      "detail": "WHY THIS CARD EXISTS: Jose asked for the device gates to be closed for him since he cannot emulate. Two findings changed the plan. (1) NO AGENT CAN DRIVE A PHYSICAL PHONE - the simulator tooling is simulator-only, so every real-device check is a human holding the phone regardless of anything else. (2) MORE IMPORTANTLY, verified this session: `npx eas-cli device:list --non-interactive` answers \"No Apple teams found for account quebrau\". No paid Apple Developer Program membership is linked to the shared Expo account, so the proposed first step (register the iPhone UDID) cannot be performed by anyone today - it needs enrollment ($99/yr, 24-48h+, an Apple ID credential step no session can do). An iPhone 15 on iOS 17.4 is irrelevant until that exists. Worth noting the coincidence: simulator E2642DD5 from the c39 build IS an iPhone 15 on iOS 17.4, so a claimed physical device of exactly that spec may be a misread of the c39 build log.\n\nTHE GATE LIST WAS MOSTLY WRONG. Only camera QR SCANNING, real Apple/Google auth, push, Apple Pay and c23 (libsignal across two phones) actually need hardware. c70 is testable on the sim (expo-image-picker is configured with a photosPermission string and the sim has a seeded photo library and shows the real permission dialog), and c79 / c140's render / c156 / c89 / c5's Share sheet and QR DISPLAY are all pure app+backend.\n\nCHEAPER REAL-HARDWARE PATH, not taken yet: android.package is set and the `development` profile produces a directly-installable APK with an EAS-generated keystore - no Apple account, no UDID, no enrollment. That is the way to get onto real hardware without waiting on Apple.\n\nSTILL TRUE FROM c39 AND UNCHANGED: Jose cannot build at all. app.json has no `owner` field and projectId is authoritative, so every build resolves to @quebrau/chirp. Adding him to the quebrau account or quebraus-team is free, instant, and the single highest-value item in this thread.\n\nBUILD IS NOT STALE for this run: react-native-qrcode-svg landed on main in this session's pull, but it is pure JS over react-native-svg 15.12.1, which was ALREADY compiled into sim build a2cea56d at commit 152b753. It flows through Metro; no rebuild needed. `npm install` was required locally.\n\nSHARED RESOURCES CLAIMED BY THIS CARD (ports 8000/8081 were already taken): the c162 session owns API :8000 and Metro :8081, both running out of .claude/worktrees/c162 - NOT main's code. This card therefore takes API :8001, Metro :8082 and its own Postgres container `chirp-c164-pg` on host port :5441, so nothing of c162's is disturbed and the app under test is main's tree. Do not reuse 5440 (chirp-dev-pg, c162), 5434 (chirp-test-pg), 5435 (chirp-c71-pg), or 5433/6379 (leadgen).\n\nHONEST LIMIT ON WHAT THIS PROVES: the run is against the LOCAL seeded stack under AUTH_MODE=emulated, so it verifies the app's flows and rendering, not the prod deployment. c140 in particular signs with a local secret, not prod's MEDIA_SIGNING_SECRET, and c70's direct-to-GCS upload leg depends on local credentials - both will be reported for what they actually demonstrate, not more."
+    },
     {
       "id": "c161",
       "col": "done",
@@ -815,7 +824,7 @@
     {
       "id": "c5",
       "col": "progress",
-      "title": "IN PROGRESS Aug 24 — native invite share + QR landed (ae7ed30); universal-link setup/device verification remain",
+      "title": "IN PROGRESS Aug 24 \u2014 native invite share + QR landed (ae7ed30); universal-link setup/device verification remain",
       "owner": "J",
       "tag": "m1",
       "area": "auth",
@@ -1168,7 +1177,7 @@
       "col": "done",
       "owner": "J",
       "tag": "m4",
-      "title": "DONE Aug 24 — Redis/VPC provisioned, API revision 00030-m97 live, and authenticated WebSocket message round-trip verified",
+      "title": "DONE Aug 24 \u2014 Redis/VPC provisioned, API revision 00030-m97 live, and authenticated WebSocket message round-trip verified",
       "area": "messages",
       "detail": "Jose approved the corrected cost floor of about $48/month plus network. Created Memorystore Redis BASIC 1 GiB on Redis 7 and the bounded e2-micro VPC connector (min 2, max 3), stored REDIS_URL, and deployed the connector-aware API as chirp-api-00030-m97 with 100% traffic. Two real Firebase QA accounts authenticated; the sender POST returned 201, the recipient WebSocket received the matching message event, and authenticated history contained it. Infrastructure/delivery gate is closed. E2EE decryption, physical-device QA, and UI send remain separate milestone work."
     },
@@ -1376,7 +1385,7 @@
       "owner": "J",
       "tag": "auth",
       "area": "auth",
-      "title": "IN PROGRESS Aug 24 — social sign-in bypass guard landed (fc08545); native provider wiring remains",
+      "title": "IN PROGRESS Aug 24 \u2014 social sign-in bypass guard landed (fc08545); native provider wiring remains",
       "detail": "Technical guard landed Aug 24 via main commit fc08545: Apple/Google buttons now show an honest unavailable/error state and never route to onboarding without authentication; email flow is unchanged. verify:auth, verify:contract, and typecheck pass. Provider wiring remains blocked on Firebase toggles, native SDK configuration, and Apple Developer/EAS device setup."
     },
     {
@@ -1834,8 +1843,8 @@
       "owner": "Q",
       "tag": "m9",
       "area": "orgs",
-      "title": "Live polls in the Secretary dashboard - CLAIMED Aug 24 (Q), MIGRATION 0018 CLAIMED. This is the ONLY new part of the secretary ask: minutes and attendance already ship. New scope, not in SPEC m9.",
-      "detail": "Asked for as 'minutes + live polls + attendance' on the secretary dashboard. Two of those three ALREADY EXIST and must not be rebuilt: \n\n- MINUTES: shipped. models/meetings.py has Meeting.minutes_md (markdown), routers/meetings.py does create/read/update/delete gated on MINUTES_ADMIN, and app/(tabs)/chapter/secretary.tsx (782 lines, subtitle 'Minutes and attendance') edits them. Original card c12. \n- ATTENDANCE: shipped. MeetingAttendance with present/absent/excused, bulk PUT upsert, attendance-summary and export.csv, plus c156's windowed meetings+attendance bundle deployed in rev 00029-s4d. The 405 that used to break it died in c124. \n- POLLS: DO NOT EXIST. `grep -rn 'poll'` over backend/app and app-mobile/src returns NOTHING. No model, no route, no schema, no UI, no mock. This card is that gap and only that gap. \n\nSCOPE NOTE: polls are NOT in SPEC. SPEC m9 defines the secretary dashboard as 'minutes, attendance' and stops there. This is a deliberate product addition - see the Decisions log. \n\nMIGRATION 0018 IS CLAIMED HERE per CLAUDE.md, before the file is written. `alembic heads` reads 0013 and the chain is 0011->0014->0017->0015->0016->0013, so 0018 parents on 0013 - NOT on the highest filename. 0012 remains a released hole. \n\n'Live' is the design question worth deciding before building: the WS + Redis fan-out from c21/c63 exists and is proven on prod, so a poll can push results as they land rather than polling an endpoint. Start with correct persisted results and a manual refresh; wire the socket second, so a broken socket degrades to a working poll instead of a blank screen."
+      "title": "Live polls in the Secretary dashboard - BUILT AND PROVEN Aug 24, branch q/c162-live-polls pushed, NOT yet PR'd. Backend 471 passed (was 456), migration 0018 applied clean, and the ballot was driven end to end against the seeded chapter on the iOS build. Minutes and attendance untouched - they already shipped.",
+      "detail": "Asked for as 'minutes + live polls + attendance' on the secretary dashboard. Two of those three ALREADY EXIST and must not be rebuilt: \n\n- MINUTES: shipped. models/meetings.py has Meeting.minutes_md (markdown), routers/meetings.py does create/read/update/delete gated on MINUTES_ADMIN, and app/(tabs)/chapter/secretary.tsx (782 lines, subtitle 'Minutes and attendance') edits them. Original card c12. \n- ATTENDANCE: shipped. MeetingAttendance with present/absent/excused, bulk PUT upsert, attendance-summary and export.csv, plus c156's windowed meetings+attendance bundle deployed in rev 00029-s4d. The 405 that used to break it died in c124. \n- POLLS: DO NOT EXIST. `grep -rn 'poll'` over backend/app and app-mobile/src returns NOTHING. No model, no route, no schema, no UI, no mock. This card is that gap and only that gap. \n\nSCOPE NOTE: polls are NOT in SPEC. SPEC m9 defines the secretary dashboard as 'minutes, attendance' and stops there. This is a deliberate product addition - see the Decisions log. \n\nMIGRATION 0018 IS CLAIMED HERE per CLAUDE.md, before the file is written. `alembic heads` reads 0013 and the chain is 0011->0014->0017->0015->0016->0013, so 0018 parents on 0013 - NOT on the highest filename. 0012 remains a released hole. \n\n'Live' is the design question worth deciding before building: the WS + Redis fan-out from c21/c63 exists and is proven on prod, so a poll can push results as they land rather than polling an endpoint. Start with correct persisted results and a manual refresh; wire the socket second, so a broken socket degrades to a working poll instead of a blank screen.\n\nBUILT Aug 24, two commits on q/c162-live-polls: f1e2fa1 (backend) and 730a12c (mobile). \n\nEVIDENCE, gathered because mobile CI is tsc-only and 'it compiles' is not 'it works': backend suite 471 passed / 3 skipped against PG16 on 5434, up from 456 - the 15 new tests are polls. tsc 5.9.3 clean. verify:contract passes with all five new poll routes matched to real backend routes; verify:charts passes. Migration 0018 applied to the dev DB (5440) and created polls, poll_options, poll_votes. The API answers /polls with 401 rather than 404, so the router is registered. Then the real thing: four seeded members voted, the president switched Yes -> No, and the tally read 4 VOTES NOT 5. The secretary, who had not voted, saw '4 votes - you have not voted'. Meter geometry measured in the DOM: Yes 590/1180px, No 590/1180px, Abstain 0px - exactly 50/50/0. \n\nTWO DESIGN CALLS, both cheap to reverse and both worth a second opinion: (1) BALLOTS ARE SECRET. The tally is a GROUP BY so no voter identity is loaded on the read path, and my_option_id describes only the caller. A test asserts a voter's id appears nowhere in the raw response body, so a future field carrying an identity fails it. (2) RESULTS ARE VISIBLE WHILE VOTING IS OPEN, which is what makes it 'live' and what was asked for. The cost is real: a running tally pulls late voters toward the leader. Hiding the bars until a member has voted is a one-file change - the server already returns what that needs. \n\nSTILL OPEN: no realtime yet. Results move on load and after your own vote, not on someone else's - a second member voting does not push. The WS + Redis fan-out from c21/c63 is proven on prod and is the obvious next step, deliberately left until the persisted version was correct so a broken socket degrades to a working poll instead of a blank screen. \n\nNOT DEPLOYED. 0018 has NOT been applied to prod, and prod has no polls code. Migrate first, then deploy - and that is Jose's call, not a worker session's."
     },
     {
       "id": "c163",
@@ -1848,6 +1857,7 @@
     }
   ],
   "decisions": [
+    "Aug 24 - c162 polls: ballots are SECRET (aggregate tallies only, no route or schema can name a voter) and results are VISIBLE WHILE VOTING IS OPEN. The first is a product guarantee for chapters voting on money or on people; the second is what 'live' means and what was asked for, at the known cost of pulling late voters toward the leader. Both are recorded because both are cheap to reverse now and expensive to argue about later.",
     "Aug 24 - Live polls (c162) and a Vice President dashboard (c163) are NEW SCOPE beyond SPEC. SPEC m9 defines the secretary dashboard as 'minutes, attendance' only, and SPEC lists vice_president as a role without ever defining a VP dashboard. Recording it because the board is where scope beyond SPEC gets agreed: minutes and attendance were verified as already shipped (c12, c124, c156) and are NOT being rebuilt - polls are the only genuinely missing piece of the secretary ask. Migration 0018 claimed for polls, parented on head 0013.",
     "Aug 24 - c145 completed by explicit authorization: only run.googleapis.com/requests and run.googleapis.com/stderr were deleted in chirps-prod. Pre-delete histories were 6,328 and 17,275 entries; exact cutoff verification returned zero remaining. stdout, varlog/system and all other logs were preserved.",
     "Aug 24 - c153 production runner completed without destructive deletion: dedicated SA, read-only DB role/secret, custom bucket roles and Cloud Run Job created against the immutable API image. Dry run chirp-media-reconcile-p679k exited 0 with scanned=1 referenced=1 eligible=0 deleted=0. Static IAM checks and runner listing passed; a temporary TokenCreator probe binding was removed and no object write/delete request was made.",

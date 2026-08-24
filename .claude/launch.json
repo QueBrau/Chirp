@@ -27,6 +27,15 @@
         "cd app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8000 npx expo start --web --port 8081"
       ],
       "port": 8081
+    },
+    {
+      "name": "chirp-native-treasurer",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8000 EXPO_PUBLIC_DEV_UID=dev-treasurer npx expo start --dev-client --clear --port 8081"
+      ],
+      "port": 8081
     }
   ]
 }
