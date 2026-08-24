@@ -51,11 +51,17 @@ MINUTES_ADMIN: frozenset[Role] = frozenset({Role.secretary, Role.president})
 # includes changing someone else's. See c83 - the person granting a role can be the
 # person losing one, and there is exactly one president.
 MEMBERS_ADMIN: frozenset[Role] = frozenset({Role.president})
+# Same membership as MINUTES_ADMIN today, deliberately kept as its own name (c162).
+# Running a vote and writing the minutes are different jobs that happen to share an
+# officer; collapsing them into one constant would mean a chapter that later lets,
+# say, the VP run polls has to either widen minutes editing too or unpick the two.
+POLLS_ADMIN: frozenset[Role] = frozenset({Role.secretary, Role.president})
 
 CAPABILITIES: dict[str, frozenset[Role]] = {
     "dues_admin": DUES_ADMIN,
     "minutes_admin": MINUTES_ADMIN,
     "members_admin": MEMBERS_ADMIN,
+    "polls_admin": POLLS_ADMIN,
     "moderation": EBOARD,
     # Lineage writes (families, big/little edges) — routers/lineage.py gates on
     # require_role(*EBOARD), the same set this maps to (c79). SPEC names the
