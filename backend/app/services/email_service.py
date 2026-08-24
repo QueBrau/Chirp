@@ -16,11 +16,12 @@ verified domain to sending at its OWN address, so a send to a real student's inb
 will be refused by the provider, not by this code. That is expected until c73 lands.
 The failure is loud and logged rather than silent, which is the point.
 
-WHAT THIS MODULE MUST NEVER DO IS LOG A MESSAGE BODY. c86 puts one-time verification
-codes through here, and a code sitting in Cloud Logging is a code that anyone with log
-access can redeem — a log line is not a private place. Sends are recorded by recipient,
-subject and provider id only. `test_email_service.py` asserts this, and that test is
-there to fail if a debugging session ever adds the body "just for now".
+WHAT THIS MODULE MUST NEVER DO IS LOG A MESSAGE BODY OR A FULL RECIPIENT ADDRESS.
+c86 puts one-time verification codes and student email addresses through here; either
+one sitting in Cloud Logging is unnecessary exposure. Sends are recorded with a fixed
+recipient-redaction marker, subject and provider id only. `test_email_service.py`
+asserts this, and that test is there to fail if a debugging session ever adds either
+value "just for now".
 """
 from __future__ import annotations
 
@@ -74,8 +75,7 @@ def _send_via_log(*, to: str, subject: str) -> str:
     """
     message_id = f"log:{uuid.uuid4()}"
     logger.info(
-        "email not delivered (provider=log) to=%s subject=%s message_id=%s",
-        to,
+        "email not delivered (provider=log) recipient=[redacted] subject=%s message_id=%s",
         subject,
         message_id,
     )
@@ -106,22 +106,25 @@ async def _send_via_resend(*, to: str, subject: str, html: str, text: str | None
     except httpx.HTTPError as exc:
         # Transport failure: no response at all. Log the exception type rather than
         # str(exc), which on some httpx errors carries the request URL and headers.
-        logger.warning("email transport failed to=%s subject=%s error=%s", to, subject, type(exc).__name__)
+        logger.warning(
+            "email transport failed recipient=[redacted] subject=%s error=%s",
+            subject,
+            type(exc).__name__,
+        )
         raise HTTPException(status_code=502, detail="email_send_failed") from exc
 
     if response.status_code >= 400:
-        # Resend's error body describes OUR request, not the message content, so it is
-        # safe to log and it is the only useful clue when sends start failing. The
-        # no-domain restriction described in the module docstring surfaces here.
+        # Provider error bodies can echo request fields, including the recipient. Keep
+        # the status (the useful operational signal) and omit the body entirely.
         logger.warning(
-            "email rejected by provider to=%s subject=%s status=%s body=%s",
-            to,
+            "email rejected by provider recipient=[redacted] subject=%s status=%s",
             subject,
             response.status_code,
-            response.text[:500],
         )
         raise HTTPException(status_code=502, detail="email_send_failed")
 
     message_id = str(response.json().get("id", ""))
-    logger.info("email sent to=%s subject=%s message_id=%s", to, subject, message_id)
+    logger.info(
+        "email sent recipient=[redacted] subject=%s message_id=%s", subject, message_id
+    )
     return message_id

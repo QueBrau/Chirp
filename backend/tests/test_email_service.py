@@ -190,8 +190,9 @@ async def test_the_message_body_never_reaches_the_log(
     provider: str, configure, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """THE POINT OF THIS FILE. c86 sends one-time codes through send_email, so a body in
-    the log is a redeemable secret sitting in Cloud Logging. Recipient, subject and
-    provider id are fine; html and text are not, on the success path or the failure one.
+    the log is a redeemable secret sitting in Cloud Logging. Full recipient addresses
+    are also unnecessary PII; subject and provider id are sufficient for correlation.
+    Neither body nor recipient may appear on the success path or the failure one.
 
     If you are here because this test failed, do not relax it — remove whatever started
     logging the body.
@@ -208,4 +209,46 @@ async def test_the_message_body_never_reaches_the_log(
     assert logged, "a send must leave an audit trail even though it omits the body"
     assert CODE not in logged
     assert HTML not in logged
-    assert "student@uncg.edu" in logged
+    assert "student@uncg.edu" not in logged
+    assert "recipient=[redacted]" in logged
+
+
+async def test_provider_failure_does_not_log_recipient_or_echoed_body(
+    configure, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A provider error body is untrusted and may echo the address we sent."""
+    configure(email_provider="resend", resend_api_key="re_test_key")
+    _stub_httpx(
+        monkeypatch,
+        _resend_response(403, {"message": "student@uncg.edu is not allowed"}),
+    )
+
+    with caplog.at_level(logging.WARNING, logger=email_service.logger.name):
+        with pytest.raises(HTTPException):
+            await email_service.send_email(
+                to="student@uncg.edu", subject="Verify your .edu", html=HTML
+            )
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "student@uncg.edu" not in logged
+    assert "not allowed" not in logged
+    assert "recipient=[redacted]" in logged
+    assert "status=403" in logged
+
+
+async def test_transport_failure_does_not_log_recipient(
+    configure, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    configure(email_provider="resend", resend_api_key="re_test_key")
+    _stub_httpx(monkeypatch, httpx.ConnectTimeout("student@uncg.edu timed out"))
+
+    with caplog.at_level(logging.WARNING, logger=email_service.logger.name):
+        with pytest.raises(HTTPException):
+            await email_service.send_email(
+                to="student@uncg.edu", subject="Verify your .edu", html=HTML
+            )
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "student@uncg.edu" not in logged
+    assert "recipient=[redacted]" in logged
+    assert "ConnectTimeout" in logged

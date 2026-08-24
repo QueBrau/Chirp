@@ -1,6 +1,6 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 24 2026 (c140 signing configuration and main deployment)._
+_Last updated: Aug 24 2026 (c63 Redis/VPC deployment and release-hygiene audit)._
 
 **This file deliberately contains almost no numbers.** The previous version rotted
 within a week because it hardcoded the prod revision, the open-PR list, the migration
@@ -40,30 +40,26 @@ system. Do not promote a board-sourced line to verified without re-checking it.
 | Local backend suite | 357 passed, 3 skipped | **verified Aug 23**, local PG14, run from `backend/` |
 | Website | https://chirps-prod.web.app | live |
 | Stripe | test mode, armed | **no money has ever moved** |
-| Redis | never provisioned on prod | deliberate (c61) |
+| Redis | not provisioned as of this Aug 23 snapshot | historical only; superseded by the Aug 24 verification below |
 
 ## Latest verification — Aug 24 2026
 
 | Thing | State | How we know |
 | --- | --- | --- |
-| API revision | `chirp-api-00029-s4d`, serving 100% | **verified Aug 24** against Cloud Run after deploying the pushed `main` source |
+| API revision | `chirp-api-00030-m97`, serving 100% | **verified Aug 24** against Cloud Run after the merge-safe Redis/VPC service update; serving image digest is unchanged from `00029-s4d` |
 | Prod DB `alembic_version` | **0013** | **verified Aug 24** through the Cloud SQL Auth Proxy |
-| Media signing secret | configured and bound to the Cloud Run runtime account | **verified Aug 24** by Secret Manager and revision inspection; bucket privacy flip intentionally not done |
+| Media signing secret | configured and bound to the Cloud Run runtime account | **verified Aug 24** by Secret Manager and revision inspection; the bucket remains public until a physical-device capability-route render passes and Jose explicitly approves the privacy flip |
 | Deployed route checks | `/_health` 200, `/auth/me` 401, lineage/attendance auth routes 401, malformed `/media/{token}` 403, `/openapi.json` 404 | **verified Aug 24** against the live revision |
 | Mobile/release static checks | TypeScript, API contract verifier (82 client calls / 92 backend routes), Expo public config, Python syntax, and c156's two-call dashboard wiring pass | **delegated GPT-5.6 QA audit Aug 24**; fresh backend pytest is blocked by a local Python 3.11/pytest startup segfault, not a test assertion |
 | c153 reconciliation operations | Dedicated runner SA, read-only DB secret, restricted bucket roles, and dry-run Cloud Run Job are live; execution `chirp-media-reconcile-p679k` reported `scanned=1 referenced=1 eligible=0 deleted=0` | **verified Aug 24**; no media deletion was attempted and the runtime `tmp/`-only IAM was preserved |
 | c145 log cleanup | The two affected Cloud Logging streams were purged; unrelated logs remain | **verified Aug 24**; 6,328 request and 17,275 stderr entries removed, exact post-delete cutoff checks returned zero |
-| Redis infrastructure | Redis/VPC APIs enabled, but no instance or connector created | **verified Aug 24**; corrected minimum estimate is about $48/month plus network, awaiting Jose confirmation |
-| GitHub push/CI | `git push --dry-run origin main` succeeds; Actions run **473** for `8ecf96d` passed web build, mobile tsc, Alembic single-head, and backend pytest | **verified Aug 24** after the repository was made public; the prior c160 billing/startup refusal is cleared |
+| Redis infrastructure | `chirp-redis` Basic 1 GiB/Redis 7.0 and `chirp-vpc` on `10.8.0.0/28`, `e2-micro` min 2/max 3 are `READY`; `REDIS_URL` v1 and private-ranges-only connector egress are bound to Cloud Run | **verified Aug 24** from live resource descriptions and revision inspection; two real Firebase users completed an HTTP 201 message to WebSocket 101 event round-trip, with authenticated history read-back |
+| Repository / GitHub | `origin/main` was `53d34f6`; the shared root `main` was at `75b8d2a`, two board-only commits behind, while this hygiene branch was cut directly from `origin/main`; no open PRs; Actions run **493** passed on `53d34f6` | **verified Aug 24** via fetch, GitHub's public API, and local ref inspection; treat this as a dated snapshot and run the commands at the top of this file for live state |
 
-The prod DB line is the one to distrust. It is the only row here that describes a system
-nobody re-read this session, and it is also the row that breaks things silently when it
-is wrong — see the migrate-first lesson below.
-
-One repo fact that makes the board-sourced line more trustworthy than it looks:
-`0013` has been the chain head since Aug 18, so applying it on Aug 22 necessarily walked
-the whole chain through `0016`. "0013 is applied" is therefore "everything is applied",
-not "0013 and four others are pending". Check it anyway at the next deploy.
+The snapshot is evidence, not a cache to trust forever. Re-run the live-source commands
+at the top before any release. In particular, `0013` was verified on prod before
+`00029-s4d`; c63 changed only service networking/secrets and did not run a migration or
+change the image. A future code deploy still re-checks the database first.
 
 ## Migrations — read this before you write one
 
@@ -182,6 +178,9 @@ These are live in front of users right now. Each has a card; the card is authori
   purpose. The liability sections are still placeholders.
 - **Transactional email cannot reach arbitrary recipients** (c87). The app-to-Resend chain
   works, but without a verified sending domain Resend refuses anyone outside the account.
+- **The media bucket is still public by design** (c140). Signed capability URLs are live,
+  but Public Access Prevention and `allUsers` removal remain gated on physical-device
+  render proof plus Jose's explicit approval. Redis/c63 did not close that gate.
 
 ## Alpha
 
