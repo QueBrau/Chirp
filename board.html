@@ -382,11 +382,11 @@
   "cards": [
     {
       "id": "c161",
-      "col": "progress",
+      "col": "done",
       "owner": "Q",
       "tag": "qa",
       "area": "qa",
-      "title": "IN PROGRESS Aug 24 (Q) - the c159 test accounts dropped their session the moment you typed a bare route. Making the dev uid stick, with a visible indicator and an explicit way off",
+      "title": "DONE Aug 24 - MERGED via PR #88 (8c97f53), 4 checks green. The dev uid now sticks across bare routes, the tab title says which account you are, and ?uid=off gets you out",
       "detail": "Found by Jose immediately: he opened http://localhost:8081/feed and got nothing. That was the auth guard behaving CORRECTLY - no ?uid= means no impersonated session, so an anonymous visitor gets bounced to sign-in - but it is indistinguishable from the app being broken, and it is the first thing anyone does after reading a dashboard: edit the path. THE FLAW WAS MINE: devAuthUid() read the query string and nothing else, so the account lived only in the URL and any navigation typed by hand threw it away. FIX: the chosen uid is remembered in localStorage, so a bare route keeps it; the query string still WINS, so switching account is still just editing the URL; and ?uid=off (or none/clear/signout) drops the impersonation and hands back the real sign-in screen. localStorage access is wrapped because it throws in some privacy modes, and a dev convenience must not take the app down. ALSO: the browser tab title now reads '<uid> - Chirp (dev)'. A sticky session you cannot see is its own confusion - with twelve accounts and no indicator there is no way to tell which one you are looking at. Deliberately the TITLE and not a banner: a banner would cover the very screens this whole thing exists to show. Still __DEV__-gated, so none of it exists in a release build."
     },
     {
