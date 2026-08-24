@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787529333933,
+  "updated": 1787531328819,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1627,7 +1627,7 @@
       "owner": "J",
       "tag": "security",
       "area": "orgs",
-      "title": "IN PROGRESS Aug 23 - DOC DELIVERED TO MANAGER, AWAITING DECISION. ANALYSIS ONLY, NO CODE (option b signed reads vs option c campus-only stopgap) for manager+Jose to approve before any implementation. RECOMMENDATION: option (b) signed reads, skip (c) - (c) is forward-only and remediates zero already-posted photos. Post photos are world-readable forever by URL, even on org-audience (chapter-private) posts. Design commitment from manager: posts.media_urls stays a stable object identity, signing happens at render time only, so c153's reconciliation diff is unaffected.",
+      "title": "c140 RULED Aug 23 (manager, on sally2.0's verified design doc): BUILD option (b) now - app-owned capability URLs (HMAC, quantized 6h window / 12h TTL), 302-to-memoized-signed-GCS, stored column untouched. Skip (c). PUBLIC-ACCESS FLIP separately gated: device-verified render + Jose's explicit go. Spike (RN Image 302/cache) is step zero, streaming fallback if it fails. Building",
       "detail": "Jose's alpha call Aug 22: option (a) - keep public-read for alpha (small trusted group), revisit before wider use. This card IS the revisit. Security argued (b) or (c) and the argument is on record: PostCreate carries both media_urls and audience, Audience = Literal['org','campus'] - NEITHER value means 'public to the internet', and org is documented in the schema as 'private to a chapter'. So a chapter-private post's photo of real students is world-readable, invisibly to the poster, and deleting the post does not unpublish the photo. Options: (b) signed GET urls + public_access_prevention enforced (breaks MediaPostCard's no-refresh <Image> premise, needs a read-signing route); (c) allow media on campus posts only until signed reads exist. Current state (GET-only, LIST revoked) is a sound interim, NOT an end state. Enumeration was already closed Aug 22 after security caught the manager's over-grant."
     },
     {
@@ -1764,6 +1764,15 @@
       "tag": "process",
       "area": "process",
       "detail": "Spotted by security 2.0 during warm-up Aug 23. Whoever picks up a doc-touching card should treat HANDOFF.md as stale relative to board.html until this closes. Refresh from the board JSON + git log, and verify prod rev/alembic head against the live systems (manager runs the live checks - prod is worker-off-limits) before writing numbers down. Small card, but numbers in it get copied into briefs, so wrong is worse than missing."
+    },
+    {
+      "id": "c155",
+      "col": "backlog",
+      "title": "tmp/ media objects are world-readable from upload, INCLUDING picked-and-abandoned photos never posted - public preview_url survives until the tmp/ lifecycle rule reclaims it",
+      "owner": "",
+      "tag": "security",
+      "area": "infra",
+      "detail": "Found by sally2.0 during the c140 analysis (design doc SS1 point 3), verified by manager: preview_url is a plain public URL to the tmp/ object (storage_service.py:249) and CreateSheet renders it (setPhotoUrl(preview_url)). A photo a user picks, previews, and abandons without posting is world-readable for up to ~a day. NOT its own build: closure rides c140's option (b) cutover - CreateSheet switches its preview to the local asset.uri (a required pre-flip step of c140 anyway, and strictly better UX), then the bucket-wide PAP=enforced + allUsers-binding removal closes tmp/ and posts/ together. This card exists so the leak is on the record and so the c140 flip step is known to close TWO leaks, not one."
     }
   ],
   "decisions": [
@@ -1863,7 +1872,8 @@
     "Aug 23 - Jose ruled c148: chapter authority does NOT end at campus-audience content. delete_post stays as-is; c108's docstring reading wins over extending c142's tier-follows-audience principle to the owning chapter's own president.",
     "Aug 23 - Redis provisioning DEFERRED by Jose ('skip redis for now'); c63 messaging gate stays honestly held. Revisit on his word.",
     "Aug 23 - c145 resolved by Jose: calpules1@icloud.com is his own login; disposition = purge the 15 token-bearing log entries. Manager executes after a blast-radius confirm (Cloud Logging deletes are whole-log granularity).",
-    "Aug 23 - c153 delete-scope re-decided (manager, Jose approved the credential part): reconciliation job (option b) under a SEPARATELY-scoped identity whose delete grant is IAM-conditioned to posts/ only. The runtime SA's tmp/-only delete grant stays untouched - c132's published-photo immutability guarantee survives."
+    "Aug 23 - c153 delete-scope re-decided (manager, Jose approved the credential part): reconciliation job (option b) under a SEPARATELY-scoped identity whose delete grant is IAM-conditioned to posts/ only. The runtime SA's tmp/-only delete grant stays untouched - c132's published-photo immutability guarantee survives.",
+    "Aug 23 - c140 ruled by manager on sally2.0's design doc (claims spot-verified against code and the installed GCS library): BUILD option (b) now - capability URLs with quantized expiry, 302 to memoized signed GCS URL, posts.media_urls format untouched; skip (c), it remediates nothing already posted. The public-access flip (PAP=enforced + allUsers removal) is separately gated on a device-verified capability-route render AND Jose's explicit go. Bare-object-name column migration deferred until after c153 lands. The 4.1 legacy-row SELECT goes in the deploy runbook for Jose."
   ]
 }
 </script>
