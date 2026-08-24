@@ -36,6 +36,87 @@
         "cd app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8000 EXPO_PUBLIC_DEV_UID=dev-treasurer npx expo start --dev-client --clear --port 8081"
       ],
       "port": 8081
+    },
+    {
+      "name": "c164-api",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/brauliopantoja-esquina/Projects/Chirp/backend && ENV=local AUTH_MODE=emulated DATABASE_URL='postgresql+asyncpg://chirp:chirp@localhost:5441/chirp' .venv/bin/uvicorn app.main:create_app --factory --port 8001"
+      ],
+      "port": 8001
+    },
+    {
+      "name": "c164-native-signin",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/brauliopantoja-esquina/Projects/Chirp/app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8001 npx expo start --dev-client --clear --port 8082"
+      ],
+      "port": 8082
+    },
+    {
+      "name": "c164-native-secretary",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/brauliopantoja-esquina/Projects/Chirp/app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8001 EXPO_PUBLIC_DEV_UID=dev-secretary npx expo start --dev-client --clear --port 8082"
+      ],
+      "port": 8082
+    },
+    {
+      "name": "c164-native-historian",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/brauliopantoja-esquina/Projects/Chirp/app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8001 EXPO_PUBLIC_DEV_UID=dev-historian npx expo start --dev-client --clear --port 8082"
+      ],
+      "port": 8082
+    },
+    {
+      "name": "c164-native-pledge",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/brauliopantoja-esquina/Projects/Chirp/app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8001 EXPO_PUBLIC_DEV_UID=dev-pledge npx expo start --dev-client --clear --port 8082"
+      ],
+      "port": 8082
+    },
+    {
+      "name": "c162-api",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/brauliopantoja-esquina/Projects/Chirp/.claude/worktrees/c162/backend && ENV=local AUTH_MODE=emulated REDIS_URL=redis://localhost:6380/0 DATABASE_URL='postgresql+asyncpg://chirp:chirp@localhost:5440/chirp' /Users/brauliopantoja-esquina/Projects/Chirp/backend/.venv/bin/uvicorn app.main:create_app --factory --reload --port 8000"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "c162-web",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/brauliopantoja-esquina/Projects/Chirp/.claude/worktrees/c162/app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8000 npx expo start --web --port 8081"
+      ],
+      "port": 8081
+    },
+    {
+      "name": "c171-native-president",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/brauliopantoja-esquina/Projects/Chirp/app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8001 EXPO_PUBLIC_DEV_UID=dev-president npx expo start --dev-client --clear --port 8082"
+      ],
+      "port": 8082
+    },
+    {
+      "name": "c171-web-president",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/brauliopantoja-esquina/Projects/Chirp/app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8001 npx expo start --web --port 8083"
+      ],
+      "port": 8083
     }
   ]
 }

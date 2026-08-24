@@ -25,7 +25,6 @@ import {
   putAttendance,
   updateMeeting,
   type AttendanceStatus,
-  type AttendanceWindow,
   type ChapterAttendanceSummary,
   type MeetingAttendanceOut,
   type MeetingOut,
@@ -42,6 +41,7 @@ import {
   SectionHeader,
 } from "@/components";
 import { shareCsv } from "@/lib/export";
+import { currentSemesterWindow } from "@/org/semester";
 import { radii, spacing, typography, useTheme, type Palette } from "@/theme";
 
 interface MeetingItem {
@@ -104,22 +104,6 @@ const WINDOW_OPTIONS: { key: WindowKey; label: string }[] = [
   { key: "semester", label: "Semester" },
   { key: "all", label: "All time" },
 ];
-
-/**
- * The current academic term as an inclusive ISO window: fall is August through
- * December, spring is January through July. A chapter calendar does not exist in
- * the schema, so this is a client-side convention rather than a fact the server
- * knows — which is exactly why the toggle to "All time" sits next to it, and why
- * the caption always states the meeting count the numbers are drawn from.
- */
-function currentSemesterWindow(now: Date): AttendanceWindow {
-  const year = now.getFullYear();
-  const isFall = now.getMonth() >= 7;
-  return {
-    start: new Date(Date.UTC(year, isFall ? 7 : 0, 1)).toISOString(),
-    end: new Date(Date.UTC(year, isFall ? 11 : 6, 31, 23, 59, 59)).toISOString(),
-  };
-}
 
 function statusTagColors(palette: Palette, status: AttendanceStatus): { bg: string; fg: string } {
   switch (status) {
