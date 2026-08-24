@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787532636673,
+  "updated": 1787532890763,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1291,11 +1291,11 @@
     },
     {
       "id": "c82",
-      "col": "progress",
+      "col": "done",
       "owner": "jose",
       "tag": "m9",
       "area": "orgs",
-      "title": "SECRETARY FOLLOW-ON: ATTENDANCE IS READABLE ONLY ONE MEETING AT A TIME, AND A MISTAKEN MEETING IS PERMANENT - BUILT Aug 23, PR #81 OPEN (awaiting manager verify, worker does not merge): GET /meetings/attendance-summary (MINUTES_ADMIN, windowed, one query) plus the deleteMeeting client half behind a confirm. 371 pass / 3 skip (redis, c92) / 0 fail on the rebase over c151; 14 new tests; tsc 5.9.3 clean; verify-contract ALL PASS",
+      "title": "DONE Aug 23 - c82 merged (#81). Per-member attendance summary (roster-spined, windowed-subquery join kills the dual-chapter leak - proven to bite by injected naive join) + deleteMeeting client half with named-meeting confirm. 14 tests, 371/3/0 local, CI green PG16, manager-verified diff. Rides next batched redeploy",
       "detail": "MEETING IS PERMANENT. Again not a re-card of c12 \u2014 what shipped is real: secretary.tsx does createMeeting, updateMeeting (minutes_md), getAttendance, putAttendance and exportMeetingsCsv, and the sheet already carries present/absent/excused. TWO GAPS. (1) There is no per-member view, so the question a secretary is actually asked \u2014 how many has this person missed this semester, who is about to owe a fine \u2014 cannot be answered without opening every meeting in turn. The client could brute-force it with listMeetings plus getAttendance per meeting, which is an N+1 over a semester of chapter meetings and the wrong shape; the honest fix is a per-member aggregate on the server, so card the endpoint before the screen. (2) DELETE /chapters/{id}/meetings/{meeting_id} exists and is require_role(secretary, president) in meetings.py, but src/api/meetings.ts has no deleteMeeting function at all \u2014 a meeting logged on the wrong date can be edited forever but never removed, and it keeps showing up in the CSV export the chapter hands to nationals. That half is a client function plus a confirm, nothing more."
     },
     {
@@ -1773,6 +1773,15 @@
       "tag": "security",
       "area": "infra",
       "detail": "Found by sally2.0 during the c140 analysis (design doc SS1 point 3), verified by manager: preview_url is a plain public URL to the tmp/ object (storage_service.py:249) and CreateSheet renders it (setPhotoUrl(preview_url)). A photo a user picks, previews, and abandons without posting is world-readable for up to ~a day. NOT its own build: closure rides c140's option (b) cutover - CreateSheet switches its preview to the local asset.uri (a required pre-flip step of c140 anyway, and strictly better UX), then the bucket-wide PAP=enforced + allUsers-binding removal closes tmp/ and posts/ together. This card exists so the leak is on the record and so the c140 flip step is known to close TWO leaks, not one."
+    },
+    {
+      "id": "c156",
+      "col": "backlog",
+      "title": "secretary.tsx loadDashboard is an N+1 - listMeetings then getAttendance PER MEETING in a Promise.all, a semester of meetings = a semester of calls on every dashboard load",
+      "owner": "jose",
+      "tag": "backend",
+      "area": "orgs",
+      "detail": "Surfaced by security 2.0 while building c82 (loadDashboard, secretary.tsx:144 pre-c82; the per-meeting present/absent/excused chips need per-meeting rows, so c82's aggregate endpoint deliberately did not remove the N+1). Fix shape: one server call returning per-meeting attendance rows for a chapter (windowed), the same single-query discipline as c82's summary - then loadDashboard makes exactly two calls (meetings+attendance bundle, members). Same MINUTES_ADMIN gate and route-ordering constraint as the summary endpoint (declare above /{meeting_id} routes). ASSIGNED to security 2.0 Aug 23 - they know this surface cold from c82."
     }
   ],
   "decisions": [
@@ -1874,7 +1883,8 @@
     "Aug 23 - c145 resolved by Jose: calpules1@icloud.com is his own login; disposition = purge the 15 token-bearing log entries. Manager executes after a blast-radius confirm (Cloud Logging deletes are whole-log granularity).",
     "Aug 23 - c153 delete-scope re-decided (manager, Jose approved the credential part): reconciliation job (option b) under a SEPARATELY-scoped identity whose delete grant is IAM-conditioned to posts/ only. The runtime SA's tmp/-only delete grant stays untouched - c132's published-photo immutability guarantee survives.",
     "Aug 23 - c140 ruled by manager on sally2.0's design doc (claims spot-verified against code and the installed GCS library): BUILD option (b) now - capability URLs with quantized expiry, 302 to memoized signed GCS URL, posts.media_urls format untouched; skip (c), it remediates nothing already posted. The public-access flip (PAP=enforced + allUsers removal) is separately gated on a device-verified capability-route render AND Jose's explicit go. Bare-object-name column migration deferred until after c153 lands. The 4.1 legacy-row SELECT goes in the deploy runbook for Jose.",
-    "Aug 23 - tsc-placeholder trap corrected before permanent ink: the npx placeholder EXITS 1 (loud red), not 0 - braul 2.0 measured three ways, manager reproduced independently. The real trap is a human misreading the red as an environment hiccup plus a worktree with no node_modules never type-checking at all. Symlink node_modules first; any tsc evidence must cite the compiler version. CLAUDE.md edit queued for Jose's approve (instruction-layer changes are not peer-authorizable - braul's refusal was correct process)."
+    "Aug 23 - tsc-placeholder trap corrected before permanent ink: the npx placeholder EXITS 1 (loud red), not 0 - braul 2.0 measured three ways, manager reproduced independently. The real trap is a human misreading the red as an environment hiccup plus a worktree with no node_modules never type-checking at all. Symlink node_modules first; any tsc evidence must cite the compiler version. CLAUDE.md edit queued for Jose's approve (instruction-layer changes are not peer-authorizable - braul's refusal was correct process).",
+    "Aug 23 - exit-code house rule sharpened by security 2.0's own post-mortem of the tsc mismeasure: a pipeline reports its LAST stage's status, so `cmd | head` reading as exit 0 proves nothing about cmd. NEVER read an exit code through a pipe - capture it unpiped or via PIPESTATUS. Goes into the queued CLAUDE.md edit alongside braul's correction when Jose approves."
   ]
 }
 </script>
