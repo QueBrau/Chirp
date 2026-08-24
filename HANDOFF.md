@@ -1,6 +1,6 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 23 2026 (local consolidation of c79, c153, c156)._
+_Last updated: Aug 24 2026 (c140 signing configuration and main deployment)._
 
 **This file deliberately contains almost no numbers.** The previous version rotted
 within a week because it hardcoded the prod revision, the open-PR list, the migration
@@ -41,6 +41,15 @@ system. Do not promote a board-sourced line to verified without re-checking it.
 | Website | https://chirps-prod.web.app | live |
 | Stripe | test mode, armed | **no money has ever moved** |
 | Redis | never provisioned on prod | deliberate (c61) |
+
+## Latest verification — Aug 24 2026
+
+| Thing | State | How we know |
+| --- | --- | --- |
+| API revision | `chirp-api-00029-s4d`, serving 100% | **verified Aug 24** against Cloud Run after deploying the pushed `main` source |
+| Prod DB `alembic_version` | **0013** | **verified Aug 24** through the Cloud SQL Auth Proxy |
+| Media signing secret | configured and bound to the Cloud Run runtime account | **verified Aug 24** by Secret Manager and revision inspection; bucket privacy flip intentionally not done |
+| Deployed route checks | `/_health` 200, `/auth/me` 401, lineage/attendance auth routes 401, malformed `/media/{token}` 403, `/openapi.json` 404 | **verified Aug 24** against the live revision |
 
 The prod DB line is the one to distrust. It is the only row here that describes a system
 nobody re-read this session, and it is also the row that breaks things silently when it
