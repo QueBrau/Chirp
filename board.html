@@ -1794,11 +1794,11 @@
     },
     {
       "id": "c158",
-      "col": "backlog",
+      "col": "progress",
       "owner": "jose",
       "tag": "frontend",
       "area": "auth",
-      "title": "verify-campus sendError has no branch for 503 email_not_configured - falls through to a generic retry, the exact loop the file's own docstring rails against for 502. Four-line mapper fix. ASSIGNED to braul 2.0 Aug 23 (after c157)",
+      "title": "verify-campus sendError has no branch for 503 email_not_configured - falls through to a generic retry, the exact loop the file's own docstring rails against for 502 - IN PROGRESS Aug 23 (braul 2.0): one mapper branch with configuration-blaming copy matching the 502 treatment; branch jose/c158-email-not-configured",
       "detail": "Found by braul 2.0 during the c90 staleness check, reachability honestly sized: email_provider defaults to 'log' locally and prod has a key (c135 proved Resend reached), so it needs a misconfigured deploy to surface - robustness nit, not a live defect. Fix: a branch in the start-flow error mapper for 503 email_not_configured with copy that blames configuration, not the student's typing, matching the 502 email_send_failed treatment. Raised at email_service.py:52 (_resend_api_key)."
     }
   ],
