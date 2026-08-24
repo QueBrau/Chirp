@@ -9,6 +9,24 @@
         "cd app-mobile && npx expo start --web --port 8081"
       ],
       "port": 8081
+    },
+    {
+      "name": "chirp-api-local",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd backend && ENV=local AUTH_MODE=emulated DATABASE_URL='postgresql+asyncpg://chirp:chirp@localhost:5440/chirp' .venv/bin/uvicorn app.main:create_app --factory --reload --port 8000"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "chirp-web-local",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8000 npx expo start --web --port 8081"
+      ],
+      "port": 8081
     }
   ]
 }
