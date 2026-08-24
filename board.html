@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787604786802,
+  "updated": 1787605731966,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1677,11 +1677,11 @@
     },
     {
       "id": "c140",
-      "col": "done",
+      "col": "progress",
       "owner": "J",
       "tag": "security",
       "area": "orgs",
-      "title": "DONE Aug 24 - THE FLIP IS EXECUTED (Jose's go): public_access_prevention=enforced + allUsers legacyObjectReader binding removed. Verified after: capability URL still serves exact bytes (302->signed), direct GCS URL 403s, app UI still renders post-reload. Post photos are no longer world-readable",
+      "title": "c140 FLIP INCOMPLETE Aug 24 - REOPENED on a real regression: the runtime SA (chirp-api-run@) never had storage.objects.get; while the bucket was public its signed READ urls worked via allUsers, and the flip removed that crutch - fresh signed urls now 403 and photos show the unavailable state. My immediate post-flip 200 was IAM-propagation lag, not proof. FIX IS ONE GRANT (Jose - classifier blocks manager IAM writes): legacyObjectReader for the SA on the bucket, then the SAME minted urls start working, no restart. PAP + allUsers removal themselves are correct and stay",
       "detail": "Jose's alpha call Aug 22: option (a) - keep public-read for alpha (small trusted group), revisit before wider use. This card IS the revisit. Security argued (b) or (c) and the argument is on record: PostCreate carries both media_urls and audience, Audience = Literal['org','campus'] - NEITHER value means 'public to the internet', and org is documented in the schema as 'private to a chapter'. So a chapter-private post's photo of real students is world-readable, invisibly to the poster, and deleting the post does not unpublish the photo. Options: (b) signed GET urls + public_access_prevention enforced (breaks MediaPostCard's no-refresh <Image> premise, needs a read-signing route); (c) allow media on campus posts only until signed reads exist. Current state (GET-only, LIST revoked) is a sound interim, NOT an end state. Enumeration was already closed Aug 22 after security caught the manager's over-grant."
     },
     {
@@ -2043,7 +2043,8 @@
     "Aug 24 - Jose's ruling batch: c70 photo test GO + c140/c155 flip GO (manager executing); actives-only == existing active status flag, dues irrelevant (c102 unblocked); NO branch protection, manual discipline stays (c112 closed); manual Stripe dashboard charges ARE a supported payment path - webhook's permissive matching is product behavior, signature requirement stays; c162 deletion policy delegated to manager and ruled (close-not-delete once ballots exist); CLAUDE.md multi-session lessons batch APPROVED and committed; Android parked; WORKER POOL RESTRUCTURED - manager-spawned Sonnet subagents, max 5 concurrent, manager does all board edits and merges.",
     "Aug 24 - c70 GATE PASSED + c140/c155 FLIP EXECUTED on Jose's go. En-route discovery: capability URLs are minted on app_public_base_url (chirps-prod.web.app) but Hosting had NO /media/** rewrite - every photo URL served the SPA's index.html. Fixed: firebase.json /media/** -> Cloud Run rewrite (ordered before the catch-all), hosting deployed, byte-exact serving verified before AND after the flip. Direct GCS access now 403s. Alpha = 16/20.",
     "Aug 24 - #91 (c167) and #92 (c166) manager-verified and merged. c166's persistence is code-complete but device-inert until the next EAS build. c35's live pass found domain/verification-blocked (c108 gate) - honest correction recorded, two unblock paths on the card. Resend domain add cannot be API-driven (stored key is send-only restricted) - Jose does the dashboard add for josedev.app.",
-    "Aug 24 - subagent wave COMPLETE: #91 (c167), #92 (c166), #93 (c168), #94 (c102) all manager-verified and merged; c162 review delivered to Q via the board. STANDING FLAG FOR NEXT DEPLOY: migration 0019 must be applied to prod FIRST (migrate-then-deploy; Jose-only DB step) - the running rev 00031-vtg predates all four merges. When c162 lands, an alembic merge revision will be needed (0018 and 0019 both chain off 0013)."
+    "Aug 24 - subagent wave COMPLETE: #91 (c167), #92 (c166), #93 (c168), #94 (c102) all manager-verified and merged; c162 review delivered to Q via the board. STANDING FLAG FOR NEXT DEPLOY: migration 0019 must be applied to prod FIRST (migrate-then-deploy; Jose-only DB step) - the running rev 00031-vtg predates all four merges. When c162 lands, an alembic merge revision will be needed (0018 and 0019 both chain off 0013).",
+    "Aug 24 - STANDING LESSON from the flip regression: a verification run seconds after an IAM change can pass on STALE authorization - Cloud IAM propagates in minutes, so post-change checks must be repeated outside the propagation window before 'verified' is claimed. Also: a signed GCS url is only as strong as the SIGNER'S own permission - public-read masks a missing objects.get grant until the moment public-read dies. The c168 FAB visual pass DID verify clean (last card clears tab bar + FAB at 390x844 on live prod data) - #93 fully closed."
   ]
 }
 </script>
