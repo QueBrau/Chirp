@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# Serialize full backend-suite runs across the worker sessions on this machine.
+#
+# Why: five sessions ran full suites concurrently on the 8-core box, load hit
+# 152 (from 33), a 237s suite ran past a 10-minute tool timeout on contention
+# alone, and a timed-out suite reads exactly like a hang (board, Aug 23).
+#
+# Protocol (board Decisions, Aug 23):
+#   - During development run TARGETED test files, unlocked.
+#   - The FULL suite runs only pre-PR, and only under this lock.
+#   - A suite that timed out under load is not a failure; rerun it under the lock.
+#
+# Usage: scripts/with-suite-lock <command...>
+#   e.g. scripts/with-suite-lock .venv/bin/python -m pytest -q
+#
+# mkdir is the lock because macOS has no flock(1). The holder's PID lives inside
+# so a dead holder's lock is stolen instead of spinning forever.
+
+set -euo pipefail
+LOCK=/tmp/chirp-suite.lock
+
+while ! mkdir "$LOCK" 2>/dev/null; do
+  holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+    echo "with-suite-lock: stealing lock from dead pid $holder" >&2
+    rm -rf "$LOCK"
+    continue
+  fi
+  sleep 15
+done
+echo "$$" > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT
+
+"$@"

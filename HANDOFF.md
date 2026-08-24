@@ -1,212 +1,179 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 16 2026, after the c94/c93/c58/c66/c95/c96 session. **Prod is current and verified.**
-Migration 0011 is applied, revision `chirp-api-00013-rbg` is serving it, and a real
-signed-in request was confirmed returning 200. Alpha readiness is **50%** — 10 of 20
-named gates. Nothing has been deployed since; c94 is a mobile-only change._
+_Last updated: Aug 23 2026 (board card c154)._
 
-**board.html is the source of truth for tasks** — 101 cards, 62 decisions. It now has an
-**alpha readiness bar** that recomputes from the cards on every render, and cards are
-**headlines with the detail behind a click** (a right-hand drawer). Open a card before
-acting on it; the headline is deliberately short and the reasoning lives in the drawer.
+**This file deliberately contains almost no numbers.** The previous version rotted
+within a week because it hardcoded the prod revision, the open-PR list, the migration
+head and the alpha percentage in prose — every one of which changes several times a day
+now that multiple sessions work the repo at once. Each of those has a live source, and
+this file points at the source instead of copying it.
 
-This file only answers what the board can't: which copy of Chirp you are looking at, and
-what will bite you.
+| Question | Live source — go here, not to this file |
+| --- | --- |
+| What is being worked on, by whom, what is blocked | `board.html`, open it in a browser |
+| Which PRs are open right now | `gh pr list` |
+| What the migration head is | `cd backend && alembic heads` |
+| What prod is serving | `gcloud run services describe chirp-api --region us-central1` |
+| Alpha readiness | the bar at the top of `board.html`, recomputed from the cards on every render |
+| Credentials, runbooks, live fixture ids | `INFRA-PRIVATE.html` at the repo root (gitignored, never commit it) |
 
-## What is live right now
+What this file keeps is the part the board cannot hold: how to set the thing up, the
+rules that are load-bearing, and the lessons that cost us something to learn.
 
-| Thing | Where | State |
+> **If you are about to write a number into this file, stop.** Either it belongs on the
+> board, or it belongs in a command someone can run. The one exception is the
+> verified-state snapshot below, which is explicitly dated and explicitly sourced.
+
+## State snapshot — Aug 23 2026, with its sourcing
+
+Sourcing is split on purpose. "Verified" means someone ran the check this session.
+"Board-sourced" means it is the board's claim and nobody has re-run it against the live
+system. Do not promote a board-sourced line to verified without re-checking it.
+
+| Thing | State | How we know |
 | --- | --- | --- |
-| API | `chirp-api-593616178468.us-central1.run.app`, rev **chirp-api-00013-rbg** | Current with `main` |
-| Prod DB | Cloud SQL `chirp-db` | `alembic_version` **0011** |
-| Website | **https://chirps-prod.web.app** | Live, phone-tuned, real phone menu |
-| Stripe | test mode, acct `acct_1U4pwbFjVGWnUErJ` | Armed. **No money has moved** |
-| Redis | — | **Never provisioned** on prod (deliberate, c61) |
-| Tests | 168 pass, 3 skip, 0 fail locally | Skips are the Redis fan-out tests (c92) |
+| API revision | `chirp-api-00027-hwf`, serving 100% | **court-verified Aug 23** against Cloud Run |
+| Open PRs | none at session start | **court-verified Aug 23** |
+| Merged PRs | through **#78** | **verified Aug 23** via `gh pr list --state merged` |
+| Alembic head (repo) | **0013**, single head | **verified Aug 23** via `alembic heads` |
+| Prod DB `alembic_version` | **0013** | **board-sourced** (c71, applied by Jose Aug 22) — **re-verify at the next deploy** |
+| Local backend suite | 357 passed, 3 skipped | **verified Aug 23**, local PG14, run from `backend/` |
+| Website | https://chirps-prod.web.app | live |
+| Stripe | test mode, armed | **no money has ever moved** |
+| Redis | never provisioned on prod | deliberate (c61) |
 
-## The one thing blocking the sprint goal
+The prod DB line is the one to distrust. It is the only row here that describes a system
+nobody re-read this session, and it is also the row that breaks things silently when it
+is wrong — see the migrate-first lesson below.
 
-**c39 — Q rebuilds the EAS dev build.** Three native modules landed after the current
-build was cut, so the dues PaymentSheet cannot run on a device. It is alpha gate one and
-step four of the payment chain. Nothing on Jose's list moves it.
+One repo fact that makes the board-sourced line more trustworthy than it looks:
+`0013` has been the chain head since Aug 18, so applying it on Aug 22 necessarily walked
+the whole chain through `0016`. "0013 is applied" is therefore "everything is applied",
+not "0013 and four others are pending". Check it anyway at the next deploy.
 
-Then **c11** — the test-mode dues payment on card AND ACH, including the cross-rail retry
-that must return 409.
+## Migrations — read this before you write one
 
-## Jose's queue (the "Next" column, owner J)
+**The head is not the highest number on disk, and right now it is not even close.**
+The chain is:
 
-Ordered by what I'd actually do first:
+```
+0011 -> 0014 -> 0017 -> 0015 -> 0016 -> 0013
+```
 
-**Answer c96's scope question first — it may reorder everything below.** See "The
-campus problem" further down.
+`0013` is the head. Alembic walks `down_revision`, not filenames, so this is correct and
+must not be "fixed" by renumbering. `0012` was claimed for c69 and released unused, so it
+is a hole in the sequence, not a missing file.
 
-1. **c58 — live browser QA.** Jose's auth/orgs half is **walked** against real prod.
-   Q's vertical (Yak content, campus feed, messaging, treasurer/secretary dashboards,
-   CSV export) is still unproven, which is the only reason the card isn't Done.
-2. **c74** — `chirp.shared@gmail.com` is published on the live site *and* owns GCP,
-   Firebase and Stripe. **In progress as of Aug 22**: Jose picked a replacement
-   address (no longer waiting on c73's domain), spelling being confirmed before
-   `src/siteConfig.ts`'s `CONTACT_EMAIL` changes — see board c74.
-3. **c73** — marketing site to `about.<domain>`. **Blocked on buying a domain** (yours).
-4. **c87 → c86 → c88** — transactional email, then `.edu` verification, then the gate.
-   Strictly in that order. Previously "hold until after alpha" — **c96 challenges that**.
-
-**PR #21 IS MERGED** (Jose authorized it directly) — c94, c93, c98, c95, c97, c99, c100, c66,
-c96 and c58's walk are all on main. `DEPLOY.md`'s `--set-env-vars` trap is fixed on main now.
-Follow-up fixes from review are on `jose/c94-review-fixes`, unmerged.
-
-> **DO NOT DEPLOY THE BACKEND RIGHT NOW WITHOUT READING c104.** main carries c96, which
-> grants `users.campus_id` on chapter join — and `feed.py:130` / `yaks.py:30` gate campus
-> content on *nothing but that column*. Jose's c88 ruling (same day, after c96 was written)
-> says campus content stays strictly `.edu`-gated. So deploying c96 alone ships a bypass of
-> a policy decided after the code. It is safe today **only because prod is un-migrated and
-> un-redeployed.** c88's gate lands first or in the same deploy.
-
-Done this session, all verified live against prod, not by reading code:
-**c94** (the sign-in bounce was a *race* — the app navigated on the Firebase credential
-while SessionProvider was still resolving `/auth/me`, so the destination guard read a
-stale `"signedOut"` and redirected straight back; reproduced on the pre-fix code first,
-then re-verified: sign out and back in lands on `/feed` in ~1s) · **c93** (+ four more
-paste-traps of the same family across three docs) · **c98** (Family Tree drew a blank box
-in the state *every* chapter starts in) · **c95** (zero 401s now, on both sign-in and cold
-reload) · **c66** (seven paste-traps fixed in the private runbook; inline password kept,
-your call) · **c97 / c99 / c100** (the fake-content trio — the seven invented people are
-cut from Home, the hardcoded "Sophomore · Business" bio is gone from every profile, and
-"brothers" is gone from the two places it appeared; the rest of the app was already
-inclusive).
-
-**No invented content ships to users any more**, with one exception worth knowing:
-Apple/Google sign-in are still visual stubs (c89).
-
-Still open from the walk: **c101** (below).
-
-Also open and unowned: **c84** (a chapter-less author cannot delete their own post) and
-**c91** (no endpoint to resolve a report).
-
-## The campus problem (c96) — decide this before alpha
-
-**Nothing in the backend writes `users.campus_id`. Anywhere.** Every `campus_id=`
-assignment in `backend/app` is a `Chapter`, `ContentReport` or `Yak`; every other
-reference is a read, mostly a 403 comparison. Bootstrap says so in its own comment,
-added by c85: *"The .edu redemption in c86 is the only writer of this column."*
-
-So "hold c87 → c86 → c88 until after alpha" does not defer email. It means **every alpha
-user permanently has no campus**, which darkens **Home's Campus tab and the entire Yak
-tab** (both confirmed live on prod), and makes alpha gate **c71** — *"a campus-only
-student can post"* — unreachable by construction.
-
-The org half of the two-tier reasoning is genuinely fine: Orgs, events, members, dues and
-invites all work perfectly with `campus_id` null. That's why this went unnoticed.
-
-Either alpha ships with two of five tabs dark and c71 dropped from the gate list, or c86
-moves ahead of alpha. **Do not "fix" it by writing a campus assignment into bootstrap** —
-that is exactly the hole c85 closed, and see c101: `q/campus-posts` predates c85, still
-has `campus_id=body.campus_id`, and will conflict on those very lines. Its side is the
-*tempting* resolution, because it is the only code in either branch that makes campus
-features work. Resolve in favour of main.
+- **Run `alembic heads` and parent on what it prints.** Claiming a number on the board
+  prevents duplicate revision ids; it does not stop two people parenting different numbers
+  on the same head. That produced a two-heads failure on Aug 16 and is the single most
+  expensive migration mistake this repo has made.
+- **Claim the next number on the board before writing the file.** `scripts/board-check`
+  prints the next genuinely free id and fails if one is in use without a card.
+- **When two migrations collide, the side that has not merged re-points at the current
+  head.** Renumbering a revision id breaks anything that already recorded it.
+- A duplicate revision id that is already applied to prod is **skipped silently** — the
+  tables never get created and nothing errors. This is why the rule is not optional.
 
 ## Things that will bite you
 
-- **Migrate FIRST, then deploy.** This bit us on Aug 16: the migration failed, the deploy
-  succeeded, and prod briefly served code reading `users.suspended_at` against a schema
-  without it. It looked fine — health checks and unauthenticated requests never reach
-  `get_current_user`, so nothing 500s until a real user signs in. **"Health is 200" is not
-  evidence a deploy is healthy when the broken path is behind auth.**
+- **Migrate FIRST, then deploy.** Aug 16: the migration failed, the deploy succeeded, and
+  prod briefly served code reading `users.suspended_at` against a schema without it. It
+  looked fine, because health checks and unauthenticated requests never reach
+  `get_current_user`. **"Health is 200" is not evidence a deploy is healthy when the
+  broken path is behind auth.** Pick a route that requires a real signed-in user.
+- **`/healthz` is unreachable** — Google's frontend answers it before your container does.
+  The route is `/_health`. To check liveness from outside, hit a real route and expect a
+  401.
 - **The prod `DATABASE_URL` secret is in Cloud Run's UNIX-SOCKET form**
   (`...@/chirp?host=/cloudsql/...`). To migrate from a laptop you must *decompose* it and
-  rebuild with `127.0.0.1:5433`, not regex the host out — a substitution that silently
-  matches nothing leaves asyncpg trying a socket that does not exist. Working recipe is in
-  c93's card detail.
-- **`cloud-sql-proxy` is not on PATH.** It lives at `~/cloud-sql-proxy`, and it must use
-  **5433** because local Postgres 14 owns 5432.
+  rebuild against `127.0.0.1:5433` — do not regex the host out. A substitution that
+  silently matches nothing leaves asyncpg trying a socket that does not exist. Recipe is
+  in c93's card detail.
+- **`cloud-sql-proxy` is not on PATH.** It lives at `~/cloud-sql-proxy` and must use
+  **5433**, because local Postgres 14 owns 5432.
 - **Jose's zsh has `interactive_comments` off.** A `#` in a pasted command runs as a
-  command, and a trailing comment gets fed to the program as an argument. Hand over
-  commands with no inline comments.
-- **THE LOCAL TEST DB IS SHARED, AND IT LIES TO YOU INSTEAD OF ERRORING.** Every session
-  points at `chirp_test` on 5432, and conftest drops and recreates the schema per run — so
-  concurrent runs tear down each other's tables mid-suite. This produced **76 failed** on a
-  tree that was genuinely green, and it corrupts the other direction too: a run can *pass*
-  against tables someone else's fixtures populated. **Give yourself your own DB:**
-  `createdb -U chirp -h localhost chirp_test_<lane>`, then hand the schema over **as the
-  local superuser, not as `chirp`** (as `chirp` it fails with the very error you are
-  trying to fix): `psql -h localhost -d postgres -c "ALTER DATABASE chirp_test_<lane>
-  OWNER TO chirp;"` followed by `psql -h localhost -d chirp_test_<lane> -c "ALTER SCHEMA
-  public OWNER TO chirp;"`. Without it every DB test errors with `must be owner of schema
-  public`. Then pass `TEST_DATABASE_URL=...` to pytest.
-  **This whole recipe is temporary.** PR #22 (c106) gives every run its own
-  `chirp_test_p<pid>` database and drops it at the end, so once that merges the answer is
-  just "run pytest" — no createdb, no ownership grant. Delete this bullet then.
-- **CI is honest today but has no floor** (c103). The backend job runs postgres:16 + redis:7
-  services and a healthy run is **179 passed, 0 skipped** — that is why CI shows 179 where a
-  laptop shows 176 pass / 3 skip. The trap is that conftest's postgres probe *skips* rather
-  than fails, so if the service ever fails to come up the suite skips and still exits 0.
-  Latent, not live. Mobile CI is `tsc` only — there is no mobile test harness at all, so it
-  means "it compiles", never "it works".
-- **`/healthz` is unreachable** — Google's frontend answers it. The route is `/_health`.
+  command, and a trailing comment is fed to the program as an argument. Hand over commands
+  with no inline comments.
 - **The firebase CLI is logged in as `madden25boss1@gmail.com`**, which cannot see
   `chirps-prod`. Website deploys go through the gcloud ADC; runbook in `web/README.md`.
-- **CLAIMING A MIGRATION NUMBER DOES NOT CLAIM A PARENT, and that is the gap that
-  actually bites.** The board reserves numbers, which prevents duplicate revision ids —
-  it does not stop two people writing different numbers that both set
-  `down_revision` to the same head. That happened Aug 16: 0017 (c91) and 0015 (c86) both
-  parented on 0014, so `alembic upgrade head` failed with two heads. **Before you write a
-  migration, run `alembic heads` against main and parent on what it actually prints** —
-  not on the highest number on disk, which is no longer the same thing. The chain is now
-  0011 -> 0014 -> 0017 -> 0015, so 0015 sits numerically after 0017 on purpose; alembic
-  walks `down_revision`, not filenames, so do not "fix" it. The rule when two migrations
-  collide is the one c71's 0013 already set: **the side that has not merged re-points at
-  the current head**, because renumbering a revision id breaks anything that recorded it.
-- **Card ids and migration numbers are shared resources.** Take the next one from
-  *origin's current* board, not the copy you started editing. Taken: 0011 (c76), **0014 (c96, MERGED)**,
-  0013 (c71, on Q's branch), **0015 (c86, claimed by the email session)**. **0012 was claimed for
-  c69 and released unused.** Next free: **0016**.
-- **`q/campus-posts` carries TWO hazards, not one** (c101). Besides the heads problem
-  below, it predates c85 and still sets `campus_id` from the request body — the merge will
-  conflict on those lines and the branch's side looks like the fix. Take main's.
-- **A multiple-heads hazard is pending.** Q's `0013_campus_posts.py` has
-  `down_revision = "0010"`, and `0011` is now on main with the same parent. Main is
-  single-head today; the moment `q/campus-posts` merges there will be **two heads** and
-  `alembic upgrade head` fails outright. 0013 needs re-pointing to 0011 before that lands.
+- **Mobile CI is `tsc` only.** There is no mobile test harness at all, so a green mobile
+  check means "it compiles" and never "it works". Anything user-facing needs a real
+  render.
+- **`npx tsc` in a worktree with no `node_modules` does not run the TypeScript compiler.**
+  It fetches the npm placeholder package called `tsc` and prints "This is not the tsc
+  command you are looking for". Symlink `node_modules` from the main checkout before any
+  mobile check in a worktree (`.gitignore` already documents the symlink and why it must
+  never be committed). **Cite `tsc --version` in your evidence** — a type-check whose
+  output does not include a version number did not type-check anything.
+  Measured, because the distinction changes what you watch for: the placeholder exits
+  **1**, not 0, on npm 10.8.2 / node 20.20.0. So this is a loud failure, not a silent
+  false green — a `&&` chain or a CI step stops on it. The way it actually costs you time
+  is a human skimming the red box, reading it as an environment hiccup, and reporting
+  "tsc ran" — not a gate that wrongly passes.
+- **A green signal can answer a question nobody asked.** A CI gate is a property of the
+  RUN, not of the PR: it only protects a merge if the check is newer than both the gate's
+  existence and the base's last move. When branches move fast, re-check the merge result
+  rather than trusting a green tick.
 
-## Alpha is defined, not vibes
+## Multi-session rules (these are enforced, not advisory)
 
-Alpha = Q's old chapter plus a couple more orgs, real students on real phones, small
-enough to phone someone when it breaks. `board.html` carries the list: 7 shipped
-foundations plus 13 named gates, each reading its status from its own card. Moving a card
-moves the bar. **50% as of Aug 16.**
+Several Claude sessions work this repo simultaneously. The full rules live in
+`CLAUDE.md`; these are the two that have caused the most damage.
 
-## Open PRs and branches
-
-**PR #21 (`jose/c94-signin-navigation`, c94 + c93) is open and waiting on Jose to merge.**
-
-Q merged two of theirs on Aug 16 without touching the board: **PR #17** (c35, the
-moderation UI — an *alpha gate*) and **PR #20** (`q/nav-back-autohide`, real back button
-plus an auto-hiding tab bar, which rewrote `(tabs)/_layout.tsx` around the auth guard;
-the guard itself is unchanged). c35's card now says merged-pending-verification — when Q
-verifies it live and moves it to Done, the alpha bar moves with it.
-
-`q/compose` (PR #14, draft, c49) is Q's. Origin was
-pruned to `main` plus branches with open PRs; two superseded branches were **tagged**
-(`archive/q-website`, `archive/q-mock-identity-fixes`) before deletion, so nothing was
-lost.
-
-## Known-bad things that are shipped
-
-- **Real users see fabricated people.** A brand-new account's Home shows `MOCK_MOMENTS` —
-  Tyler, Maria, Priya, Devon, Sam, Ethan, Noah — in the "Your story" row. There is no
-  backend concept for Moments, but it is in front of every user. **Now carded as c97.**
-- **Apple and Google sign-in are visual stubs** that skip authentication entirely and drop
-  the user into a disconnected onboarding flow (c89). Apple guideline 4.8 makes Sign in
-  with Apple mandatory once Google ships.
-- **`/terms` and `/privacy` are not lawyer-reviewed** (c75), scoped to NC and UNCG on
-  purpose. c76 made the moderation claim true; the liability sections are still
-  placeholders.
+- **One worktree per session.** The shared tree at the repo root stays on `main`. Never
+  `git checkout` a branch there — a peer can switch it between your commands, and your
+  "board commit to main" then silently lands on their branch. Read other branches with
+  `git show <ref>:<path>`; take your own `git worktree add` for any code work.
+- **Write the card before you cut the branch.** Card ids are a shared resource and have
+  collided three times. `scripts/board-check` prints the next genuinely free id.
+- **Run `scripts/board-check` before committing `board.html`, and
+  `scripts/board-check --pushed` after pushing.** Four board changes vanished silently in
+  one day and a JSON-parse check caught none of them.
+- Edit the embedded `<script id="board-data">` JSON by parsing and re-serializing it
+  (`json.dumps(..., indent=2, ensure_ascii=True)` round-trips byte-identically, so the
+  diff stays minimal). Never regex or find/replace the HTML.
 
 ## Environment
 
-Two very different Macs, both written up in `CLAUDE.md`. Jose: Intel Mac, no Docker, local
-PG14 on 5432, no `redis-server`. Q: Apple Silicon, Docker, postgres:16 on 5434. Run the
-backend suite from **inside `backend/`** or every async test errors confusingly.
+Two very different Macs, both written up in `CLAUDE.md`.
 
-Creds, runbooks and live fixture ids: `INFRA-PRIVATE.html` at the repo root — gitignored,
-never commit it.
+- **Jose**: Intel Mac, macOS 12, **no Docker**. Local Postgres 14 via
+  `pg_ctl -D /usr/local/var/postgresql@14 start`. Backend venv at `backend/.venv`. No
+  `redis-server`, which is why the Redis fan-out tests skip locally.
+- **Q**: Apple Silicon, Docker available, no native Postgres — backend tests run against a
+  `postgres:16` container on host port **5434**, so runs there match prod's PG16.
+
+**Run the backend suite from inside `backend/`** or every async test errors confusingly.
+Tests no longer need any database setup: since c106 each run creates and drops its own
+`chirp_test_p<pid>` database, so concurrent sessions cannot tear down each other's tables.
+The old "give yourself your own DB" recipe is gone — just run `pytest`.
+
+## Deploys
+
+Backend changes need a Cloud Run redeploy to go live. The command and credentials are in
+`INFRA-PRIVATE.html`; `DEPLOY.md` carries the procedure. Deploys and prod DB migrations
+are **not** a worker session's call — they run through Jose and the manager session.
+
+Order is always **migrate, then deploy**, and the post-deploy check must exercise a real
+authenticated route.
+
+## Known-bad things that are shipped
+
+These are live in front of users right now. Each has a card; the card is authoritative.
+
+- **Apple and Google sign-in are visual stubs** (c89) that skip authentication entirely.
+  Apple guideline 4.8 makes Sign in with Apple mandatory once Google ships.
+- **`/terms` and `/privacy` are not lawyer-reviewed** (c75), scoped to NC and UNCG on
+  purpose. The liability sections are still placeholders.
+- **Transactional email cannot reach arbitrary recipients** (c87). The app-to-Resend chain
+  works, but without a verified sending domain Resend refuses anyone outside the account.
+
+## Alpha
+
+Alpha is Q's old chapter plus a couple more orgs — real students, real phones, small
+enough to phone someone when it breaks. It is defined as a fixed list of named gates, not
+a vibe: `board.html` carries the shipped foundations and the gate list, and the readiness
+bar recomputes from the cards on every render. Moving a card moves the bar.
+
+Read the bar off the board. Do not copy the number into this file.

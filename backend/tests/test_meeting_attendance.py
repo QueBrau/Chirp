@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from httpx import AsyncClient
 
-from tests.conftest import MakeChapterWith
+from tests.conftest import MakeChapterWith, MakeUser
 
 
 async def _create_meeting(client: AsyncClient, setup, title: str = "Chapter meeting") -> str:
@@ -235,3 +235,216 @@ async def test_an_oversized_sheet_is_refused_by_validation(
     )
 
     assert response.status_code == 422, response.text
+
+
+# ---- board c151: entries[] must name active members of the meeting's chapter ----
+
+
+async def test_a_non_member_cannot_be_marked_present(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    """The records-integrity half: a real user who is not in this chapter gets no row.
+
+    The route scoped the MEETING to the chapter and never the ENTRIES, so any valid
+    user_id inserted silently - fabricated attendance in the record that
+    export_meetings_csv hands officers for dues and good-standing decisions.
+    """
+    setup = await make_chapter_with("secretary")
+    outsider = await make_user("Not In This Chapter")
+    meeting_id = await _create_meeting(client, setup)
+    url = f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance"
+
+    response = await client.put(
+        url,
+        json={"entries": [{"user_id": outsider.id, "status": "present"}]},
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 422, response.text
+    assert outsider.id in response.json()["detail"], "the 422 must name the offending id"
+
+    read = await client.get(url, headers=setup.member.headers)
+    assert read.json() == [], "a refused sheet must leave no attendance rows behind"
+
+
+async def test_a_member_of_another_chapter_is_still_a_non_member(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """Being an active member SOMEWHERE is not being a member HERE.
+
+    Guards the shape of the check: it filters on chapter_id, not merely on "has any
+    membership row". A president of chapter A is exactly the plausible id an officer
+    of chapter B could paste in.
+    """
+    chapter_a = await make_chapter_with("president")
+    chapter_b = await make_chapter_with("secretary")
+    meeting_id = await _create_meeting(client, chapter_b)
+
+    response = await client.put(
+        f"/chapters/{chapter_b.chapter_id}/meetings/{meeting_id}/attendance",
+        json={"entries": [{"user_id": chapter_a.president.id, "status": "present"}]},
+        headers=chapter_b.member.headers,
+    )
+
+    assert response.status_code == 422, response.text
+    assert chapter_a.president.id in response.json()["detail"]
+
+
+async def test_a_mixed_sheet_is_refused_whole_and_writes_nothing(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    """One bad id refuses the WHOLE sheet - no partial write of the valid entries.
+
+    The check runs before the insert and the request never reaches the commit, so a
+    secretary who fat-fingers one row does not get a half-saved sheet that silently
+    disagrees with what is on their screen.
+    """
+    setup = await make_chapter_with("secretary")
+    outsider = await make_user("Not In This Chapter")
+    meeting_id = await _create_meeting(client, setup)
+    url = f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance"
+
+    response = await client.put(
+        url,
+        json={
+            "entries": [
+                {"user_id": setup.president.id, "status": "present"},
+                {"user_id": outsider.id, "status": "present"},
+            ]
+        },
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 422, response.text
+    assert outsider.id in response.json()["detail"]
+    assert setup.president.id not in response.json()["detail"], (
+        "only the offending ids should be named"
+    )
+
+    read = await client.get(url, headers=setup.member.headers)
+    assert read.json() == [], "the valid entry must not have been written either"
+
+
+async def test_a_nonexistent_user_id_is_422_not_500(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """The bad-error-path half: an id belonging to nobody used to reach the users FK.
+
+    IntegrityError at commit surfaces as a 500 and takes the whole sheet down. The
+    membership SELECT catches it first for free - an id with no user row cannot have
+    an active membership row either - so both halves close with one check.
+    """
+    setup = await make_chapter_with("secretary")
+    meeting_id = await _create_meeting(client, setup)
+    ghost = "00000000-0000-0000-0000-000000000000"
+
+    response = await client.put(
+        f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance",
+        json={"entries": [{"user_id": ghost, "status": "present"}]},
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 422, response.text
+    assert ghost in response.json()["detail"]
+
+
+async def test_an_inactive_member_cannot_be_marked_present(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """The check is ACTIVE membership, not merely a membership row in this chapter.
+
+    Matches what the client actually sends: the secretary screen builds its roster
+    from listMembers().filter(status === "active") (secretary.tsx), so an active-only
+    backend check refuses exactly the ids no real sheet contains.
+    """
+    setup = await make_chapter_with("member")
+    meeting_id = await _create_meeting(client, setup)
+
+    demoted = await client.patch(
+        f"/chapters/{setup.chapter_id}/members",
+        json={"user_id": setup.member.id, "status": "inactive"},
+        headers=setup.president.headers,
+    )
+    assert demoted.status_code == 200, demoted.text
+
+    response = await client.put(
+        f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance",
+        json={"entries": [{"user_id": setup.member.id, "status": "present"}]},
+        headers=setup.president.headers,
+    )
+
+    assert response.status_code == 422, response.text
+    assert setup.member.id in response.json()["detail"]
+
+
+async def test_an_all_valid_sheet_still_upserts(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """The golden path is untouched: real members still save, for every status."""
+    setup = await make_chapter_with("secretary")
+    meeting_id = await _create_meeting(client, setup)
+    url = f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance"
+
+    response = await client.put(
+        url,
+        json={
+            "entries": [
+                {"user_id": setup.president.id, "status": "present"},
+                {"user_id": setup.member.id, "status": "excused"},
+            ]
+        },
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert {(r["user_id"], r["status"]) for r in response.json()} == {
+        (setup.president.id, "present"),
+        (setup.member.id, "excused"),
+    }
+
+
+async def test_resubmitting_the_same_valid_sheet_still_works(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """Idempotent retry is unbroken - the new SELECT must not make a re-save conflict.
+
+    The secretary screen re-PUTs the full sheet on every save, so the second submit of
+    an unchanged sheet is the common case, not an edge case.
+    """
+    setup = await make_chapter_with("secretary")
+    meeting_id = await _create_meeting(client, setup)
+    url = f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance"
+    sheet = {
+        "entries": [
+            {"user_id": setup.president.id, "status": "present"},
+            {"user_id": setup.member.id, "status": "absent"},
+        ]
+    }
+
+    first = await client.put(url, json=sheet, headers=setup.member.headers)
+    assert first.status_code == 200, first.text
+    second = await client.put(url, json=sheet, headers=setup.member.headers)
+    assert second.status_code == 200, second.text
+
+    assert first.json() == second.json()
+
+
+async def test_an_empty_sheet_is_still_accepted(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """No entries means nothing to validate - the check must not reject an empty PUT.
+
+    `entries` defaults to an empty list, and the validation lives inside the existing
+    `if body.entries` guard, so this pins that an empty sheet never reaches the SELECT.
+    """
+    setup = await make_chapter_with("secretary")
+    meeting_id = await _create_meeting(client, setup)
+
+    response = await client.put(
+        f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance",
+        json={"entries": []},
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == []
