@@ -39,7 +39,8 @@ function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   // Slides the pill down past its own height plus the bottom inset and fades it,
   // driven by the shared value Screen's scroll handler writes. Kept as a
   // transform+opacity so it never affects layout — content clearance
-  // (TAB_BAR_CLEARANCE) stays constant whether the bar is shown or hidden.
+  // (Screen's useOverlayClearance, theme/index.ts) stays constant whether the
+  // bar is shown or hidden.
   const animatedStyle = useAnimatedStyle(() => {
     const shown = tabBar?.visible.value ?? 1;
     return {

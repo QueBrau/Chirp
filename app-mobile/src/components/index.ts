@@ -27,6 +27,3 @@ export { MomentsRow, type MomentsRowMoment, type MomentsRowProps } from "./Momen
 export { Screen, type ScreenProps } from "./Screen";
 export { SectionHeader, type SectionHeaderProps } from "./SectionHeader";
 export { VotePill, type VoteDirection, type VotePillProps } from "./VotePill";
-
-/** Bottom padding scroll content needs to clear the floating tab bar. */
-export { TAB_BAR_CLEARANCE } from "@/theme";

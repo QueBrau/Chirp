@@ -187,6 +187,10 @@ export default function FeedScreen() {
         eyebrow={campus ? campus.name.toUpperCase() : undefined}
         accentBarColor={campusColors.secondary}
         subtitle="Your campus, right now."
+        // Fab below only renders once campusId resolves non-null — matched
+        // exactly here so scroll content clears it whenever it's actually
+        // showing (c168).
+        hasFab={campusId !== null}
       >
         <View style={{ flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg }}>
           {FILTERS.map((option) => {

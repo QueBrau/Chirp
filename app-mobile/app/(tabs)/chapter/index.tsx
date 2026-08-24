@@ -953,6 +953,11 @@ export default function OrgsScreen() {
                 ? `Find your org at ${campus.name}`
                 : "Find your org"
         }
+        // Fab below only renders on the feed segment once membership resolves
+        // — matched exactly here so scroll content (including the Tools grid
+        // on other segments) clears whichever overlays are actually showing
+        // (c168).
+        hasFab={!loading && membership !== null && segment === "feed"}
       >
         {loading ? (
           <EmptyState title="Loading your org..." />

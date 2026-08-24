@@ -6,14 +6,16 @@
 
 import { useColorScheme, type ViewStyle } from "react-native";
 import { useMemo } from "react";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { Palette } from "./colors";
 import { resolvePalette, useAppearance } from "./appearance";
 import { applyOrgAccent, useOrgAccentColors } from "./orgScope";
+import { spacing } from "./spacing";
 
 export { brand, dark, light } from "./colors";
 export type { GradientPair, Palette } from "./colors";
-export { spacing } from "./spacing";
+export { spacing };
 export type { SpacingToken } from "./spacing";
 export { typography } from "./typography";
 export type { TypeStyle, TypographyVariant } from "./typography";
@@ -96,10 +98,26 @@ export const metrics = {
   tabBarInsetX: 12,
   /** Floating tab bar bottom inset (§5). */
   tabBarInsetBottom: 8,
-  /** How far the floating tab bar slides down when auto-hiding on scroll.
+  /**
+   * How far the floating tab bar slides down when auto-hiding on scroll.
    * Comfortably past its own height plus the bottom safe-area inset, so it
-   * clears the screen edge entirely instead of leaving a sliver visible. */
+   * clears the screen edge entirely instead of leaving a sliver visible.
+   */
   tabBarHiddenOffset: 140,
+  /**
+   * Approximate rendered height of the floating tab bar's own box (§5),
+   * independent of the safe-area inset it sits above: outer paddingVertical
+   * (spacing.sm * 2) + border (1px * 2) + the tallest tab content (an
+   * inactive icon plus its own vertical padding) works out to ~54; this
+   * rounds up for breathing room. The single shared source for both
+   * `useOverlayClearance` below and Fab's own positioning, so a future resize
+   * of the bar only needs changing here (c168 — previously Fab.tsx alone
+   * approximated this as a local, unexported constant nothing else could see).
+   */
+  tabBarBoxHeight: 64,
+  /** Fab's circle diameter (§7) — shared with `useOverlayClearance` so the
+   * clearance a FAB screen reserves always matches the FAB actually rendered. */
+  fabSize: 56,
   /**
    * Header accent bar under an oversized screen title (§10.1: "zones, not card
    * soup" — Home/Yak/Orgs headers get a short accent bar under the title).
@@ -113,10 +131,32 @@ export const metrics = {
 } as const;
 
 /**
- * Bottom padding scrollable tab screens need so content clears the floating
- * tab bar (bar height + bottom inset + breathing room).
+ * Bottom padding a scrollable screen needs so its LAST row/card clears the
+ * floating overlays (DESIGN.md §5 tab bar, §7 FAB) instead of sitting under
+ * them — c168 (found on a real iOS simulator: Secretary's meetings list, the
+ * Orgs Tools grid, and feed post text were all clipped by the pill/FAB).
+ *
+ * This used to be a flat `TAB_BAR_CLEARANCE = 96` constant that baked in an
+ * assumed safe-area inset instead of reading the device's real one, and had
+ * no FAB-aware variant — Home and the Orgs feed (which also render a sibling
+ * `<Fab/>`, floating `spacing.md + fabSize` further above the tab bar) used
+ * the exact same number as every screen with no FAB at all. Both cases are
+ * derived here from the same constants FloatingTabBar and Fab actually render
+ * with (`metrics.tabBarBoxHeight`, `metrics.fabSize`) plus the REAL
+ * `useSafeAreaInsets().bottom` for this device, plus one `spacing.lg` of
+ * breathing room — never eyeballed, and there is exactly one place to update
+ * if the tab bar or FAB ever change size.
+ *
+ * `Screen` is the only intended call site (via its `hasFab` prop) — pass
+ * `hasFab: true` when the screen also renders a sibling `<Fab/>` so its
+ * content clears both overlays instead of just the tab bar.
  */
-export const TAB_BAR_CLEARANCE = 96;
+export function useOverlayClearance(hasFab: boolean = false): number {
+  const insets = useSafeAreaInsets();
+  const tabBarTop = Math.max(insets.bottom, metrics.tabBarInsetBottom) + metrics.tabBarBoxHeight;
+  const fabExtra = hasFab ? spacing.md + metrics.fabSize : 0;
+  return tabBarTop + fabExtra + spacing.lg;
+}
 
 /**
  * Returns the active color palette: system light/dark scheme, resolved through
