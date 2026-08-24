@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787606433938,
+  "updated": 1787610914565,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -752,7 +752,7 @@
     {
       "id": "c35",
       "col": "progress",
-      "title": "c35 GATE DEPENDENCY CORRECTED Aug 24: the live prod pass (file report -> queue -> resolve) requires a moderator with a VERIFIED .EDU (Jose's own c108 ruling) - no QA account has one, and .edu code delivery is blocked on the domain chain (c73/c134). Two unblock paths: Jose runs a one-row verification UPDATE for the QA president (SQL on request), or the domain lands and a real .edu inbox receives a code. Code itself is shipped + sim-proven. Moderation UI \u2014 PR #17 MERGED to main Aug 16 (d43c819). Q: verify live, then move to Done and the alpha bar moves with it",
+      "title": "c35 UNBLOCK APPROVED Aug 24 - Jose running the one-row verification flip for the QA president; manager drives the live pass (file report -> queue -> resolve on prod) immediately after, then the gate closes. c35 GATE DEPENDENCY CORRECTED Aug 24: the live prod pass (file report -> queue -> resolve) requires a moderator with a VERIFIED .EDU (Jose's own c108 ruling) - no QA account has one, and .edu code delivery is blocked on the domain chain (c73/c134). Two unblock paths: Jose runs a one-row verification UPDATE for the QA president (SQL on request), or the domain lands and a real .edu inbox receives a code. Code itself is shipped + sim-proven. Moderation UI \u2014 PR #17 MERGED to main Aug 16 (d43c819). Q: verify live, then move to Done and the alpha bar moves with it",
       "owner": "Q",
       "tag": "vert:social-msg",
       "area": "yak",
@@ -1926,6 +1926,15 @@
       "area": "infra",
       "title": "npm audit: 9 high / 13 moderate, all in the Expo/Metro build toolchain - fix requires a PLANNED major Expo upgrade, never audit fix --force",
       "detail": "From the Aug 24 security review. The forced-fix path does a major Expo bump blind and breaks the native builds. Plan: review the exact advisories, schedule an Expo SDK upgrade as its own milestone, rebuild sim+Android artifacts, re-run the full mobile check suite, re-audit. No urgency signal today - toolchain, not runtime, exposure."
+    },
+    {
+      "id": "c173",
+      "col": "progress",
+      "owner": "jose",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c102 follow-up (Jose's call Aug 24): inactive members become READ-ONLY on the chapter-public tier - like/comment revert to active-only; the read gate stays as c102 built it. Subagent building",
+      "detail": "c102's #94 made read-implies-react: _readable_post's 'org' branch accepted any non-removed membership, so inactive members could like/comment chapter-public posts. Jose chose read-only instead. Fix: list_posts keeps get_current_chapter_member (active OR inactive may READ); _readable_post's org branch goes back to ACTIVE membership only, so like/comment/reactions refuse inactive members. Tests: inactive member reads chapter-public but 403s on like and comment; active member unaffected; org_actives tier unaffected."
     }
   ],
   "decisions": [
