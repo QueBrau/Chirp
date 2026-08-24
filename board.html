@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787603398403,
+  "updated": 1787604786802,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1479,11 +1479,11 @@
     },
     {
       "id": "c102",
-      "col": "progress",
+      "col": "done",
       "owner": "jose",
       "tag": "backend",
       "area": "orgs",
-      "title": "c102 UNBLOCKED + IN PROGRESS Aug 24 - Jose ruled: actives-only == Membership.status == 'active' (the EXISTING flag; dues standing irrelevant, no new pledge model). Sonnet subagent building two-tier chapter content; migration 0019 reserved IF a db constraint forces one (0018 belongs to q/c162)",
+      "title": "CODE DONE Aug 24 - merged (#94), NOT YET LIVE: needs migration 0019 applied to prod BEFORE the next redeploy (Jose-only step). Two-tier chapter content per the ruling: org stays chapter-public (any non-removed member), org_actives filtered in-query on the viewer's own status. Honest-signal via X-Actives-Only-Hidden header. Bonus fixes: constraint-name drift (posts_audience_check vs ck_posts_audience) closed; profile listPosts regression caught by tsc. Full suite green in CI incl. the migration chain. NOTE for Jose's eye: inactive members can now READ + like/comment the chapter-public tier (read-implies-react) - one-line tightening if unwanted",
       "detail": "Asked for by Jose Aug 16 while answering c88, and carded separately rather than folded into that card because it is a different question wearing the same word. c88 decides who gets IN to chapter content at all; this decides what a member sees ONCE IN. Jose's wording: a member can see the chapter's public feed, but the chapter should also have an actives-only thing. So chapter content splits in two - a chapter-public tier visible to any member of the chapter, and an actives-only tier that a member who is not an active does not see. WHAT HAS TO BE PINNED DOWN BEFORE ANY CODE, because the word 'active' is doing load-bearing work and does not exist in the schema yet: membership today carries a role and an ACTIVE/inactive status, and it is not yet decided whether 'actives only' means that status flag, a separate members-vs-pledges distinction, or dues-paid standing - which is a real possibility given c11 and the dues work, and would couple this to Stripe. Those are three different features with the same name. Ask Jose which one before writing the migration. DESIGN NOTE, and it is the failure mode worth naming up front: the wrong build of this ships a feed with an invisible half, where a pledge cannot tell whether the chapter is quiet or whether they are simply not being shown things. Whatever the rule turns out to be, a user in the lesser tier should be able to tell that a fuller tier EXISTS - the same reasoning that put a real verify screen behind c88's 403 in c90 instead of an empty feed. RELATED: this rides on the same authorization dependency c88 introduces, so building it as a second copied if-statement per route is the exact mistake c88's card already warns about. One dependency, two tiers."
     },
     {
@@ -1884,11 +1884,11 @@
     },
     {
       "id": "c168",
-      "col": "backlog",
+      "col": "done",
       "owner": "",
       "tag": "frontend",
       "area": "social",
-      "title": "Floating tab bar and FAB sit ON TOP of scroll content - lower rows of Secretary list, Tools grid and post text hide under the overlays on several screens",
+      "title": "DONE Aug 24 - merged (#93): overlay clearance derived from real safe-area + shared tab-bar/FAB metrics via useOverlayClearance(hasFab), one fix for every screen through Screen.tsx. Secretary + Tools grid visually verified by the builder; FAB-screen visual pass is the manager's one open check (Metro rebuild pending) - formula identical, typechecked",
       "detail": "c164 sim find, consistent across screens. Cosmetic but before broad device testing: scroll containers need bottom padding sized to the floating elements (content inset), not just a translucent bar. DESIGN.md binding - the fix is padding, not removing the floating treatment."
     },
     {
@@ -2033,7 +2033,8 @@
     "Aug 24 - SECURITY-FIX RELEASE DEPLOYED (manager, Jose's 'deploy'): revision chirp-api-00031-vtg serving 100%, built from pinned worktree at 8af4740, deploy-only (head 0013 = prod, no migration), section-7 command with no env flags. Ships: conversation authz, lineage target validation, media capability-path log scrub, Redis rate limiting, suspended-WS recheck, email log redaction. Live smoke: /auth/me 401 with bogus-path 404 control, /docs 404 (c122 holds), /media/<garbage> 403 (signing live, forged token rejected), digest pinned. NOT re-driven live: authenticated WS round-trip (proven on 00030, gateway change additive) and cross-instance rate limiting - both ride the next QA-credentialed pass.",
     "Aug 24 - Jose's ruling batch: c70 photo test GO + c140/c155 flip GO (manager executing); actives-only == existing active status flag, dues irrelevant (c102 unblocked); NO branch protection, manual discipline stays (c112 closed); manual Stripe dashboard charges ARE a supported payment path - webhook's permissive matching is product behavior, signature requirement stays; c162 deletion policy delegated to manager and ruled (close-not-delete once ballots exist); CLAUDE.md multi-session lessons batch APPROVED and committed; Android parked; WORKER POOL RESTRUCTURED - manager-spawned Sonnet subagents, max 5 concurrent, manager does all board edits and merges.",
     "Aug 24 - c70 GATE PASSED + c140/c155 FLIP EXECUTED on Jose's go. En-route discovery: capability URLs are minted on app_public_base_url (chirps-prod.web.app) but Hosting had NO /media/** rewrite - every photo URL served the SPA's index.html. Fixed: firebase.json /media/** -> Cloud Run rewrite (ordered before the catch-all), hosting deployed, byte-exact serving verified before AND after the flip. Direct GCS access now 403s. Alpha = 16/20.",
-    "Aug 24 - #91 (c167) and #92 (c166) manager-verified and merged. c166's persistence is code-complete but device-inert until the next EAS build. c35's live pass found domain/verification-blocked (c108 gate) - honest correction recorded, two unblock paths on the card. Resend domain add cannot be API-driven (stored key is send-only restricted) - Jose does the dashboard add for josedev.app."
+    "Aug 24 - #91 (c167) and #92 (c166) manager-verified and merged. c166's persistence is code-complete but device-inert until the next EAS build. c35's live pass found domain/verification-blocked (c108 gate) - honest correction recorded, two unblock paths on the card. Resend domain add cannot be API-driven (stored key is send-only restricted) - Jose does the dashboard add for josedev.app.",
+    "Aug 24 - subagent wave COMPLETE: #91 (c167), #92 (c166), #93 (c168), #94 (c102) all manager-verified and merged; c162 review delivered to Q via the board. STANDING FLAG FOR NEXT DEPLOY: migration 0019 must be applied to prod FIRST (migrate-then-deploy; Jose-only DB step) - the running rev 00031-vtg predates all four merges. When c162 lands, an alembic merge revision will be needed (0018 and 0019 both chain off 0013)."
   ]
 }
 </script>
