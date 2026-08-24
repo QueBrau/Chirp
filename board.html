@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787534169114,
+  "updated": 1787534280338,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1907,7 +1907,8 @@
     "Aug 23 - suite-contention protocol (manager, after load hit 152 on the 8-core box with five concurrent full suites and a clean suite ran past a 10-min tool timeout on contention alone; raised by jon 2.0): full backend-suite runs are SERIALIZED via scripts/with-suite-lock; targeted test files stay unlocked during development; the full suite runs only pre-PR under the lock; a suite that timed out under load is rerun under the lock, not reported as a hang.",
     "Aug 23 - grep-before-build promoted to TRIAGE: the manager runs git log --oneline --grep='^<card-id>' plus a surface grep BEFORE assigning any card older than a couple of days. Adopted after c90 became the third consecutive stale-premise assignment (c78, c90, c154's six stale titles) - the c90 assignment was made without the check c78 had just taught. Board sweep carded as c157 to flush the remaining false backlog.",
     "Aug 23 - worktree mobile-tooling refinement (james 2.0): the node_modules SYMLINK satisfies tsc but BREAKS Metro (serverRoot resolution); an APFS clone (cp -c) of node_modules works for both. Joins the queued CLAUDE.md edit.",
-    "Aug 23 - c157 board sweep verified and applied: c80/c110/c108/c8 closed as done-by-prior-work (each verified in code by manager, not just commit subject); c117/c120 title-stale closed; c122/c123 had WRONG PR attributions (renumbering kept the pre-renumber PR numbers) - fixed with prev-ids recorded. CONVENTION ADOPTED: a renumbered card carries 'PREV-ID: cX' in its detail in fixed form, because commits and branches keep the old id and id-greps (including the manager's triage grep) miss the work entirely - the sweep's method finding."
+    "Aug 23 - c157 board sweep verified and applied: c80/c110/c108/c8 closed as done-by-prior-work (each verified in code by manager, not just commit subject); c117/c120 title-stale closed; c122/c123 had WRONG PR attributions (renumbering kept the pre-renumber PR numbers) - fixed with prev-ids recorded. CONVENTION ADOPTED: a renumbered card carries 'PREV-ID: cX' in its detail in fixed form, because commits and branches keep the old id and id-greps (including the manager's triage grep) miss the work entirely - the sweep's method finding.",
+    "Aug 23 - shared-tree board-edit atomicity (raised by security 2.0 after the third benign sweep of the day; james 2.0 and the manager hit the same race): a board edit in the shared tree is EDIT + ADD + COMMIT with no verification step between - the uncommitted window is where a peer's add sweeps your lines or, worse, a peer's stale-copy commit drops them. Order is now: edit, commit immediately, board-check the COMMITTED state, fix-and-amend if it fails, push, board-check --pushed. Joins the queued CLAUDE.md edit."
   ]
 }
 </script>
