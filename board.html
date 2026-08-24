@@ -391,7 +391,7 @@
     },
     {
       "id": "c160",
-      "col": "progress",
+      "col": "done",
       "owner": "",
       "tag": "infra",
       "area": "infra",
@@ -814,12 +814,12 @@
     },
     {
       "id": "c5",
-      "col": "backlog",
-      "title": "Invite deep links \u2014 https SHARE LINK LANDED in PR #13",
-      "owner": "",
+      "col": "progress",
+      "title": "IN PROGRESS Aug 24 — native invite share + QR landed (ae7ed30); universal-link setup/device verification remain",
+      "owner": "J",
       "tag": "m1",
       "area": "auth",
-      "detail": "chapter/index.tsx now shares https://chirps-prod.web.app/join-chapter?code=... via a new inviteShareUrl(), instead of the raw chirp:// string it used to print: a custom scheme is not linkified by Messages or most DM apps, so invites arrived as dead text exactly where they get sent. withInviteCode() is unchanged because the auth chain still uses it for internal router paths. BACKEND+CHAIN was already DONE via c42. LEFT: in-app invite-create UI for e-board (Tools segment) + share sheet/QR, and universal links \u2014 which need a real Apple Team ID and an EAS release cert fingerprint, so web/public/.well-known/ is deliberately left EMPTY rather than holding a fabricated Team ID that would serve 200 and read as done."
+      "detail": "Technical slice landed Aug 24 via main commit ae7ed30: InviteCard now provides native Share.share and a QR toggle encoding the same public https invite URL. verify:invites, mobile typecheck, and contract checks pass. Universal-link association files remain intentionally pending Apple Team ID/EAS release credentials; device verification remains c39."
     },
     {
       "id": "c6",
@@ -1168,9 +1168,9 @@
       "col": "progress",
       "owner": "J",
       "tag": "m4",
-      "title": "c63 GATE HELD - client/auth are live, but Redis delivery is still unproven. Redis and VPC APIs were enabled Aug 24, but no billable instance/connector was created after the corrected minimum estimate came back at about $48/month plus network. Gate flips after Jose confirms that spend and one message round-trips live.",
+      "title": "DONE Aug 24 — Redis/VPC provisioned, API revision 00030-m97 live, and authenticated WebSocket message round-trip verified",
       "area": "messages",
-      "detail": "src/realtime/socket.ts defines ChirpSocket with reconnect/backoff and status listeners, and src/api/messages.ts exposes listMessages(), but NO screen imports ChirpSocket \u2014 so the verified gateway is unused by the client today. That's why the two Redis findings are latent rather than live. Wiring it needs a reconnect-triggered catch-up fetch, since pub/sub drops anything published while the socket was down (proven in c21's suite). Rides with m4 real messaging. REASSIGNED Aug 22 from Q to J by the manager (Jose's forward-moving-tickets instruction), with an explicit veto path - if Jose vetoes it parks, and it is being built clean enough that parking costs nothing (own worktree, touches only realtime/socket.ts + SessionProvider + the two messages screens). SCOPED BEFORE BUILDING, per the manager's ask to report real size before summiting: read ws/gateway.py + pubsub.py's actual publish shape and both messages screens rather than assume. FINDING: messages/[id].tsx's own docstring says compose/send stays UI-disabled until milestone 4 (libsignal) - so send-side isn't a smaller second PR, it is blocked on a separate milestone entirely and out of scope here regardless of sizing. Every bubble already renders a fixed 'Encrypted message' placeholder (no plaintext exists yet), so a live-appended message needs no decryption work - the placeholder rendering is unaffected by how the row arrived. ALSO FOUND: the published event includes created_at, but the client's MessageSocketEvent type does not declare it - a small, real drift, fixed in this PR rather than left. PR 1 SCOPE: SessionProvider connects chirpSocket on a real ready (non-suspended) session and disconnects on sign-out/suspension (single effect keyed on status, not scattered calls); the thread screen appends live 'message' events for its own conversation_id; a reconnect-after-real-disconnect triggers listMessages() catch-up (the card's own point - pub/sub drops what was published while down, per c21's suite); the conversation list flips a row's preview live on any message event for that conversation. NOT IN SCOPE: sending over the wire, decryption, unread badges, list reordering. COORDINATION: security is running a pass on gateway.py in parallel (their item-7, token off the query string) - building against the CURRENT query-string auth per instruction, not pre-adapting. BUILT, PR #67, branch jose/c63-realtime-connect. SessionProvider owns connect/disconnect in one effect keyed on status; thread screen live-appends message events for its own conversation_id and catches up via listMessages() on a genuine reconnect (tracked via a ref, not a first-open assumption); conversation list flips previews live. Send-side confirmed blocked on m4 (libsignal) by reading messages/[id].tsx's own docstring before building, not assumed - so every bubble already renders a fixed placeholder and a live-appended row needs zero decryption work. REBASED ONTO c143/PR #63 (item 7) after that merged - this branch was built before the auth mechanism moved off the query string, so it carried duplicate auth hunks that git's rebase collapsed automatically once main already had them; grepped both socket.ts and client.ts afterward for any remaining token= construction and found none. INCIDENT NOTE: this branch's own live-verification drives were the first real /ws traffic against prod, which is what surfaced the token-in-logs finding item 7 exists to close - see c143 and the incident record court/Jose are handling. All verification after the stop was local-only, per instruction. EVIDENCE: tsc clean, no backend change, no migration, full suite 318 pass / 3 skip / 0 fail on a fresh isolated database post-rebase. NOT IN SCOPE: sending over the wire, decryption, unread badges, list reordering."
+      "detail": "Jose approved the corrected cost floor of about $48/month plus network. Created Memorystore Redis BASIC 1 GiB on Redis 7 and the bounded e2-micro VPC connector (min 2, max 3), stored REDIS_URL, and deployed the connector-aware API as chirp-api-00030-m97 with 100% traffic. Two real Firebase QA accounts authenticated; the sender POST returned 201, the recipient WebSocket received the matching message event, and authenticated history contained it. Infrastructure/delivery gate is closed. E2EE decryption, physical-device QA, and UI send remain separate milestone work."
     },
     {
       "id": "c64",
@@ -1372,12 +1372,12 @@
     },
     {
       "id": "c89",
-      "col": "backlog",
-      "owner": "Q",
+      "col": "progress",
+      "owner": "J",
       "tag": "auth",
       "area": "auth",
-      "title": "APPLE AND GOOGLE SIGN-IN ARE VISUAL STUBS",
-      "detail": "reported by Jose Aug 16 from the phone: email works now, Apple and Google do not. They are not broken, they were never wired. sign-in.tsx:188-189 calls continueToOnboarding() DIRECTLY with no auth at all, and the caption under them already admits real OAuth 'arrives with the dev build'. So they do not fail, they silently skip authentication and drop the user into a disconnected onboarding flow \u2014 which is worse than a button that errors, because it looks like it worked. TWO REASONS THIS IS NOT OPTIONAL: Apple's App Store guideline 4.8 REQUIRES Sign in with Apple once you offer any other third-party sign-in, so shipping Google without Apple is a rejection; and native Apple/Google both need the EAS dev build, so this sits downstream of c39. Google can be wired on the web target first if we want it sooner. NOTE FOR c86: whatever these return, the email they hand us is a personal or an Apple private-relay address, so neither can ever serve as .edu proof \u2014 they authenticate the person, and c86 verifies the school. Two different questions."
+      "title": "IN PROGRESS Aug 24 — social sign-in bypass guard landed (fc08545); native provider wiring remains",
+      "detail": "Technical guard landed Aug 24 via main commit fc08545: Apple/Google buttons now show an honest unavailable/error state and never route to onboarding without authentication; email flow is unchanged. verify:auth, verify:contract, and typecheck pass. Provider wiring remains blocked on Firebase toggles, native SDK configuration, and Apple Developer/EAS device setup."
     },
     {
       "id": "c90",
