@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787533105167,
+  "updated": 1787533379466,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1885,7 +1885,8 @@
     "Aug 23 - c140 ruled by manager on sally2.0's design doc (claims spot-verified against code and the installed GCS library): BUILD option (b) now - capability URLs with quantized expiry, 302 to memoized signed GCS URL, posts.media_urls format untouched; skip (c), it remediates nothing already posted. The public-access flip (PAP=enforced + allUsers removal) is separately gated on a device-verified capability-route render AND Jose's explicit go. Bare-object-name column migration deferred until after c153 lands. The 4.1 legacy-row SELECT goes in the deploy runbook for Jose.",
     "Aug 23 - tsc-placeholder trap corrected before permanent ink: the npx placeholder EXITS 1 (loud red), not 0 - braul 2.0 measured three ways, manager reproduced independently. The real trap is a human misreading the red as an environment hiccup plus a worktree with no node_modules never type-checking at all. Symlink node_modules first; any tsc evidence must cite the compiler version. CLAUDE.md edit queued for Jose's approve (instruction-layer changes are not peer-authorizable - braul's refusal was correct process).",
     "Aug 23 - exit-code house rule sharpened by security 2.0's own post-mortem of the tsc mismeasure: a pipeline reports its LAST stage's status, so `cmd | head` reading as exit 0 proves nothing about cmd. NEVER read an exit code through a pipe - capture it unpiped or via PIPESTATUS. Goes into the queued CLAUDE.md edit alongside braul's correction when Jose approves.",
-    "Aug 23 - pool rule adopted from braul 2.0's c78 stop (second stale-premise card in a day): before building from any card older than a couple of days, grep for the thing the card says does not exist and git-log the files it names - a card's factual claims are dated the day they were written. c78 would have shipped a duplicate screen without this. Goes into the queued CLAUDE.md edit alongside the typecheck and pipe-exit-code lessons when Jose approves."
+    "Aug 23 - pool rule adopted from braul 2.0's c78 stop (second stale-premise card in a day): before building from any card older than a couple of days, grep for the thing the card says does not exist and git-log the files it names - a card's factual claims are dated the day they were written. c78 would have shipped a duplicate screen without this. Goes into the queued CLAUDE.md edit alongside the typecheck and pipe-exit-code lessons when Jose approves.",
+    "Aug 23 - suite-contention protocol (manager, after load hit 152 on the 8-core box with five concurrent full suites and a clean suite ran past a 10-min tool timeout on contention alone; raised by jon 2.0): full backend-suite runs are SERIALIZED via scripts/with-suite-lock; targeted test files stay unlocked during development; the full suite runs only pre-PR under the lock; a suite that timed out under load is rerun under the lock, not reported as a hang."
   ]
 }
 </script>
