@@ -184,10 +184,17 @@ export function CreateSheet({
   // offer and no way for the org default above to apply to them (c71).
   const canChooseAudience = chapterId !== null;
   const effectiveAudience: PostAudience = canChooseAudience ? audience : "campus";
-  // preview_url of an uploaded photo, once the pick+upload round trip finishes — null
+  // The LOCAL device uri of the picked photo (expo-image-picker's asset.uri) — null
   // means "no photo attached," not "still uploading" (see uploadingPhoto). Local
-  // rendering ONLY (c132): the tmp/ object this points at is never sent to the
-  // backend, and is not what ends up in the post's media_urls.
+  // rendering ONLY: never sent to the backend, and not what ends up in media_urls.
+  //
+  // This used to hold the upload response's `preview_url`, a public GCS url pointing at
+  // the tmp/ object. That had to change for c140: once public_access_prevention is
+  // enforced, tmp/ stops answering anonymous requests too, so a preview_url-backed
+  // <Image> would render an empty box at exactly the moment the user is deciding whether
+  // to post. The local uri has no such dependency — and it is strictly better anyway,
+  // since it paints immediately from disk instead of round-tripping to GCS to show the
+  // user a picture their own phone already has.
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   // The tmp/ object_name actually sent at submit time (c132) — the server moves this
   // to a permanent location and assigns the post's real media_urls itself.
@@ -274,12 +281,13 @@ export function CreateSheet({
     try {
       const typedContentType = contentType as AllowedMediaContentType;
       const bytes = await (await fetch(asset.uri)).blob();
-      const { upload_url, preview_url, object_name } = await getMediaUploadUrl(
+      const { upload_url, object_name } = await getMediaUploadUrl(
         typedContentType,
         bytes.size,
       );
       await uploadMediaBytes(upload_url, bytes, typedContentType);
-      setPhotoUrl(preview_url);
+      // asset.uri, not the response's preview_url — see the photoUrl declaration.
+      setPhotoUrl(asset.uri);
       setPhotoObjectName(object_name);
       setStep("compose");
     } catch (error) {
