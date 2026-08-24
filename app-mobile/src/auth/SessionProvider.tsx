@@ -288,6 +288,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (DEV_UID === null) return;
     setDebugFirebaseUid(DEV_UID);
     setAuthToken(null); // no bearer token exists for an emulated identity
+    // Say WHO you are in the tab title. The uid now persists across page loads,
+    // so without this there is no way to tell which of twelve accounts you are
+    // looking at — and a sticky session you cannot see is its own confusion.
+    // Title only: a banner would cover the very screens this exists to show.
+    if (typeof document !== "undefined") {
+      document.title = `${DEV_UID} · Chirp (dev)`;
+    }
     void loadMe();
   }, [loadMe]);
 
