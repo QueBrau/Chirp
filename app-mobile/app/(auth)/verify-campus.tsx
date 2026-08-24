@@ -231,9 +231,21 @@ function sendError(err: unknown): string {
   if (err.status === 429) {
     return "That's a few codes in a short time. Give it fifteen minutes and try again.";
   }
-  if (err.status === 502) {
-    // c73 is on the backlog, so this is the LIKELY path for a real student today.
-    // Say what is true — the problem is ours and retrying will not fix it.
+  if (err.status === 502 || err.status === 503) {
+    // 502 email_send_failed — the provider rejected or failed the send. c73 is on the
+    // backlog, so this is the LIKELY path for a real student today.
+    // 503 email_not_configured — the deployment set email_provider=resend with no key
+    // (email_service._resend_api_key). Needs a misconfigured deploy to reach, since
+    // email_provider defaults to "log" and prod has a key (c135), but it used to fall
+    // through to the generic retry below — which tells a student to try again at the
+    // one moment retrying cannot possibly work, and sends them round the loop
+    // retyping an address that was correct the first time. That is the exact failure
+    // this mapper exists to prevent (board c158).
+    //
+    // ONE branch, not two, because the two differ only operationally. The user's
+    // situation is identical either way: codes cannot be sent, it is our fault, and
+    // there is nothing for them to fix. Two branches would mean two copies of the same
+    // sentence to keep in sync.
     return "We can't send verification codes just yet — that's on us, not you. Hang tight; your org tools all still work in the meantime.";
   }
   return "Something went wrong. Try again.";
