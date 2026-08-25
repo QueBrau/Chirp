@@ -148,6 +148,28 @@ export async function getRoleMeta(chapterId: string): Promise<RoleMetaOut> {
   return request<RoleMetaOut>(`/chapters/${chapterId}/role-meta`);
 }
 
+/** One dated span of a membership holding a role — mirrors backend RoleTermOut
+ * (board card c83: a chapter role is a DATED TERM, not a plain fact). Rows come
+ * back newest first; `ended_at` null marks the OPEN term, the role the member
+ * holds right now. `changed_by` is null on rows nobody's PATCH actually created
+ * (the 0021 backfill and the seed a brand-new membership gets) — see c180's
+ * client-side date rule at its call site in chapter/member/[id].tsx. */
+export interface RoleTerm {
+  id: string;
+  membership_id: string;
+  role: RoleName;
+  started_at: string;
+  ended_at: string | null;
+  changed_by: string | null;
+}
+
+/** A member's role history, newest first (board card c83/c180) — GET
+ * /chapters/{id}/members/{userId}/role-terms. Gated the same as the roster
+ * itself: any active member of the chapter may read it. */
+export async function getRoleTerms(chapterId: string, userId: string): Promise<RoleTerm[]> {
+  return request<RoleTerm[]>(`/chapters/${chapterId}/members/${userId}/role-terms`);
+}
+
 export async function updateMember(
   chapterId: string,
   body: MembershipUpdate,
