@@ -15,10 +15,10 @@
  *
  * Overflow control (board c35, App Store Guideline 1.2): a discreet
  * more-horizontal icon in the header row of every variant, offering Report
- * and (unless `canBlock` is false) Block — mirrors the Yak board's own
- * report/block affordance (app/(tabs)/yak/index.tsx), rolled locally into
+ * and (unless `canBlock` is false) Block — mirrors the Chirps board's own
+ * report/block affordance (app/(tabs)/chirp/index.tsx), rolled locally into
  * this component rather than the screen since every post here has a KNOWN
- * author (`authorName`/`post.author_id`), unlike Yak where the client never
+ * author (`authorName`/`post.author_id`), unlike Chirp where the client never
  * learns who posted. The sheet/report-reasons Modal is only ever mounted
  * while open for THIS card (`sheet !== null`), not one-per-card-always, so a
  * long feed doesn't carry N idle Modals. The screen owns the actual API
@@ -45,14 +45,14 @@ const PLAY_CIRCLE = 48;
 const ACTION_CHIP = 36;
 
 /** Preset report reasons (backend requires a non-empty `reason` string) — same
- * three presets as the Yak board's report sheet. */
+ * three presets as the Chirps board's report sheet. */
 const REPORT_REASONS = ["Spam", "Harassment", "Inappropriate"];
 
 /**
  * One choice in the action sheet below. Rolled by hand instead of using
  * `Alert` for the menus because Android's Alert supports AT MOST three
  * buttons — the report-reason list (three reasons + Cancel) would silently
- * lose an option there, the exact bug the Yak screen hit first. Alert is
+ * lose an option there, the exact bug the Chirp screen hit first. Alert is
  * still fine for the block confirm/error dialogs below, which never exceed
  * three buttons.
  */
@@ -285,7 +285,7 @@ export function MediaPostCard({
   };
 
   const confirmBlock = () => {
-    // Unlike Yak (client genuinely doesn't know the author), a feed post carries
+    // Unlike Chirp (client genuinely doesn't know the author), a feed post carries
     // a known author_id/display_name — the copy can and should name them.
     Alert.alert(`Block ${authorName}?`, `You won't see posts from ${authorName} again.`, [
       { text: "Block", style: "destructive", onPress: onBlock },

@@ -75,7 +75,7 @@ On a phone build there is no URL bar, so it comes from the environment instead:
   (DESIGN §8.6) is provable rather than assumed: her entire Orgs stack renders in
   Alpha Delta Pi azure where Sigma Chi's is blue. Same screens, different colours.
 - **`dev-unverified`** — has a campus but no `.edu` verification, which is the c88
-  gate state. Campus feed and Yak refuse her and c90's "Verify my .edu" screen is
+  gate state. Campus feed and Chirp refuse her and c90's "Verify my .edu" screen is
   the destination. **This state was previously unreachable without deliberately
   breaking a working account.**
 - **`dev-campus-student`** — belongs to no org at all, which the Aug 11 product
@@ -84,7 +84,7 @@ On a phone build there is no URL bar, so it comes from the environment instead:
 
 ## Where to look
 
-`/` Home · `/yak` Yak · `/messages` Messages · `/chapter` Orgs · `/profile` Profile
+`/` Home · `/chirp` Chirp · `/messages` Messages · `/chapter` Orgs · `/profile` Profile
 
 Role-gated screens under Orgs → Tools: `/chapter/treasurer`,
 `/chapter/secretary`, `/chapter/president`, `/chapter/historian`,

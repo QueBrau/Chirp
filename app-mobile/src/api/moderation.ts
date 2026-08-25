@@ -1,8 +1,8 @@
-/** Moderation API: content reports, user blocks, admin yak removal — routers/moderation.py. */
+/** Moderation API: content reports, user blocks, admin chirp removal — routers/moderation.py. */
 
 import { request } from "./client";
 
-export type ReportTargetType = "yak" | "post" | "comment" | "message_forward" | "user";
+export type ReportTargetType = "chirp" | "post" | "comment" | "message_forward" | "user";
 export type ReportStatus = "open" | "actioned" | "dismissed";
 
 /** For E2EE message reports the client forwards plaintext (SPEC §6.7). */
@@ -72,17 +72,17 @@ export async function unblockUser(blockedId: string): Promise<void> {
 }
 
 /**
- * Block the (server-known) author of a yak — distinct from blockUser because a
- * yak carries NO author field on the wire (SPEC §8.3): the client never learns
- * whose yak it is, so it can't pass a blocked_id to POST /moderation/blocks.
- * The server resolves the yak's author internally and blocks them; the response
+ * Block the (server-known) author of a chirp — distinct from blockUser because a
+ * chirp carries NO author field on the wire (SPEC §8.3): the client never learns
+ * whose chirp it is, so it can't pass a blocked_id to POST /moderation/blocks.
+ * The server resolves the chirp's author internally and blocks them; the response
  * identifies nothing back to the client (204, no body).
  */
-export async function blockYakAuthor(yakId: string): Promise<void> {
-  return request<void>(`/moderation/blocks/by-yak/${yakId}`, { method: "POST" });
+export async function blockChirpAuthor(chirpId: string): Promise<void> {
+  return request<void>(`/moderation/blocks/by-chirp/${chirpId}`, { method: "POST" });
 }
 
-/** Admin removal of a yak (moderator action, distinct from author delete). */
-export async function removeYak(yakId: string, reason: string): Promise<void> {
-  return request<void>(`/moderation/yaks/${yakId}/remove`, { method: "POST", body: { reason } });
+/** Admin removal of a chirp (moderator action, distinct from author delete). */
+export async function removeChirp(chirpId: string, reason: string): Promise<void> {
+  return request<void>(`/moderation/chirps/${chirpId}/remove`, { method: "POST", body: { reason } });
 }

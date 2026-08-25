@@ -437,7 +437,7 @@ async def set_campus(user_id: str, campus_id: str, *, verified: bool = True) -> 
     """Pin a user to a campus directly in the DB, verified by default.
 
     `verified=True` also stamps campus_verified_at, because since c88 a campus_id alone
-    no longer opens the campus feed or Yak — the gate keys on the verification
+    no longer opens the campus feed or Chirp — the gate keys on the verification
     timestamp. Almost every caller here is testing a campus FEATURE and wants a fully
     entitled user, so that is the default and those tests read unchanged.
 

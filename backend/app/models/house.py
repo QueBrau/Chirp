@@ -63,7 +63,7 @@ class HouseBallot(Base):
     # went, and would leave nothing in the data to show they had.
     week_start: Mapped[date] = mapped_column(Date, nullable=False)
     # Who voted. Stored so abuse can be investigated, and NEVER serialized to any
-    # client - the same rule Yak.author_id follows (SPEC 8.3).
+    # client - the same rule Chirp.author_id follows (SPEC 8.3).
     voter_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )

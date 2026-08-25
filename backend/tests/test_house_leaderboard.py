@@ -136,7 +136,7 @@ async def test_a_ballot_never_reports_who_cast_it(
     client: AsyncClient, make_user: MakeUser, make_campus: MakeCampus
 ) -> None:
     """voter_id exists for abuse investigation and is serialized by nothing - the same
-    rule Yak.author_id follows. Not even back to its own author, because a field that
+    rule Chirp.author_id follows. Not even back to its own author, because a field that
     is "safe for the owner" ends up in a shared component that renders for someone else."""
     campus = await make_campus()
     house = await _make_chapter(campus, "Sigma Chi")

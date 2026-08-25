@@ -1,5 +1,5 @@
 """Moderation: content reports, user blocks, account suspension, and admin content
-removal (yaks, posts, comments) — all with an audit trail (board card c76)."""
+removal (chirps, posts, comments) — all with an audit trail (board card c76)."""
 import uuid
 from datetime import datetime, timezone
 
@@ -21,12 +21,12 @@ from app.schemas.moderation import (
     SuspendUserRequest,
     SuspensionStateOut,
 )
-from app.schemas.yak import (
+from app.schemas.chirp import (
     ContentReportCreate,
     ContentReportOut,
     UserBlockCreate,
     UserBlockOut,
-    YakRemoveRequest,
+    ChirpRemoveRequest,
 )
 
 router = APIRouter(tags=["moderation"])
@@ -42,8 +42,8 @@ async def _require_any_eboard(
 
     This only proves "is a moderator somewhere" — it is NOT sufficient authorization
     on its own. Callers MUST additionally scope to the specific campus/chapter of the
-    target (see list_reports, remove_yak) so an e-board member of chapter A cannot see
-    or act on chapter B's reports/yaks (SECURITY-REVIEW finding 1). Gating chapter
+    target (see list_reports, remove_chirp) so an e-board member of chapter A cannot see
+    or act on chapter B's reports/chirps (SECURITY-REVIEW finding 1). Gating chapter
     creation itself (self-serve presidency) is a separate product decision, carded
     on the board — out of scope here.
     """
@@ -69,7 +69,7 @@ async def _resolve_report_campus_id(
 ) -> uuid.UUID | None:
     """Resolve the campus a report belongs to, server-side (SECURITY-REVIEW finding 1).
 
-    yak -> yak.campus_id; post/comment -> the post's own campus_id;
+    chirp -> chirp.campus_id; post/comment -> the post's own campus_id;
     anything else (message_forward, user, or a missing/unresolvable target) falls back
     to the reporter's own users.campus_id, best-effort. Never trusts the client.
 
@@ -78,10 +78,10 @@ async def _resolve_report_campus_id(
     it would have fallen through to the reporter's campus — which silently files a
     report on the wrong campus's moderation queue if the reporter ever differs.
     """
-    if target_id is not None and target_type == "yak":
-        yak = await session.get(models.Yak, target_id)
-        if yak is not None:
-            return yak.campus_id
+    if target_id is not None and target_type == "chirp":
+        chirp = await session.get(models.Chirp, target_id)
+        if chirp is not None:
+            return chirp.campus_id
     elif target_id is not None and target_type == "post":
         post = await session.get(models.Post, target_id)
         if post is not None:
@@ -127,17 +127,17 @@ async def _report_campus_content(
     """Whether a report's target is campus-wide content, for c108's tier (c139/c142).
 
     THE BUG THIS CLOSES: the tier used to come from target_type alone
-    (target_type == "yak"), which was true only until c71 let a Post carry
+    (target_type == "chirp"), which was true only until c71 let a Post carry
     audience="campus" and publish to the campus feed. A campus-audience post's
     report was then keyed as chapter content — an unverified officer could
     dismiss it, the exact reverse of feed.py's create-side rule that PUBLISHING
     a campus post requires a verified .edu. Removing/dismissing must never be the
     weaker side of that pair.
 
-    Yaks are campus-wide by definition; anything else defers to _content_campus_tier,
+    Chirps are campus-wide by definition; anything else defers to _content_campus_tier,
     which is where the unresolvable-target default actually lives (c147).
     """
-    if target_type == "yak":
+    if target_type == "chirp":
         return True
     if target_type == "post" and target_id is not None:
         post = await session.get(models.Post, target_id)
@@ -159,7 +159,7 @@ async def _require_eboard_for_campus(
 ) -> None:
     """403 unless moderator is active e-board in a chapter of campus_id AND verified there.
 
-    Factored out of remove_yak (SECURITY-REVIEW finding 1's fix) so remove_content
+    Factored out of remove_chirp (SECURITY-REVIEW finding 1's fix) so remove_content
     enforces the identical per-campus scoping instead of a second hand-rolled check.
     campus_id is None only when a target's campus could not be resolved (e.g. a
     dangling chapter reference) — treated as "no campus matches" rather than falling
@@ -173,7 +173,7 @@ async def _require_eboard_for_campus(
     reading it.
 
     `campus_content` IS REQUIRED AND HAS NO DEFAULT, because getting it wrong is silent
-    in both directions and this function serves BOTH tiers. It gates yaks, which are
+    in both directions and this function serves BOTH tiers. It gates chirps, which are
     campus-wide, AND chapter posts and comments, which are org content. The first
     implementation of c108 put the verification check here unconditionally, which would
     have locked an unverified officer out of moderating their OWN CHAPTER'S posts — the
@@ -182,7 +182,7 @@ async def _require_eboard_for_campus(
     tier a decision someone had to make rather than a default they inherited.
 
     So: a president who never verified keeps every chapter power, including removing a
-    member's post, and cannot touch the campus Yak board.
+    member's post, and cannot touch the campus Chirp board.
     """
     if campus_id is None:
         raise forbidden("insufficient_role")
@@ -215,7 +215,7 @@ async def create_report(
     """File a content report; forwarded_plaintext supports E2EE message reports (SPEC §6.7).
 
     campus_id is resolved server-side from the target (SECURITY-REVIEW finding 1) so
-    list_reports/remove_yak can scope moderation to the right campus.
+    list_reports/remove_chirp can scope moderation to the right campus.
     """
     campus_id = await _resolve_report_campus_id(session, body.target_type, body.target_id, user)
     report = models.ContentReport(
@@ -276,7 +276,7 @@ async def resolve_report(
 
     content_reports has carried a status column since it was created, and
     GET /moderation/reports has always returned it, but nothing could ever CHANGE it.
-    So the moderation queue shipped in c35 could remove a reported yak and still not
+    So the moderation queue shipped in c35 could remove a reported chirp and still not
     mark the report handled — it faked the transition client-side for the session and
     every handled item came back as open on the next reload. A queue that cannot be
     emptied is not a workflow, and this is the route that makes it one.
@@ -299,7 +299,7 @@ async def resolve_report(
     # A report's tier follows its TARGET's actual audience, not its type (c108/c139/
     # c142) — a campus-audience post is campus-wide content wearing "post" as its
     # target_type, and dismissing that report is a campus moderation act just like
-    # dismissing a yak report is. Only a genuinely chapter-scoped post/comment lets an
+    # dismissing a chirp report is. Only a genuinely chapter-scoped post/comment lets an
     # unverified officer clear their own chapter's queue; _report_campus_content is
     # what tells the two apart.
     #
@@ -373,43 +373,43 @@ async def create_block(
     return UserBlockOut.model_validate(block)
 
 
-@router.post("/moderation/blocks/by-yak/{yak_id}", status_code=204)
-async def block_yak_author(
-    yak_id: uuid.UUID,
+@router.post("/moderation/blocks/by-chirp/{chirp_id}", status_code=204)
+async def block_chirp_author(
+    chirp_id: uuid.UUID,
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    """Block the (anonymous) author of a yak without ever revealing who that author is.
+    """Block the (anonymous) author of a chirp without ever revealing who that author is.
 
     Resolves author_id server-side and returns no body — unlike POST /moderation/blocks,
     which echoes UserBlockOut(blocked_id=...). Echoing blocked_id here would let a caller
-    block-by-yak on two different yaks and diff the response to learn whether they share
+    block-by-chirp on two different chirps and diff the response to learn whether they share
     an author, breaking the SPEC §8.3 anonymity invariant. For the same reason, an
     already-existing block (including one lost to a concurrent insert race) is treated
     as success (204) rather than 409: a 409-vs-204 split is itself a one-bit oracle for
-    "have I already blocked this yak's author", which also leaks author identity across
-    yaks. So this endpoint is idempotent by design, not just by convenience.
+    "have I already blocked this chirp's author", which also leaks author identity across
+    chirps. So this endpoint is idempotent by design, not just by convenience.
     """
-    yak = await session.get(models.Yak, yak_id)
-    if yak is None or yak.removed_at is not None:
-        raise not_found("yak_not_found")
-    # A FOURTH copy of the old `user.campus_id != yak.campus_id` comparison lived here
-    # (c88). It was invisible to the dependency swap that fixed feed.py and yaks.py,
+    chirp = await session.get(models.Chirp, chirp_id)
+    if chirp is None or chirp.removed_at is not None:
+        raise not_found("chirp_not_found")
+    # A FOURTH copy of the old `user.campus_id != chirp.campus_id` comparison lived here
+    # (c88). It was invisible to the dependency swap that fixed feed.py and chirps.py,
     # because it is hand-rolled inside the handler — which is precisely the failure mode
     # the shared module exists to end. Routing it through the same check keeps this
     # endpoint honest when the rule changes again.
-    require_verified_campus(user, yak.campus_id)
-    if yak.author_id == user.id:
+    require_verified_campus(user, chirp.campus_id)
+    if chirp.author_id == user.id:
         raise forbidden("cannot_block_self")
 
     # Unconditional idempotent upsert, deliberately: the earlier read-then-maybe-insert
     # returned the same 204 either way, but an already-blocked author short-circuited on
     # the read while a new block paid for an INSERT plus a commit. That latency gap is
     # itself the one-bit oracle the 204 was chosen to close — timing the response still
-    # answered "do these two yaks share an author". Every call now does the same work.
+    # answered "do these two chirps share an author". Every call now does the same work.
     await session.execute(
         pg_insert(models.UserBlock)
-        .values(blocker_id=user.id, blocked_id=yak.author_id)
+        .values(blocker_id=user.id, blocked_id=chirp.author_id)
         .on_conflict_do_nothing(index_elements=["blocker_id", "blocked_id"])
     )
     await session.commit()
@@ -430,10 +430,10 @@ async def delete_block(
     await session.commit()
 
 
-@router.post("/moderation/yaks/{yak_id}/remove", status_code=204)
-async def remove_yak(
-    yak_id: uuid.UUID,
-    body: YakRemoveRequest,
+@router.post("/moderation/chirps/{chirp_id}/remove", status_code=204)
+async def remove_chirp(
+    chirp_id: uuid.UUID,
+    body: ChirpRemoveRequest,
     moderator: models.User = Depends(_require_any_eboard),
     session: AsyncSession = Depends(get_session),
 ) -> None:
@@ -441,24 +441,24 @@ async def remove_yak(
     audit row (board card c76: who removed it, not just that it was removed).
 
     SECURITY-REVIEW finding 1: previously any e-board member of any chapter could
-    remove any campus's yaks. Now requires the caller to be active e-board in some
-    chapter whose campus matches the yak's campus.
+    remove any campus's chirps. Now requires the caller to be active e-board in some
+    chapter whose campus matches the chirp's campus.
     """
-    yak = await session.get(models.Yak, yak_id)
-    if yak is None:
-        raise not_found("yak_not_found")
-    if yak.removed_at is not None:
+    chirp = await session.get(models.Chirp, chirp_id)
+    if chirp is None:
+        raise not_found("chirp_not_found")
+    if chirp.removed_at is not None:
         raise conflict("already_removed")
-    # Yaks are the campus-wide surface by definition (c108).
-    await _require_eboard_for_campus(session, moderator, yak.campus_id, campus_content=True)
-    yak.removed_at = datetime.now(timezone.utc)
-    yak.removed_reason = body.reason
+    # Chirps are the campus-wide surface by definition (c108).
+    await _require_eboard_for_campus(session, moderator, chirp.campus_id, campus_content=True)
+    chirp.removed_at = datetime.now(timezone.utc)
+    chirp.removed_reason = body.reason
     session.add(
         models.ModerationAction(
             actor_id=moderator.id,
             action="remove_content",
-            target_type="yak",
-            target_id=yak.id,
+            target_type="chirp",
+            target_id=chirp.id,
             reason=body.reason,
         )
     )
@@ -473,7 +473,7 @@ async def remove_content(
 ) -> None:
     """Admin removal of a post or comment (board card c76: the Terms claims we can
     "remove content that breaks these rules" — this is what makes that true for named-
-    author content; yaks have their own dedicated route above, anonymous-content shaped).
+    author content; chirps have their own dedicated route above, anonymous-content shaped).
 
     Marks removed via the SAME deleted_at column the author/president self-delete in
     routers/feed.py already sets — that is what makes a moderator's removal actually
@@ -505,7 +505,7 @@ async def remove_content(
     #
     # (1) campus_content was hard-coded False here on the theory that a post/comment
     #     is always chapter content. c71 made that false: a Post can carry
-    #     audience="campus" and publish to the campus feed, same as a yak. That made
+    #     audience="campus" and publish to the campus feed, same as a chirp. That made
     #     REMOVING a campus post require less than PUBLISHING one required
     #     (feed.py's create route demands a verified .edu for audience="campus") -
     #     backwards, and exploitable by an unverified officer in a different chapter

@@ -31,7 +31,7 @@ class HouseBallotOut(_Schema):
 
     NO voter_id, ever - not even back to the person who cast it. The column exists so
     abuse can be investigated and is never serialized by any route, the same rule
-    Yak.author_id follows (SPEC 8.3). Serializing it "only for the owner" is how a field
+    Chirp.author_id follows (SPEC 8.3). Serializing it "only for the owner" is how a field
     ends up in a shared component that later renders for someone else.
     """
 

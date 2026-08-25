@@ -1,6 +1,6 @@
 """GET /campuses/{campus_id} (c46): resolve users.campus_id to a real name.
 
-This route exists so the app stops hardcoding a mock campus on Profile and the Yak
+This route exists so the app stops hardcoding a mock campus on Profile and the Chirp
 board header. It is deliberately readable by any registered caller — campus name and
 slug are public-facing labels, not org-scoped data.
 """

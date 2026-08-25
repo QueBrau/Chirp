@@ -96,7 +96,7 @@ export interface CreateSheetProps {
 }
 
 /** ApiError carries a server-provided `.detail`; anything else gets a generic
- * fallback. Same shape as the local helper in yak/index.tsx and treasurer.tsx —
+ * fallback. Same shape as the local helper in chirp/index.tsx and treasurer.tsx —
  * there's no shared one, so this mirrors it rather than inventing a new import. */
 function showApiError(error: unknown, title: string): void {
   const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";

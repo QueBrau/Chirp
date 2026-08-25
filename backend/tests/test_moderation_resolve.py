@@ -2,7 +2,7 @@
 
 content_reports has always had a status column and GET /moderation/reports has always
 returned it, but nothing could change it. The c35 moderation queue could remove a
-reported yak and still not mark the report handled, so it faked the transition
+reported chirp and still not mark the report handled, so it faked the transition
 client-side and every handled item reappeared as open on reload.
 
 The happy path is the least interesting thing here. What these tests actually pin is

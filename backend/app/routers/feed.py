@@ -152,12 +152,12 @@ def _post_counts_select(caller_id: uuid.UUID):
 
     The UserBlock outerjoin/filter is folded in here rather than repeated in each
     caller (list_posts, list_campus_feed) since both already thread `caller_id`
-    through for liked_by_me — same anti-join proven in routers/yaks.py list_yaks:
+    through for liked_by_me — same anti-join proven in routers/chirps.py list_chirps:
     outerjoin on (blocked_id == Post.author_id) AND (blocker_id == caller_id), then
     WHERE blocker_id IS NULL. The ON clause pins blocker_id to this one caller, so
     it matches at most one UserBlock row per post — no fan-out. A blocked author's
     posts are simply ABSENT: no tombstone, no count, nothing revealing a hide
-    happened (mirrors the yak anonymity invariant, SPEC §8.3, applied here to
+    happened (mirrors the chirp anonymity invariant, SPEC §8.3, applied here to
     known-author feed posts).
     """
     like_count = (
@@ -685,9 +685,9 @@ async def list_comments(
     """List a post's comments, oldest first, excluding soft-deleted and blocked ones.
 
     c109: blocking was half-implemented. The block filter existed on the POST query
-    (_post_counts_select's outerjoin on Post.author_id) and on yaks, but not here — so
+    (_post_counts_select's outerjoin on Post.author_id) and on chirps, but not here — so
     blocking someone hid their posts and left their comments sitting underneath
-    everyone else's. The app makes this promise in words: yak/index.tsx's confirm
+    everyone else's. The app makes this promise in words: chirp/index.tsx's confirm
     dialog says "You won't see posts from this person again". Same family as c76, where
     /terms claimed removal powers the server did not have, and the fix there was making
     the claim true rather than softening the claim.

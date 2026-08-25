@@ -31,7 +31,7 @@ from app.models.messaging import (
 )
 from app.models.moderation import ModerationAction
 from app.models.social import Post, PostComment, PostLike
-from app.models.yak import ContentReport, UserBlock, Yak, YakVote
+from app.models.chirp import ContentReport, UserBlock, Chirp, ChirpVote
 
 __all__ = [
     "AlumniProfile",
@@ -70,6 +70,6 @@ __all__ = [
     "SpendApproval",
     "User",
     "UserBlock",
-    "Yak",
-    "YakVote",
+    "Chirp",
+    "ChirpVote",
 ]

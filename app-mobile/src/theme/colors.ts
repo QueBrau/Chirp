@@ -38,8 +38,8 @@ export interface Palette {
   warning: string;
   warningSoft: string;
 
-  /** Rotating pastel card tints on Yak (index % 4). */
-  yakTints: readonly [string, string, string, string];
+  /** Rotating pastel card tints on Chirps (index % 4). */
+  chirpTints: readonly [string, string, string, string];
 
   /**
    * Categorical chart series (DESIGN §11). Fixed order, assigned in sequence and
@@ -113,7 +113,7 @@ export const light: Palette = {
   warning: "#F5A623",
   warningSoft: "#FDF3E1",
 
-  yakTints: ["#FFF3E9", "#EDF6FF", "#F3EDFF", "#EAF8F1"],
+  chirpTints: ["#FFF3E9", "#EDF6FF", "#F3EDFF", "#EAF8F1"],
 
   // Validated on surface #FFFFFF: worst adjacent CVD dE 13.8, normal-vision 28.8,
   // all >= 3:1 contrast. Slot order chosen by enumerating all 120 permutations and
@@ -156,7 +156,7 @@ export const dark: Palette = {
   warning: "#FFB84D",
   warningSoft: "rgba(255,184,77,0.16)",
 
-  yakTints: [
+  chirpTints: [
     "rgba(255,243,233,0.12)",
     "rgba(237,246,255,0.12)",
     "rgba(243,237,255,0.12)",

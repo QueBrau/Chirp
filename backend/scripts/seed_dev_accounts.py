@@ -79,7 +79,7 @@ CAST = [
     # A second chapter, so org colour scoping (DESIGN §8.6) is provable rather than
     # assumed: this president's whole Orgs stack should render in ADPi's colours.
     ("dev-sorority-president", "Naomi Frazier", "naomi", "greek", "president", "adpi", True),
-    # c71's first-class user: belongs to no org at all. Campus tab and Yak work,
+    # c71's first-class user: belongs to no org at all. Campus tab and Chirp work,
     # the Orgs tab shows the "find your org" state.
     ("dev-campus-student", "Dana Brooks", "dana", "non_greek", None, None, True),
     # The c88 gate state. Has a campus but NO .edu verification, so campus content

@@ -3,7 +3,7 @@
  * title + caption subtitle header (24 top pad, no nav chrome), and bottom
  * clearance so scroll content never hides under the floating tab bar.
  *
- * §10.1 header zones (Home/Yak/Orgs): optional `eyebrow` (micro uppercase line
+ * §10.1 header zones (Home/Chirp/Orgs): optional `eyebrow` (micro uppercase line
  * above the title) and `accentBarColor` (the accent bar LEADING the title —
  * pass the screen's own "one gold moment" color; omit on screens that don't
  * use the header-zone pattern, e.g. Messages/Profile, and nothing renders).
@@ -50,7 +50,7 @@ export interface ScreenProps {
   eyebrow?: string;
   /** Renders the §10.1/§10.4 accent bar LEADING the title in this color (4 wide, title-height). */
   accentBarColor?: string;
-  /** Canvas override (Yak's deep-navy campus wash, §10.5) — default `palette.bg`. */
+  /** Canvas override (Chirp's deep-navy campus wash, §10.5) — default `palette.bg`. */
   backgroundColor?: string;
   /** Wrap content in a ScrollView (default true — most screens are lists). */
   scroll?: boolean;
@@ -72,7 +72,7 @@ export interface ScreenProps {
   onBack?: () => void;
   /**
    * Icon color for the back control. Defaults to the theme's ink. Screens that
-   * override `backgroundColor` with a dark canvas (Yak's navy wash) must pass a
+   * override `backgroundColor` with a dark canvas (Chirp's navy wash) must pass a
    * light tint here or the chevron disappears into the background.
    */
   backTint?: string;

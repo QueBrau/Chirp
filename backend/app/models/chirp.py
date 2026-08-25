@@ -1,4 +1,4 @@
-"""Yak (anonymous board) models: yaks, votes, content reports, user blocks (SPEC §3)."""
+"""Chirp (anonymous board) models: chirps, votes, content reports, user blocks (SPEC §3)."""
 
 import uuid
 from datetime import datetime
@@ -19,11 +19,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base
 
 
-class Yak(Base):
-    __tablename__ = "yaks"
+class Chirp(Base):
+    __tablename__ = "chirps"
     __table_args__ = (
         Index(
-            "idx_yaks_campus_time",
+            "idx_chirps_campus_time",
             "campus_id",
             text("created_at DESC"),
             postgresql_where=text("removed_at IS NULL"),
@@ -51,14 +51,14 @@ class Yak(Base):
     removed_reason: Mapped[str | None] = mapped_column(Text)
 
 
-class YakVote(Base):
-    __tablename__ = "yak_votes"
+class ChirpVote(Base):
+    __tablename__ = "chirp_votes"
     __table_args__ = (
-        CheckConstraint("value IN (-1, 1)", name="ck_yak_votes_value"),
+        CheckConstraint("value IN (-1, 1)", name="ck_chirp_votes_value"),
     )
 
-    yak_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("yaks.id"), primary_key=True
+    chirp_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chirps.id"), primary_key=True
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True
@@ -70,7 +70,7 @@ class ContentReport(Base):
     __tablename__ = "content_reports"
     __table_args__ = (
         CheckConstraint(
-            "target_type IN ('yak','post','comment','message_forward','user')",
+            "target_type IN ('chirp','post','comment','message_forward','user')",
             name="ck_content_reports_target_type",
         ),
         CheckConstraint(

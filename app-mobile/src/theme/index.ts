@@ -121,7 +121,7 @@ export const metrics = {
   /**
    * Header accent bar LEADING an oversized screen title (§10.1: "zones, not card
    * soup"). Dimensions only — color is the screen's own accent (campus primary by
-   * default, or campusColors.secondary for the gold moment on Home/Yak per
+   * default, or campusColors.secondary for the gold moment on Home/Chirp per
    * §10.4), never a fixed hex, so it moves with campus/org theming.
    *
    * NO HEIGHT HERE ON PURPOSE. The bar sits beside the title and takes the title's

@@ -26,7 +26,7 @@ from app.routers import (
     messages,
     moderation,
     payments,
-    yaks,
+    chirps,
 )
 from app.ws import gateway
 
@@ -193,7 +193,7 @@ def create_app() -> FastAPI:
         keys,
         messages,
         feed,
-        yaks,
+        chirps,
         moderation,
         lineage,
         finance,

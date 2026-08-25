@@ -1,6 +1,6 @@
 """Blocking hides a person's COMMENTS too, not just their posts (board card c109).
 
-The block filter existed on the post query and on yaks, and not on comments — so
+The block filter existed on the post query and on chirps, and not on comments — so
 blocking a harasser hid their posts and left their comments underneath everyone else's.
 The app promises otherwise in words: the confirm dialog says "You won't see posts from
 this person again". Same family as c76, where /terms claimed removal powers the server

@@ -1,9 +1,9 @@
 /**
- * VotePill per DESIGN.md §5: single vertical capsule on Yak cards —
+ * VotePill per DESIGN.md §5: single vertical capsule on Chirps cards —
  * chevron-up / score (stat type) / chevron-down in surfaceAlt; the active
  * direction fills accent (up) / danger (down) with a white glyph.
  *
- * §10 rule 6 ("numbers have personality"): Yak overrides the up-vote fill and
+ * §10 rule 6 ("numbers have personality"): Chirp overrides the up-vote fill and
  * the score color to campus gold via `upColor`/`scoreColor` — optional, so
  * every other call site keeps the default accent/danger behavior untouched.
  */
@@ -23,9 +23,9 @@ export interface VotePillProps {
   vote?: VoteDirection | null;
   onUpvote?: () => void;
   onDownvote?: () => void;
-  /** Overrides the active "up" fill + score color (default `palette.accent`) — Yak's gold moment. */
+  /** Overrides the active "up" fill + score color (default `palette.accent`) — Chirp's gold moment. */
   upColor?: string;
-  /** Overrides the score color when the viewer hasn't voted (default "primary") — e.g. Yak's top score. */
+  /** Overrides the score color when the viewer hasn't voted (default "primary") — e.g. Chirp's top score. */
   scoreColor?: string;
   style?: ViewStyle;
 }
@@ -73,8 +73,8 @@ export function VotePill({
   const upFill = upColor ?? palette.accent;
 
   const scoreTone: TextTone = vote === "down" ? "danger" : "primary";
-  // vote "up" always follows upFill (accent by default, gold on Yak); otherwise
-  // an unvoted notable score (e.g. Yak's top yak) can still be called out gold.
+  // vote "up" always follows upFill (accent by default, gold on Chirps); otherwise
+  // an unvoted notable score (e.g. Chirp's top chirp) can still be called out gold.
   const scoreOverride = vote === "up" ? upFill : vote === null ? scoreColor : undefined;
 
   return (

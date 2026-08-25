@@ -15,17 +15,17 @@ test per fix.
 ## CRITICAL
 
 ### 1. Platform-wide moderator self-escalation → reads plaintext of every reported E2EE message
-`backend/app/routers/moderation.py:27` (`_require_any_eboard`, `list_reports`, `remove_yak`)
+`backend/app/routers/moderation.py:27` (`_require_any_eboard`, `list_reports`, `remove_chirp`)
 
 Anyone can `POST /chapters` and is auto-inserted as that chapter's **president**
 (an EBOARD role) with no approval. Moderation routes then check only "is the
 caller EBOARD of *any* chapter" — zero campus/chapter scoping. `list_reports`
 does `select(ContentReport)` with **no WHERE clause**, returning every report
 system-wide including `forwarded_plaintext` (the decrypted content of reported
-private E2EE messages, per SPEC §6.7), and `remove_yak` can remove any campus's
-yaks. Violates SPEC §2.3 and the whole "server never reads message content" promise.
+private E2EE messages, per SPEC §6.7), and `remove_chirp` can remove any campus's
+chirps. Violates SPEC §2.3 and the whole "server never reads message content" promise.
 **Fix:** scope moderation to the target's campus/chapter — resolve the report
-target's chapter_id (or yak's campus_id) and require the caller's active EBOARD
+target's chapter_id (or chirp's campus_id) and require the caller's active EBOARD
 membership *in that specific org*. Gate chapter creation too (self-serve
 presidency is the enabler). Add moderation tests (currently zero).
 
@@ -74,7 +74,7 @@ and refuse emulated mode + `*` origins when `env != local`. Keeps dev/tests work
 Same shape in four spots — SELECT-then-INSERT with no `IntegrityError` guard, so a
 double-tap/retry crashes with a bare 500:
 - `chapters.py:146` `join_chapter` (memberships unique) — 4/40 concurrent → 500
-- `yaks.py:90` `vote_yak` (yak_votes pk) — 4/20 → 500
+- `chirps.py:90` `vote_chirp` (chirp_votes pk) — 4/20 → 500
 - `feed.py:139` `like_post` (post_likes pk) + `moderation.py` `create_block` (user_blocks pk) — 4/20 each → 500
 - (also noted: `messages.py` `upsert_receipt`, same shape, lower impact)
 **Fix:** wrap in `try/except IntegrityError → rollback + conflict()`, or use
@@ -114,8 +114,8 @@ but `onPress` always routes to `/join-chapter`; a student/alum still gets the
 chapter-code screen. **Fix:** branch onPress — only greek → join-chapter. (Quick.)
 
 ### 14 & 15. Test-coverage gaps against SPEC §8 (non-negotiables)
-- **Yak anonymity untested** (`schemas/yak.py:24`): enforcement is correct
-  (YakOut has no author field) but no test guards it. Add `test_yaks.py`.
+- **Chirp anonymity untested** (`schemas/chirp.py:24`): enforcement is correct
+  (ChirpOut has no author field) but no test guards it. Add `test_chirps.py`.
 - **Cross-chapter 403 test incomplete** (`tests/test_org_scoping.py:8`): covers 5 of
   8 `/chapters/{id}/*` groups — misses dues-cycles, spend-approvals, invites. SPEC
   §8.4 mandates the test for every such route. Extend it.
