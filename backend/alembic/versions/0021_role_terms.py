@@ -32,18 +32,18 @@ wrote a role-change timestamp. Every term opened AFTER this migration has an hon
 started_at; these backfilled rows do not, and should read as "known to hold this role
 as of chirp's role_terms rollout," never as "became this role on this date."
 
-MIGRATION NUMBERING: claimed as 0021 against down_revision 0019, the actual head on
-main as of this writing (verified with `alembic heads`, not assumed from filename
-order — see 0019's own docstring on why filename order and chain order can differ in
-this repo). Board card c175 (Q, branch q/c175-*) was mid-flight on 0020 at the same
-time; per the board decisions log, the manager re-parents this migration onto 0020 at
-merge time if c175 lands first — the single-head check in CI enforces it either way,
-so a wrong parent cannot merge unnoticed.
+MIGRATION NUMBERING: claimed as 0021 on the board. Originally written against
+down_revision 0019 (the head on main when the branch was cut) while board card c175
+(Q) was mid-flight on 0020; the board decisions log pre-committed the manager to
+re-parenting onto 0020 at merge time if c175 landed first. c175 merged to main as
+0020_house_leaderboard (f34c6bd) before this branch did, so that re-parent happened
+exactly as recorded: down_revision is 0020. The single-head check in CI enforces
+this either way, so a wrong parent cannot merge unnoticed.
 """
 from alembic import op
 
 revision = "0021"
-down_revision = "0019"
+down_revision = "0020"
 branch_labels = None
 depends_on = None
 

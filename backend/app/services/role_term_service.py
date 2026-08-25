@@ -62,11 +62,12 @@ async def apply_role_change(
 
     TOLERANT of a membership with no open term to close (nothing found — a plain
     no-op there, straight to inserting the new one). Every membership present when
-    0021 ran has one from its backfill, but a membership created afterward via
-    create_chapter/join_chapter is NOT (also) seeded one by this card's explicit
-    build scope — see the c83 build notes. Heals into the one-open-term invariant
-    on its first real role change rather than raising on a state this service
-    itself did not create.
+    0021 ran has one from its backfill, and memberships created afterward are
+    seeded one by open_initial_term at creation (create_chapter, join_chapter).
+    The tolerance covers any row that slips past both — e.g. memberships minted by
+    raw SQL in tests or ops — healing into the one-open-term invariant on the
+    first real role change rather than raising on a state this service itself did
+    not create.
     """
     if new_role == membership.role:
         return
