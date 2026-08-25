@@ -381,6 +381,15 @@
   ],
   "cards": [
     {
+      "id": "c175",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "vert:social-msg",
+      "area": "yak",
+      "title": "CLAIMED Aug 24 - Touse/Bouse weekly house leaderboard, campus-wide. CLAIMS ALEMBIC 0020 (verified: `alembic heads` reads 0019). New vertical - grepped code and board first, nothing existed. NOTE: first claimed as c173 and renumbered - c173 went to another session mid-flight, which is the exact collision board-check exists to catch.",
+      "detail": "WHAT IT IS (braul product call Aug 24): every verified student at a campus casts ONE ballot per week naming a top house (Touse) and optionally a bottom house (Bouse). Weekly leaderboard, plus a semester title - 'Touse of Fall 26'.\n\nTHREE PRODUCT DECISIONS TAKEN, each of which was a different schema:\n  1. BALLOT SHAPE: one ballot per student per week naming one Touse and optionally one Bouse. NOT per-house up/down voting - that lets a single voter downvote every rival at once, which makes brigading cheap and the weekly reset meaningless. One row per (campus, week, voter) makes 'one vote per week' a PRIMARY KEY rather than application logic, the same structural trick yak_votes uses for one-vote-per-yak.\n  2. ELECTORATE: any campus-verified .edu student, Greek or not, through the existing is_campus_verified gate (c86/c88, TTL included). That gate is the only thing between this and off-campus brigading, so it is load-bearing, not decoration.\n  3. BOUSE IS FULLY PUBLIC, top-to-bottom, DECIDED BY BRAUL after the risk was put to him explicitly. Recorded here so the call is attributable and nobody re-litigates it in review: a public bottom ranking names a real organisation with identifiable members as the worst on campus, it is the most brigadeable surface in the app, and it is the likeliest App Store Guideline 1.2 flag - the same gate the public-site card already tracks. Alternatives offered and declined: Bouse visible only to that chapter's own e-board, or naming only the top half. If review pushes back, both are retreat positions that need only a serializer change, NOT a migration - which is part of why the schema stores raw ballots rather than precomputed public standings.\n\nMITIGATIONS BUILT IN REGARDLESS, because they are simply what a brigadeable public ranking needs and none of them change the product: a minimum-ballot threshold before a house is ranked at all (crowning a Bouse off three votes is noise, not a result); the week is computed SERVER-side and never accepted from the client, or a client stuffs past weeks; a ballot is replaceable within its own week but never retroactively; voter identity is stored for abuse investigation and NEVER serialized.\n\nTOUSE CANNOT ALSO BE BOUSE on one ballot (CHECK). A ballot cannot point at a chapter from another campus - enforced by a COMPOSITE FOREIGN KEY on (chapter_id, campus_id), not a validation, because this repo has already shipped two cross-campus leaks (c82's dual-chapter attendance join, SECURITY-REVIEW finding 1 on moderation) and BOTH passed every single-campus test.\n\nSEMESTER TITLE = MOST WEEKLY WINS, tiebroken on cumulative net - a season champion rather than a points total, so one huge week does not buy the semester. Flagged as MY call and not a stated requirement; trivial to flip to cumulative points if Jose prefers.\n\nSCOPE THIS SESSION: migration 0020, models, schemas, endpoints, tests. Mobile screen is the follow-up."
+    },
+    {
       "id": "c172",
       "col": "done",
       "owner": "jose",
@@ -918,7 +927,7 @@
       "owner": "",
       "tag": "backend",
       "area": "db",
-      "detail": "Stripe migration renumbered to 0008 (down_revision 0007), chain verified linear 0001->0008, 116 tests run through the full chain, merged via PR #3 (0557375, CI green on main). NEXT FREE NUMBER: 0009 \u2014 claim here before writing the file (CLAUDE.md rule). 0008 APPLIED TO PROD Aug 14 by Jose (alembic current = 0008 head), then redeployed rev 00007-kff. Learned: cloud-sql-proxy is NOT part of the gcloud SDK and was missing on Jose's Mac \u2014 install step now documented in INFRA-PRIVATE.html."
+      "detail": "Stripe migration renumbered to 0008 (down_revision 0007), chain verified linear 0001->0008, 116 tests run through the full chain, merged via PR #3 (0557375, CI green on main). NEXT FREE NUMBER: STALE - this line said 0009 until Aug 24 while `alembic heads` had long since read 0019, which is exactly the misleading pointer the claim-before-you-write rule exists to prevent. c175 claims 0020. Do NOT trust this line again: run `alembic heads` and claim on your own card. 0008 APPLIED TO PROD Aug 14 by Jose (alembic current = 0008 head), then redeployed rev 00007-kff. Learned: cloud-sql-proxy is NOT part of the gcloud SDK and was missing on Jose's Mac \u2014 install step now documented in INFRA-PRIVATE.html."
     },
     {
       "id": "c39",
