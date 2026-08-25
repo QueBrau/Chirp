@@ -381,6 +381,24 @@
   ],
   "cards": [
     {
+      "id": "c179",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "vert:social-msg",
+      "area": "yak",
+      "title": "RENAME Yak -> Chirps EVERYWHERE, braul's call Aug 25: copy, client code, API ROUTES and DATABASE. CLAIMS ALEMBIC 0022 (0021 already claimed elsewhere). This one needs a COORDINATED prod migrate + redeploy or the live client 404s - see the sequence below.",
+      "detail": "SCOPE CHOSEN BY BRAUL after the four levels and their risks were put to him explicitly: copy only / +client code / +routes / +DB. He took the deepest one.\n\nAMBIGUITY FLAGGED AND ACCEPTED: the app itself is called Chirp and already has a `posts` concept, so 'a chirp' can now mean either the anonymous board item or any post. It lands hardest in moderation, where target_type becomes 'chirp' sitting beside 'post' and 'comment'. Recorded so nobody re-opens it as a discovery.\n\nWHAT MOVES:\n  - TABLES: yaks -> chirps, yak_votes -> chirp_votes (migration 0022, reversible).\n  - DATA: content_reports.target_type value 'yak' -> 'chirp', with the CHECK constraint dropped and recreated around it. EXISTING PROD ROWS need the backfill, so this is a data migration and not only a rename.\n  - THE CONSTRAINT NAME IS NOT WHAT THE MODEL SAYS. Verified against a live catalog, not assumed: the real name is `content_reports_target_type_check` (Postgres's auto-generated name for an unnamed inline column CHECK), while models/yak.py declares `ck_content_reports_target_type`. That ORM-side name was never realized in any database. 0019 hit exactly this on posts.audience and wrote it down; this migration drops by the REAL name and recreates under the declared one, closing the drift.\n  - ROUTES: /campuses/{id}/yaks -> /chirps, /yaks/{id}/vote -> /chirps/{id}/vote, /moderation/yaks/{id}/remove -> /moderation/chirps/{id}/remove, /moderation/blocks/by-yak/{id} -> by-chirp.\n  - CODE: models Yak/YakVote -> Chirp/ChirpVote, schemas/yak.py -> chirp.py, routers/yaks.py -> chirps.py, purge job, client src/api/yaks.ts -> chirps.ts, the app/(tabs)/yak/ route folder -> chirps/ (which also moves c175's Touse screen), tab label.\n  - DOCS: SPEC.md, DESIGN.md, SECURITY-REVIEW.md, web marketing site.\n\nDEPLOY SEQUENCE, and it is NOT the usual one. The routes and the tables move together, so prod must be migrated AND redeployed in the same window: migrate first (the new code cannot read `yaks`), then redeploy immediately. Between those two steps the live backend is serving old code against renamed tables and WILL error - that gap is unavoidable with a table rename and should be taken at a quiet hour. The web client also 404s on the old route paths until it is rebuilt."
+    },
+    {
+      "id": "c178",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "design",
+      "area": "mobile",
+      "title": "Header accent bar LEADS the title instead of sitting under it (braul, Aug 25). Branch q/c178-accent-bar-leads-title (04cec52) pushed. DESIGN.md rule 1 updated in the same commit - the spec said 'under it' and is law, so code alone would have been correctly reverted.",
+      "detail": "The bar floated under the oversized screen title at a fixed 28 tall. It now leads the title on the left and takes the TITLE'S OWN HEIGHT via alignSelf: 'stretch' rather than a fixed number - the hardcoded 28 already sat short against the display face's 35 line-height, and would drift again the moment that scale moved.\n\nmetrics.accentBarHeight is DELETED, not left unused. Kept around, the next person hand-rolling a header would have reached for it and quietly reintroduced a bar that no longer matches the text beside it.\n\nBOTH headers changed. Yak hand-rolls its own because its canvas is forced navy and its header text is pinned to onAccent, so leaving it would have split the treatment on the tab most likely to be compared with Home. Verified on device across Home, Yak and Touse. tsc + all three verify scripts exit 0."
+    },
+    {
       "id": "c177",
       "col": "done",
       "owner": "Q",
