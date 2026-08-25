@@ -40,6 +40,7 @@ import {
   Screen,
   SectionHeader,
 } from "@/components";
+import { calendarDay } from "@/lib/dates";
 import { shareCsv } from "@/lib/export";
 import { currentSemesterWindow } from "@/org/semester";
 import { radii, spacing, typography, useTheme, type Palette } from "@/theme";
@@ -59,7 +60,9 @@ const ATTENDANCE_OPTIONS: { key: AttendanceStatus; label: string; short: string 
 ];
 
 function meetingDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
+  // c165: meeting_date is a calendar DAY, not an instant. Formatting the instant
+  // directly rendered the previous day everywhere west of UTC.
+  return calendarDay(iso).toLocaleDateString(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",

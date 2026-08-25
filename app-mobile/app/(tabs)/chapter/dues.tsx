@@ -14,6 +14,7 @@ import { myMemberships, type MyMembershipOut } from "@/api/chapters";
 import { listDuesCycles, listLedger, type DuesCycleOut } from "@/api/finance";
 import { getChapterPaymentsStatus } from "@/api/payments";
 import { AppText, Card, Chip, EmptyState, Screen, SectionHeader } from "@/components";
+import { calendarDay } from "@/lib/dates";
 import DuesPaymentScreen from "@/payments/dues";
 import { spacing } from "@/theme";
 
@@ -22,7 +23,7 @@ function dollars(cents: number): string {
 }
 
 function dueDate(isoDay: string): string {
-  return new Date(`${isoDay}T00:00:00`).toLocaleDateString(undefined, {
+  return calendarDay(isoDay).toLocaleDateString(undefined, {
     month: "long",
     day: "numeric",
   });

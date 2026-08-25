@@ -39,6 +39,7 @@ import {
   type RoleName,
 } from "@/api/chapters";
 import { ApiError } from "@/api/client";
+import { calendarDay } from "@/lib/dates";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { currentSemesterWindow } from "@/org/semester";
 import {
@@ -98,16 +99,9 @@ function dollarsRounded(cents: number): string {
   });
 }
 
-/**
- * A calendar day rendered as a calendar day.
- *
- * The `T00:00:00` with NO trailing Z is load-bearing: due_date is a date, not an
- * instant, and `new Date("2026-05-01")` parses as UTC midnight and then formats in
- * local time, which shows the previous day everywhere west of Greenwich. Same fix
- * as dues.tsx:25 and treasurer.tsx:104 (and the bug c165 records elsewhere).
- */
+/** Due date as a calendar day. See @/lib/dates for why this cannot use the raw value. */
 function dueDate(isoDay: string): string {
-  return new Date(`${isoDay}T00:00:00`).toLocaleDateString(undefined, {
+  return calendarDay(isoDay).toLocaleDateString(undefined, {
     month: "long",
     day: "numeric",
   });
