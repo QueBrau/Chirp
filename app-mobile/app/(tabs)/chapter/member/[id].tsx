@@ -9,75 +9,26 @@
  * There is no GET /users/{id} — member identity (name/photo/pledge_class)
  * comes from the roster fetch, same resolve-against-the-roster pattern as
  * chapter/event/[id].tsx and chapter/index.tsx's own findMember helpers.
+ *
+ * Role display + the date-honesty rule (termDateLabel) live in
+ * @/lib/roleTerms — extracted in c181 so the alumni directory and the family
+ * tree reuse this screen's exact rule instead of re-deriving it.
  */
 
 import { useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 
-import { getRoleTerms, listMembers, type MemberOut, type RoleName, type RoleTerm } from "@/api/chapters";
+import { getRoleTerms, listMembers, type MemberOut, type RoleTerm } from "@/api/chapters";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
-import { AppText, Card, Chip, type ChipVariant, EmptyState, GradientAvatar, Screen, SectionHeader } from "@/components";
+import { chipVariant, roleLabel, termDateLabel } from "@/lib/roleTerms";
+import { AppText, Card, Chip, EmptyState, GradientAvatar, Screen, SectionHeader } from "@/components";
 import { spacing, useTheme } from "@/theme";
-
-const ROLE_LABELS: Record<RoleName, string> = {
-  president: "President",
-  vice_president: "Vice President",
-  treasurer: "Treasurer",
-  secretary: "Secretary",
-  historian: "Historian",
-  member: "Member",
-  pledge: "Pledge",
-  alumni: "Alum",
-};
-
-/** Prettified fallback for a role the closed label record doesn't know yet —
- * the server owns the taxonomy (c44), mirrors members.tsx's own fallback. */
-function prettifyRole(role: string): string {
-  return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function roleLabel(role: RoleName): string {
-  return ROLE_LABELS[role] ?? prettifyRole(role);
-}
-
-function chipVariant(role: RoleName, eboard: RoleName[]): ChipVariant {
-  if (eboard.includes(role)) return "accent";
-  return role === "pledge" ? "warning" : "neutral";
-}
 
 /** Resolve a user id against the chapter roster — the only name/photo source
  * available (mirrors the helper in chapter/event/[id].tsx). */
 function findMember(members: MemberOut[], userId: string): MemberOut | undefined {
   return members.find((member) => member.user_id === userId);
-}
-
-function monthYear(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", year: "numeric" });
-}
-
-/**
- * HONESTY RULE (c83 migration docstring, carried into the client for c180):
- * a role term's `started_at` is only a REAL date when apply_role_change wrote
- * the term — and the data says exactly when that happened: `changed_by` is
- * non-null on precisely the rows a real PATCH created, and null on the rows
- * nobody's action dated (the 0021 backfill and open_initial_term's seed at
- * membership creation, both stamped at migration/creation time). So the start
- * date renders only when `changed_by` is set. This must key off changed_by,
- * NOT off "does a closed term exist": a SEEDED term that later gets closed
- * has a real end but still a backfilled start, and rendering its full span
- * would assert a start date this system never recorded — it shows
- * "Until <date>" instead. Every ended_at is always real (only a PATCH closes
- * a term), so end dates render unconditionally.
- */
-function termDateLabel(term: RoleTerm): string | null {
-  const startIsReal = term.changed_by !== null;
-  if (term.ended_at === null) {
-    return startIsReal ? `Since ${monthYear(term.started_at)}` : null;
-  }
-  return startIsReal
-    ? `${monthYear(term.started_at)} – ${monthYear(term.ended_at)}`
-    : `Until ${monthYear(term.ended_at)}`;
 }
 
 export default function MemberDetailScreen() {

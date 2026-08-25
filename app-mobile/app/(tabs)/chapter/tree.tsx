@@ -273,11 +273,13 @@ export default function TreeScreen() {
             onSelectUser={setSelectedUserId}
           />
 
-          {selectedUserId ? (
+          {selectedUserId && chapterId !== null ? (
             <NodeDetail
               tree={tree}
               userId={selectedUserId}
               onClose={() => setSelectedUserId(null)}
+              chapterId={chapterId}
+              eboard={roleMeta?.eboard ?? []}
               canEdit={canEdit}
               onChangeBig={(littleId) => openPair(littleId, null)}
               onAddLittle={(bigId) => openPair(null, bigId)}
