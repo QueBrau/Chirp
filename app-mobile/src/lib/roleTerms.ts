@@ -78,13 +78,16 @@ export function currentTerm(terms: RoleTerm[]): RoleTerm | null {
 }
 
 /**
- * The highest-ranked e-board term this member has REALLY held — c181's
- * "President, 2026" claim on the alumni directory. `changed_by === null`
- * terms (seeded/backfilled) never win: an invented office is worse than no
- * office. Rank comes from `eboard` (server-ordered president-first, since
- * GET .../role-meta walks permissions.EBOARD in Role-enum declaration order),
- * so a role outside that list — member/pledge/alumni, or a future role this
- * caller's role-meta hasn't been told about — never wins either. Ties (two
+ * The highest-ranked e-board term this member has held — c181's
+ * "President, 2026" claim on the alumni directory. ALL terms are eligible:
+ * the ROLE value is always real (it came from memberships.role at backfill or
+ * from a real role change) — only the DATE on a seeded term is invented, and
+ * that's the label builder's problem, not the ranking's. Skipping seeded
+ * terms here would erase every pre-0021 officer's office entirely, which is
+ * exactly backwards. Rank comes from `eboard` (server-ordered president-first,
+ * since GET .../role-meta walks permissions.EBOARD in Role-enum declaration
+ * order), so a role outside that list — member/pledge/alumni, or a future
+ * role this caller's role-meta hasn't been told about — never wins. Ties (two
  * terms at the same rank) keep the first one seen; callers pass `terms`
  * newest-first (the API's own order), so that's the most recent.
  */
@@ -92,7 +95,6 @@ export function highestOfficeTerm(terms: RoleTerm[], eboard: RoleName[]): RoleTe
   let best: RoleTerm | null = null;
   let bestRank = Infinity;
   for (const term of terms) {
-    if (term.changed_by === null) continue;
     const rank = eboard.indexOf(term.role);
     if (rank === -1) continue;
     if (rank < bestRank) {
@@ -103,10 +105,13 @@ export function highestOfficeTerm(terms: RoleTerm[], eboard: RoleName[]): RoleTe
   return best;
 }
 
-/** "President, 2026" — null when no real e-board term exists. Never invents
- * a claim: no dated term proving an office means no office is shown. */
+/** "President, 2026" — or just "President" when the term is seeded/backfilled
+ * (changed_by null): the office is a real fact either way, but the year comes
+ * from started_at, which the honesty rule says is only real on PATCH-created
+ * terms. Null only when no e-board term exists at all. */
 export function highestOfficeLabel(terms: RoleTerm[], eboard: RoleName[]): string | null {
   const term = highestOfficeTerm(terms, eboard);
   if (term === null) return null;
-  return `${roleLabel(term.role)}, ${new Date(term.started_at).getFullYear()}`;
+  const label = roleLabel(term.role);
+  return term.changed_by !== null ? `${label}, ${new Date(term.started_at).getFullYear()}` : label;
 }
