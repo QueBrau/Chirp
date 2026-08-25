@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787621329396,
+  "updated": 1787621616414,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -1920,11 +1920,11 @@
     },
     {
       "id": "c170",
-      "col": "progress",
+      "col": "done",
       "owner": "jose",
       "tag": "process",
       "area": "infra",
-      "title": "AUDIT+PLAN IN PROGRESS Aug 24 (pool) - deliverable is the advisory triage + upgrade plan; the upgrade itself stays a future milestone. npm audit: 9 high / 13 moderate, all in the Expo/Metro build toolchain - fix requires a PLANNED major Expo upgrade, never audit fix --force",
+      "title": "DONE Aug 24 - audit + plan delivered (read-only, nothing executed): all 9 high / 13 moderate trace to THREE build-toolchain leaves (image-size, postcss, uuid via metro/expo-cli/xcode) - NONE can execute in the shipped app; runtime packages are flagged only for their build-time halves. NO quick wins exist (every fix is isSemVerMajor via Expo SDK 57). Upgrade carded as milestone c174",
       "detail": "From the Aug 24 security review. The forced-fix path does a major Expo bump blind and breaks the native builds. Plan: review the exact advisories, schedule an Expo SDK upgrade as its own milestone, rebuild sim+Android artifacts, re-run the full mobile check suite, re-audit. No urgency signal today - toolchain, not runtime, exposure."
     },
     {
@@ -1935,6 +1935,15 @@
       "area": "orgs",
       "title": "DONE Aug 24 - merged (#96): inactive members are READ-ONLY on the chapter-public tier. _readable_post org branch back to active-only (one shared filter for org/org_actives/campus), read gate untouched, docstrings record the ruling. 54-test regression sweep across every _readable_post consumer, CI green. Rides the next deploy with the rest of the wave",
       "detail": "c102's #94 made read-implies-react: _readable_post's 'org' branch accepted any non-removed membership, so inactive members could like/comment chapter-public posts. Jose chose read-only instead. Fix: list_posts keeps get_current_chapter_member (active OR inactive may READ); _readable_post's org branch goes back to ACTIVE membership only, so like/comment/reactions refuse inactive members. Tests: inactive member reads chapter-public but 403s on like and comment; active member unaffected; org_actives tier unaffected."
+    },
+    {
+      "id": "c174",
+      "col": "backlog",
+      "owner": "",
+      "tag": "mobile",
+      "area": "infra",
+      "title": "MILESTONE: Expo SDK 54 -> 57 upgrade - the ONLY path that clears all 22 audit findings (no backports into SDK 54/55/56 lines). Sequence WITH the next EAS rebuild, never mid-sprint",
+      "detail": "From c170's audit (full advisory table + audit.json in the manager session, Aug 24). Plan essentials: branch off main with the pre-upgrade lockfile committed first (rollback = checkout lockfile + npm ci); npx expo install expo@^57 then expo install --check / expo-doctor to align every expo-* peer (NEVER manual per-package bumps); RN core moves past 0.81.5 so reanimated/worklets/svg/stripe pins need coordinated bumps; EVERY existing EAS build goes stale (the sim build already is, from c166's AsyncStorage) so cut fresh iOS-sim + Android builds after; verification matrix = tsc with version cited, all five verify:* scripts, router/notifications/auth-persistence/image-picker targeted checks, sim smoke of the c164 screens, and a final npm audit --json diffed against c170's 22 entries to PROVE closure. Do not merge partial breakage - abandon the branch rather than land it broken. Overrides-block shortcut for postcss/image-size/uuid explicitly rejected (untested Metro internal API contract)."
     }
   ],
   "decisions": [
