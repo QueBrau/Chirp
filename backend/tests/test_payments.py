@@ -105,6 +105,45 @@ async def _create_dues_cycle(
     return response.json()["id"]
 
 
+async def _pay_on_ledger(
+    client: AsyncClient, setup: ChapterSetup, cycle_id: str, user_id: str, cents: int = 25_000
+) -> str:
+    """Record a dues payment the way a treasurer enters a cash payment: straight onto
+    the ledger, no Stripe involved. Same helper shape as test_chapter_overview.py's
+    _pay — used here so a board c172 test can put a member in the "paid" state
+    without ever creating a DuesPaymentIntent reservation, isolating the netted
+    already_paid guard (payments.py) from the separate reservation-table gate (c51)."""
+    response = await client.post(
+        f"/chapters/{setup.chapter_id}/ledger",
+        json={
+            "entry_type": "dues_payment",
+            "amount_cents": cents,
+            "related_user_id": user_id,
+            "dues_cycle_id": cycle_id,
+        },
+        headers=setup.president.headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def _correct(
+    client: AsyncClient, setup: ChapterSetup, entry_id: str, cents: int
+) -> None:
+    """Append a correction against a prior ledger entry (SPEC 8.2) — a refund is a
+    NEW row, never an update to the original."""
+    response = await client.post(
+        f"/chapters/{setup.chapter_id}/ledger",
+        json={
+            "entry_type": "correction",
+            "amount_cents": cents,
+            "corrects_entry_id": entry_id,
+        },
+        headers=setup.president.headers,
+    )
+    assert response.status_code == 201, response.text
+
+
 async def _onboard(client: AsyncClient, setup: ChapterSetup) -> str:
     """Run onboarding as the president so the chapter has a connected account."""
     response = await client.post(
@@ -410,6 +449,188 @@ async def test_dues_intent_409_after_the_member_already_paid(
     )
     assert response.status_code == 409
     assert response.json()["detail"] == "already_paid"
+
+
+# ---- c172: the guard must NET corrections, matching the President overview (c171) ----
+#
+# Before the fix, this endpoint's already_paid check read the mere EXISTENCE of a
+# dues_payment row and never looked at corrections, while chapter_overview NETTED them
+# per member. A member refunded in full showed as still owing on the President
+# dashboard while their own pay button told them they had already paid and refused a
+# second attempt. dues_contributions_subquery (app/core/dues_status.py) is now the one
+# definition both read.
+
+
+async def test_dues_intent_is_allowed_again_after_a_full_refund(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """The exact board c172 scenario: paid, refunded in full, must be payable again."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
+    entry_id = await _pay_on_ledger(client, setup, cycle_id, setup.member.id, 25_000)
+
+    # Before the refund: blocked, same as the plain already-paid case above.
+    blocked = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "already_paid"
+
+    await _correct(client, setup, entry_id, -25_000)
+
+    allowed = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert allowed.status_code == 200, allowed.text
+
+
+async def test_dues_intent_stays_blocked_after_a_partial_refund(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Netting, not "has any correction": refunded $10 of $250 is still paid, and
+    must stay blocked here exactly as they stay off the overview's chase list."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
+    entry_id = await _pay_on_ledger(client, setup, cycle_id, setup.member.id, 25_000)
+    await _correct(client, setup, entry_id, -1_000)
+
+    response = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "already_paid"
+
+
+async def test_a_plain_paid_member_with_no_correction_is_unaffected(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Regression guard: netting must not change the ordinary paid-with-no-refund
+    case, which is the overwhelming majority of real payments."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
+    await _pay_on_ledger(client, setup, cycle_id, setup.member.id, 25_000)
+
+    response = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "already_paid"
+
+
+async def test_full_refund_agrees_on_both_the_president_overview_and_the_pay_button(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Both surfaces named in board c172, read through the exact endpoints they use:
+    GET .../overview (the President dashboard) and POST .../intent (the pay button).
+    A refund must never leave one saying chase them and the other already paid."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
+    entry_id = await _pay_on_ledger(client, setup, cycle_id, setup.member.id, 25_000)
+    await _correct(client, setup, entry_id, -25_000)
+
+    overview = await client.get(
+        f"/chapters/{setup.chapter_id}/overview", headers=setup.president.headers
+    )
+    assert overview.status_code == 200, overview.text
+    assert overview.json()["dues"]["paid_members"] == 0
+    assert overview.json()["dues"]["outstanding_members"] == 2  # president + member
+
+    intent = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert intent.status_code == 200, intent.text
+
+
+async def test_a_reservation_settled_through_stripe_stays_blocked_after_a_refund(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """DOCUMENTS A KNOWN REMAINING EDGE, deliberately — this is not the divergence
+    c172 closes, but the boundary of what it safely can.
+
+    Unlike a treasurer's manual ledger entry (the two tests above), a payment made
+    through THIS endpoint's real flow leaves a DuesPaymentIntent reservation behind
+    in 'succeeded' status (board c51 / migration 0010), and nothing transitions that
+    row when a later correction refunds the payment it belongs to. So a member whose
+    ORIGINAL payment went through Stripe stays blocked here even though the President
+    overview now correctly shows them outstanding — the two surfaces still disagree
+    for this one path.
+
+    This is not a quiet gap: it is asserted here on purpose, so it fails loudly if
+    someone "fixes" the reservation check without also fixing what it guards against.
+    Lifting it safely needs more than netting — uq_ledger_dues_payment_once still
+    allows at most one dues_payment row per (cycle, member) ever, so a second Stripe
+    payment could settle with no ledger row to show for it. See the RESIDUAL EDGE
+    comments in payments.py and chapters.py: closing this needs the cycle/member's
+    dues status modeled explicitly (c83-shaped), not a same-day patch.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
+
+    created = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert created.status_code == 200, created.text
+    intent_id = await _reserved_intent_id(cycle_id, setup.member.id)
+    assert intent_id is not None
+
+    settled = await _post_webhook(
+        client, _succeeded_event(cycle_id, setup.member.id, intent_id, "evt_settled")
+    )
+    assert settled.status_code == 200
+
+    entries = await client.get(
+        f"/chapters/{setup.chapter_id}/ledger", headers=setup.president.headers
+    )
+    paid_entry = next(
+        e for e in entries.json()
+        if e["entry_type"] == "dues_payment" and e["related_user_id"] == setup.member.id
+    )
+    await _correct(client, setup, paid_entry["id"], -25_000)
+
+    overview = await client.get(
+        f"/chapters/{setup.chapter_id}/overview", headers=setup.president.headers
+    )
+    assert overview.json()["dues"]["outstanding_members"] == 2  # correctly refunded
+
+    retry = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert retry.status_code == 409
+    assert retry.json()["detail"] == "already_paid"
 
 
 async def test_dues_intent_rejects_non_member(

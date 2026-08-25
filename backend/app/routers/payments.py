@@ -3,12 +3,13 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import get_settings
+from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
 from app.core.permissions import Role, require_role
 from app.db import get_session
@@ -175,14 +176,20 @@ async def create_dues_payment_intent(
     if membership.scalar_one_or_none() is None:
         raise forbidden("not_a_member")
 
-    already_paid = await session.execute(
-        select(models.LedgerEntry.id).where(
-            models.LedgerEntry.dues_cycle_id == cycle_id,
-            models.LedgerEntry.related_user_id == user.id,
-            models.LedgerEntry.entry_type == "dues_payment",
+    # NET against corrections (board c172) — this used to be a plain existence check
+    # ("does a dues_payment row exist for this cycle/member"), which never looked at
+    # corrections and so disagreed with the President overview (c171): a member
+    # refunded in full showed as still owing there but got already_paid here. Reading
+    # the same dues_contributions_subquery the overview reads is what makes the two
+    # agree; a partial refund still nets positive and stays blocked here exactly as it
+    # stays "paid" there.
+    contributions = dues_contributions_subquery(cycle.chapter_id, cycle.id)
+    net_cents = await session.scalar(
+        select(func.coalesce(func.sum(contributions.c.amount_cents), 0)).where(
+            contributions.c.user_id == user.id
         )
     )
-    if already_paid.scalar_one_or_none() is not None:
+    if net_cents > 0:
         raise conflict("already_paid")
 
     chapter = await session.get(models.Chapter, cycle.chapter_id)
@@ -211,6 +218,15 @@ async def create_dues_payment_intent(
     reservation = live.scalar_one_or_none()
     if reservation is not None:
         if reservation.status == "succeeded":
+            # RESIDUAL EDGE (board c172): unlike the net check above, this reservation
+            # is never re-examined against later corrections, so a member whose
+            # ORIGINAL payment went through this Stripe flow (not a manually entered
+            # cash row) stays blocked here even after a full refund nets them back to
+            # outstanding above. Lifting this block safely needs more than netting —
+            # uq_ledger_dues_payment_once still allows at most one dues_payment row
+            # per (cycle, member) ever, so a second Stripe payment could settle with no
+            # ledger row to show for it. That needs the cycle/member's dues status
+            # modeled explicitly (c83-shaped), not a reservation-table patch.
             raise conflict("already_paid")
         if reservation.rail != body.rail:
             # THE double-charge case: an ACH debit is still processing (days) and
