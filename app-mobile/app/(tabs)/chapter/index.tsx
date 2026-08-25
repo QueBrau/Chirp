@@ -117,6 +117,13 @@ const TOOLS: Tool[] = [
     description: "Roles, status, and chapter details",
     capability: "members_admin",
   },
+  {
+    href: "/chapter/vice-president",
+    icon: "eye",
+    title: "Deputy President",
+    description: "Read-only roster, invites, and dues",
+    capability: "deputy_overview",
+  },
 ];
 
 const ROLE_LABELS: Record<RoleName, string> = {

@@ -346,3 +346,22 @@ class ChapterOverview(_Schema):
     attendance: AttendanceOverview
     lineage: LineageOverview
     invites: InviteOverview
+
+
+class DeputyOverview(_Schema):
+    """Body for GET /chapters/{id}/deputy-overview — the Vice President's deputy-
+    president dashboard (board card c163, Jose's product ruling).
+
+    A trimmed sibling of ChapterOverview, not a client-side slice of it: attendance is
+    the Secretary's domain and lineage is the Historian's/e-board's, and the Vice
+    President holds neither minutes_admin nor lineage_admin from this card, so those
+    two sections are absent from the RESPONSE, not merely hidden in the UI. Gated on
+    the deputy_overview capability (permissions.py), which is read-only and holds no
+    delegation - the ruling that named this a read view, not a stand-in with powers.
+    """
+
+    chapter_id: uuid.UUID
+    generated_at: datetime
+    roster: RosterOverview
+    dues: DuesOverview
+    invites: InviteOverview
