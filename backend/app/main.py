@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
 from app.core.log_scrub import install_credential_log_scrub
+from app.core.logging_config import configure_app_logging
 from app.routers import (
     alumni,
     auth,
@@ -129,6 +130,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     """Build the Chirp API app; run with `uvicorn app.main:create_app --factory`."""
+    # c176: wire the app's own module loggers (logging.getLogger(__name__) everywhere
+    # under app/) to a stdout handler. Without this, logger.info calls never reached
+    # Cloud Logging at all — see app.core.logging_config for the full mechanism.
+    # First, so every logger call made while building the app is covered too.
+    configure_app_logging()
     # c146: scrub token/access_token/id_token query params from uvicorn's access log
     # before any request is served. A tripwire, not a fallback for c143's fix — see
     # app.core.log_scrub for why a FUTURE client putting a credential back in a URL
