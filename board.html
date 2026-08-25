@@ -1893,11 +1893,11 @@
     },
     {
       "id": "c163",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "m9",
       "area": "orgs",
-      "title": "c163 IN BUILD Aug 24 - Jose ruled DEPUTY PRESIDENT: read view of president admin (roster, invites, dues status), capability-gated via CAPABILITIES dict, tile from server taxonomy (no client role lists - c80 lesson), stand-in delegation NOT in alpha. Sonnet worker building in chirp-sub-c163 (preview: dev-vice-president seed, Metro 8082+, never 8081). Manager reviews line-level before merge. Original scoping note preserved in detail",
+      "title": "c163 DONE Aug 24 - MERGED as fdb09c5 (PR #102, squash, CI 4/4 green). Jose's DEPUTY-PRESIDENT ruling shipped: deputy_overview capability (VP+president, deliberately not members_admin), president's roster/dues/invites SQL refactored into shared helpers so the two dashboards cannot disagree, GET /chapters/{id}/deputy-overview (no attendance/lineage over the wire), read-only vice-president.tsx + server-driven tile (c80 lesson held). Sonnet-built, manager-verified line-level incl zero-mutation sweep + screenshots; manager re-ran post-rebase over c83: 44/44 combined tests, tsc 5.9.3 clean, single head 0021. Live-verified: member 403s, president loads it, VP loads it (dev seeds, Metro 8082)",
       "detail": "app/(tabs)/chapter/ has president.tsx, secretary.tsx, treasurer.tsx, historian.tsx, alumni/, moderation.tsx and members.tsx. There is NO vice-president screen and no /chapter/vice-president route. \n\nThis is not an oversight nobody noticed - core/permissions.py says it out loud: 'vice_president and historian are in EBOARD and got no tools at all'. Historian has since got a screen (c79). VP still has not, so a VP today sees exactly what a plain member sees plus moderation and lineage rights inherited from EBOARD. \n\nBEFORE BUILDING, decide what a VP actually DOES here - SPEC lists the role (section 12, milestone 2) but never defines a VP dashboard, so there is no spec to implement and inventing one is the real work. Whatever it becomes, add a capability to the CAPABILITIES dict in core/permissions.py and gate on it. Do NOT hardcode a role list in the client: c80 is exactly that bug, where chapter/index.tsx kept its own copy of the taxonomy, drifted from the server, and failed silently. \n\nDependency worth knowing: dev-vice-president (Andre Coleman) already exists as a seeded account from c159, so the screen is viewable at EXPO_PUBLIC_DEV_UID=dev-vice-president the moment it has anything to show."
     },
     {
