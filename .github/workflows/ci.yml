@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Explicit least-privilege regardless of org/repo Actions defaults (c185 - the
+# repo is public; this workflow references no secrets and needs only checkout).
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: backend pytest (PG16)
