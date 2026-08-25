@@ -2009,6 +2009,15 @@
       "detail": "The second read-side pass c83's own card predicted: 'the alumni directory and the lineage tree both want to say president, 2024 and the schema cannot' - now it can (role_terms, merged 75ab482) and the member detail screen proves the pattern (c180, b0631ba). This card: (1) alumni directory entries show highest-office-held with year when a REAL dated term exists (changed_by non-null - same honesty rule as c180, comment it); (2) lineage tree member cards/detail show the same compact term line. REUSE getRoleTerms and the c180 date rule - extract shared helpers rather than duplicating the honesty logic. Per-request N+1 caution: the directory lists many members - do NOT fire one role-terms request per row; fetch on tap/expand, or skip enrichment where the surface has no detail interaction. Out of scope: backend changes, new endpoints, batch endpoints (card one if genuinely needed rather than building unasked)."
     },
     {
+      "id": "c183",
+      "col": "progress",
+      "owner": "court",
+      "tag": "bug",
+      "area": "mobile",
+      "title": "c183 IN BUILD Aug 25 - Alert.alert is a SILENT NO-OP on react-native-web: every confirm dialog and error alert in the app (13 files) does nothing on web - no dialog, no callback, no error. Found live when c35's moderation Remove/Dismiss buttons proved inert on prod web QA (zero network calls, click dispatch proven fine). Native is unaffected, which is why sim passes never caught it. Fix: shared cross-platform confirm/alert util (window.confirm/alert on web, Alert.alert on native), all 13 callers migrated. Sonnet worker in chirp-sub-c183; manager reviews line-level before merge",
+      "detail": "Evidence chain (c35 live pass, Aug 25): moderation action buttons render enabled, elementFromPoint confirms clicks land, browse click + JS click + keyboard Enter all produce zero network requests and zero console output, while Go back on the same screen navigates fine. moderation.tsx confirmRemove/confirmDismiss wrap the API calls in Alert.alert(title, msg, buttons) - react-native-web does not implement Alert, so the call vanishes and onPress never fires. showApiError's two-arg Alert.alert is equally dead, so web QA also cannot SEE server errors. Affected callers: tree, moderation, historian, chapter/index, president, treasurer, secretary, chirps/houses, chirps/index, feed/index, dues, MediaPostCard, CreateSheet. Severity: users are on native (works), but web is the team's main QA loop - this has been silently masking every confirm-gated flow and every error surface there. Migration rule: confirm-with-buttons -> shared confirm util; bare alert -> shared alert util; no behavior change on native (same labels, same destructive styling)."
+    },
+    {
       "id": "c182",
       "col": "progress",
       "owner": "court",
