@@ -4,9 +4,10 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.invites import INVITE_DEFAULT_MAX_USES, INVITE_MAX_USES_CAP
+from app.core.validation import validate_public_url
 
 AccountType = Literal["greek", "non_greek", "alumni"]
 RoleName = Literal[
@@ -49,6 +50,14 @@ class UserCreate(_Schema):
     avatar_url: str | None = None
     account_type: AccountType
 
+    # c184 sweep: avatar_url is client-supplied and written straight through to
+    # users.avatar_url with no validation (routers/auth.py bootstrap_account),
+    # the same shape of gap the card flagged in alumni.linkedin_url / apply_url.
+    @field_validator("avatar_url")
+    @classmethod
+    def _validate_avatar_url(cls, value: str | None) -> str | None:
+        return validate_public_url(value)
+
 
 class UserUpdate(_Schema):
     """No campus_id here either, for the same reason (c85).
@@ -60,6 +69,11 @@ class UserUpdate(_Schema):
 
     display_name: str | None = None
     avatar_url: str | None = None
+
+    @field_validator("avatar_url")
+    @classmethod
+    def _validate_avatar_url(cls, value: str | None) -> str | None:
+        return validate_public_url(value)
 
 
 class UserOut(_Schema):
