@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787622886681,
+  "updated": 1787623427711,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -382,11 +382,11 @@
   "cards": [
     {
       "id": "c172",
-      "col": "progress",
+      "col": "done",
       "owner": "jose",
       "tag": "money",
       "area": "payments",
-      "title": "c172 PR #97 REJECTED in review Aug 24 - the netted guard opened a MONEY HOLE: a hand-entered-then-refunded payment has no reservation, nets to 0, passes the new guard, pays at Stripe, and the webhook's plain insert dies on uq_ledger_dues_payment_once = money captured with no ledger record. Fix list issued: overview keeps the netted definition; charge path stays existence-blocked with an honest refunded_contact_treasurer 409; the full-flow test that would have caught it is now required. Worker revising",
+      "title": "DONE Aug 24 - merged (#97, second revision after the first was rejected for a money hole). President overview nets corrections (true standing); the pay path stays existence-blocked but tells the truth: already_paid vs refunded_contact_treasurer. Self-serve re-payment after refund stays closed on purpose (unrepresentable in the append-only ledger) - c83-shaped future work, documented at both sites and pinned by tests. Full CI green. Rides the next deploy",
       "detail": "Found while building c171, and deliberately NOT resolved there because making the two agree means deciding which one is wrong.\n\nTHE TWO DEFINITIONS. payments.py:178 (the double-charge guard) treats the mere EXISTENCE of a dues_payment row for the cycle as already_paid and does not look at corrections. c171's overview NETS corrections per member, so a member refunded in full has a net of zero and comes back as outstanding.\n\nWHAT A CHAPTER ACTUALLY HITS: a treasurer refunds someone - correctly, as a new append-only correction entry (SPEC 8.2) - and from that moment the president's dashboard lists that member as still owing, while the member opening the app to pay gets a 409 already_paid and cannot. Neither screen is lying; they are answering different questions with the same word.\n\nBOTH DEFENCES ARE REAL, which is why this is a ruling and not a bug fix. The guard erring toward 'paid' is the SAFE direction for a guard whose job is to stop a card being charged twice - a false 'unpaid' there means double-charging a student. The dashboard erring toward 'owes' is the honest answer to 'who do I chase', and a refunded member genuinely does owe again.\n\nOPTIONS, roughly in increasing order of work: (1) leave both and document the seam where a treasurer will see it, accepting that refunds need a manual nudge; (2) teach the guard to net corrections too, so a fully-refunded member can pay again - the smallest change that makes the two agree, and it moves the risk onto the refund being correct; (3) model dues status explicitly rather than deriving it from ledger rows twice, which is the real fix and is c83-shaped work.\n\nNOT URGENT TODAY: it needs a refund to have happened, and no chapter has processed one yet. It will not stay that way once real dues run. The seam is already written down in chapters.py's chapter_overview docstring so the next person to touch either side finds it."
     },
     {
