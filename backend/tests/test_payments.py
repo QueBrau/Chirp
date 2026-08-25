@@ -451,29 +451,53 @@ async def test_dues_intent_409_after_the_member_already_paid(
     assert response.json()["detail"] == "already_paid"
 
 
-# ---- c172: the guard must NET corrections, matching the President overview (c171) ----
+# ---- c172: an honest reason for the same block, not a reopened charge path ----
 #
 # Before the fix, this endpoint's already_paid check read the mere EXISTENCE of a
 # dues_payment row and never looked at corrections, while chapter_overview NETTED them
 # per member. A member refunded in full showed as still owing on the President
-# dashboard while their own pay button told them they had already paid and refused a
-# second attempt. dues_contributions_subquery (app/core/dues_status.py) is now the one
-# definition both read.
+# dashboard while their own pay button told them they had already paid.
+#
+# THE FIRST FIX ATTEMPT let the charge path itself net corrections and reopen for a
+# fully-refunded member — reviewed and reverted (board c172) because it is a
+# money-loss bug, not a fix: a member whose ORIGINAL payment was hand-entered by the
+# treasurer has no DuesPaymentIntent reservation to block a retry, so netting alone
+# let them create a fresh intent, pay through Stripe for real, and then hit
+# uq_ledger_dues_payment_once (at most one dues_payment row per (cycle, member) EVER)
+# when the webhook tried to record the second payment — money captured at Stripe,
+# no ledger row, and _record_dues_payment's IntegrityError handling swallows exactly
+# that as if it were a harmless replay. The test below is the one that would have
+# caught it, rewritten to assert the correct (refused) outcome instead of stopping at
+# a green "200, intent created" that never exercised the webhook leg where the loss
+# actually happens.
+#
+# THE LANDED FIX keeps the charge path closed on existence — re-payment for one dues
+# cycle is structurally unrepresentable in this ledger until dues status is modeled
+# explicitly (c83-shaped) — and uses dues_contributions_subquery only to pick an
+# honest 409 reason: already_paid (net > 0) or refunded_contact_treasurer (net <= 0).
 
 
-async def test_dues_intent_is_allowed_again_after_a_full_refund(
+async def test_dues_intent_refuses_with_an_honest_reason_after_a_full_refund(
     client: AsyncClient,
     make_chapter_with: MakeChapterWith,
     stripe_env: None,
     stripe_calls: dict[str, list[dict[str, Any]]],
 ) -> None:
-    """The exact board c172 scenario: paid, refunded in full, must be payable again."""
+    """THE TEST THAT WOULD HAVE CAUGHT THE MONEY-LOSS REGRESSION.
+
+    A hand-entered original payment (no DuesPaymentIntent reservation exists to
+    block a retry on its own) refunded in full. The charge path must REFUSE the
+    retry outright — asserting refusal here, rather than a 200 that goes on to
+    settle a real Stripe payment, is what keeps the webhook-settlement leg (where
+    uq_ledger_dues_payment_once would silently swallow the second payment)
+    unreachable in the first place.
+    """
     setup = await make_chapter_with(role="member")
     await _onboard(client, setup)
     cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
     entry_id = await _pay_on_ledger(client, setup, cycle_id, setup.member.id, 25_000)
 
-    # Before the refund: blocked, same as the plain already-paid case above.
+    # Before the refund: blocked, same as the plain already-paid case below.
     blocked = await client.post(
         f"/payments/dues/{cycle_id}/intent",
         json={"rail": "card"},
@@ -484,12 +508,15 @@ async def test_dues_intent_is_allowed_again_after_a_full_refund(
 
     await _correct(client, setup, entry_id, -25_000)
 
-    allowed = await client.post(
+    # After the refund: STILL blocked (the charge path never reopens), but the 409
+    # now tells the truth about why instead of repeating "already_paid".
+    refused = await client.post(
         f"/payments/dues/{cycle_id}/intent",
         json={"rail": "card"},
         headers=setup.member.headers,
     )
-    assert allowed.status_code == 200, allowed.text
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == "refunded_contact_treasurer"
 
 
 async def test_dues_intent_stays_blocked_after_a_partial_refund(
@@ -545,7 +572,13 @@ async def test_full_refund_agrees_on_both_the_president_overview_and_the_pay_but
 ) -> None:
     """Both surfaces named in board c172, read through the exact endpoints they use:
     GET .../overview (the President dashboard) and POST .../intent (the pay button).
-    A refund must never leave one saying chase them and the other already paid."""
+
+    THE HONEST RESOLUTION of c172's disagreement is this exact pair, not full
+    alignment: the president sees OUTSTANDING (the member genuinely owes again),
+    and the pay button still refuses them — but with a reason that agrees with the
+    dashboard (refunded_contact_treasurer) instead of contradicting it
+    (already_paid, which is what it said before this fix).
+    """
     setup = await make_chapter_with(role="member")
     await _onboard(client, setup)
     cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
@@ -564,7 +597,8 @@ async def test_full_refund_agrees_on_both_the_president_overview_and_the_pay_but
         json={"rail": "card"},
         headers=setup.member.headers,
     )
-    assert intent.status_code == 200, intent.text
+    assert intent.status_code == 409, intent.text
+    assert intent.json()["detail"] == "refunded_contact_treasurer"
 
 
 async def test_a_reservation_settled_through_stripe_stays_blocked_after_a_refund(
@@ -573,24 +607,19 @@ async def test_a_reservation_settled_through_stripe_stays_blocked_after_a_refund
     stripe_env: None,
     stripe_calls: dict[str, list[dict[str, Any]]],
 ) -> None:
-    """DOCUMENTS A KNOWN REMAINING EDGE, deliberately — this is not the divergence
-    c172 closes, but the boundary of what it safely can.
+    """The SAME refusal for a payment that settled through THIS endpoint's real
+    Stripe flow, not just a treasurer's manual ledger entry — proving the existence
+    check (not the DuesPaymentIntent reservation) is what is actually doing the work.
 
-    Unlike a treasurer's manual ledger entry (the two tests above), a payment made
-    through THIS endpoint's real flow leaves a DuesPaymentIntent reservation behind
-    in 'succeeded' status (board c51 / migration 0010), and nothing transitions that
-    row when a later correction refunds the payment it belongs to. So a member whose
-    ORIGINAL payment went through Stripe stays blocked here even though the President
-    overview now correctly shows them outstanding — the two surfaces still disagree
-    for this one path.
-
-    This is not a quiet gap: it is asserted here on purpose, so it fails loudly if
-    someone "fixes" the reservation check without also fixing what it guards against.
-    Lifting it safely needs more than netting — uq_ledger_dues_payment_once still
-    allows at most one dues_payment row per (cycle, member) ever, so a second Stripe
-    payment could settle with no ledger row to show for it. See the RESIDUAL EDGE
-    comments in payments.py and chapters.py: closing this needs the cycle/member's
-    dues status modeled explicitly (c83-shaped), not a same-day patch.
+    A real payment here leaves a reservation behind in 'succeeded' status (board c51
+    / migration 0010), and nothing transitions that row when a later correction
+    refunds the payment it belongs to. That reservation's own 'succeeded' branch
+    would still unconditionally raise already_paid — but it never gets the chance:
+    the existence check above it in the function runs first, finds the SAME
+    dues_payment row this reservation is tied to, and raises refunded_contact_treasurer
+    before the reservation check is ever reached. This backstops that invariant: if a
+    future change ever let a dues_payment row and its reservation disagree, this is
+    the test that would notice.
     """
     setup = await make_chapter_with(role="member")
     await _onboard(client, setup)
@@ -630,7 +659,7 @@ async def test_a_reservation_settled_through_stripe_stays_blocked_after_a_refund
         headers=setup.member.headers,
     )
     assert retry.status_code == 409
-    assert retry.json()["detail"] == "already_paid"
+    assert retry.json()["detail"] == "refunded_contact_treasurer"
 
 
 async def test_dues_intent_rejects_non_member(

@@ -323,22 +323,26 @@ async def chapter_overview(
         # create_dues_payment_intent used to treat the mere EXISTENCE of a dues_payment
         # row as "already_paid" and never look at corrections, so after a full refund
         # this dashboard said chase them while POST .../intent still answered
-        # already_paid. Both now read dues_contributions_subquery, so a fully-refunded
-        # member is outstanding on both.
+        # already_paid — genuinely two different facts, not two views of one fact.
         #
-        # RESIDUAL EDGE, still open: payments.py also holds a DuesPaymentIntent
-        # reservation in 'succeeded' once a Stripe-originated payment settles
-        # (board c51 / migration 0010), and nothing transitions that row when a later
-        # correction refunds the payment it belongs to. A member whose ORIGINAL payment
-        # went through the Stripe intent flow (not a manually entered cash row) still
-        # gets blocked on a second self-serve attempt by that reservation even though
-        # this dashboard and the netted guard both now agree they are outstanding. Their
-        # ledger's own uq_ledger_dues_payment_once also allows at most one dues_payment
-        # row per (cycle, member) ever, so even lifting the reservation block would let a
-        # second Stripe payment settle without a ledger row to show for it. Closing that
-        # needs the cycle/member's dues status modeled explicitly rather than re-derived
-        # from ledger rows and a reservation table that both assume payment happens once
-        # — c83-shaped work, not a same-day fix.
+        # THE FINAL SPLIT, not full alignment: this DISPLAY netted from the start and
+        # still does — a fully-refunded member reads as outstanding here, full stop.
+        # The CHARGE PATH in payments.py reads the exact same dues_contributions_subquery
+        # now, but only to pick an HONEST reason for a block it still always applies
+        # once any dues_payment row exists: already_paid (net > 0, the money is still
+        # in hand) or refunded_contact_treasurer (net <= 0, they owe again but this
+        # endpoint cannot self-serve it). An earlier version of this fix let the charge
+        # path re-open for net <= 0 instead, which is a money-loss bug, not a fix:
+        # uq_ledger_dues_payment_once allows at most one dues_payment row per (cycle,
+        # member) EVER, so a second Stripe payment settling here would capture real
+        # money and then have no ledger row to show for it once the webhook's insert
+        # lost to that constraint. So the two surfaces now agree on WHETHER a member
+        # owes money (this display, honestly) and on WHY the pay button still refuses
+        # them (payments.py's honest detail string) without ever reopening a charge
+        # path this ledger cannot yet represent safely. Actually letting a refunded
+        # member self-serve repay needs the cycle/member's dues status modeled
+        # explicitly rather than re-derived from ledger rows twice — c83-shaped work,
+        # not a same-day guard change.
         #
         # A dues_payment with related_user_id NULL (a hand-entered cash payment, since
         # POST /ledger does not require it) counts toward collected_cents and toward
