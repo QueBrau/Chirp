@@ -156,6 +156,16 @@ jobs:
         # is exactly what verify:charts exists to catch (c118). Until this step, the
         # script only ran if a human remembered to type the command by hand.
         run: npm run verify:charts
+      - name: Calendar-day rendering
+        working-directory: app-mobile
+        # Board card c165. A calendar day formatted as an instant renders the
+        # PREVIOUS day everywhere west of Greenwich - every chapter meeting showed
+        # one day early, and it was invisible to tsc, invisible to the backend suite
+        # (the stored value was right), and invisible on any machine sitting at UTC.
+        # verify:dates re-runs the assertions under several timezones on both sides
+        # of Greenwich, and asserts the naive version still fails in them so the
+        # check cannot go quietly vacuous.
+        run: npm run verify:dates
       - name: Client/backend contract
         working-directory: app-mobile
         # Board card c121. tsc cannot tell you a client HTTP verb disagrees with

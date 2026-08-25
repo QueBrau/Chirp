@@ -15,6 +15,7 @@ import { Alert, Linking, Pressable, TextInput, View } from "react-native";
 
 import { listMembers, myMemberships, type MyMembershipOut } from "@/api/chapters";
 import { ApiError } from "@/api/client";
+import { calendarDay } from "@/lib/dates";
 import {
   createDuesCycle,
   createLedgerEntry,
@@ -101,7 +102,7 @@ function entryDate(iso: string): string {
 }
 
 function dueDate(isoDay: string): string {
-  return new Date(`${isoDay}T00:00:00`).toLocaleDateString(undefined, {
+  return calendarDay(isoDay).toLocaleDateString(undefined, {
     month: "long",
     day: "numeric",
   });
