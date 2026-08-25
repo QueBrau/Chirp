@@ -1,7 +1,7 @@
 """.edu verification: send a code to a school address, redeem it, record the proof (c86).
 
 This is the ONLY writer of users.campus_verified_at, which per app.core.campus_access is
-the only thing that opens the campus feed and the Yak board.
+the only thing that opens the campus feed and the Chirp board.
 
 WHY THE CAMPUS IS NEVER TAKEN FROM THE REQUEST. The caller supplies an address and
 nothing else; the campus is resolved from that address's domain, server-side, at send

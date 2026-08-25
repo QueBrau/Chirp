@@ -9,7 +9,7 @@ A mobile-first social + operations platform for fraternity/sorority chapters: E2
 | Layer | Choice | Notes |
 |---|---|---|
 | Mobile app | Expo (React Native), iOS + Android | **Dev build required** (`expo prebuild` / EAS Build), NOT Expo Go — libsignal needs native modules |
-| Navigation | Expo Router, tab-based | Tabs: Feed, Yak, Messages, Chapter, Profile. Chapter tab contents are role-gated |
+| Navigation | Expo Router, tab-based | Tabs: Feed, Chirps, Messages, Chapter, Profile. Chapter tab contents are role-gated |
 | Backend | FastAPI (Python 3.12) on Cloud Run | Stateless, containerized, scales to zero |
 | Database | Cloud SQL — PostgreSQL 16 | Connect via Cloud SQL connector/unix socket; use connection pooling (SQLAlchemy pool limits) |
 | Realtime | WebSockets on Cloud Run + Memorystore (Redis) pub/sub | Redis is transport/fan-out ONLY — never message storage |
@@ -31,7 +31,7 @@ A mobile-first social + operations platform for fraternity/sorority chapters: E2
 3. **Org scoping is middleware, not per-endpoint discipline.** Every request resolves `(user_id, chapter_id) → role` via the memberships table before handlers run. One missed check = one chapter reading another's data.
 4. **One auth system, three experiences.** Greek members, non-greek users, and alumni are the same Firebase user type differentiated by membership records — not separate auth flows.
 5. **Append-only ledger.** Never UPDATE or DELETE a financial row. Corrections are new offsetting entries.
-6. **Anonymous to peers, pseudonymous to the server.** Yak posts hide identity from users but retain author_id server-side for moderation/bans.
+6. **Anonymous to peers, pseudonymous to the server.** Chirps posts hide identity from users but retain author_id server-side for moderation/bans.
 
 ---
 
@@ -201,9 +201,9 @@ CREATE TABLE post_comments (
     deleted_at  TIMESTAMPTZ
 );
 
--- ============ YAK (anonymous board) ============
+-- ============ CHIRP (anonymous board) ============
 
-CREATE TABLE yaks (
+CREATE TABLE chirps (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     campus_id   UUID NOT NULL REFERENCES campuses(id),
     author_id   UUID NOT NULL REFERENCES users(id),  -- NEVER exposed via API
@@ -213,19 +213,19 @@ CREATE TABLE yaks (
     removed_at  TIMESTAMPTZ,
     removed_reason TEXT
 );
-CREATE INDEX idx_yaks_campus_time ON yaks(campus_id, created_at DESC) WHERE removed_at IS NULL;
+CREATE INDEX idx_chirps_campus_time ON chirps(campus_id, created_at DESC) WHERE removed_at IS NULL;
 
-CREATE TABLE yak_votes (
-    yak_id  UUID NOT NULL REFERENCES yaks(id),
+CREATE TABLE chirp_votes (
+    chirp_id  UUID NOT NULL REFERENCES chirps(id),
     user_id UUID NOT NULL REFERENCES users(id),
     value   SMALLINT NOT NULL CHECK (value IN (-1, 1)),
-    PRIMARY KEY (yak_id, user_id)
+    PRIMARY KEY (chirp_id, user_id)
 );
 
 CREATE TABLE content_reports (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     reporter_id     UUID NOT NULL REFERENCES users(id),
-    target_type     TEXT NOT NULL CHECK (target_type IN ('yak','post','comment','message_forward','user')),
+    target_type     TEXT NOT NULL CHECK (target_type IN ('chirp','post','comment','message_forward','user')),
     target_id       UUID,
     forwarded_plaintext TEXT,      -- for E2EE message reports: client forwards plaintext
     reason          TEXT NOT NULL,
@@ -371,7 +371,7 @@ backend/
 │   │   ├── keys.py               # key directory: upload bundles, fetch prekey bundles
 │   │   ├── messages.py           # send ciphertext, fetch history, receipts
 │   │   ├── feed.py               # posts, likes, comments
-│   │   ├── yaks.py               # anonymous board + voting
+│   │   ├── chirps.py               # anonymous board + voting
 │   │   ├── moderation.py         # reports, blocks, admin actions
 │   │   ├── lineage.py            # families, edges, tree fetch (returns full adjacency for chapter)
 │   │   ├── finance.py            # dues cycles, ledger (append-only enforced here too), approvals
@@ -406,7 +406,7 @@ backend/
 - `GET /chapters/{id}/lineage` — full nodes + edges + families for tree render
 - `POST /chapters/{id}/dues-cycles`, `POST /payments/dues/{cycle_id}/intent`, `POST /webhooks/stripe`
 - `GET /chapters/{id}/ledger?category=&from=&to=` — treasurer views
-- Standard CRUD for feed, yaks, meetings, alumni, jobs
+- Standard CRUD for feed, chirps, meetings, alumni, jobs
 
 ---
 
@@ -422,7 +422,7 @@ app-mobile/
 │   │   └── join-chapter.tsx      # invite-code deep link landing
 │   ├── (tabs)/
 │   │   ├── feed/                 # For You (v1 = reverse-chron chapter posts)
-│   │   ├── yak/                  # campus anonymous board
+│   │   ├── chirp/                  # campus anonymous board
 │   │   ├── messages/             # conversation list, thread view
 │   │   ├── chapter/              # role-gated: tree, treasurer, secretary, members
 │   │   │   ├── tree.tsx          # Skia lineage graph
@@ -480,7 +480,7 @@ app-mobile/
 | 2 | Chapters + IAM roles + org-scope middleware + role-gated tabs | 1 | Roles: president, VP, treasurer, secretary, **historian**, member, pledge, alumni |
 | 3 | **libsignal RN spike** — encrypt/decrypt between two physical devices | 1 | De-risks the scariest unknown. Real devices, not simulators (Keychain/Keystore differ). If RN+libsignal fails, decide fallback NOW |
 | 4 | E2EE DMs → group chats + sender-key rotation + local SQLite + offline queue + WS/Redis fan-out + content-free push | 2, 3 | "Messaging works" and "E2EE" are ONE milestone |
-| 5 | Feed (reverse-chron v1) + Yak **with moderation built in** (report, block, admin removal) | 2 | App Store Guideline 1.2 requires UGC moderation before submission |
+| 5 | Feed (reverse-chron v1) + Chirps **with moderation built in** (report, block, admin removal) | 2 | App Store Guideline 1.2 requires UGC moderation before submission |
 | 6 | Family tree — lineage CRUD + Skia/d3 interactive graph, ghost nodes, family colors, little-confirms-big | 2 | Demo weapon. Historian/e-board edit rights |
 | 7 | **TestFlight with a real chapter** | 4, 5, 6 | Validate social hook before building money machinery |
 | 8 | Stripe Connect onboarding + dues PaymentSheet (Apple Pay / Google Pay) | 2 | Dues = physical-world service, no Apple 30% cut |
@@ -494,7 +494,7 @@ app-mobile/
 
 1. `messages.ciphertext` is never parsed, logged, indexed, or included in push payloads.
 2. `ledger_entries` has no UPDATE/DELETE path anywhere — corrections reference `corrects_entry_id`.
-3. Yak API responses never include `author_id`.
+3. Chirps API responses never include `author_id`.
 4. Every `/chapters/{id}/*` route goes through org-scope middleware. Write the cross-chapter 403 test before the features.
 5. Private keys never leave the device. No key material in Postgres except public keys.
 6. Secrets via Secret Manager; logs redact tokens, emails where feasible, and all financial fields.

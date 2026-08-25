@@ -1,4 +1,4 @@
-"""Moderation scoping (SECURITY-REVIEW finding 1): reports and yak removal must be
+"""Moderation scoping (SECURITY-REVIEW finding 1): reports and chirp removal must be
 scoped to the target's campus, not readable/actionable by e-board members platform-wide."""
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ async def _bootstrap_user_with_campus(
 ) -> ApiUser:
     """Bootstrap a user pinned to a specific campus_id.
 
-    make_user (conftest) doesn't expose campus_id, and posting a yak requires
-    user.campus_id == the target campus (routers/yaks.py _require_campus_user), so
+    make_user (conftest) doesn't expose campus_id, and posting a chirp requires
+    user.campus_id == the target campus (routers/chirps.py _require_campus_user), so
     this mirrors make_user's flow with campus_id added to the bootstrap body.
     """
     uid = f"uid-{uuid.uuid4().hex}"
@@ -86,13 +86,13 @@ async def test_reporter_in_other_campus_cannot_see_report(
     assert any(r["id"] == report_id for r in same_campus_view.json())
 
 
-async def test_remove_yak_cross_campus_is_403(
+async def test_remove_chirp_cross_campus_is_403(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
     """An e-board member of an unrelated campus's chapter cannot remove another
-    campus's yak; the matching campus's e-board still can.
+    campus's chirp; the matching campus's e-board still can.
 
-    Before the fix, any e-board member of any chapter could remove any campus's yaks.
+    Before the fix, any e-board member of any chapter could remove any campus's chirps.
     """
     chapter_a = await make_chapter_with("president")
     chapter_b = await make_chapter_with("president")
@@ -106,18 +106,18 @@ async def test_remove_yak_cross_campus_is_403(
     assert chapter_a_detail.status_code == 200, chapter_a_detail.text
     campus_a_id = chapter_a_detail.json()["campus_id"]
 
-    yakker = await _bootstrap_user_with_campus(client, campus_a_id, "Yakker")
-    yak = await client.post(
-        f"/campuses/{campus_a_id}/yaks",
-        json={"body": "anonymous yak"},
-        headers=yakker.headers,
+    chirpker = await _bootstrap_user_with_campus(client, campus_a_id, "Chirpker")
+    chirp = await client.post(
+        f"/campuses/{campus_a_id}/chirps",
+        json={"body": "anonymous chirp"},
+        headers=chirpker.headers,
     )
-    assert yak.status_code == 201, yak.text
-    yak_id = yak.json()["id"]
+    assert chirp.status_code == 201, chirp.text
+    chirp_id = chirp.json()["id"]
 
     # Chapter B's president is e-board somewhere, but not on campus A -> 403.
     cross_campus_removal = await client.post(
-        f"/moderation/yaks/{yak_id}/remove",
+        f"/moderation/chirps/{chirp_id}/remove",
         json={"reason": "test"},
         headers=chapter_b.president.headers,
     )
@@ -126,7 +126,7 @@ async def test_remove_yak_cross_campus_is_403(
 
     # Sanity: chapter A's president (matching campus) CAN remove it.
     same_campus_removal = await client.post(
-        f"/moderation/yaks/{yak_id}/remove",
+        f"/moderation/chirps/{chirp_id}/remove",
         json={"reason": "test"},
         headers=chapter_a.president.headers,
     )

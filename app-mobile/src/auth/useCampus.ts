@@ -6,7 +6,7 @@ import { useSession } from "./SessionProvider";
  * The signed-in user's campus. c67: this used to fetch GET /campuses/{id}
  * itself, per hook instance — with OrgsScreen and MemberOrgHub both mounted
  * on the Orgs tab, one screen mount fired two identical requests, plus a
- * third from Yak. campus_id is a property of the session (derived from
+ * third from Chirp. campus_id is a property of the session (derived from
  * user.campus_id), so SessionProvider now resolves it exactly once and this
  * is just a thin reader over that shared value — any number of call sites,
  * one fetch. Kept as its own export (rather than inlining useSession().campus

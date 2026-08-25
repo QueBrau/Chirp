@@ -822,7 +822,7 @@ function OrgToolsSegment({ chapterId, role }: { chapterId: string; role: RoleNam
       href: "/chapter/moderation",
       icon: "shield",
       title: "Moderation",
-      description: "Open reports and yak removal",
+      description: "Open reports and chirp removal",
       capability: "moderation",
     },
   ];

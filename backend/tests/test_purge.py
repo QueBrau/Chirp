@@ -63,28 +63,28 @@ async def _insert_post_like(post_id: str, user_id: str) -> None:
         await session.commit()
 
 
-async def _insert_yak(campus_id: str, author_id: str, *, removed_at: datetime | None) -> str:
+async def _insert_chirp(campus_id: str, author_id: str, *, removed_at: datetime | None) -> str:
     async with get_session_factory()() as session:
         result = await session.execute(
             text(
-                "INSERT INTO yaks (campus_id, author_id, body, removed_at) "
-                "VALUES (:campus_id, :author_id, 'purge test yak', :removed_at) "
+                "INSERT INTO chirps (campus_id, author_id, body, removed_at) "
+                "VALUES (:campus_id, :author_id, 'purge test chirp', :removed_at) "
                 "RETURNING id"
             ),
             {"campus_id": campus_id, "author_id": author_id, "removed_at": removed_at},
         )
-        yak_id = str(result.scalar_one())
+        chirp_id = str(result.scalar_one())
         await session.commit()
-    return yak_id
+    return chirp_id
 
 
-async def _insert_yak_vote(yak_id: str, user_id: str) -> None:
+async def _insert_chirp_vote(chirp_id: str, user_id: str) -> None:
     async with get_session_factory()() as session:
         await session.execute(
             text(
-                "INSERT INTO yak_votes (yak_id, user_id, value) VALUES (:yak_id, :user_id, 1)"
+                "INSERT INTO chirp_votes (chirp_id, user_id, value) VALUES (:chirp_id, :user_id, 1)"
             ),
-            {"yak_id": yak_id, "user_id": user_id},
+            {"chirp_id": chirp_id, "user_id": user_id},
         )
         await session.commit()
 
@@ -151,24 +151,24 @@ async def test_purge_comments_expired_gone_fresh_and_live_survive(
     assert await _row_exists("post_comments", live_comment)
 
 
-async def test_purge_yaks_expired_gone_fresh_and_live_survive(
+async def test_purge_chirps_expired_gone_fresh_and_live_survive(
     client: AsyncClient, make_campus: MakeCampus, make_user: MakeUser
 ) -> None:
-    """Same window rule applied to yaks via removed_at instead of deleted_at."""
+    """Same window rule applied to chirps via removed_at instead of deleted_at."""
     campus_id = await make_campus()
-    author = await make_user("Yak Author", account_type="non_greek")
+    author = await make_user("Chirp Author", account_type="non_greek")
     now = datetime.now(timezone.utc)
 
-    expired_yak = await _insert_yak(campus_id, author.id, removed_at=now - timedelta(days=31))
-    fresh_yak = await _insert_yak(campus_id, author.id, removed_at=now - timedelta(days=5))
-    live_yak = await _insert_yak(campus_id, author.id, removed_at=None)
+    expired_chirp = await _insert_chirp(campus_id, author.id, removed_at=now - timedelta(days=31))
+    fresh_chirp = await _insert_chirp(campus_id, author.id, removed_at=now - timedelta(days=5))
+    live_chirp = await _insert_chirp(campus_id, author.id, removed_at=None)
 
     result = await _run_purge(now=now)
 
-    assert result.yaks == 1
-    assert not await _row_exists("yaks", expired_yak)
-    assert await _row_exists("yaks", fresh_yak)
-    assert await _row_exists("yaks", live_yak)
+    assert result.chirps == 1
+    assert not await _row_exists("chirps", expired_chirp)
+    assert await _row_exists("chirps", fresh_chirp)
+    assert await _row_exists("chirps", live_chirp)
 
 
 async def test_purge_post_cascades_likes_and_comments_without_fk_violation(
@@ -195,21 +195,21 @@ async def test_purge_post_cascades_likes_and_comments_without_fk_violation(
     assert not await _row_exists("post_comments", live_comment_on_expired_post)
 
 
-async def test_purge_yak_cascades_votes_without_fk_violation(
+async def test_purge_chirp_cascades_votes_without_fk_violation(
     client: AsyncClient, make_campus: MakeCampus, make_user: MakeUser
 ) -> None:
-    """Purging a yak also removes its votes — yak_votes.yak_id has no ON DELETE CASCADE."""
+    """Purging a chirp also removes its votes — chirp_votes.chirp_id has no ON DELETE CASCADE."""
     campus_id = await make_campus()
-    author = await make_user("Yak Author", account_type="non_greek")
-    voter = await make_user("Yak Voter", account_type="non_greek")
+    author = await make_user("Chirp Author", account_type="non_greek")
+    voter = await make_user("Chirp Voter", account_type="non_greek")
     now = datetime.now(timezone.utc)
-    expired_yak = await _insert_yak(campus_id, author.id, removed_at=now - timedelta(days=31))
-    await _insert_yak_vote(expired_yak, voter.id)
+    expired_chirp = await _insert_chirp(campus_id, author.id, removed_at=now - timedelta(days=31))
+    await _insert_chirp_vote(expired_chirp, voter.id)
 
     result = await _run_purge(now=now)
 
-    assert result.yaks == 1
-    assert not await _row_exists("yaks", expired_yak)
+    assert result.chirps == 1
+    assert not await _row_exists("chirps", expired_chirp)
 
 
 async def test_purge_is_safe_to_run_twice(

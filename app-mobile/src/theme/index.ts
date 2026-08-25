@@ -120,9 +120,9 @@ export const metrics = {
   fabSize: 56,
   /**
    * Header accent bar under an oversized screen title (§10.1: "zones, not card
-   * soup" — Home/Yak/Orgs headers get a short accent bar under the title).
+   * soup" — Home/Chirp/Orgs headers get a short accent bar under the title).
    * Dimensions only — color is the screen's own accent (campus primary by
-   * default, or campusColors.secondary for the gold moment on Home/Yak per
+   * default, or campusColors.secondary for the gold moment on Home/Chirp per
    * §10.4), never a fixed hex, so it moves with campus/org theming.
    */
   accentBarWidth: 4,

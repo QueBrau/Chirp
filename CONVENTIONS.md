@@ -55,7 +55,7 @@ This file pins the naming/dependency contract so independently-built modules fit
 `app/models/` split by domain, mirroring SPEC §3 exactly (types, checks, defaults, indexes):
 `identity.py` (User, Campus, Chapter, Membership, ChapterInvite), `e2ee.py` (Device, SignedPrekey,
 OneTimePrekey, KyberPrekey), `messaging.py` (Conversation, ConversationMember, Message, MessageReceipt),
-`social.py` (Post, PostLike, PostComment), `yak.py` (Yak, YakVote, ContentReport, UserBlock),
+`social.py` (Post, PostLike, PostComment), `chirp.py` (Chirp, ChirpVote, ContentReport, UserBlock),
 `lineage.py` (Family, LineageEdge), `finance.py` (DuesCycle, LedgerEntry, SpendApproval),
 `meetings.py` (Meeting, MeetingAttendance), `alumni.py` (AlumniProfile, JobPost).
 `models/__init__.py` re-exports everything (so `Base.metadata` is complete and
@@ -71,8 +71,8 @@ UUID PKs: `server_default=text("gen_random_uuid()")`.
 | `routers/keys.py` | `POST /devices`, `POST /devices/{device_id}/prekeys`, `GET /devices/{device_id}/prekeys/count`, `GET /users/{user_id}/prekey-bundle` |
 | `routers/messages.py` | `POST /conversations`, `GET /conversations`, `POST /conversations/{conversation_id}/messages`, `GET /conversations/{conversation_id}/messages?before=&limit=`, `POST /conversations/{conversation_id}/leave`, `POST /messages/{message_id}/receipts` |
 | `routers/feed.py` | `/chapters/{chapter_id}/posts` CRUD + `/posts/{post_id}/likes`, `/posts/{post_id}/comments` |
-| `routers/yaks.py` | `GET/POST /campuses/{campus_id}/yaks`, `PUT /yaks/{yak_id}/vote`, `DELETE /yaks/{yak_id}` (author only) |
-| `routers/moderation.py` | `POST/GET /moderation/reports`, `POST/DELETE /moderation/blocks`, `POST /moderation/yaks/{yak_id}/remove` |
+| `routers/chirps.py` | `GET/POST /campuses/{campus_id}/chirps`, `PUT /chirps/{chirp_id}/vote`, `DELETE /chirps/{chirp_id}` (author only) |
+| `routers/moderation.py` | `POST/GET /moderation/reports`, `POST/DELETE /moderation/blocks`, `POST /moderation/chirps/{chirp_id}/remove` |
 | `routers/lineage.py` | `GET /chapters/{chapter_id}/lineage` (nodes+edges+families), `POST /chapters/{chapter_id}/lineage/families`, `POST /chapters/{chapter_id}/lineage/edges`, `POST /chapters/{chapter_id}/lineage/edges/{edge_id}/confirm` |
 | `routers/finance.py` | `/chapters/{chapter_id}/dues-cycles`, `GET/POST /chapters/{chapter_id}/ledger`, `/chapters/{chapter_id}/spend-approvals` (+ decide) |
 | `routers/meetings.py` | `/chapters/{chapter_id}/meetings` CRUD + `PUT .../meetings/{meeting_id}/attendance` |
@@ -86,13 +86,13 @@ clarity). `app.main.create_app()` includes all twelve + `ws.gateway.router` + `G
 
 `app/schemas/<domain>.py` (same domain split as models). Pydantic v2,
 `model_config = ConfigDict(from_attributes=True)`. Naming: `XCreate`, `XUpdate`, `XOut`.
-**`YakOut` has NO author field of any kind (§8.3).** Ciphertext travels as base64 `str` in
+**`ChirpOut` has NO author field of any kind (§8.3).** Ciphertext travels as base64 `str` in
 JSON bodies (`ciphertext_b64`), stored as `bytes`.
 
 ### Functional vs stub (§9)
 
 FULLY functional: keys, messages (+ prekey_service, pubsub fan-out), chapters, auth bootstrap.
-Functional-but-simple (plain DB CRUD is fine): feed, yaks, moderation, lineage, finance, meetings, alumni.
+Functional-but-simple (plain DB CRUD is fine): feed, chirps, moderation, lineage, finance, meetings, alumni.
 STUB ONLY: payments/stripe_service (raise 501 `NotImplementedError`-style with `# TODO(milestone-8)`),
 fcm_service (log-only no-op, content-free signature `send_content_free_push(user_id, title)`).
 Do NOT build: Skia tree canvas, encrypted backups.

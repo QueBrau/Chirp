@@ -23,7 +23,7 @@ async def _make_campus_user(
 ) -> ApiUser:
     """Bootstrap a user pinned to `campus_id` (make_user doesn't expose campus_id).
 
-    Matches the helper in test_yaks.py / test_moderation_scope.py.
+    Matches the helper in test_chirps.py / test_moderation_scope.py.
     """
     uid = f"uid-{uuid.uuid4().hex}"
     headers = {"X-Debug-Firebase-Uid": uid}

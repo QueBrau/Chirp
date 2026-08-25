@@ -10,7 +10,7 @@ This file is the binding contract. Screens/components use ONLY these tokens via
 Modern, clean, a little playful. Soft neutral canvas, white cards, ONE confident
 violet-indigo accent used sparingly + gradient moments for hero surfaces. Generous
 whitespace, bold tight headings, pill/capsule shapes everywhere. Never corporate,
-never cluttered. Anonymous (Yak) content gets playful pastel treatment.
+never cluttered. Anonymous (Chirps) content gets playful pastel treatment.
 
 ## 2. Color tokens
 
@@ -32,7 +32,7 @@ never cluttered. Anonymous (Yak) content gets playful pastel treatment.
 | danger | #E5484D | money out, destructive, downvote active |
 | dangerSoft | #FDECEC | danger chip bg |
 | warning | #F5A623 | pending states |
-| yakTints | #FFF3E9 / #EDF6FF / #F3EDFF / #EAF8F1 | rotating card tints on Yak (by index % 4) |
+| chirpTints | #FFF3E9 / #EDF6FF / #F3EDFF / #EAF8F1 | rotating card tints on Chirps (by index % 4) |
 
 ### Dark
 | token | value |
@@ -48,7 +48,7 @@ never cluttered. Anonymous (Yak) content gets playful pastel treatment.
 | accentSoft | rgba(124,124,255,0.16) |
 | accentGradient | #6366F1 → #8B5CF6 |
 | success/danger/warning | #2BD597 / #FF6369 / #FFB84D (softs = 16% alpha of each) |
-| yakTints | 12% alpha versions of light tints |
+| chirpTints | 12% alpha versions of light tints |
 
 Dark follows system (`useColorScheme`). Both palettes complete — no color defined
 in only one mode.
@@ -83,13 +83,13 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
 - **Chip** — pill, micro type. Variants: neutral (surfaceAlt/inkSecondary),
   accent (accentSoft/accent), success, danger, warning. Used for roles
   ("President"), pledge classes, categories, "Correction" badges.
-- **VotePill** — single vertical capsule on Yak cards: ▲ / score (stat type) / ▼ in
+- **VotePill** — single vertical capsule on Chirps cards: ▲ / score (stat type) / ▼ in
   surfaceAlt; active direction fills accent (up) / danger (down) with white glyph.
 - **HeroCard** — accentGradient bg, white text, radius 20. For org identity header
   and treasurer balance. Max one per screen.
 - **Floating tab bar** — surface pill container, radius 28, inset 12 horizontal /
   8 bottom, border + shadow per card spec. Active tab: accentSoft pill behind
-  icon+label in accent; inactive: inkFaint icon only. 5 tabs: Home, Yak, Messages,
+  icon+label in accent; inactive: inkFaint icon only. 5 tabs: Home, Chirps, Messages,
   Orgs, Profile.
 - **Screen header** — display title + caption subtitle, no nav chrome, 24 top pad.
 - **EmptyState** — small geometric mark (outlined circle or squircle drawn with
@@ -114,8 +114,8 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
   for members; "Lakeview State" later for campus-wide).
 - Auth `account-type` copy: "I'm a student" / "I'm in a fraternity or sorority" /
   "I'm an alum" — same three backend account types, friendlier framing.
-- Yak stays campus-wide + anonymous: NO avatars and NO masks of any kind — the
-  yakTint card background + typography carry the anonymity. Optional small tinted
+- Chirps stays campus-wide + anonymous: NO avatars and NO masks of any kind — the
+  chirpTint card background + typography carry the anonymity. Optional small tinted
   geometric dot (8px circle in the card's tint, darkened) as the only marker.
   VotePill on the right.
 
@@ -243,7 +243,7 @@ segments under the org hero — a pill segmented control: **Feed · Events · To
 Generic-clean is not enough. Every screen must pass these:
 
 1. **Zones, not card soup.** Each screen has a distinct header zone and content
-   zone. Home/Yak/Orgs headers get an oversized title with a short gold accent
+   zone. Home/Chirp/Orgs headers get an oversized title with a short gold accent
    bar (4x28, radius 2) under it, plus a micro eyebrow above ("UNC GREENSBORO ·
    SPARTANS" style). Never an unbroken stack of identical white rectangles —
    vary card sizes, insets, and groupings.
@@ -257,12 +257,12 @@ Generic-clean is not enough. Every screen must pass these:
 4. **One gold moment per screen.** Spartan gold is the delight color: the accent
    bar, an active vote, the balance figure, an unread ring. Never gold-wash
    whole surfaces; never zero gold either.
-5. **Yak is a PLACE, not a list.** The Yak board renders on a deep-navy campus
+5. **Chirps is a PLACE, not a list.** The Chirps board renders on a deep-navy campus
    canvas (campus primary dark wash over bg in BOTH light and dark modes) with
    light tinted cards floating on it and gold vote states. It should feel like
    the campus at night — instantly distinct from Home.
 6. **Numbers have personality.** All counts/scores/money in the stat type,
-   tabular; notable numbers (top yak score, balance) get gold.
+   tabular; notable numbers (top chirp score, balance) get gold.
 7. **Copy is specific.** Mock content and microcopy name real things (UNCG,
    Spartans, College Ave, EUC) — never lorem-ipsum-flavored filler.
 

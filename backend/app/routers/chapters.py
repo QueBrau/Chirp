@@ -754,7 +754,7 @@ async def join_chapter(
     # Before this, nothing anywhere wrote users.campus_id: c85 correctly stopped
     # trusting the client to assert one at bootstrap, and named c86's .edu
     # redemption as the only writer. But c86 is deferred, so every user sat at
-    # campus_id NULL forever, which dead-ends Home's Campus tab AND the whole Yak
+    # campus_id NULL forever, which dead-ends Home's Campus tab AND the whole Chirp
     # tab and makes board gate c71 unreachable.
     #
     # This is NOT a rollback of c85. The value is read off the CHAPTER, which

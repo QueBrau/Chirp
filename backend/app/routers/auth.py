@@ -106,7 +106,7 @@ async def get_campus(
 ) -> CampusOut:
     """Return a campus by id; any registered caller may read one (c46).
 
-    Campus name/slug are public-facing labels shown on Profile and the Yak board
+    Campus name/slug are public-facing labels shown on Profile and the Chirp board
     header. Before this route the app had no way to resolve users.campus_id to a
     name, so those screens hardcoded a mock campus — the bug this fixes.
     """

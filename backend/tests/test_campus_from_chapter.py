@@ -3,7 +3,7 @@
 Before this, nothing anywhere wrote users.campus_id — c85 removed the client-supplied
 value at bootstrap and named c86's `.edu` redemption as the only writer, then c86 was
 deferred. Every user sat at NULL forever, which dead-ends Home's Campus tab and the
-whole Yak tab and makes gate c71 unreachable.
+whole Chirp tab and makes gate c71 unreachable.
 
 The point of these tests is not "campus gets set". It is the two guarantees that make
 setting it safe: the value comes off the CHAPTER (never a request body, so c85 stays

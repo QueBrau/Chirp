@@ -1,7 +1,7 @@
 """c142: moderation's c108 tier follows the target's actual audience, not its type.
 
-THE BUG, and why "target_type == 'yak'" was wrong the moment c71 shipped: a Post can
-carry audience="campus" and publish to the campus feed, exactly like a Yak does. But
+THE BUG, and why "target_type == 'chirp'" was wrong the moment c71 shipped: a Post can
+carry audience="campus" and publish to the campus feed, exactly like a Chirp does. But
 resolve_report and remove_content both keyed the .edu-verification tier on
 target_type alone, so a campus-audience POST read as chapter content for moderation
 purposes even though feed.py requires a verified .edu to CREATE one. Net effect:

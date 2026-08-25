@@ -117,6 +117,15 @@
         "cd /Users/brauliopantoja-esquina/Projects/Chirp/app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8001 npx expo start --web --port 8083"
       ],
       "port": 8083
+    },
+    {
+      "name": "artifact-preview",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /private/tmp/claude-501/-Users-brauliopantoja-esquina-Projects-Chirp/a57809e8-49f9-4c8d-895f-c6549b8a8cc3/scratchpad && python3 -m http.server 8084"
+      ],
+      "port": 8084
     }
   ]
 }

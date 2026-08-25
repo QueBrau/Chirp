@@ -73,7 +73,7 @@ async def redeem_verification(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> CampusVerificationStatus:
-    """Redeem a code and record the proof; opens the campus feed and Yak."""
+    """Redeem a code and record the proof; opens the campus feed and Chirp."""
     await campus_verification.redeem(session, user, body.code)
     return CampusVerificationStatus(
         verified=is_campus_verified(user),

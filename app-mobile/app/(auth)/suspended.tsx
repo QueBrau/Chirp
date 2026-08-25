@@ -8,7 +8,7 @@
  * one deliberately doesn't, specifically so the client can render this).
  *
  * DESIGN.md §10's "one gold moment, never zero" targets product surfaces —
- * Home, Yak, Orgs, the things a member uses. This is the opposite of one: a
+ * Home, Chirps, Orgs, the things a member uses. This is the opposite of one: a
  * screen that exists because using the product stopped being available. Gold
  * is the delight color; painting it on a suspension notice would read as
  * tone-deaf, not on-brand. The accent bar here is intentionally palette.danger

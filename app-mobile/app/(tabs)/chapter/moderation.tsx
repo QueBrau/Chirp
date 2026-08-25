@@ -1,7 +1,7 @@
 /**
  * Moderation (board c35/c78, App Store Guideline 1.2): lists open content reports,
- * lets an e-board moderator remove a reported yak — the ONLY removal action the
- * backend actually supports (POST /moderation/yaks/{yak_id}/remove, gated
+ * lets an e-board moderator remove a reported chirp — the ONLY removal action the
+ * backend actually supports (POST /moderation/chirps/{chirp_id}/remove, gated
  * `_require_any_eboard`) — and now closes reports for real via PATCH
  * /moderation/reports/{id} (c91). There is no endpoint to remove a reported post
  * or comment, and no endpoint at all for message_forward reports (E2EE — the
@@ -23,7 +23,7 @@
  * chapter. That's the server's call to make, not this screen's.
  *
  * c91 shipped PATCH /moderation/reports/{id} with no client function and no call
- * site anywhere — this screen is the first thing that calls it. Removing a yak now
+ * site anywhere — this screen is the first thing that calls it. Removing a chirp now
  * resolves its report as "actioned" through the real endpoint instead of tracking
  * "handled" in local state for the session only, so a reload no longer resurrects
  * it as open.
@@ -35,7 +35,7 @@ import { Alert, View } from "react-native";
 import { ApiError } from "@/api/client";
 import {
   listReports,
-  removeYak,
+  removeChirp,
   resolveReport,
   type ContentReportOut,
   type ReportTargetType,
@@ -52,7 +52,7 @@ function showApiError(error: unknown, title: string): void {
   Alert.alert(title, message);
 }
 
-/** Compact relative age ("just now", "5h ago", "2d ago") — matches Home/Yak. */
+/** Compact relative age ("just now", "5h ago", "2d ago") — matches Home/Chirp. */
 function age(iso: string): string {
   const hours = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 3_600_000));
   if (hours < 1) return "just now";
@@ -61,17 +61,17 @@ function age(iso: string): string {
 }
 
 const TARGET_LABELS: Record<ReportTargetType, string> = {
-  yak: "Yak",
+  chirp: "Chirp",
   post: "Post",
   comment: "Comment",
   message_forward: "Message",
   user: "User",
 };
 
-/** Only yak removal is wired to a real endpoint — narrows target_id to string
+/** Only chirp removal is wired to a real endpoint — narrows target_id to string
  * so the Remove button below never has to fight a `string | null` type. */
-function removableYakId(report: ContentReportOut): string | null {
-  return report.target_type === "yak" ? report.target_id : null;
+function removableChirpId(report: ContentReportOut): string | null {
+  return report.target_type === "chirp" ? report.target_id : null;
 }
 
 export default function ModerationScreen() {
@@ -130,21 +130,21 @@ export default function ModerationScreen() {
     setReports((current) => current.filter((r) => r.id !== reportId));
   };
 
-  const doRemove = async (report: ContentReportOut, yakId: string) => {
+  const doRemove = async (report: ContentReportOut, chirpId: string) => {
     setWorkingReportId(report.id);
     try {
       // Reuse the reporter's own stated reason as the removal reason (v1
       // scaffolding, CONVENTIONS.md "functional-but-simple" for moderation)
       // rather than adding a second free-text field just for this.
-      await removeYak(yakId, report.reason);
+      await removeChirp(chirpId, report.reason);
       // c78: c91's resolve endpoint existed with no caller anywhere. Removing
-      // the yak takes the content down; resolving the REPORT is what actually
+      // the chirp takes the content down; resolving the REPORT is what actually
       // empties the queue — the two were separate actions server-side and
       // this screen used to only ever do the first one.
       await resolveReport(report.id, "actioned", report.reason);
       closeReport(report.id);
     } catch (error) {
-      showApiError(error, "Couldn't remove that yak");
+      showApiError(error, "Couldn't remove that chirp");
     } finally {
       setWorkingReportId(null);
     }
@@ -162,12 +162,12 @@ export default function ModerationScreen() {
     }
   };
 
-  const confirmRemove = (report: ContentReportOut, yakId: string) => {
+  const confirmRemove = (report: ContentReportOut, chirpId: string) => {
     Alert.alert(
-      "Remove this yak?",
+      "Remove this chirp?",
       "This takes it down for everyone on the board. This can't be undone.",
       [
-        { text: "Remove", style: "destructive", onPress: () => void doRemove(report, yakId) },
+        { text: "Remove", style: "destructive", onPress: () => void doRemove(report, chirpId) },
         { text: "Cancel", style: "cancel" },
       ],
     );
@@ -201,7 +201,7 @@ export default function ModerationScreen() {
         <View style={{ gap: spacing.md }}>
           <SectionHeader title="Open reports" caption={`${reports.length} waiting`} />
           {reports.map((report) => {
-            const yakId = removableYakId(report);
+            const chirpId = removableChirpId(report);
             const working = workingReportId === report.id;
             return (
               <Card key={report.id}>
@@ -224,7 +224,7 @@ export default function ModerationScreen() {
                       {report.forwarded_plaintext}
                     </AppText>
                   ) : null}
-                  {yakId === null ? (
+                  {chirpId === null ? (
                     <AppText variant="caption" tone="tertiary">
                       Removal isn't available for {TARGET_LABELS[report.target_type].toLowerCase()}{" "}
                       reports yet — dismiss it once you've reviewed it.
@@ -232,12 +232,12 @@ export default function ModerationScreen() {
                   ) : null}
 
                   <View style={{ gap: spacing.xs }}>
-                    {yakId !== null ? (
+                    {chirpId !== null ? (
                       <Button
-                        label={working ? "Working..." : "Remove yak"}
+                        label={working ? "Working..." : "Remove chirp"}
                         variant="destructive"
                         disabled={working}
-                        onPress={() => confirmRemove(report, yakId)}
+                        onPress={() => confirmRemove(report, chirpId)}
                       />
                     ) : null}
                     <Button

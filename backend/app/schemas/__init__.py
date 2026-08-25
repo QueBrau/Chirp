@@ -98,16 +98,16 @@ from app.schemas.social import (
     PostOut,
     PostUpdate,
 )
-from app.schemas.yak import (
+from app.schemas.chirp import (
     ContentReportCreate,
     ContentReportOut,
     UserBlockCreate,
     UserBlockOut,
-    YakCreate,
-    YakOut,
-    YakRemoveRequest,
-    YakVoteCreate,
-    YakVoteOut,
+    ChirpCreate,
+    ChirpOut,
+    ChirpRemoveRequest,
+    ChirpVoteCreate,
+    ChirpVoteOut,
 )
 
 __all__ = [
@@ -199,14 +199,14 @@ __all__ = [
     "PostLikeOut",
     "PostOut",
     "PostUpdate",
-    # yak
+    # chirp
     "ContentReportCreate",
     "ContentReportOut",
     "UserBlockCreate",
     "UserBlockOut",
-    "YakCreate",
-    "YakOut",
-    "YakRemoveRequest",
-    "YakVoteCreate",
-    "YakVoteOut",
+    "ChirpCreate",
+    "ChirpOut",
+    "ChirpRemoveRequest",
+    "ChirpVoteCreate",
+    "ChirpVoteOut",
 ]

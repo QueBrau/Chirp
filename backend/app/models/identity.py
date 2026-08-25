@@ -60,7 +60,7 @@ class User(Base):
         UUID(as_uuid=True), ForeignKey("users.id")
     )
     # .edu verification (board c86/c88). NULL == never verified. This is the ONLY thing
-    # that may open the campus feed and the Yak board — deliberately NOT campus_id.
+    # that may open the campus feed and the Chirp board — deliberately NOT campus_id.
     #
     # WHY THE DISTINCTION IS LOAD-BEARING: campus_id is reachable without any email at
     # all. c96 made redeeming a chapter invite write it, and per c105 an invite code is
