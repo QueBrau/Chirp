@@ -17,7 +17,7 @@ import { useRouter, type Href } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Image, Pressable, Share, View, type ViewStyle } from "react-native";
+import { Image, Pressable, Share, View, type ViewStyle } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 
 import {
@@ -54,6 +54,7 @@ import {
   SectionHeader,
   type CreateEventInput,
 } from "@/components";
+import { confirmAction, showAlert } from "@/lib/alert";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -171,7 +172,7 @@ function age(iso: string): string {
 /** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
 function showApiError(error: unknown, title: string): void {
   const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
+  showAlert(title, message);
 }
 
 /** Pill segmented control under the org hero (§8.7): Feed · Events · Tools, org-accent active state. */
@@ -277,7 +278,7 @@ function OrgFeedSegment({
   const reportPost = async (item: OrgFeedItem, reason: string) => {
     try {
       await createReport({ target_type: "post", target_id: item.post.id, reason });
-      Alert.alert("Reported", "Thanks for letting us know.");
+      showAlert("Reported", "Thanks for letting us know.");
     } catch (error) {
       showApiError(error, "Couldn't send that report");
     }
@@ -625,30 +626,26 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
   // Confirmed rather than instant: this is not undoable through any screen in the
   // app, and the whole point of the code is that other people are holding it.
   const confirmRevoke = (target: ChapterInviteOut) => {
-    Alert.alert(
-      "Turn off this code?",
-      `${target.code} stops working immediately. Anyone still holding it will need a new one.`,
-      [
-        { text: "Keep it", style: "cancel" },
-        {
-          text: "Turn it off",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              setRevoking(target.code);
-              try {
-                await revokeInvite(chapterId, target.code);
-                await refreshExisting();
-              } catch {
-                setError("Couldn't turn that code off. Try again.");
-              } finally {
-                setRevoking(null);
-              }
-            })();
-          },
-        },
-      ],
-    );
+    confirmAction({
+      title: "Turn off this code?",
+      message: `${target.code} stops working immediately. Anyone still holding it will need a new one.`,
+      confirmLabel: "Turn it off",
+      cancelLabel: "Keep it",
+      destructive: true,
+      onConfirm: () => {
+        void (async () => {
+          setRevoking(target.code);
+          try {
+            await revokeInvite(chapterId, target.code);
+            await refreshExisting();
+          } catch {
+            setError("Couldn't turn that code off. Try again.");
+          } finally {
+            setRevoking(null);
+          }
+        })();
+      },
+    });
   };
 
   return (

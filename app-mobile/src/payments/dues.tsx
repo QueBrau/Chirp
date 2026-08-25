@@ -9,7 +9,7 @@
  */
 
 import { useState, type ReactElement } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 
 import { ApiError } from "@/api/client";
 import {
@@ -19,6 +19,7 @@ import {
   type PaymentRail,
 } from "@/api/payments";
 import { AppText, Button, Card } from "@/components";
+import { showAlert } from "@/lib/alert";
 import { radii, spacing, useTheme } from "@/theme";
 
 import { stripeSdk } from "./stripeSdk";
@@ -137,9 +138,9 @@ export default function DuesPaymentScreen({
       const outcome = await presentDuesPaymentSheet(cycleId, rail, amountCents);
       if (outcome === "canceled") return;
       if (outcome === "paid") {
-        Alert.alert("Dues paid", `${cycleName} is settled. Thanks!`);
+        showAlert("Dues paid", `${cycleName} is settled. Thanks!`);
       } else {
-        Alert.alert(
+        showAlert(
           "Bank transfer started",
           "Bank payments take 1–3 business days to clear. Your dues will show as paid once it settles.",
         );
@@ -152,7 +153,7 @@ export default function DuesPaymentScreen({
           : stripeSdk === null
             ? WEB_UNAVAILABLE
             : "Payment could not be started. Try again.";
-      Alert.alert("Payment failed", message);
+      showAlert("Payment failed", message);
     } finally {
       setPaying(false);
     }

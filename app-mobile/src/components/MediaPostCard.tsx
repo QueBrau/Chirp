@@ -28,9 +28,10 @@
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
 import { useEffect, useState } from "react";
-import { Alert, Image, Modal, Pressable, View, type ViewStyle } from "react-native";
+import { Image, Modal, Pressable, View, type ViewStyle } from "react-native";
 
 import type { PostOut } from "@/api/feed";
+import { confirmAction } from "@/lib/alert";
 import { cardShadow, light, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
@@ -287,10 +288,14 @@ export function MediaPostCard({
   const confirmBlock = () => {
     // Unlike Chirp (client genuinely doesn't know the author), a feed post carries
     // a known author_id/display_name — the copy can and should name them.
-    Alert.alert(`Block ${authorName}?`, `You won't see posts from ${authorName} again.`, [
-      { text: "Block", style: "destructive", onPress: onBlock },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    confirmAction({
+      title: `Block ${authorName}?`,
+      message: `You won't see posts from ${authorName} again.`,
+      confirmLabel: "Block",
+      destructive: true,
+      order: "confirm-first",
+      onConfirm: onBlock,
+    });
   };
 
   const openMenu = () => {

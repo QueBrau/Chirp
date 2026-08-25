@@ -30,7 +30,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, View } from "react-native";
+import { View } from "react-native";
 
 import { ApiError } from "@/api/client";
 import {
@@ -42,6 +42,7 @@ import {
 } from "@/api/moderation";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { AppText, Button, Card, Chip, EmptyState, Screen, SectionHeader } from "@/components";
+import { confirmAction, showAlert } from "@/lib/alert";
 import { spacing } from "@/theme";
 
 type LoadState = "loading" | "loaded" | "error";
@@ -49,7 +50,7 @@ type LoadState = "loading" | "loaded" | "error";
 /** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
 function showApiError(error: unknown, title: string): void {
   const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
+  showAlert(title, message);
 }
 
 /** Compact relative age ("just now", "5h ago", "2d ago") — matches Home/Chirp. */
@@ -163,25 +164,24 @@ export default function ModerationScreen() {
   };
 
   const confirmRemove = (report: ContentReportOut, chirpId: string) => {
-    Alert.alert(
-      "Remove this chirp?",
-      "This takes it down for everyone on the board. This can't be undone.",
-      [
-        { text: "Remove", style: "destructive", onPress: () => void doRemove(report, chirpId) },
-        { text: "Cancel", style: "cancel" },
-      ],
-    );
+    confirmAction({
+      title: "Remove this chirp?",
+      message: "This takes it down for everyone on the board. This can't be undone.",
+      confirmLabel: "Remove",
+      destructive: true,
+      order: "confirm-first",
+      onConfirm: () => void doRemove(report, chirpId),
+    });
   };
 
   const confirmDismiss = (report: ContentReportOut) => {
-    Alert.alert(
-      "Dismiss this report?",
-      "Marks it reviewed with no action taken. It leaves the queue either way.",
-      [
-        { text: "Dismiss", onPress: () => void doDismiss(report) },
-        { text: "Cancel", style: "cancel" },
-      ],
-    );
+    confirmAction({
+      title: "Dismiss this report?",
+      message: "Marks it reviewed with no action taken. It leaves the queue either way.",
+      confirmLabel: "Dismiss",
+      order: "confirm-first",
+      onConfirm: () => void doDismiss(report),
+    });
   };
 
   return (

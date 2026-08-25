@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, TextInput, View } from "react-native";
+import { Pressable, TextInput, View } from "react-native";
 
 import {
   getChapter,
@@ -39,6 +39,7 @@ import {
   type RoleName,
 } from "@/api/chapters";
 import { ApiError } from "@/api/client";
+import { confirmAction, showAlert } from "@/lib/alert";
 import { calendarDay } from "@/lib/dates";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { currentSemesterWindow } from "@/org/semester";
@@ -114,7 +115,7 @@ function shortUserId(userId: string): string {
 /** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
 function showApiError(error: unknown, title: string): void {
   const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
+  showAlert(title, message);
 }
 
 /**
@@ -367,7 +368,7 @@ export default function PresidentScreen() {
     const nextStatus = changes.status ?? target.status;
 
     if (wouldOrphanChapter(target, nextRole, nextStatus)) {
-      Alert.alert(
+      showAlert(
         "This chapter would lose its last president",
         "At least one active president has to remain, or nobody will be able to change a " +
           "role here again — recovery would need to go outside the app. Promote someone " +
@@ -392,32 +393,27 @@ export default function PresidentScreen() {
     if (nextRole === target.role) return;
     // The person granting a role can be the person losing it — always confirm,
     // never apply a role change on tap alone.
-    Alert.alert(
-      `Change ${target.display_name || "this member"} to ${ROLE_LABELS[nextRole] ?? prettifyRole(nextRole)}?`,
-      target.role === "president"
-        ? "They're currently President. This takes that role away from them."
-        : undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Confirm", onPress: () => void applyMemberChange(target, { role: nextRole }) },
-      ],
-    );
+    confirmAction({
+      title: `Change ${target.display_name || "this member"} to ${ROLE_LABELS[nextRole] ?? prettifyRole(nextRole)}?`,
+      message:
+        target.role === "president"
+          ? "They're currently President. This takes that role away from them."
+          : undefined,
+      confirmLabel: "Confirm",
+      onConfirm: () => void applyMemberChange(target, { role: nextRole }),
+    });
   };
 
   const confirmStatusChange = (target: MemberOut, nextStatus: MembershipStatus) => {
     if (nextStatus === target.status) return;
-    Alert.alert(
-      `Mark ${target.display_name || "this member"} ${STATUS_LABELS[nextStatus].toLowerCase()}?`,
-      nextStatus !== "active" ? "They'll drop out of the active roster and role-gated tools." : undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Confirm",
-          style: nextStatus === "removed" ? "destructive" : "default",
-          onPress: () => void applyMemberChange(target, { status: nextStatus }),
-        },
-      ],
-    );
+    confirmAction({
+      title: `Mark ${target.display_name || "this member"} ${STATUS_LABELS[nextStatus].toLowerCase()}?`,
+      message:
+        nextStatus !== "active" ? "They'll drop out of the active roster and role-gated tools." : undefined,
+      confirmLabel: "Confirm",
+      destructive: nextStatus === "removed",
+      onConfirm: () => void applyMemberChange(target, { status: nextStatus }),
+    });
   };
 
   const savePledgeClass = async (target: MemberOut) => {

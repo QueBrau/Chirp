@@ -18,7 +18,7 @@
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 
 import { listMembers, type MemberOut } from "@/api/chapters";
 import { getLineage, type LineageEdgeOut, type LineageTreeOut } from "@/api/lineage";
@@ -33,6 +33,7 @@ import {
   Screen,
   SectionHeader,
 } from "@/components";
+import { showAlert } from "@/lib/alert";
 import { FamilySheet } from "@/tree/FamilySheet";
 import { PairSheet } from "@/tree/PairSheet";
 import { radii, spacing, useTheme } from "@/theme";
@@ -119,7 +120,7 @@ export default function HistorianScreen() {
   };
 
   const onEdgeSaved = (edge: LineageEdgeOut) => {
-    Alert.alert(
+    showAlert(
       "Paired",
       `${nameOf(edge.little_user_id)} will be asked to confirm ${nameOf(edge.big_user_id)} as their big.`,
     );

@@ -34,7 +34,7 @@ import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import type { ComponentProps } from "react";
 import { useRef, useState } from "react";
-import { ActivityIndicator, Alert, Image, Modal, Pressable, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Modal, Pressable, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ApiError } from "@/api/client";
@@ -45,6 +45,7 @@ import {
   MAX_UPLOAD_BYTES,
   type AllowedMediaContentType,
 } from "@/api/media";
+import { showAlert } from "@/lib/alert";
 import { light, radii, spacing, typography, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
@@ -100,7 +101,7 @@ export interface CreateSheetProps {
  * there's no shared one, so this mirrors it rather than inventing a new import. */
 function showApiError(error: unknown, title: string): void {
   const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
+  showAlert(title, message);
 }
 
 function OptionIcon({ icon, muted }: { icon: FeatherIconName; muted?: boolean }) {
@@ -249,7 +250,7 @@ export function CreateSheet({
     try {
       permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert(
+        showAlert(
           "Photo access needed",
           "Chirp needs access to your photos to attach one. You can allow it in Settings.",
         );
@@ -267,7 +268,7 @@ export function CreateSheet({
       // rather than resolving to a picker. Previously this was an unhandled
       // rejection with no message: the user tapped Photo and nothing happened.
       // Matches treasurer.tsx exportCsv()'s precedent for the identical risk.
-      Alert.alert(
+      showAlert(
         "Can't attach a photo yet",
         "Photo attach needs the latest app build. Rebuild the app (EAS dev build) and try again.",
       );
@@ -278,11 +279,11 @@ export function CreateSheet({
 
     const contentType = asset.mimeType;
     if (contentType !== "image/jpeg" && contentType !== "image/png" && contentType !== "image/webp") {
-      Alert.alert("Unsupported photo", "Please choose a JPEG, PNG, or WebP image.");
+      showAlert("Unsupported photo", "Please choose a JPEG, PNG, or WebP image.");
       return;
     }
     if (asset.fileSize !== undefined && asset.fileSize > MAX_UPLOAD_BYTES) {
-      Alert.alert("Photo too large", "Photos are limited to 10MB. Try a different one.");
+      showAlert("Photo too large", "Photos are limited to 10MB. Try a different one.");
       return;
     }
 
