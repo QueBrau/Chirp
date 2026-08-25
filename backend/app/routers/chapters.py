@@ -35,8 +35,10 @@ from app.schemas.identity import (
     MembershipUpdate,
     RoleCount,
     RoleMetaOut,
+    RoleTermOut,
     RosterOverview,
 )
+from app.services.role_term_service import apply_role_change, open_initial_term
 
 router = APIRouter(tags=["chapters"])
 
@@ -65,13 +67,14 @@ async def create_chapter(
     )
     session.add(chapter)
     await session.flush()
-    session.add(
-        models.Membership(
-            user_id=user.id,
-            chapter_id=chapter.id,
-            role=Role.president.value,
-        )
+    membership = models.Membership(
+        user_id=user.id,
+        chapter_id=chapter.id,
+        role=Role.president.value,
     )
+    session.add(membership)
+    await session.flush()
+    await open_initial_term(session, membership=membership)
     # c96, same rule as join_chapter: the founding president belongs to the
     # campus they just created a chapter on. Safe here for the stronger reason
     # that this route is platform-admin-only.
@@ -453,10 +456,16 @@ async def chapter_overview(
 async def update_member(
     chapter_id: uuid.UUID,
     body: MembershipUpdate,
-    _actor: models.Membership = Depends(require_role(*MEMBERS_ADMIN)),
+    actor: models.Membership = Depends(require_role(*MEMBERS_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> MembershipOut:
-    """Update a member's role/status/pledge_class; president only."""
+    """Update a member's role/status/pledge_class; president only.
+
+    A role change (board card c83) closes the member's open role_terms row and
+    opens a new one via apply_role_change — a no-op if the requested role equals
+    the current one. memberships.role stays the current-role source of truth;
+    role_terms is the dated history layered on top of it.
+    """
     result = await session.execute(
         select(models.Membership).where(
             models.Membership.chapter_id == chapter_id,
@@ -467,13 +476,50 @@ async def update_member(
     if target is None:
         raise not_found("membership_not_found")
     if body.role is not None:
-        target.role = body.role
+        await apply_role_change(
+            session, membership=target, new_role=body.role, changed_by=actor.user_id
+        )
     if body.status is not None:
         target.status = body.status
     if body.pledge_class is not None:
         target.pledge_class = body.pledge_class
     await session.commit()
     return MembershipOut.model_validate(target)
+
+
+@router.get("/chapters/{chapter_id}/members/{user_id}/role-terms")
+async def list_role_terms(
+    chapter_id: uuid.UUID,
+    user_id: uuid.UUID,
+    _membership: models.Membership = Depends(get_current_membership),
+    session: AsyncSession = Depends(get_session),
+) -> list[RoleTermOut]:
+    """Role history for one member of the chapter, newest first (board card c83).
+
+    Gated the same way the roster itself is (GET /chapters/{chapter_id}/members):
+    any active member of the chapter may read it, via get_current_membership —
+    reusing that capability pattern rather than inventing a tighter one, since this
+    is more history alongside data (current role, status) the roster already shows
+    every member. org-scoped the same way that lookup is: the membership row below
+    is matched on BOTH chapter_id and user_id, so a caller can never walk another
+    chapter's user_id in through this route and a non-member of chapter_id never
+    gets past get_current_membership's 403 to try.
+    """
+    result = await session.execute(
+        select(models.Membership.id).where(
+            models.Membership.chapter_id == chapter_id,
+            models.Membership.user_id == user_id,
+        )
+    )
+    membership_id = result.scalar_one_or_none()
+    if membership_id is None:
+        raise not_found("membership_not_found")
+    result = await session.execute(
+        select(models.RoleTerm)
+        .where(models.RoleTerm.membership_id == membership_id)
+        .order_by(models.RoleTerm.started_at.desc(), models.RoleTerm.id.desc())
+    )
+    return [RoleTermOut.model_validate(term) for term in result.scalars().all()]
 
 
 @router.post("/chapters/{chapter_id}/invites", status_code=201)
@@ -655,6 +701,8 @@ async def join_chapter(
         role=invite.role,
     )
     session.add(membership)
+    await session.flush()
+    await open_initial_term(session, membership=membership)
 
     # c96 — a chapter you were INVITED to is proof of a campus, so inherit it.
     #

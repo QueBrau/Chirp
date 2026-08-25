@@ -162,6 +162,20 @@ class MemberOut(_Schema):
     avatar_url: str | None = None
 
 
+class RoleTermOut(_Schema):
+    """Body for GET /chapters/{chapter_id}/members/{user_id}/role-terms — one dated
+    span of a membership holding a role (board card c83: a chapter role is a DATED
+    TERM, not a plain fact). Rows come back newest first; ended_at NULL marks the
+    OPEN term, i.e. the role the member holds right now."""
+
+    id: uuid.UUID
+    membership_id: uuid.UUID
+    role: RoleName
+    started_at: datetime
+    ended_at: datetime | None = None
+    changed_by: uuid.UUID | None = None
+
+
 class RoleMetaOut(_Schema):
     """Body for GET /chapters/{id}/role-meta — the role taxonomy, served so the app
     never hand-mirrors permissions.py (c44).
