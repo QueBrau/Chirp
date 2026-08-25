@@ -59,24 +59,25 @@ function monthYear(iso: string): string {
 /**
  * HONESTY RULE (c83 migration docstring, carried into the client for c180):
  * a role term's `started_at` is only a REAL date when apply_role_change wrote
- * it — i.e. an actual PATCH closed a prior open term. That happens exactly
- * when this membership has a CLOSED term in its history. A term with no
- * predecessor was instead seeded either by the 0021 backfill (every
- * membership that already existed) or by open_initial_term at membership
- * creation — both stamp `started_at` at migration/creation time, not the
- * date the member actually took the role, and both leave `changed_by` null
- * for the same reason. So: the open term shows "Since <date>" ONLY when an
- * earlier, closed term exists; a sole open term with no history shows just
- * the role name, no date, rather than assert a start date this system never
- * actually recorded. Closed terms always show their full span — both of
- * THEIR boundaries are real PATCH events (the one that opened it and the one
- * that closed it), never backfilled.
+ * the term — and the data says exactly when that happened: `changed_by` is
+ * non-null on precisely the rows a real PATCH created, and null on the rows
+ * nobody's action dated (the 0021 backfill and open_initial_term's seed at
+ * membership creation, both stamped at migration/creation time). So the start
+ * date renders only when `changed_by` is set. This must key off changed_by,
+ * NOT off "does a closed term exist": a SEEDED term that later gets closed
+ * has a real end but still a backfilled start, and rendering its full span
+ * would assert a start date this system never recorded — it shows
+ * "Until <date>" instead. Every ended_at is always real (only a PATCH closes
+ * a term), so end dates render unconditionally.
  */
-function termDateLabel(term: RoleTerm, hasPredecessor: boolean): string | null {
+function termDateLabel(term: RoleTerm): string | null {
+  const startIsReal = term.changed_by !== null;
   if (term.ended_at === null) {
-    return hasPredecessor ? `Since ${monthYear(term.started_at)}` : null;
+    return startIsReal ? `Since ${monthYear(term.started_at)}` : null;
   }
-  return `${monthYear(term.started_at)} – ${monthYear(term.ended_at)}`;
+  return startIsReal
+    ? `${monthYear(term.started_at)} – ${monthYear(term.ended_at)}`
+    : `Until ${monthYear(term.ended_at)}`;
 }
 
 export default function MemberDetailScreen() {
@@ -113,7 +114,6 @@ export default function MemberDetailScreen() {
   // never flash "not found" while the session/chapter/roster are still
   // resolving.
   const loading = sessionStatus === "loading" || (membership !== null && chapterLoading) || member === undefined;
-  const openIndex = terms.findIndex((term) => term.ended_at === null);
   const label = member ? (member.display_name.length > 0 ? member.display_name : member.user_id) : "";
 
   return (
@@ -144,8 +144,7 @@ export default function MemberDetailScreen() {
             ) : (
               <Card>
                 {terms.map((term, index) => {
-                  const hasPredecessor = index === openIndex && terms.length > openIndex + 1;
-                  const dateLabel = termDateLabel(term, hasPredecessor);
+                  const dateLabel = termDateLabel(term);
                   return (
                     <View
                       key={term.id}
