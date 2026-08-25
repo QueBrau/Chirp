@@ -382,11 +382,11 @@
   "cards": [
     {
       "id": "c177",
-      "col": "progress",
+      "col": "done",
       "owner": "Q",
       "tag": "bug",
       "area": "process",
-      "title": "Seeded dues payments belonged to NOBODY - related_user_id NULL on every one, so every 'who has paid' surface read zero on a fresh local stack. PR #101 open (c30a62f), verified on a fresh migrate+seed. CARD WRITTEN AFTER THE BRANCH and caught by board-check - my process slip, recorded rather than tidied away.",
+      "title": "c177 DONE Aug 24 - MERGED via PR #101 (27667dd), all 4 CI checks green. Seeded dues payments are attributed, so 'who has paid' is answerable from the column instead of reading zero on every fresh local stack. Verified on a fresh migrate+seed: 5 of 5 rows attributed, roster resolves 5 paid / 3 outstanding.",
       "detail": "PROCESS NOTE FIRST, because it is the more useful half: I cut q/c177-seed-dues-attribution BEFORE writing this card, which is exactly backwards from the CLAUDE.md rule. `scripts/board-check` refused to report a next free id and named the branch - the tripwire works in practice and not just in principle.\n\nTHE BUG: every dues_payment row in scripts/seed_dev_accounts.py named its payer in the DESCRIPTION ('Dues - Marcus Webb') and left related_user_id NULL. The money existed and belonged to nobody, so anything answering 'who has paid' by grouping on that column read zero. Concretely: the c171 President overview rendered '$2,250 collected / 0 of 8 paid' on a freshly seeded stack - which reads as a broken feature rather than as missing fixture data - and payments.py's double-charge guard keys on the same column, so every seeded member could have paid again.\n\nPRODUCTION WAS NEVER AFFECTED - payments.py:316 sets related_user_id from the Stripe webhook. This was purely a fixture lying to whoever opened the app next, which is its own kind of expensive: it sends the reader hunting for a bug in working code.\n\nFIX: the payer uid is a real field on each LEDGER row instead of prose inside the description. Deliberately leaves THREE of the eight actives unpaid - a roster where everyone has paid cannot show the outstanding state the dues screens exist to surface.\n\nVERIFIED on a fresh migrate + seed against real PG16, by querying the COLUMN rather than the screen: 5 of 5 dues rows attributed, roster resolves to 5 paid / 3 outstanding.\n\nFound while building c175 and noted there at the time rather than fixed inline, since it is fixture data rather than feature code and did not belong in that PR."
     },
     {
