@@ -239,6 +239,41 @@ export default function YakScreen() {
         </AppText>
       </View>
 
+      {/* c175: the house leaderboard is the other campus-wide surface and shares Yak's
+          electorate (verified .edu), so it hangs off this tab rather than earning a
+          sixth one. Deliberately a quiet row, not a hero: Yak is the PLACE this screen
+          is (DESIGN.md rule 5) and a second loud card here would fight it. */}
+      {access === "ok" && campusId !== null ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.push("/(tabs)/yak/houses")}
+          style={({ pressed }) => ({
+            opacity: pressed ? 0.7 : 1,
+            marginBottom: spacing.lg,
+            paddingVertical: spacing.md,
+            paddingHorizontal: spacing.lg,
+            borderRadius: radii.card,
+            // The canvas here is forced navy in BOTH schemes, so this cannot use a
+            // system-following surface token - it would go near-black in dark mode on an
+            // already-dark wash. A translucent white sits on the navy in either scheme.
+            backgroundColor: "rgba(255,255,255,0.10)",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+          })}
+        >
+          <View style={{ gap: 2 }}>
+            <AppText variant="headline" tone="onAccent">
+              Touse of the week
+            </AppText>
+            <AppText variant="caption" tone="onAccent">
+              One vote a week. The whole school decides.
+            </AppText>
+          </View>
+          <Feather name="chevron-right" size={20} color={campusColors.secondary} />
+        </Pressable>
+      ) : null}
+
       {access === "loading" ? (
         <EmptyState title="Opening the board..." />
       ) : access === "unverified" || access === "lapsed" ? (

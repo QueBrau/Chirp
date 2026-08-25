@@ -9,6 +9,7 @@ export * as feed from "./feed";
 export * as events from "./events";
 export * as yaks from "./yaks";
 export * as moderation from "./moderation";
+export * as house from "./house";
 export * as lineage from "./lineage";
 export * as finance from "./finance";
 export * as meetings from "./meetings";
