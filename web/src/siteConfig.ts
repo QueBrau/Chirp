@@ -9,11 +9,9 @@
 /**
  * Where privacy requests, deletion requests and takedowns actually arrive.
  *
- * Jose's call, Aug 2026, and fine for launch. Worth swapping before Chirp is
- * publicised widely: this is also the Google account that owns the GCP project,
- * Firebase and the Stripe dashboard, so publishing it points phishing at the
- * one mailbox that can reset production. A forwarding alias costs nothing and
- * separates "the public can reach us" from "this inbox owns the infrastructure".
+ * Jose's call, Aug 2026, and fine for launch. A forwarding alias is the
+ * planned upgrade before Chirp is publicised widely — the rest of the
+ * reasoning lives with the account notes in the private infra doc (c185).
  */
 export const CONTACT_EMAIL = "chirp.shared@gmail.com";
 
