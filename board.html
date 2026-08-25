@@ -2019,11 +2019,11 @@
     },
     {
       "id": "c185",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "security",
       "area": "web",
-      "title": "c185 IN BUILD Aug 25 (manager-direct, small) - public-repo hygiene from c182: (1) siteConfig.ts comment explicitly labels chirp.shared@gmail.com as the GCP/Firebase/Stripe-owning account - recon gift now the repo is public; move that reasoning to INFRA-PRIVATE. (2) ci.yml gets an explicit top-level 'permissions: contents: read' block (self-documenting least-privilege; no secrets exist in the workflow either way)",
+      "title": "c185 DONE Aug 25 - MERGED as a0d42b2 (PR #107, CI 4/4, manager-direct). The infra-owner reasoning is out of public source (siteConfig comment neutralized, full text preserved in gitignored INFRA-PRIVATE with a c74 cross-ref) and ci.yml now pins explicit least-privilege 'permissions: contents: read'. Zero behavior change; web deploy of the comment-only change rides the next hosting deploy, nothing user-visible",
       "detail": "Both c182 findings, low severity, zero behavior change. The comment's CONTENT is true and stays useful - it just belongs in the gitignored INFRA-PRIVATE.html, not in public source. The CI permissions block is defense-in-depth: the workflow currently references no secrets and triggers only on push:[main] and pull_request, but the explicit block pins least-privilege regardless of org defaults (which JoesyP cannot read - 403 on the Actions-policy API)."
     },
     {
