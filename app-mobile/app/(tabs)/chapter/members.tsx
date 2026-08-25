@@ -1,5 +1,6 @@
 /** Members: chapter roster grouped by role — SectionHeader per group, GradientAvatar rows, role Chips. */
 
+import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 
@@ -60,6 +61,7 @@ function shortUserId(userId: string): string {
 }
 
 export default function MembersScreen() {
+  const router = useRouter();
   const { sessionStatus, membership, chapterLoading, roleMeta } = useOwnChapter();
   const chapterId = membership?.chapter_id ?? null;
   const [members, setMembers] = useState<MemberOut[] | null>(null);
@@ -122,6 +124,10 @@ export default function MembersScreen() {
                         />
                       }
                       divider={index < rows.length - 1}
+                      // Opens the member's own detail surface (c180), which is
+                      // where role-term history (c83) lives — the roster row
+                      // itself only has room for the CURRENT role Chip.
+                      onPress={() => router.push(`/chapter/member/${member.user_id}`)}
                     />
                   );
                 })}
