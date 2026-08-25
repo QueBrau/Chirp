@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1787611441688,
+  "updated": 1787621329396,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -382,11 +382,11 @@
   "cards": [
     {
       "id": "c172",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "jose",
       "tag": "money",
       "area": "payments",
-      "title": "After a refund, the President dashboard says CHASE THEM and the pay button says ALREADY PAID. Two surfaces, two different definitions of 'paid' - needs a product ruling, not a quiet alignment.",
+      "title": "ASSIGNED to pool Aug 24 (Jose: pick up purely-technical backlog). After a refund, the President dashboard says CHASE THEM and the pay button says ALREADY PAID. Two surfaces, two different definitions of 'paid' - needs a product ruling, not a quiet alignment.",
       "detail": "Found while building c171, and deliberately NOT resolved there because making the two agree means deciding which one is wrong.\n\nTHE TWO DEFINITIONS. payments.py:178 (the double-charge guard) treats the mere EXISTENCE of a dues_payment row for the cycle as already_paid and does not look at corrections. c171's overview NETS corrections per member, so a member refunded in full has a net of zero and comes back as outstanding.\n\nWHAT A CHAPTER ACTUALLY HITS: a treasurer refunds someone - correctly, as a new append-only correction entry (SPEC 8.2) - and from that moment the president's dashboard lists that member as still owing, while the member opening the app to pay gets a 409 already_paid and cannot. Neither screen is lying; they are answering different questions with the same word.\n\nBOTH DEFENCES ARE REAL, which is why this is a ruling and not a bug fix. The guard erring toward 'paid' is the SAFE direction for a guard whose job is to stop a card being charged twice - a false 'unpaid' there means double-charging a student. The dashboard erring toward 'owes' is the honest answer to 'who do I chase', and a refunded member genuinely does owe again.\n\nOPTIONS, roughly in increasing order of work: (1) leave both and document the seam where a treasurer will see it, accepting that refunds need a manual nudge; (2) teach the guard to net corrections too, so a fully-refunded member can pay again - the smallest change that makes the two agree, and it moves the risk onto the refund being correct; (3) model dues status explicitly rather than deriving it from ledger rows twice, which is the real fix and is c83-shaped work.\n\nNOT URGENT TODAY: it needs a refund to have happened, and no chapter has processed one yet. It will not stay that way once real dues run. The seam is already written down in chapters.py's chapter_overview docstring so the next person to touch either side finds it."
     },
     {
@@ -467,7 +467,7 @@
       "owner": "J",
       "tag": "infra",
       "area": "infra",
-      "title": "PROD EMAIL, post-c135: send path now REACHABLE (Resend contacted, 502 email_send_failed is the delivery layer). Remaining: delivery beyond the account owner needs domain verification - blocked on c87/c73 (domain purchase, Q/Jose). No code work assignable here until the domain exists",
+      "title": "c134 NEARLY CLOSED Aug 24: josedev.app VERIFIED in Resend (proven by a real accepted+delivered send from hello@josedev.app, id db8f996f). Remaining: (1) Jose pastes the EMAIL_FROM env update (classifier blocks manager prod mutations this session), (2) one real .edu inbox receives a code for the final leg. Arbitrary-recipient delivery is UNBLOCKED",
       "detail": "Ticket from court/Jose. THE MAIN FINDING FIRST, because it changes what the question even is: this codebase has exactly ONE caller of email_service.send_email anywhere (grepped backend/app/ - campus_verification.py:130, inside start_verification). The 'future receipt' and '30-day removal reply' the module docstring names are not built yet. So 'has prod email been proven to send' collapses to one question: does POST /auth/campus-verification work on prod - and it does not, for a reason that has nothing to do with Resend. CONFIRMED TWO WAYS, not one: (1) direct read of prod's campuses table - the only campus (UNC Greensboro) has email_domains IS NULL, true NULL not an empty array; (2) called the real endpoint against prod with a real signed-in QA account - POST /auth/campus-verification {edu_email: test.student@uncg.edu} returns 400 unrecognized_edu_domain. resolve_campus's own docstring says it 'fails CLOSED when no campus configures domains' - that is exactly what is happening, working as designed against missing data. Resend is never contacted; the request never gets that far. Carded as its own finding, c135, because it is the actual blocker and needs its own owner. SEPARATELY - since the app path is blocked, tested Resend's send capability directly against its API, bypassing our app, to answer the ticket's second question on its own terms: sent a real POST to https://api.resend.com/emails, from the exact address prod's config.py defaults to (Chirp <onboarding@resend.dev>, confirming no verified sending domain exists, matching email_service.py's own docstring), to chirp.shared@gmail.com - the account owner per the established infra pattern, and a mailbox the team already controls, not an address I have no standing to mail. Result: HTTP 200, real message id 5337b14f-62b7-4719-bdf7-d0f8274c994f. So the key CAN send, and Resend ACCEPTED a send to that address. SABOTAGE-TEST DISCIPLINE APPLIED TO MY OWN FINDING, per the ticket's own instruction that a sent status is a claim, not proof: a 200 with a message id is Resend's ACCEPTANCE of the request, not confirmation of inbox delivery. Tried to close that gap myself before asking for help - GET /emails/{id} on the same key returns 401 'This API key is restricted to only send emails.' Same restriction blocks GET /domains, so I could not even read the account's verified-domain state directly, only infer it from config.py's default from-address and the module docstring. THIS KEY CANNOT PROVE ITS OWN DELIVERY - checked INFRA-PRIVATE.html for a Resend dashboard login and found none. Two ways to close this, either is sufficient, court can route: (a) whoever has Resend dashboard access looks up message id 5337b14f-62b7-4719-bdf7-d0f8274c994f and reports its status (delivered / bounced / etc - dashboard is app.resend.com), or (b) Jose confirms whether a 'c134 prod email delivery test - safe to ignore' email actually arrived in chirp.shared@gmail.com around 2026-08-22 18:3x UTC. UNTIL ONE OF THOSE HAPPENS: prod email delivery is UNPROVEN, not proven and not disproven - Resend accepted the request, that is all that is confirmed. c87 updated to reflect all of this precisely rather than either the old FAILED status or a premature DONE."
     },
     {
@@ -1920,11 +1920,11 @@
     },
     {
       "id": "c170",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "jose",
       "tag": "process",
       "area": "infra",
-      "title": "npm audit: 9 high / 13 moderate, all in the Expo/Metro build toolchain - fix requires a PLANNED major Expo upgrade, never audit fix --force",
+      "title": "AUDIT+PLAN IN PROGRESS Aug 24 (pool) - deliverable is the advisory triage + upgrade plan; the upgrade itself stays a future milestone. npm audit: 9 high / 13 moderate, all in the Expo/Metro build toolchain - fix requires a PLANNED major Expo upgrade, never audit fix --force",
       "detail": "From the Aug 24 security review. The forced-fix path does a major Expo bump blind and breaks the native builds. Plan: review the exact advisories, schedule an Expo SDK upgrade as its own milestone, rebuild sim+Android artifacts, re-run the full mobile check suite, re-audit. No urgency signal today - toolchain, not runtime, exposure."
     },
     {
@@ -2062,7 +2062,8 @@
     "Aug 24 - c70 GATE PASSED + c140/c155 FLIP EXECUTED on Jose's go. En-route discovery: capability URLs are minted on app_public_base_url (chirps-prod.web.app) but Hosting had NO /media/** rewrite - every photo URL served the SPA's index.html. Fixed: firebase.json /media/** -> Cloud Run rewrite (ordered before the catch-all), hosting deployed, byte-exact serving verified before AND after the flip. Direct GCS access now 403s. Alpha = 16/20.",
     "Aug 24 - #91 (c167) and #92 (c166) manager-verified and merged. c166's persistence is code-complete but device-inert until the next EAS build. c35's live pass found domain/verification-blocked (c108 gate) - honest correction recorded, two unblock paths on the card. Resend domain add cannot be API-driven (stored key is send-only restricted) - Jose does the dashboard add for josedev.app.",
     "Aug 24 - subagent wave COMPLETE: #91 (c167), #92 (c166), #93 (c168), #94 (c102) all manager-verified and merged; c162 review delivered to Q via the board. STANDING FLAG FOR NEXT DEPLOY: migration 0019 must be applied to prod FIRST (migrate-then-deploy; Jose-only DB step) - the running rev 00031-vtg predates all four merges. When c162 lands, an alembic merge revision will be needed (0018 and 0019 both chain off 0013).",
-    "Aug 24 - STANDING LESSON from the flip regression: a verification run seconds after an IAM change can pass on STALE authorization - Cloud IAM propagates in minutes, so post-change checks must be repeated outside the propagation window before 'verified' is claimed. Also: a signed GCS url is only as strong as the SIGNER'S own permission - public-read masks a missing objects.get grant until the moment public-read dies. The c168 FAB visual pass DID verify clean (last card clears tab bar + FAB at 390x844 on live prod data) - #93 fully closed."
+    "Aug 24 - STANDING LESSON from the flip regression: a verification run seconds after an IAM change can pass on STALE authorization - Cloud IAM propagates in minutes, so post-change checks must be repeated outside the propagation window before 'verified' is claimed. Also: a signed GCS url is only as strong as the SIGNER'S own permission - public-read masks a missing objects.get grant until the moment public-read dies. The c168 FAB visual pass DID verify clean (last card clears tab bar + FAB at 390x844 on live prod data) - #93 fully closed.",
+    "Aug 24 - domain milestone: josedev.app verified in Resend, real send accepted and delivered from the domain. Sender switch + the c35 DB flip both queue on Jose pastes (auto-mode classifier now blocks manager-side prod mutations: psql-to-prod, IAM grants, env updates - deploys were allowed earlier; not fighting it). Pool spun onto purely-technical backlog per Jose: c172 (refund-state consistency) and c170 (dependency audit + upgrade PLAN, upgrade itself deliberately not executed)."
   ]
 }
 </script>
