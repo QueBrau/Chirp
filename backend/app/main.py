@@ -18,6 +18,7 @@ from app.routers import (
     events,
     feed,
     finance,
+    house,
     keys,
     lineage,
     media,
@@ -201,6 +202,7 @@ def create_app() -> FastAPI:
         alumni,
         payments,
         events,
+        house,
     ):
         app.include_router(module.router)
     app.include_router(gateway.router)

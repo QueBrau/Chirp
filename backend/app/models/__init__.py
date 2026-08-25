@@ -11,6 +11,7 @@ from app.models.finance import (
     ProcessedStripeEvent,
     SpendApproval,
 )
+from app.models.house import HouseBallot
 from app.models.identity import (
     Campus,
     CampusVerification,
@@ -49,6 +50,7 @@ __all__ = [
     "Family",
     "JobPost",
     "KyberPrekey",
+    "HouseBallot",
     "LedgerEntry",
     "LineageEdge",
     "Meeting",
