@@ -787,8 +787,8 @@
     },
     {
       "id": "c35",
-      "col": "progress",
-      "title": "c35 LIVE PASS 4-OF-6 Aug 24 - PROVEN on prod by Sonnet worker (manager-verified screenshots): member post created 201, president Report filed 201 (Block untouched), moderation queue shows 'OPEN REPORTS / 1 waiting'. FINAL LEG IS YAK-SCOPED BY DESIGN: post reports are dismiss-only ('Removal isn't available for post reports yet' - shipped UI copy), removal exists for yak reports, and no member account can post a yak (none campus-verified; Yak gated on verify-your-.edu). Jose's one-row flip for chirp.e2e.member unblocks it; then member-yak -> report -> REMOVE -> queue-clear closes the gate, alpha 17/20. QA post + its open report deliberately left live pending that run",
+      "col": "done",
+      "title": "c35 DONE Aug 25 - GATE CLOSED, alpha 17/20. Full moderation loop PROVEN LIVE ON PROD across three runs: member yak posted 201 (after Jose's verification flip), president Report filed 201, queue showed both open reports, DISMISS on the stale post report PATCH 200, REMOVE YAK POST 204 + report resolve 200, queue reads 'All clear / No open reports right now' (screenshot-verified by manager) and the yak is GONE from the board (empty-array GET). Zero console errors. The run also FOUND c183 (Alert.alert is a silent no-op on react-native-web - the confirm dialogs never fired; QA client patched locally to finish the pass, app-wide fix in flight). All QA artifacts cleaned up on prod - nothing left open",
       "owner": "Q",
       "tag": "vert:social-msg",
       "area": "yak",
