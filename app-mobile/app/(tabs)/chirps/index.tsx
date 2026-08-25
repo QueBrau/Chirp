@@ -18,7 +18,7 @@
 
 import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Modal, Pressable, TextInput, View } from "react-native";
+import { Modal, Pressable, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 
 import { ApiError } from "@/api/client";
@@ -26,6 +26,7 @@ import { createReport, blockChirpAuthor } from "@/api/moderation";
 import { createChirp, listChirps, voteChirp, type ChirpFeedOut, type ChirpVoteValue } from "@/api/chirps";
 import { useCampus, useCampusAccess, useSession } from "@/auth";
 import { AppText, EmptyState, Screen, VotePill } from "@/components";
+import { confirmAction, showAlert } from "@/lib/alert";
 import {
   campusNightWash,
   elevation,
@@ -50,7 +51,7 @@ function age(iso: string): string {
 /** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
 function showApiError(error: unknown, title: string): void {
   const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
+  showAlert(title, message);
 }
 
 /**
@@ -153,7 +154,7 @@ export default function ChirpScreen() {
   const submitReport = async (chirp: ChirpFeedOut, reason: string) => {
     try {
       await createReport({ target_type: "chirp", target_id: chirp.id, reason });
-      Alert.alert("Reported", "Thanks for letting us know.");
+      showAlert("Reported", "Thanks for letting us know.");
     } catch (error) {
       showApiError(error, "Couldn't send that report");
     }
@@ -186,10 +187,14 @@ export default function ChirpScreen() {
   const confirmBlock = (chirp: ChirpFeedOut) => {
     // The client genuinely doesn't know who posted this (SPEC §8.3) — the copy
     // must never imply otherwise.
-    Alert.alert("Block?", "You won't see posts from this person again.", [
-      { text: "Block", style: "destructive", onPress: () => void submitBlock(chirp) },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    confirmAction({
+      title: "Block?",
+      message: "You won't see posts from this person again.",
+      confirmLabel: "Block",
+      destructive: true,
+      order: "confirm-first",
+      onConfirm: () => void submitBlock(chirp),
+    });
   };
 
   const openMenu = (chirp: ChirpFeedOut) => {

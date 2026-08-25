@@ -22,7 +22,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 import { useRouter } from "expo-router";
 
 import { ApiError } from "@/api/client";
@@ -32,12 +32,13 @@ import { blockUser, createReport } from "@/api/moderation";
 // SessionProvider (c67) precisely to kill the per-screen duplicate requests.
 import { useCampus, useCampusAccess, useSession } from "@/auth";
 import { AppText, EmptyState, Fab, MediaPostCard, Screen } from "@/components";
+import { showAlert } from "@/lib/alert";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
 
 /** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
 function showApiError(error: unknown, title: string): void {
   const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
+  showAlert(title, message);
 }
 
 type FeedFilter = "forYou" | "campus";
@@ -140,7 +141,7 @@ export default function FeedScreen() {
   const reportPost = async (item: FeedPostOut, reason: string) => {
     try {
       await createReport({ target_type: "post", target_id: item.id, reason });
-      Alert.alert("Reported", "Thanks for letting us know.");
+      showAlert("Reported", "Thanks for letting us know.");
     } catch (error) {
       showApiError(error, "Couldn't send that report");
     }

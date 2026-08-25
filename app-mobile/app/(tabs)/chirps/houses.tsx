@@ -25,7 +25,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 
 import { listMembers } from "@/api/chapters";
 import { ApiError } from "@/api/client";
@@ -48,6 +48,7 @@ import {
   Screen,
   SectionHeader,
 } from "@/components";
+import { showAlert } from "@/lib/alert";
 import { calendarDay } from "@/lib/dates";
 import { radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
@@ -64,7 +65,7 @@ function houseLabel(house: { org_name: string; chapter_name: string | null }): s
 
 function showApiError(error: unknown, title: string): void {
   const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
+  showAlert(title, message);
 }
 
 export default function HousesScreen() {

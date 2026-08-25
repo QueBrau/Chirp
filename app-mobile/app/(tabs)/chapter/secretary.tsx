@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, TextInput, View } from "react-native";
+import { Pressable, TextInput, View } from "react-native";
 
 import { listMembers, myMemberships, type MemberOut, type MyMembershipOut } from "@/api/chapters";
 import { ApiError } from "@/api/client";
@@ -40,6 +40,7 @@ import {
   Screen,
   SectionHeader,
 } from "@/components";
+import { confirmAction, showAlert } from "@/lib/alert";
 import { calendarDay } from "@/lib/dates";
 import { shareCsv } from "@/lib/export";
 import { currentSemesterWindow } from "@/org/semester";
@@ -72,7 +73,7 @@ function meetingDate(iso: string): string {
 /** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
 function showApiError(error: unknown, title: string): void {
   const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
+  showAlert(title, message);
 }
 
 /**
@@ -365,20 +366,17 @@ export default function SecretaryScreen() {
    */
   const confirmDeleteMeeting = (meeting: MeetingOut) => {
     if (chapterId === null || deletingMeetingId !== null) return;
-    Alert.alert(
-      "Delete this meeting?",
-      `"${meeting.title}" on ${meetingDate(meeting.meeting_date)} and its attendance ` +
+    confirmAction({
+      title: "Delete this meeting?",
+      message:
+        `"${meeting.title}" on ${meetingDate(meeting.meeting_date)} and its attendance ` +
         "will be removed for everyone, and it will drop out of the CSV export. " +
         "This cannot be undone.",
-      [
-        { text: "Keep", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => void removeMeeting(meeting),
-        },
-      ],
-    );
+      confirmLabel: "Delete",
+      cancelLabel: "Keep",
+      destructive: true,
+      onConfirm: () => void removeMeeting(meeting),
+    });
   };
 
   const removeMeeting = async (meeting: MeetingOut) => {
@@ -413,7 +411,7 @@ export default function SecretaryScreen() {
         // EAS dev build is rebuilt, shareCsv fails at native-module resolution even
         // though the CSV text above resolved fine. Surface that plainly instead of
         // letting it fall through as an unhandled rejection.
-        Alert.alert(
+        showAlert(
           "Can't share yet",
           "The CSV was generated, but sharing needs a native module that isn't in this " +
             "build yet. Rebuild the app (EAS dev build) and try again.",
