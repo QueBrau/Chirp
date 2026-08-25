@@ -222,18 +222,23 @@ export default function ChirpScreen() {
             {campus.name.toUpperCase()}
           </AppText>
         ) : null}
-        <AppText variant="display" tone="onAccent">
-          Chirps
-        </AppText>
-        <View
-          style={{
-            width: metrics.accentBarWidth,
-            height: metrics.accentBarHeight,
-            borderRadius: metrics.accentBarRadius,
-            backgroundColor: campusColors.secondary,
-            marginTop: spacing.xs,
-          }}
-        />
+        {/* Hand-rolled rather than Screen's, because this canvas is forced navy and the
+            header text is pinned to onAccent. Kept structurally identical to Screen's so
+            the two headers cannot drift: bar LEADS the title, no alignItems so it
+            inherits `stretch` and matches the title's height. */}
+        <View style={{ flexDirection: "row", gap: spacing.sm }}>
+          <View
+            style={{
+              width: metrics.accentBarWidth,
+              alignSelf: "stretch",
+              borderRadius: metrics.accentBarRadius,
+              backgroundColor: campusColors.secondary,
+            }}
+          />
+          <AppText variant="display" tone="onAccent">
+            Chirps
+          </AppText>
+        </View>
         <AppText variant="caption" tone="onAccent" style={{ marginTop: spacing.xs }}>
           Anonymous and campus-wide — no names, ever.
         </AppText>

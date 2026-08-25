@@ -244,9 +244,16 @@ Generic-clean is not enough. Every screen must pass these:
 
 1. **Zones, not card soup.** Each screen has a distinct header zone and content
    zone. Home/Chirp/Orgs headers get an oversized title with a short gold accent
-   bar (4x28, radius 2) under it, plus a micro eyebrow above ("UNC GREENSBORO ·
-   SPARTANS" style). Never an unbroken stack of identical white rectangles —
-   vary card sizes, insets, and groupings.
+   bar (4 wide, radius 2) **leading it on the left**, plus a micro eyebrow above
+   ("UNC GREENSBORO · SPARTANS" style). Never an unbroken stack of identical
+   white rectangles — vary card sizes, insets, and groupings.
+
+   *Changed Aug 25 (braul): the bar used to sit UNDER the title at a fixed 28
+   tall. It now leads the title and takes the title's own height via
+   `alignSelf: "stretch"` rather than a fixed number, so it stays aligned if the
+   display scale moves. `metrics.accentBarHeight` was deleted rather than left
+   unused — kept around, the next hand-rolled header would have reached for it
+   and quietly reintroduced a bar that no longer matches the text beside it.*
 2. **Real imagery.** People get photo avatars: `https://i.pravatar.cc/150?u=<id>`
    seeded per user (GradientAvatar gains an optional photo uri, initials become
    the fallback only). Story tiles show the photo. Media posts use picsum photos.
