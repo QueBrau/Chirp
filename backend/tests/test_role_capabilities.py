@@ -48,7 +48,10 @@ async def test_plain_member_holds_none(
         # The two roles the old hardcoded grid forgot entirely. They are e-board, so
         # they moderate — and they are NOT dues/minutes/members admins, which is the
         # half a "just show e-board everything" fix would have got wrong.
-        ("vice_president", {"moderation", "lineage_admin"}),
+        # vice_president additionally holds deputy_overview (c163): read-only roster/
+        # dues/invites data for the Deputy President dashboard, not a mutating
+        # capability, and historian does not hold it.
+        ("vice_president", {"moderation", "lineage_admin", "deputy_overview"}),
         # lineage_admin is EBOARD-wide (edit rights are "Historian/e-board", SPEC §7
         # m6), but the historian is the role the job is named for (c79).
         ("historian", {"moderation", "lineage_admin"}),

@@ -52,6 +52,17 @@ MINUTES_ADMIN: frozenset[Role] = frozenset({Role.secretary, Role.president})
 # person losing one, and there is exactly one president.
 MEMBERS_ADMIN: frozenset[Role] = frozenset({Role.president})
 
+# READ-ONLY, deliberately not named *_admin: c163's product ruling made the Vice
+# President dashboard a DEPUTY PRESIDENT view — roster, open invites, and a dues
+# status summary, framed as a stand-in for the president — with delegation (acting
+# on any of it) explicitly out of the alpha build. It is NOT members_admin: that set
+# also gates PATCH /chapters/{id}/members and PATCH /chapters/{id}, and granting it
+# would hand the VP mutation rights the ruling never asked for. President is included
+# for the same reason every other capability includes them (see chapter_overview's
+# docstring in routers/chapters.py) - they already hold the superset of this data via
+# their own overview, so this is not a new door for them.
+DEPUTY_OVERVIEW: frozenset[Role] = frozenset({Role.vice_president, Role.president})
+
 CAPABILITIES: dict[str, frozenset[Role]] = {
     "dues_admin": DUES_ADMIN,
     "minutes_admin": MINUTES_ADMIN,
@@ -61,6 +72,7 @@ CAPABILITIES: dict[str, frozenset[Role]] = {
     # require_role(*EBOARD), the same set this maps to (c79). SPEC names the
     # historian for the job, but edit rights are "Historian/e-board" (§7 m6).
     "lineage_admin": EBOARD,
+    "deputy_overview": DEPUTY_OVERVIEW,
 }
 
 

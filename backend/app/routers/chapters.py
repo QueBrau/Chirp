@@ -12,7 +12,14 @@ from app import models
 from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
 from app.core.invites import clamp_invite_expiry
-from app.core.permissions import EBOARD, MEMBERS_ADMIN, Role, capabilities_for, require_role
+from app.core.permissions import (
+    DEPUTY_OVERVIEW,
+    EBOARD,
+    MEMBERS_ADMIN,
+    Role,
+    capabilities_for,
+    require_role,
+)
 from app.core.windows import meeting_window
 from app.db import get_session
 from app.middleware.auth import get_current_user
@@ -27,6 +34,7 @@ from app.schemas.identity import (
     ChapterOut,
     ChapterOverview,
     ChapterUpdate,
+    DeputyOverview,
     DuesOverview,
     InviteOverview,
     LineageOverview,
@@ -194,6 +202,156 @@ async def get_role_meta(
     )
 
 
+async def _roster_overview(chapter_id: uuid.UUID, session: AsyncSession) -> RosterOverview:
+    """Who is on the roster right now (1 statement).
+
+    Grouped by (status, role) rather than counted per status: one pass gives both the
+    active/inactive totals and the by-role breakdown, and they cannot disagree because
+    they are folded from the same rows. "removed" is neither active nor inactive and is
+    intentionally not reported — a removed member is not on the roster in any sense a
+    president (or, per c163, the vice president's deputy view) is asking about.
+
+    Shared by chapter_overview (president) and deputy_overview (VP/president, c163) so
+    the roster panel cannot report two different numbers on the same chapter.
+    """
+    roster_rows = await session.execute(
+        select(
+            models.Membership.status,
+            models.Membership.role,
+            func.count().label("count"),
+        )
+        .where(models.Membership.chapter_id == chapter_id)
+        .group_by(models.Membership.status, models.Membership.role)
+    )
+    active_by_role: dict[str, int] = {}
+    active_total = 0
+    inactive_total = 0
+    for status, role, count in roster_rows:
+        if status == "active":
+            active_by_role[role] = active_by_role.get(role, 0) + count
+            active_total += count
+        elif status == "inactive":
+            inactive_total += count
+    return RosterOverview(
+        active=active_total,
+        inactive=inactive_total,
+        # Biggest group first, then role name, so the order is stable between calls
+        # when two roles tie — the same reason attendance_summary orders by id after
+        # display_name.
+        by_role=[
+            RoleCount(role=role, count=count)  # type: ignore[arg-type]
+            for role, count in sorted(active_by_role.items(), key=lambda kv: (-kv[1], kv[0]))
+        ],
+    )
+
+
+async def _dues_overview(chapter_id: uuid.UUID, session: AsyncSession) -> DuesOverview:
+    """The current dues cycle and how far through collecting it the chapter is
+    (3 statements: cycle, per-member net, chapter net).
+
+    Shared by chapter_overview (president) and deputy_overview (VP/president, c163) —
+    see that shared use for why this is a function rather than being inlined twice,
+    which would risk the two dashboards silently disagreeing about the same cycle.
+
+    "Current cycle" is the most recently CREATED one, matching list_dues_cycles'
+    ordering and therefore treasurer.tsx's cycles[0]. Picking the nearest due_date
+    here instead would be defensible in isolation and would put a different cycle name
+    on the President and Treasurer screens on the same day — the exact class of silent
+    disagreement _meeting_window exists to prevent.
+    """
+    cycle = await session.scalar(
+        select(models.DuesCycle)
+        .where(models.DuesCycle.chapter_id == chapter_id)
+        .order_by(models.DuesCycle.created_at.desc())
+        .limit(1)
+    )
+    if cycle is None:
+        return DuesOverview()
+
+    # A dues payment can be CORRECTED — ledger_entries is append-only, so a refund
+    # or a mistake is a new entry_type="correction" row pointing at the original via
+    # corrects_entry_id (SPEC 8.2). Reading only entry_type="dues_payment" would
+    # report money the chapter gave back as money it collected.
+    #
+    # dues_contributions_subquery (app/core/dues_status.py) is the SAME netting
+    # definition payments.py's create_dues_payment_intent guard reads (board c172)
+    # — before that module existed this query and that guard's plain existence
+    # check disagreed about whether a fully-refunded member had paid.
+    contributions = dues_contributions_subquery(chapter_id, cycle.id)
+
+    # PAID/OUTSTANDING ARE SPINED ON THE ACTIVE ROSTER, so they always sum to
+    # roster.active. Counting DISTINCT payers instead would let a member who paid
+    # and then went inactive make outstanding_members negative — the roster shrinks
+    # under a payment count that cannot.
+    paid_rows = await session.execute(
+        select(func.coalesce(func.sum(contributions.c.amount_cents), 0).label("net"))
+        .select_from(models.Membership)
+        .outerjoin(contributions, contributions.c.user_id == models.Membership.user_id)
+        .where(
+            models.Membership.chapter_id == chapter_id,
+            models.Membership.status == "active",
+        )
+        .group_by(models.Membership.user_id)
+    )
+    # Net rather than "has a payment row": a member refunded in full is someone the
+    # president still has to chase, and a partial correction leaves them paid. Both
+    # fall out of the sign of one number. See chapter_overview's original docstring
+    # (git history) for the full c172 discussion this netting resolves.
+    nets = [row.net for row in paid_rows]
+    paid_members = sum(1 for net in nets if net > 0)
+    return DuesOverview(
+        cycle_id=cycle.id,
+        cycle_name=cycle.name,
+        amount_cents=cycle.amount_cents,
+        due_date=cycle.due_date,
+        paid_members=paid_members,
+        outstanding_members=len(nets) - paid_members,
+        # DELIBERATELY NOT roster-spined, unlike the two counts above. This is "how
+        # much money came in for this cycle", which includes members who have since
+        # gone inactive and payments whose related_user_id was never set. Filtering
+        # it to the current roster would quietly under-report the bank balance to
+        # make it agree with a headcount, and the two are not the same question.
+        collected_cents=await session.scalar(
+            select(func.coalesce(func.sum(contributions.c.amount_cents), 0))
+        )
+        or 0,
+    )
+
+
+async def _invite_overview(
+    chapter_id: uuid.UUID, session: AsyncSession, now: datetime
+) -> InviteOverview:
+    """Invite codes that could still be redeemed right now (1 statement).
+
+    All three conditions c105 gave a code, together: a code that is merely unexpired is
+    not live if it was revoked or has been fully redeemed. remaining_uses answers "how
+    many more people could walk in on codes already out there", which is the number
+    that decides whether something needs revoking.
+
+    Shared by chapter_overview (president) and deputy_overview (VP/president, c163).
+    """
+    live_invite = [
+        models.ChapterInvite.chapter_id == chapter_id,
+        models.ChapterInvite.revoked_at.is_(None),
+        models.ChapterInvite.expires_at > now,
+        models.ChapterInvite.uses < models.ChapterInvite.max_uses,
+    ]
+    invite_row = (
+        await session.execute(
+            select(
+                func.count().label("live_codes"),
+                func.coalesce(
+                    func.sum(models.ChapterInvite.max_uses - models.ChapterInvite.uses), 0
+                ).label("remaining_uses"),
+            ).where(*live_invite)
+        )
+    ).one()
+    return InviteOverview(
+        live_codes=invite_row.live_codes,
+        remaining_uses=invite_row.remaining_uses,
+    )
+
+
 @router.get("/chapters/{chapter_id}/overview")
 async def chapter_overview(
     chapter_id: uuid.UUID,
@@ -241,136 +399,10 @@ async def chapter_overview(
     """
     now = datetime.now(timezone.utc)
 
-    # ---- roster (1 statement) ----
-    #
-    # Grouped by (status, role) rather than counted per status: one pass gives both the
-    # active/inactive totals and the by-role breakdown, and they cannot disagree because
-    # they are folded from the same rows. "removed" is neither active nor inactive and is
-    # intentionally not reported — a removed member is not on the roster in any sense a
-    # president is asking about.
-    roster_rows = await session.execute(
-        select(
-            models.Membership.status,
-            models.Membership.role,
-            func.count().label("count"),
-        )
-        .where(models.Membership.chapter_id == chapter_id)
-        .group_by(models.Membership.status, models.Membership.role)
-    )
-    active_by_role: dict[str, int] = {}
-    active_total = 0
-    inactive_total = 0
-    for status, role, count in roster_rows:
-        if status == "active":
-            active_by_role[role] = active_by_role.get(role, 0) + count
-            active_total += count
-        elif status == "inactive":
-            inactive_total += count
-    roster = RosterOverview(
-        active=active_total,
-        inactive=inactive_total,
-        # Biggest group first, then role name, so the order is stable between calls
-        # when two roles tie — the same reason attendance_summary orders by id after
-        # display_name.
-        by_role=[
-            RoleCount(role=role, count=count)  # type: ignore[arg-type]
-            for role, count in sorted(active_by_role.items(), key=lambda kv: (-kv[1], kv[0]))
-        ],
-    )
-
-    # ---- dues (3 statements: cycle, per-member net, chapter net) ----
-    #
-    # "Current cycle" is the most recently CREATED one, matching list_dues_cycles'
-    # ordering and therefore treasurer.tsx's cycles[0]. Picking the nearest due_date
-    # here instead would be defensible in isolation and would put a different cycle name
-    # on the President and Treasurer screens on the same day — the exact class of silent
-    # disagreement _meeting_window exists to prevent.
-    cycle = await session.scalar(
-        select(models.DuesCycle)
-        .where(models.DuesCycle.chapter_id == chapter_id)
-        .order_by(models.DuesCycle.created_at.desc())
-        .limit(1)
-    )
-    dues = DuesOverview()
-    if cycle is not None:
-        # A dues payment can be CORRECTED — ledger_entries is append-only, so a refund
-        # or a mistake is a new entry_type="correction" row pointing at the original via
-        # corrects_entry_id (SPEC 8.2). Reading only entry_type="dues_payment" would
-        # report money the chapter gave back as money it collected.
-        #
-        # dues_contributions_subquery (app/core/dues_status.py) is the SAME netting
-        # definition payments.py's create_dues_payment_intent guard reads (board c172)
-        # — before that module existed this query and that guard's plain existence
-        # check disagreed about whether a fully-refunded member had paid.
-        contributions = dues_contributions_subquery(chapter_id, cycle.id)
-
-        # PAID/OUTSTANDING ARE SPINED ON THE ACTIVE ROSTER, so they always sum to
-        # roster.active. Counting DISTINCT payers instead would let a member who paid
-        # and then went inactive make outstanding_members negative — the roster shrinks
-        # under a payment count that cannot.
-        paid_rows = await session.execute(
-            select(func.coalesce(func.sum(contributions.c.amount_cents), 0).label("net"))
-            .select_from(models.Membership)
-            .outerjoin(contributions, contributions.c.user_id == models.Membership.user_id)
-            .where(
-                models.Membership.chapter_id == chapter_id,
-                models.Membership.status == "active",
-            )
-            .group_by(models.Membership.user_id)
-        )
-        # Net rather than "has a payment row": a member refunded in full is someone the
-        # president still has to chase, and a partial correction leaves them paid. Both
-        # fall out of the sign of one number.
-        #
-        # FORMERLY DISAGREED WITH THE DOUBLE-CHARGE GUARD (board c172): payments.py's
-        # create_dues_payment_intent used to treat the mere EXISTENCE of a dues_payment
-        # row as "already_paid" and never look at corrections, so after a full refund
-        # this dashboard said chase them while POST .../intent still answered
-        # already_paid — genuinely two different facts, not two views of one fact.
-        #
-        # THE FINAL SPLIT, not full alignment: this DISPLAY netted from the start and
-        # still does — a fully-refunded member reads as outstanding here, full stop.
-        # The CHARGE PATH in payments.py reads the exact same dues_contributions_subquery
-        # now, but only to pick an HONEST reason for a block it still always applies
-        # once any dues_payment row exists: already_paid (net > 0, the money is still
-        # in hand) or refunded_contact_treasurer (net <= 0, they owe again but this
-        # endpoint cannot self-serve it). An earlier version of this fix let the charge
-        # path re-open for net <= 0 instead, which is a money-loss bug, not a fix:
-        # uq_ledger_dues_payment_once allows at most one dues_payment row per (cycle,
-        # member) EVER, so a second Stripe payment settling here would capture real
-        # money and then have no ledger row to show for it once the webhook's insert
-        # lost to that constraint. So the two surfaces now agree on WHETHER a member
-        # owes money (this display, honestly) and on WHY the pay button still refuses
-        # them (payments.py's honest detail string) without ever reopening a charge
-        # path this ledger cannot yet represent safely. Actually letting a refunded
-        # member self-serve repay needs the cycle/member's dues status modeled
-        # explicitly rather than re-derived from ledger rows twice — c83-shaped work,
-        # not a same-day guard change.
-        #
-        # A dues_payment with related_user_id NULL (a hand-entered cash payment, since
-        # POST /ledger does not require it) counts toward collected_cents and toward
-        # nobody's paid status. That is the honest reading - the money arrived, the app
-        # does not know from whom - and it is why the two numbers can legitimately
-        # disagree on screen.
-        nets = [row.net for row in paid_rows]
-        paid_members = sum(1 for net in nets if net > 0)
-        dues = DuesOverview(
-            cycle_id=cycle.id,
-            cycle_name=cycle.name,
-            amount_cents=cycle.amount_cents,
-            due_date=cycle.due_date,
-            paid_members=paid_members,
-            outstanding_members=len(nets) - paid_members,
-            # DELIBERATELY NOT roster-spined, unlike the two counts above. This is "how
-            # much money came in for this cycle", which includes members who have since
-            # gone inactive and payments whose related_user_id was never set. Filtering
-            # it to the current roster would quietly under-report the bank balance to
-            # make it agree with a headcount, and the two are not the same question.
-            collected_cents=await session.scalar(
-                select(func.coalesce(func.sum(contributions.c.amount_cents), 0))
-            )
-            or 0,
-        )
+    # Roster/dues/invites are shared with deputy_overview below (c163) — see each
+    # helper's docstring for why they are functions rather than inlined twice.
+    roster = await _roster_overview(chapter_id, session)
+    dues = await _dues_overview(chapter_id, session)
 
     # ---- attendance (2 statements) ----
     window = meeting_window(chapter_id, start, end)
@@ -410,28 +442,7 @@ async def chapter_overview(
         )
     )
 
-    # ---- invites (1 statement) ----
-    #
-    # All three conditions c105 gave a code, together: a code that is merely unexpired is
-    # not live if it was revoked or has been fully redeemed. remaining_uses answers "how
-    # many more people could walk in on codes already out there", which is the number
-    # that decides whether something needs revoking.
-    live_invite = [
-        models.ChapterInvite.chapter_id == chapter_id,
-        models.ChapterInvite.revoked_at.is_(None),
-        models.ChapterInvite.expires_at > now,
-        models.ChapterInvite.uses < models.ChapterInvite.max_uses,
-    ]
-    invite_row = (
-        await session.execute(
-            select(
-                func.count().label("live_codes"),
-                func.coalesce(
-                    func.sum(models.ChapterInvite.max_uses - models.ChapterInvite.uses), 0
-                ).label("remaining_uses"),
-            ).where(*live_invite)
-        )
-    ).one()
+    invites = await _invite_overview(chapter_id, session, now)
 
     return ChapterOverview(
         chapter_id=chapter_id,
@@ -445,10 +456,44 @@ async def chapter_overview(
             window_end=end,
         ),
         lineage=LineageOverview(unconfirmed_edges=unconfirmed_edges or 0),
-        invites=InviteOverview(
-            live_codes=invite_row.live_codes,
-            remaining_uses=invite_row.remaining_uses,
-        ),
+        invites=invites,
+    )
+
+
+@router.get("/chapters/{chapter_id}/deputy-overview")
+async def deputy_overview(
+    chapter_id: uuid.UUID,
+    _membership: models.Membership = Depends(require_role(*DEPUTY_OVERVIEW)),
+    session: AsyncSession = Depends(get_session),
+) -> DeputyOverview:
+    """Roster, dues status, and open invites for the Vice President's deputy-president
+    dashboard (board card c163).
+
+    Jose's product ruling (board decisions log): the VP dashboard is DEPUTY PRESIDENT —
+    a READ view of president-admin data (roster, open invites, dues status) framed as a
+    stand-in, with delegation (acting on any of it) explicitly out of the alpha build.
+
+    GATED ON deputy_overview, a capability of its own rather than members_admin.
+    chapter_overview above is deliberately gated on members_admin BECAUSE its payload
+    mixes dues, attendance and lineage, and no role short of president may read all
+    three - reusing that gate here (or reusing that endpoint's response and trimming
+    fields client-side) would ship attendance and lineage over the wire to a role
+    that holds neither minutes_admin nor lineage_admin. This endpoint computes only
+    the sections deputy_overview actually grants.
+
+    Same roster/dues/invites helpers chapter_overview uses, so the two dashboards
+    cannot report different numbers for the same chapter.
+    """
+    now = datetime.now(timezone.utc)
+    roster = await _roster_overview(chapter_id, session)
+    dues = await _dues_overview(chapter_id, session)
+    invites = await _invite_overview(chapter_id, session, now)
+    return DeputyOverview(
+        chapter_id=chapter_id,
+        generated_at=now,
+        roster=roster,
+        dues=dues,
+        invites=invites,
     )
 
 
