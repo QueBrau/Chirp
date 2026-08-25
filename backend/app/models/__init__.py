@@ -18,6 +18,7 @@ from app.models.identity import (
     Chapter,
     ChapterInvite,
     Membership,
+    RoleTerm,
     User,
 )
 from app.models.lineage import Family, LineageEdge
@@ -64,6 +65,7 @@ __all__ = [
     "PostComment",
     "PostLike",
     "ProcessedStripeEvent",
+    "RoleTerm",
     "SignedPrekey",
     "SpendApproval",
     "User",

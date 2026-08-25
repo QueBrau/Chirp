@@ -153,6 +153,51 @@ class Membership(Base):
     )
 
 
+class RoleTerm(Base):
+    """One dated span of a membership holding a role (board card c83; Jose's ruling:
+    a chapter role is a DATED TERM, not a plain fact, not just the current value
+    memberships.role has always held). ended_at IS NULL means this term is still
+    open — the role the member holds right now. memberships.role remains the
+    current-role source of truth every existing reader depends on (require_role,
+    capabilities_for, the roster, ...); this table is the history layered on top,
+    kept in sync by app.services.role_term_service on every actual role change.
+
+    INVARIANT: at most one open term per membership. Enforced by a REAL partial
+    unique index in the migration (0021), not just here — see uq_role_terms_open_
+    per_membership below, which mirrors it so the ORM-side declaration doesn't
+    silently drift from what the database actually enforces (0019's docstring
+    documents exactly that drift happening once already in this repo)."""
+
+    __tablename__ = "role_terms"
+    __table_args__ = (
+        Index(
+            "uq_role_terms_open_per_membership",
+            "membership_id",
+            unique=True,
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    membership_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("memberships.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # NULL for the 0021 backfill (no acting user to blame — see the migration's
+    # docstring) and for any membership-creation path that never called
+    # apply_role_change. Set to the acting president's user_id on every real
+    # PATCH /chapters/{chapter_id}/members role change.
+    changed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id")
+    )
+
+
 class ChapterInvite(Base):
     """A redeemable chapter invite. c105 made it a bounded credential, not a bearer
     token: every code expires, every code has a redemption budget, and any of them
