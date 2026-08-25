@@ -3,12 +3,13 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import get_settings
+from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
 from app.core.permissions import Role, require_role
 from app.db import get_session
@@ -175,15 +176,39 @@ async def create_dues_payment_intent(
     if membership.scalar_one_or_none() is None:
         raise forbidden("not_a_member")
 
-    already_paid = await session.execute(
+    # EXISTENCE still blocks the charge path (board c172) — re-payment for one dues
+    # cycle is structurally UNREPRESENTABLE in this ledger today, not merely
+    # undesirable: uq_ledger_dues_payment_once allows at most one dues_payment row
+    # per (cycle, member) EVER, so a second Stripe payment settling here would
+    # capture real money at Stripe and then silently have no ledger row to show for
+    # it when the webhook's insert loses to that constraint (see _record_dues_payment
+    # and the RESIDUAL EDGE note below). An earlier version of this fix let net<=0
+    # (a full refund) through to Stripe, which is exactly the money-loss path — closed
+    # by going back to existence, not by NOT netting at all: dues_contributions_subquery
+    # (same definition chapter_overview reads, board c171) still decides WHICH honest
+    # reason accompanies the block, so the two surfaces agree on whether the member
+    # owes money even though this endpoint cannot yet let them pay again. Actually
+    # reopening self-serve repayment after a refund needs the cycle/member's dues
+    # status modeled explicitly (c83-shaped work), not a same-day guard change.
+    existing_payment = await session.execute(
         select(models.LedgerEntry.id).where(
             models.LedgerEntry.dues_cycle_id == cycle_id,
             models.LedgerEntry.related_user_id == user.id,
             models.LedgerEntry.entry_type == "dues_payment",
         )
     )
-    if already_paid.scalar_one_or_none() is not None:
-        raise conflict("already_paid")
+    if existing_payment.scalar_one_or_none() is not None:
+        contributions = dues_contributions_subquery(cycle.chapter_id, cycle.id)
+        net_cents = await session.scalar(
+            select(func.coalesce(func.sum(contributions.c.amount_cents), 0)).where(
+                contributions.c.user_id == user.id
+            )
+        )
+        # net > 0: the money is genuinely still in hand — "already_paid" (unchanged).
+        # net <= 0: a correction refunded it, and the member DOES owe again, but this
+        # endpoint cannot self-serve that yet — say so rather than repeating the
+        # already_paid lie the President overview no longer tells.
+        raise conflict("already_paid" if net_cents > 0 else "refunded_contact_treasurer")
 
     chapter = await session.get(models.Chapter, cycle.chapter_id)
     if chapter is None or chapter.stripe_account_id is None:
@@ -211,6 +236,14 @@ async def create_dues_payment_intent(
     reservation = live.scalar_one_or_none()
     if reservation is not None:
         if reservation.status == "succeeded":
+            # Effectively unreachable in normal operation (board c172): a reservation
+            # only reaches 'succeeded' via the webhook's _resolve_reservation, which
+            # commits in the SAME transaction as _record_dues_payment's ledger insert
+            # — so whenever this is true, the existence check above has already
+            # raised (with the honest already_paid/refunded_contact_treasurer split)
+            # before this line runs. Left as a defensive backstop rather than removed,
+            # matching uq_ledger_dues_payment_once's own "independent of the
+            # reservation" backstop reasoning (migration 0010).
             raise conflict("already_paid")
         if reservation.rail != body.rail:
             # THE double-charge case: an ACH debit is still processing (days) and

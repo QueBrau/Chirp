@@ -4,11 +4,12 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_, func, select, union_all, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
 from app.core.invites import clamp_invite_expiry
 from app.core.permissions import EBOARD, MEMBERS_ADMIN, Role, capabilities_for, require_role
@@ -294,37 +295,11 @@ async def chapter_overview(
         # corrects_entry_id (SPEC 8.2). Reading only entry_type="dues_payment" would
         # report money the chapter gave back as money it collected.
         #
-        # The correction row's own related_user_id is not trusted for attribution: it is
-        # nullable and nothing requires it to match the entry being corrected. The user
-        # comes from the payment it points at, which is the only link the schema
-        # actually guarantees.
-        payments = (
-            select(
-                models.LedgerEntry.id.label("entry_id"),
-                models.LedgerEntry.related_user_id.label("user_id"),
-                models.LedgerEntry.amount_cents.label("amount_cents"),
-            )
-            .where(
-                models.LedgerEntry.chapter_id == chapter_id,
-                models.LedgerEntry.entry_type == "dues_payment",
-                models.LedgerEntry.dues_cycle_id == cycle.id,
-            )
-            .subquery()
-        )
-        corrections = (
-            select(
-                payments.c.user_id.label("user_id"),
-                models.LedgerEntry.amount_cents.label("amount_cents"),
-            )
-            .join(payments, models.LedgerEntry.corrects_entry_id == payments.c.entry_id)
-            .where(
-                models.LedgerEntry.chapter_id == chapter_id,
-                models.LedgerEntry.entry_type == "correction",
-            )
-        )
-        contributions = union_all(
-            select(payments.c.user_id, payments.c.amount_cents), corrections
-        ).subquery()
+        # dues_contributions_subquery (app/core/dues_status.py) is the SAME netting
+        # definition payments.py's create_dues_payment_intent guard reads (board c172)
+        # — before that module existed this query and that guard's plain existence
+        # check disagreed about whether a fully-refunded member had paid.
+        contributions = dues_contributions_subquery(chapter_id, cycle.id)
 
         # PAID/OUTSTANDING ARE SPINED ON THE ACTIVE ROSTER, so they always sum to
         # roster.active. Counting DISTINCT payers instead would let a member who paid
@@ -344,15 +319,30 @@ async def chapter_overview(
         # president still has to chase, and a partial correction leaves them paid. Both
         # fall out of the sign of one number.
         #
-        # KNOWN SEAM WITH THE DOUBLE-CHARGE GUARD, recorded rather than papered over.
-        # payments.py:178 treats the mere EXISTENCE of a dues_payment row for the cycle
-        # as "already_paid" and does not net corrections. So after a full refund this
-        # dashboard says chase them and POST .../pay still answers already_paid. The two
-        # are answering different questions - one is protecting a card from being charged
-        # twice, the other is telling a president who owes money - and erring toward
-        # "paid" is the right direction for the charge guard specifically. It is still a
-        # seam a real chapter can walk into; it needs a product decision, not a quiet
-        # alignment here, because making them agree means changing which one is wrong.
+        # FORMERLY DISAGREED WITH THE DOUBLE-CHARGE GUARD (board c172): payments.py's
+        # create_dues_payment_intent used to treat the mere EXISTENCE of a dues_payment
+        # row as "already_paid" and never look at corrections, so after a full refund
+        # this dashboard said chase them while POST .../intent still answered
+        # already_paid — genuinely two different facts, not two views of one fact.
+        #
+        # THE FINAL SPLIT, not full alignment: this DISPLAY netted from the start and
+        # still does — a fully-refunded member reads as outstanding here, full stop.
+        # The CHARGE PATH in payments.py reads the exact same dues_contributions_subquery
+        # now, but only to pick an HONEST reason for a block it still always applies
+        # once any dues_payment row exists: already_paid (net > 0, the money is still
+        # in hand) or refunded_contact_treasurer (net <= 0, they owe again but this
+        # endpoint cannot self-serve it). An earlier version of this fix let the charge
+        # path re-open for net <= 0 instead, which is a money-loss bug, not a fix:
+        # uq_ledger_dues_payment_once allows at most one dues_payment row per (cycle,
+        # member) EVER, so a second Stripe payment settling here would capture real
+        # money and then have no ledger row to show for it once the webhook's insert
+        # lost to that constraint. So the two surfaces now agree on WHETHER a member
+        # owes money (this display, honestly) and on WHY the pay button still refuses
+        # them (payments.py's honest detail string) without ever reopening a charge
+        # path this ledger cannot yet represent safely. Actually letting a refunded
+        # member self-serve repay needs the cycle/member's dues status modeled
+        # explicitly rather than re-derived from ledger rows twice — c83-shaped work,
+        # not a same-day guard change.
         #
         # A dues_payment with related_user_id NULL (a hand-entered cash payment, since
         # POST /ledger does not require it) counts toward collected_cents and toward
