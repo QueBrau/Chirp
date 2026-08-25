@@ -3,7 +3,9 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.validation import validate_public_url
 
 
 class _Schema(BaseModel):
@@ -23,6 +25,13 @@ class AlumniProfileUpdate(_Schema):
     location: str | None = None
     linkedin_url: str | None = None
     open_to_mentoring: bool = False
+
+    # c184: the mobile client opens linkedin_url blind via Linking.openURL — a
+    # verified phishing / intent-URI vector. http(s)-only, <= 2048 chars.
+    @field_validator("linkedin_url")
+    @classmethod
+    def _validate_linkedin_url(cls, value: str | None) -> str | None:
+        return validate_public_url(value)
 
 
 class AlumniProfileOut(_Schema):
@@ -50,6 +59,13 @@ class JobPostCreate(_Schema):
     apply_url: str | None = None
     expires_at: datetime | None = None
 
+    # c184: the mobile client opens apply_url blind via Linking.openURL — same
+    # phishing / intent-URI vector as linkedin_url above.
+    @field_validator("apply_url")
+    @classmethod
+    def _validate_apply_url(cls, value: str | None) -> str | None:
+        return validate_public_url(value)
+
 
 class JobPostUpdate(_Schema):
     title: str | None = None
@@ -58,6 +74,15 @@ class JobPostUpdate(_Schema):
     description: str | None = None
     apply_url: str | None = None
     expires_at: datetime | None = None
+
+    # No route accepts this schema today (see routers/alumni.py) but it is kept
+    # in lockstep with JobPostCreate for the same reason UserUpdate.avatar_url
+    # is validated below: an unvalidated field is the one that gets wired up
+    # later by someone who assumes it was already safe.
+    @field_validator("apply_url")
+    @classmethod
+    def _validate_apply_url(cls, value: str | None) -> str | None:
+        return validate_public_url(value)
 
 
 class JobPostOut(_Schema):

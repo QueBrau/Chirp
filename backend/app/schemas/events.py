@@ -4,7 +4,9 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.validation import validate_public_url
 
 RsvpStatus = Literal["going", "maybe", "cant"]
 
@@ -21,6 +23,17 @@ class EventCreate(_Schema):
     date_label: str = Field(min_length=1)
     location: str = Field(min_length=1)
     cover_url: str = Field(min_length=1)
+
+    # c184 sweep: cover_url is client-supplied and written straight through to
+    # the events row with no validation (routers/events.py create_event), the
+    # same shape of gap the card flagged in alumni.linkedin_url / apply_url.
+    # http(s)-only, <= 2048 chars.
+    @field_validator("cover_url")
+    @classmethod
+    def _validate_cover_url(cls, value: str) -> str:
+        validated = validate_public_url(value)
+        assert validated is not None  # field is required (min_length=1), never None
+        return validated
 
 
 class EventOut(_Schema):
