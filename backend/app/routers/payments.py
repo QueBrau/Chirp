@@ -1,4 +1,5 @@
 """Payments: Stripe Connect onboarding, dues PaymentIntents, and the webhook sink."""
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -25,6 +26,7 @@ from app.schemas.payments import (
 from app.services import stripe_service
 
 router = APIRouter(tags=["payments"])
+logger = logging.getLogger(__name__)
 
 
 def _onboarding_urls() -> tuple[str, str]:
@@ -250,8 +252,8 @@ async def create_dues_payment_intent(
             # the member is now trying to pay the same cycle by card. The per-rail
             # Stripe idempotency key would happily mint a second real intent.
             raise conflict("payment_already_in_progress")
-        # Same rail — an ordinary client retry. Reuse the reservation; the
-        # idempotency key is identical, so Stripe resolves it to the same intent.
+        # Same rail — an ordinary client retry. Handled below: reused if we already
+        # have a stored intent id, created if we do not.
     else:
         reservation = models.DuesPaymentIntent(
             chapter_id=chapter.id, dues_cycle_id=cycle.id, user_id=user.id, rail=body.rail
@@ -265,25 +267,46 @@ async def create_dues_payment_intent(
             await session.rollback()
             raise conflict("payment_already_in_progress") from None
 
-    try:
-        intent = await stripe_service.create_dues_payment_intent(
-            account_id=account_id,
-            customer_id=customer_id,
-            amount_cents=cycle.amount_cents,
-            rail=body.rail,
-            cycle_id=cycle.id,
-            user_id=user.id,
-            chapter_id=chapter.id,
+    if reservation.stripe_payment_intent_id is not None:
+        # A same-rail retry against an intent we already created (board c193). Stripe
+        # only retains an idempotency key for 24h, while ACH can sit in 'processing'
+        # for DAYS with no payment_intent.processing webhook to move the reservation
+        # out of 'open' in the meantime — a create() call here past that window would
+        # mint a genuinely NEW real intent (a second bank debit) instead of resolving
+        # to the original. Retrieve, never create, once an intent id is on file.
+        intent = await stripe_service.retrieve_payment_intent(
+            account_id, reservation.stripe_payment_intent_id
         )
-    except Exception:
-        # Stripe never created an intent, so the reservation must not keep
-        # blocking a legitimate retry.
-        reservation.status = "canceled"
-        await session.commit()
-        raise
+    else:
+        # Either a freshly-inserted reservation (the else branch above), or one that
+        # exists but has not gotten a Stripe answer yet — either way there is no
+        # intent to retrieve, so this is the only branch allowed to create one, and
+        # therefore the only branch allowed to cancel the reservation if Stripe
+        # rejects the call.
+        try:
+            intent = await stripe_service.create_dues_payment_intent(
+                account_id=account_id,
+                customer_id=customer_id,
+                amount_cents=cycle.amount_cents,
+                rail=body.rail,
+                cycle_id=cycle.id,
+                user_id=user.id,
+                chapter_id=chapter.id,
+            )
+        except Exception:
+            # Stripe never created an intent, so the reservation must not keep
+            # blocking a legitimate retry. Safe ONLY here: stripe_payment_intent_id
+            # was still None going in, so this reservation was never live at Stripe.
+            # A reservation that already points at a live intent must NEVER be
+            # canceled from an exception — that would release uq_dues_intent_live
+            # and reopen the cross-rail double-charge this guard exists to close.
+            reservation.status = "canceled"
+            await session.commit()
+            raise
 
-    reservation.stripe_payment_intent_id = intent.id
-    await session.commit()
+        reservation.stripe_payment_intent_id = intent.id
+        await session.commit()
+
     customer_session_secret = await stripe_service.create_customer_session(
         account_id, customer_id
     )
@@ -355,6 +378,45 @@ async def _record_dues_payment(session: AsyncSession, intent: dict) -> None:
     )
 
 
+async def _log_if_second_capture_unrecordable(session: AsyncSession, intent: dict) -> None:
+    """After a commit loses to a constraint, tell whether real money just went
+    unrecorded (board c193, finding 5).
+
+    uq_ledger_dues_payment_once does not know WHY an insert lost to it — an exact
+    replay of the intent we already recorded hits it too (the index has no intent id
+    in its key), and that case is harmless: the ledger already holds the money. Only
+    a DIFFERENT intent id losing here is the dangerous case: Stripe captured real
+    money on a second, distinct PaymentIntent for this (cycle, member), and this
+    append-only ledger can structurally never hold a second dues_payment row for it
+    (board c172). That capture is now invisible unless this line exists. Only
+    internal ids are logged — never email, name, or the raw event payload.
+    """
+    metadata = intent.get("metadata") or {}
+    cycle_id = metadata.get("chirp_dues_cycle_id")
+    user_id = metadata.get("chirp_user_id")
+    if not cycle_id or not user_id:
+        return
+
+    recorded = await session.execute(
+        select(models.LedgerEntry.stripe_payment_intent_id).where(
+            models.LedgerEntry.dues_cycle_id == uuid.UUID(cycle_id),
+            models.LedgerEntry.related_user_id == uuid.UUID(user_id),
+            models.LedgerEntry.entry_type == "dues_payment",
+        )
+    )
+    recorded_intent_id = recorded.scalar_one_or_none()
+    if recorded_intent_id is not None and recorded_intent_id != intent["id"]:
+        logger.error(
+            "dues payment reconciliation: cycle=%s user=%s intent=%s captured but "
+            "NOT recorded on the ledger — a dues_payment for a DIFFERENT intent (%s) "
+            "is already there. Verify both against Stripe and reconcile manually.",
+            cycle_id,
+            user_id,
+            intent["id"],
+            recorded_intent_id,
+        )
+
+
 @router.post("/webhooks/stripe")
 async def stripe_webhook(
     request: Request,
@@ -392,6 +454,13 @@ async def stripe_webhook(
     try:
         await session.commit()
     except IntegrityError:
-        # Replayed event id, or a second event for an intent already in the ledger.
+        # Replayed event id, or a second event for an intent already in the ledger —
+        # or (board c193, finding 5) a genuine second capture on a DIFFERENT intent
+        # that this append-only ledger can never hold. Distinguish and surface the
+        # dangerous case rather than swallowing it silently; still return 200 below
+        # either way, because a non-2xx just makes Stripe retry an event that can
+        # never succeed.
         await session.rollback()
+        if event["type"] == "payment_intent.succeeded":
+            await _log_if_second_capture_unrecordable(session, event["data"]["object"])
     return {"received": True}
