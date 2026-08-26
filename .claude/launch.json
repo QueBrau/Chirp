@@ -29,6 +29,33 @@
       "port": 8081
     },
     {
+      "name": "house-api",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd backend && ENV=local AUTH_MODE=emulated DATABASE_URL='postgresql+asyncpg://chirp:chirp@localhost:5442/chirp' .venv/bin/uvicorn app.main:create_app --factory --reload --port 8002"
+      ],
+      "port": 8002
+    },
+    {
+      "name": "house-native",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8002 EXPO_PUBLIC_DEV_UID=dev-president npx expo start --dev-client --clear --port 8082"
+      ],
+      "port": 8082
+    },
+    {
+      "name": "chirp-native-president",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd app-mobile && EXPO_PUBLIC_API_URL=http://localhost:8000 EXPO_PUBLIC_DEV_UID=dev-president npx expo start --dev-client --clear --port 8081"
+      ],
+      "port": 8081
+    },
+    {
       "name": "chirp-native-treasurer",
       "runtimeExecutable": "sh",
       "runtimeArgs": [

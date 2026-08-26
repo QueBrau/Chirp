@@ -249,7 +249,7 @@ export default function ChirpScreen() {
       {access === "ok" && campusId !== null ? (
         <Pressable
           accessibilityRole="button"
-          onPress={() => router.push("/(tabs)/chirp/houses")}
+          onPress={() => router.push("/(tabs)/chirps/houses")}
           style={({ pressed }) => ({
             opacity: pressed ? 0.7 : 1,
             marginBottom: spacing.lg,
