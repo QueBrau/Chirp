@@ -1974,11 +1974,11 @@
     },
     {
       "id": "c174",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "court",
       "tag": "mobile",
       "area": "infra",
-      "title": "MILESTONE: Expo SDK 54 -> 57 upgrade - the ONLY path that clears all 22 audit findings (no backports into SDK 54/55/56 lines). Sequence WITH the next EAS rebuild, never mid-sprint",
+      "title": "c174 IN BUILD Aug 25 - Expo SDK 54 -> 57 upgrade branch per the card's own checklist (expo install expo@^57, expo-doctor peer alignment, coordinated RN pins, full local verification matrix, npm audit diffed against c170's 22 entries). Sonnet worker in chirp-sub-c174. MERGE IS GATED: PR opens on green local matrix but lands only at the next EAS/device window per the sequencing rule - abandon rather than land broken. Merges LAST after all smaller open branches",
       "detail": "From c170's audit (full advisory table + audit.json in the manager session, Aug 24). Plan essentials: branch off main with the pre-upgrade lockfile committed first (rollback = checkout lockfile + npm ci); npx expo install expo@^57 then expo install --check / expo-doctor to align every expo-* peer (NEVER manual per-package bumps); RN core moves past 0.81.5 so reanimated/worklets/svg/stripe pins need coordinated bumps; EVERY existing EAS build goes stale (the sim build already is, from c166's AsyncStorage) so cut fresh iOS-sim + Android builds after; verification matrix = tsc with version cited, all five verify:* scripts, router/notifications/auth-persistence/image-picker targeted checks, sim smoke of the c164 screens, and a final npm audit --json diffed against c170's 22 entries to PROVE closure. Do not merge partial breakage - abandon the branch rather than land it broken. Overrides-block shortcut for postcss/image-size/uuid explicitly rejected (untested Metro internal API contract)."
     },
     {
@@ -2007,6 +2007,51 @@
       "area": "orgs",
       "title": "c181 DONE Aug 25 - MERGED as cb98e7c (PR #108, CI 4/4). Alumni cards: tap-to-expand role history + highest-office line ('President, 2026' - year only when the start date is real). Tree node inspector: current role chip + honesty-gated date, ghost nodes skipped. c180's date rule extracted to shared src/lib/roleTerms.ts (3 call sites). N+1 proven by network log. Manager fix in review: seeded officer terms keep their OFFICE (only the year is honesty-gated) - the worker's version would have erased every pre-0021 officer from the directory. NOT ON PROD until the coordinated deploy window",
       "detail": "The second read-side pass c83's own card predicted: 'the alumni directory and the lineage tree both want to say president, 2024 and the schema cannot' - now it can (role_terms, merged 75ab482) and the member detail screen proves the pattern (c180, b0631ba). This card: (1) alumni directory entries show highest-office-held with year when a REAL dated term exists (changed_by non-null - same honesty rule as c180, comment it); (2) lineage tree member cards/detail show the same compact term line. REUSE getRoleTerms and the c180 date rule - extract shared helpers rather than duplicating the honesty logic. Per-request N+1 caution: the directory lists many members - do NOT fire one role-terms request per row; fetch on tap/expand, or skip enrichment where the surface has no detail interaction. Out of scope: backend changes, new endpoints, batch endpoints (card one if genuinely needed rather than building unasked)."
+    },
+    {
+      "id": "c186",
+      "col": "progress",
+      "owner": "court",
+      "tag": "infra",
+      "area": "infra",
+      "title": "c186 IN BUILD Aug 25 - deploy-window preflight kit for the coordinated 0019-0022 migrate+redeploy: Jose's exact migration pastes, the deploy command, and a single post-deploy verification script covering route smoke (401 + 404 control), the chirps route swap (old /yaks 404, new /chirps 200), c176's log-line proof, c184's read-only prod URL-data check, and the web client rebuild+deploy step. Dry-run against the local stack before it's called ready. Sonnet worker in chirp-sub-c186",
+      "detail": "The next deploy is the riskiest in weeks: 0022 renames tables so migrate and redeploy must land in ONE window with an unavoidable error gap (Q's c179 detail). This kit exists so the quiet-hour window is minutes, not exploration: (1) RUNBOOK.md section or DEPLOY.md amendment with the exact ordered steps and who runs each (Jose: proxy + alembic upgrade head; manager: gcloud run deploy, web deploy, verification); (2) scripts/deploy-verify (or similar) probing prod after: real route 401, bogus route 404 control, /yaks 404 + /chirps 200 route swap, one POST /auth/campus-verification 202 followed by a Cloud Logging read asserting the c176 'email sent' line appears, read-only SELECT counts for c184's four URL columns; (3) web/ rebuild + hosting deploy step (old route paths 404 from the web client until rebuilt - Q's card). Dry-run: run the verify script against the local stack (expect the local-flavored results) to prove it executes. NO prod access in the build phase - the kit RUNS at the window, built and rehearsed now."
+    },
+    {
+      "id": "c187",
+      "col": "progress",
+      "owner": "court",
+      "tag": "cleanup",
+      "area": "mobile",
+      "title": "c187 QUEUED Aug 25 (pool at cap, starts on first free slot) - consolidate the duplicate helpers today's cards exposed: 4 remaining private copies of ROLE_LABELS/chipVariant (members, president, vice-president, profile) onto src/lib/roleTerms.ts (c181 note), and the 10+ per-file showApiError bodies onto a shared helper next to src/lib/alert.ts (c183 note). Zero behavior change, grep-proof no duplicates remain",
+      "detail": "Both flagged as explicit out-of-scope notes by the c181 and c183 workers. Rules: no visual or behavioral change (same labels, same variants, same error strings); showApiError keeps its (error, title) signature at call sites or migrates them all - one convention, not two; grep proof both ways (no local ROLE_LABELS/chipVariant/prettifyRole definitions outside roleTerms.ts, no per-file showApiError bodies), tsc cited. Small diffs per file - c174's upgrade branch rebases over this, so keep it surgical."
+    },
+    {
+      "id": "c188",
+      "col": "progress",
+      "owner": "court",
+      "tag": "security",
+      "area": "process",
+      "title": "c188 IN BUILD Aug 25 - SECURITY-REVIEW.md is dated Aug 13 and predates the money path, the media flip, and every audit since. Bring it current: the 9-lens coverage map with dates and verdicts, shipped mitigations cross-linked to cards (c140 media, c146 scrubbing, c176 logs, c184 URLs, c185 hygiene, the c85/c120/c121 hardening), and the open-items table (SA grants, SQL ssl, Firebase key per-platform, .edu inbox leg) with owners. Sonnet worker in chirp-sub-c188",
+      "detail": "Docs-only card, but the doc is load-bearing: it is the file a future session reads to know what is already proven safe vs assumed. Source of truth order: board cards + decisions log + the c182 report (manager session) over the stale doc text. Structure: coverage map (9 lenses, when run, verdict), shipped mitigations (dated, carded, one line each), open items (severity, owner, card), explicit last-full-review date. No new claims the cards do not back; anything uncertain marked unverified rather than asserted. Repo rule reminders: no emojis, merge via PR."
+    },
+    {
+      "id": "c189",
+      "col": "progress",
+      "owner": "court",
+      "tag": "design",
+      "area": "mobile",
+      "title": "c189 IN BUILD Aug 25 - designer's-eye QA over the four surfaces added/changed this week (VP dashboard, member detail + role history, alumni tap-to-expand, tree node inspector role line) on web at 390x844 against DESIGN.md: spacing, hierarchy, empty/loading states, dark canvas rules, no default-looking UI. Small fixes applied in-card; anything structural carded separately. Sonnet worker in chirp-sub-c189",
+      "detail": "All four surfaces shipped fast behind functional evidence; none has had a dedicated design pass. Method: local stack (backend :8000, Metro from the worktree :8084, dev seeds incl the 2-term Chris Delgado history), drive every state of each surface (loading, empty, populated, error - errors now VISIBLE on web thanks to c183), screenshot each, judge against DESIGN.md's binding rules, fix the small stuff (spacing tokens, type variants, chip usage, copy tone), screenshot after. tsc cited; no new features; keep diffs minimal (c174 rebases over this)."
+    },
+    {
+      "id": "c190",
+      "col": "progress",
+      "owner": "court",
+      "tag": "m4",
+      "area": "messaging",
+      "title": "c190 IN BUILD Aug 25 - E2EE epic de-stale audit feeding Q's c36: read-only sweep of what the crypto stubs, messaging transport, and c36/c7/c23/c14's card text claim vs what main actually contains post-rename, producing a board-ready re-scoped epic (sequenced cards with real acceptance criteria) as a PROPOSAL for Jose+Q - no card edits to Q's lane without his eyes. Sonnet worker, read-only",
+      "detail": "c36 says of itself 'CARD IS 2/3 STALE, re-scoped Aug 16' and nine days of merges (incl the full Chirps rename and live Redis messaging) have moved the ground again. Deliverable: (1) inventory - every crypto/E2EE-adjacent file on main (stubs, key handling, socket transport, message storage) with one line each on its real state; (2) delta - what c36/c7/c23/c14 assert that is no longer true; (3) proposed epic - sequenced, device-dependency-honest (libsignal needs physical devices, c23), each proposed card with concrete acceptance criteria; (4) the explicit note that messaging today is transport-encrypted only and must not be called private (standing artifact language). Output is TEXT for the manager to route to Jose+Q - the worker touches no board and no code."
     },
     {
       "id": "c184",
