@@ -6,7 +6,6 @@
     "scheme": "chirp",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "com.chirp.app",
       "supportsTablet": false,
@@ -55,7 +54,9 @@
         {
           "photosPermission": "Chirp needs access to your photos so you can attach one to a post."
         }
-      ]
+      ],
+      "expo-sharing",
+      "expo-status-bar"
     ],
     "extra": {
       "router": {},
