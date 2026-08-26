@@ -325,13 +325,13 @@ export default function HousesScreen() {
                           backgroundColor: palette.surfaceAlt,
                         }}
                       >
-                        <AppText style={{ ...typography.stat, color: palette.textPrimary }}>
+                        <AppText style={{ ...typography.stat, color: palette.ink }}>
                           {row.rank}
                         </AppText>
                       </View>
                     }
                     right={
-                      <AppText style={{ ...typography.stat, color: palette.textPrimary }}>
+                      <AppText style={{ ...typography.stat, color: palette.ink }}>
                         {row.net > 0 ? `+${row.net}` : `${row.net}`}
                       </AppText>
                     }

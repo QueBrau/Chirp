@@ -206,7 +206,7 @@ function OverviewPanel({
           <AppText variant="caption" tone="tertiary">
             ROSTER
           </AppText>
-          <AppText style={{ ...typography.stat, color: palette.textPrimary }}>
+          <AppText style={{ ...typography.stat, color: palette.ink }}>
             {roster.active}
           </AppText>
           <AppText variant="caption" tone="secondary">
@@ -217,7 +217,7 @@ function OverviewPanel({
           <AppText variant="caption" tone="tertiary">
             MEETINGS
           </AppText>
-          <AppText style={{ ...typography.stat, color: palette.textPrimary }}>
+          <AppText style={{ ...typography.stat, color: palette.ink }}>
             {attendance.meetings_in_window}
           </AppText>
           <AppText variant="caption" tone="secondary">
@@ -428,7 +428,7 @@ export default function PresidentScreen() {
 
   const inputStyle = {
     ...typography.body,
-    color: palette.textPrimary,
+    color: palette.ink,
     backgroundColor: palette.surfaceAlt,
     borderRadius: radii.input,
     paddingHorizontal: spacing.md,
@@ -488,7 +488,7 @@ export default function PresidentScreen() {
                     value={chapterName}
                     onChangeText={setChapterName}
                     placeholder="e.g. Alpha"
-                    placeholderTextColor={palette.textTertiary}
+                    placeholderTextColor={palette.inkFaint}
                     style={inputStyle}
                   />
                 </View>
@@ -600,7 +600,7 @@ export default function PresidentScreen() {
                                 setPledgeDrafts((current) => ({ ...current, [member.id]: text }))
                               }
                               placeholder="e.g. Fall 2026"
-                              placeholderTextColor={palette.textTertiary}
+                              placeholderTextColor={palette.inkFaint}
                               editable={!saving}
                               // onEndEditing is a native-only RN event — react-native-web's
                               // TextInput does not implement it at all (checked against
