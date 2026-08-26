@@ -2032,7 +2032,7 @@
       "owner": "court",
       "tag": "security",
       "area": "process",
-      "title": "c188 IN BUILD Aug 25 - SECURITY-REVIEW.md is dated Aug 13 and predates the money path, the media flip, and every audit since. Bring it current: the 9-lens coverage map with dates and verdicts, shipped mitigations cross-linked to cards (c140 media, c146 scrubbing, c176 logs, c184 URLs, c185 hygiene, the c85/c120/c121 hardening), and the open-items table (SA grants, SQL ssl, Firebase key per-platform, .edu inbox leg) with owners. Sonnet worker in chirp-sub-c188",
+      "title": "c188 PR #111 OPEN Aug 25 - SECURITY-REVIEW.md rewritten as a narrative index over the board: 9-lens coverage map, dated mitigations, open-items table with owners, superseded Aug-13 findings verified closed at their call sites. The old doc's own status line ('fixes NOT yet applied') was WRONG, not stale - flagged. NEW GAP SURFACED: the money path has never had a dedicated end-to-end adversarial pass (webhook lens only) - recommended before real dues volume. Manager fix in review: the .edu row carried a stale pre-c134 claim, corrected to sending-proven/inbox-hop-open. Awaiting CI then merge",
       "detail": "Docs-only card, but the doc is load-bearing: it is the file a future session reads to know what is already proven safe vs assumed. Source of truth order: board cards + decisions log + the c182 report (manager session) over the stale doc text. Structure: coverage map (9 lenses, when run, verdict), shipped mitigations (dated, carded, one line each), open items (severity, owner, card), explicit last-full-review date. No new claims the cards do not back; anything uncertain marked unverified rather than asserted. Repo rule reminders: no emojis, merge via PR."
     },
     {
