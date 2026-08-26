@@ -4,7 +4,7 @@
  * corrections are new entries with entry_type="correction" + corrects_entry_id.
  */
 
-import { request, requestText } from "./client";
+import { ApiError, request, requestText } from "./client";
 
 export type LedgerEntryType =
   | "dues_payment"
@@ -28,6 +28,35 @@ export interface DuesCycleOut {
   amount_cents: number;
   due_date: string;
   created_at: string;
+}
+
+/** Status of a member's installment plan for one dues cycle (c197). */
+export type DuesPaymentPlanStatus = "active" | "completed" | "canceled";
+
+/** One scheduled slice of a DuesPaymentPlanOut — routers/finance.py's DuesPlanInstallmentOut. */
+export interface DuesPlanInstallmentOut {
+  id: string;
+  plan_id: string;
+  seq: number;
+  amount_cents: number;
+  due_date: string; // ISO date (YYYY-MM-DD) — a real scheduled date, honest to render
+  paid_at: string | null; // real timestamp once a treasurer records the payment
+  ledger_entry_id: string | null;
+}
+
+/** Response of GET /chapters/{chapterId}/dues-cycles/{cycleId}/plans/mine — routers/finance.py. */
+export interface DuesPaymentPlanOut {
+  id: string;
+  chapter_id: string;
+  dues_cycle_id: string;
+  user_id: string;
+  total_cents: number;
+  installment_count: number;
+  status: DuesPaymentPlanStatus;
+  note: string | null;
+  created_by: string;
+  created_at: string;
+  installments: DuesPlanInstallmentOut[];
 }
 
 /** created_by comes from auth server-side. */
@@ -82,6 +111,27 @@ export async function createDuesCycle(
   body: DuesCycleCreate,
 ): Promise<DuesCycleOut> {
   return request<DuesCycleOut>(`/chapters/${chapterId}/dues-cycles`, { method: "POST", body });
+}
+
+/**
+ * The signed-in member's own most-recent installment plan for one dues cycle
+ * (any status), or null if they've never had one. The backend 404s
+ * ("dues_payment_plan_not_found") rather than returning an empty body when no
+ * plan exists — that 404 is the expected "no plan" case here, not a failure,
+ * so it's swallowed into null; any other status still throws.
+ */
+export async function getMyPlan(
+  chapterId: string,
+  cycleId: string,
+): Promise<DuesPaymentPlanOut | null> {
+  try {
+    return await request<DuesPaymentPlanOut>(
+      `/chapters/${chapterId}/dues-cycles/${cycleId}/plans/mine`,
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 /** Treasurer ledger view with optional filters. */
