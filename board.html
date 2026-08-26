@@ -2055,11 +2055,11 @@
     },
     {
       "id": "c196",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "m5",
       "area": "payments",
-      "title": "c196 PR #123 OPEN Aug 26 - treasurer/president payment-plan UI: a 'Payment plans' card on both dashboards (gated on server dues_admin, not a client role list) -> plans screen: list w/ progress meters, create (member Chip picker, auto-suggested even split editable, live sum==cycle validation), record installment (note + money confirm), cancel (destructive confirm). Live-verified create/record/cancel + honest already_paid 409, from BOTH treasurer and president. Manager resolved the finance.ts type-dup from c197's parallel merge, tsc clean. Awaiting CI then merge - completes the payment-plans feature (backend c195 + member c197 + this). NOT ON PROD until Jose's window (rides 0023)",
+      "title": "c196 DONE Aug 26 - MERGED as d10e92f (PR #123, CI 4/4). PAYMENT-PLANS FEATURE NOW COMPLETE END-TO-END (c195 backend+0023, c197 member display, c196 this). Treasurer/president payment-plan UI: a 'Payment plans' card on both dashboards (gated on server dues_admin, not a client role list) -> plans screen: list w/ progress meters, create (member Chip picker, auto-suggested even split editable, live sum==cycle validation), record installment (note + money confirm), cancel (destructive confirm). Live-verified create/record/cancel + honest already_paid 409, from BOTH treasurer and president. Manager resolved the finance.ts type-dup from c197's parallel merge, tsc clean. Awaiting CI then merge - completes the payment-plans feature (backend c195 + member c197 + this). NOT ON PROD until Jose's window (rides 0023)",
       "detail": "Starts once c195 merges and its API is real. Reuse the treasurer.tsx / president.tsx patterns and the c183 confirm/alert util + DESIGN.md. The plan-setup flow: choose an at-large member with no full payment, enter installment count, auto-suggest an even split of the cycle total across due dates (editable), submit. Record-installment: mark installment N paid (cash or Stripe-received - treasurer's word, this build does not auto-charge). Live render at 390x844, dev seeds, tsc cited."
     },
     {
