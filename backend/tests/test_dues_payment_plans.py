@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from httpx import AsyncClient
+from sqlalchemy import text as sa_text
 
 from tests.conftest import ChapterSetup, MakeChapterWith
 
@@ -85,6 +86,49 @@ async def _record_payment(
         json={"note": note},
         headers=setup.president.headers,
     )
+
+
+async def _correct(
+    client: AsyncClient, setup: ChapterSetup, entry_id: str, cents: int
+) -> None:
+    """Append a correction against a prior ledger entry (SPEC 8.2) — a refund is a
+    NEW row, never an update to the original. Same helper shape as test_payments.py's."""
+    response = await client.post(
+        f"/chapters/{setup.chapter_id}/ledger",
+        json={
+            "entry_type": "correction",
+            "amount_cents": cents,
+            "corrects_entry_id": entry_id,
+        },
+        headers=setup.president.headers,
+    )
+    assert response.status_code == 201, response.text
+
+
+async def _open_reservation(
+    chapter_id: str, cycle_id: str, user_id: str, rail: str = "card"
+) -> None:
+    """Insert an OPEN dues_payment_intents row directly — the c51 reservation a
+    real in-flight Stripe payment leaves behind, WITHOUT going through Stripe. No
+    API constructs this state on its own (same reasoning as conftest's
+    _grant_platform_admin/set_campus: some fixtures only exist as direct writes)."""
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            sa_text(
+                "INSERT INTO dues_payment_intents "
+                "(chapter_id, dues_cycle_id, user_id, rail, status) "
+                "VALUES (:chapter_id, :cycle_id, :user_id, :rail, 'open')"
+            ),
+            {
+                "chapter_id": chapter_id,
+                "cycle_id": cycle_id,
+                "user_id": user_id,
+                "rail": rail,
+            },
+        )
+        await session.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -553,3 +597,181 @@ async def test_list_plans_is_dues_admin_gated_and_get_mine_is_not(
     )
     assert admin_listed.status_code == 200
     assert len(admin_listed.json()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Adversarial pre-merge review gaps (see board thread) — falsify-first
+# ---------------------------------------------------------------------------
+
+
+async def test_recording_an_installment_against_a_canceled_plan_is_409(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """GAP 1 (HIGH). Canceling a plan must stop its installments from being
+    recordable. Before this guard, a canceled plan's installments are still
+    paid_at NULL and fully recordable: recording them posts dues_installment
+    ledger rows the cancellation was meant to stop, and once the last one is
+    recorded the plan's status is flipped back to 'completed' — resurrecting a
+    plan the treasurer explicitly killed.
+    """
+    setup = await make_chapter_with(role="member")
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    plan = (
+        await _create_plan(client, setup, cycle_id, setup.member.id, _three_installments())
+    ).json()
+
+    canceled = await client.post(
+        f"/chapters/{setup.chapter_id}/dues-plans/{plan['id']}/cancel",
+        headers=setup.president.headers,
+    )
+    assert canceled.status_code == 200, canceled.text
+
+    response = await _record_payment(client, setup, plan["id"], 1)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "plan_not_active"
+
+    entries = await client.get(
+        f"/chapters/{setup.chapter_id}/ledger", headers=setup.president.headers
+    )
+    assert not [e for e in entries.json() if e["entry_type"] == "dues_installment"]
+
+    still_canceled = await client.get(
+        f"/chapters/{setup.chapter_id}/dues-cycles/{cycle_id}/plans/mine",
+        headers=setup.member.headers,
+    )
+    assert still_canceled.json()["status"] == "canceled"
+
+
+async def test_recording_an_installment_against_a_completed_plan_is_409_plan_not_active(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """GAP 1, continued: recording against an already-COMPLETED plan must also be
+    refused by the same status guard, with the specific plan_not_active reason —
+    not merely fall through to the generic installment_already_paid 409 that the
+    conditional-UPDATE guard happens to also produce for a fully-paid plan.
+    """
+    setup = await make_chapter_with(role="member")
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    plan = (
+        await _create_plan(client, setup, cycle_id, setup.member.id, _three_installments())
+    ).json()
+    for seq in (1, 2, 3):
+        await _record_payment(client, setup, plan["id"], seq)
+
+    response = await _record_payment(client, setup, plan["id"], 1)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "plan_not_active"
+
+
+async def test_a_member_who_completed_a_plan_cannot_get_a_second_plan(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """GAP 2 (MODERATE). create_dues_payment_plan's already-paid guard was filtered
+    to entry_type=='dues_payment' only. A member who COMPLETED a plan has only
+    entry_type='dues_installment' rows on the ledger, so that guard never saw them
+    and a SECOND plan could be created for someone already fully paid.
+    """
+    setup = await make_chapter_with(role="member")
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    plan = (
+        await _create_plan(client, setup, cycle_id, setup.member.id, _three_installments())
+    ).json()
+    for seq in (1, 2, 3):
+        await _record_payment(client, setup, plan["id"], seq)
+
+    second = await _create_plan(
+        client, setup, cycle_id, setup.member.id, _three_installments()
+    )
+    assert second.status_code == 409, second.text
+    assert second.json()["detail"] == "already_paid"
+
+
+async def test_a_live_self_serve_reservation_blocks_plan_creation(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """GAP 3 (MODERATE). A member with an in-flight self-serve payment — an OPEN
+    DuesPaymentIntent reservation (e.g. an ACH debit still processing) — has NO
+    ledger row yet, so none of create_dues_payment_plan's existing guards (paid
+    existence, active-plan existence) can see them. Without this check, a plan
+    gets created underneath the in-flight payment; the ACH later settles into a
+    full dues_payment AND the treasurer keeps recording installments on top of
+    it, over-collecting the cycle.
+    """
+    setup = await make_chapter_with(role="member")
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    await _open_reservation(setup.chapter_id, cycle_id, setup.member.id)
+
+    response = await _create_plan(
+        client, setup, cycle_id, setup.member.id, _three_installments()
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "payment_in_progress"
+
+
+async def test_a_succeeded_reservation_also_blocks_plan_creation(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """The reservation guard must match payments.py's own status set — 'open' AND
+    'succeeded', not just 'open' — mirroring uq_dues_intent_live's own coverage."""
+    setup = await make_chapter_with(role="member")
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    await _open_reservation(setup.chapter_id, cycle_id, setup.member.id)
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            sa_text(
+                "UPDATE dues_payment_intents SET status = 'succeeded' "
+                "WHERE dues_cycle_id = :cycle_id AND user_id = :user_id"
+            ),
+            {"cycle_id": cycle_id, "user_id": setup.member.id},
+        )
+        await session.commit()
+
+    response = await _create_plan(
+        client, setup, cycle_id, setup.member.id, _three_installments()
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "payment_in_progress"
+
+
+async def test_a_completed_then_fully_refunded_plan_member_is_not_reported_paid(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """GAP 4 (MODERATE). The old classification OR'd in plan_status=='completed' as
+    an INDEPENDENT path to 'paid' alongside net>=total. That is a LATCH: once a
+    plan completes, the member reads as paid forever, even after every
+    installment's ledger row is corrected away to zero — while collected_cents and
+    the self-serve pay-guard both correctly say the member owes again. Paid must
+    be decided on net alone (net >= total, or the plain net>0 partial-refund-still-
+    paid rule for everyone else), never latched by a stale plan status.
+    """
+    setup = await make_chapter_with(role="member")
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    plan = (
+        await _create_plan(client, setup, cycle_id, setup.member.id, _three_installments())
+    ).json()
+    for seq in (1, 2, 3):
+        await _record_payment(client, setup, plan["id"], seq)
+
+    entries = await client.get(
+        f"/chapters/{setup.chapter_id}/ledger", headers=setup.president.headers
+    )
+    installment_entries = [
+        e
+        for e in entries.json()
+        if e["entry_type"] == "dues_installment"
+        and e["related_user_id"] == setup.member.id
+    ]
+    assert len(installment_entries) == 3
+    for entry in installment_entries:
+        await _correct(client, setup, entry["id"], -entry["amount_cents"])
+
+    overview = await client.get(
+        f"/chapters/{setup.chapter_id}/overview", headers=setup.president.headers
+    )
+    assert overview.status_code == 200, overview.text
+    dues = overview.json()["dues"]
+    assert dues["paid_members"] == 0
+    assert dues["on_plan_members"] == 0  # the plan is 'completed', not 'active'
+    assert dues["outstanding_members"] == 2  # the refunded member + the president

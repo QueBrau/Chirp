@@ -372,10 +372,13 @@ async def create_dues_payment_plan(
     installment_count must equal len(installments) (422) so the stored count can
     never silently disagree with the schedule actually written.
 
-    409 if the member already has a full dues_payment for this cycle (they do not
-    need a plan) or already has an ACTIVE plan for it (uq_dues_payment_plans_active_
-    per_member, migration 0023, is the real guard under concurrency — the read here
-    only picks the honest 409 reason before the race).
+    409 if the member already has a full dues_payment OR a completed plan's
+    dues_installment rows for this cycle (they do not need a plan — see the
+    existing_payment query below), already has an ACTIVE plan for it
+    (uq_dues_payment_plans_active_per_member, migration 0023, is the real guard
+    under concurrency — the read here only picks the honest 409 reason before the
+    race), or has a LIVE self-serve reservation in flight (an open/succeeded
+    DuesPaymentIntent with no ledger row yet — see the reservation check below).
     """
     cycle = await session.get(models.DuesCycle, cycle_id)
     if cycle is None or cycle.chapter_id != chapter_id:
@@ -399,12 +402,21 @@ async def create_dues_payment_plan(
             status_code=422, detail="installments_must_sum_to_cycle_amount"
         )
 
+    # entry_type also matches 'dues_installment', mirroring payments.py's own
+    # create_dues_payment_intent existence guard (c195) — a member who COMPLETED a
+    # prior plan has only dues_installment rows on the ledger, never a dues_payment
+    # row, so filtering to 'dues_payment' alone would miss them entirely and hand
+    # out a SECOND plan to someone already fully paid. LIMIT 1 for the same reason
+    # as that guard: a member can have SEVERAL dues_installment rows for one cycle,
+    # where scalar_one_or_none() only tolerates zero or one.
     existing_payment = await session.execute(
-        select(models.LedgerEntry.id).where(
+        select(models.LedgerEntry.id)
+        .where(
             models.LedgerEntry.dues_cycle_id == cycle_id,
             models.LedgerEntry.related_user_id == body.user_id,
-            models.LedgerEntry.entry_type == "dues_payment",
+            models.LedgerEntry.entry_type.in_(("dues_payment", "dues_installment")),
         )
+        .limit(1)
     )
     if existing_payment.scalar_one_or_none() is not None:
         raise conflict("already_paid")
@@ -418,6 +430,26 @@ async def create_dues_payment_plan(
     )
     if existing_active_plan.scalar_one_or_none() is not None:
         raise conflict("on_payment_plan")
+
+    # LIVE-RESERVATION GUARD, mirroring payments.py's create_dues_payment_intent
+    # reservation check (c51) exactly: a member with an in-flight self-serve
+    # payment — an ACH debit still 'processing', say — has an OPEN
+    # DuesPaymentIntent and NO ledger row yet, so neither guard above can see them.
+    # Without this, a plan gets created underneath the in-flight payment; the ACH
+    # later settles into a full dues_payment AND the treasurer keeps recording
+    # installments on top of it, over-collecting the cycle. uq_dues_intent_live
+    # caps this at exactly one open/succeeded row per (cycle, member), so
+    # scalar_one_or_none() is safe here without a LIMIT, same as payments.py's own
+    # use of this query shape.
+    live_reservation = await session.execute(
+        select(models.DuesPaymentIntent.id).where(
+            models.DuesPaymentIntent.dues_cycle_id == cycle_id,
+            models.DuesPaymentIntent.user_id == body.user_id,
+            models.DuesPaymentIntent.status.in_(("open", "succeeded")),
+        )
+    )
+    if live_reservation.scalar_one_or_none() is not None:
+        raise conflict("payment_in_progress")
 
     plan = models.DuesPaymentPlan(
         chapter_id=chapter_id,
@@ -478,10 +510,21 @@ async def record_dues_installment_payment(
     read-check-then-write, so two treasurers recording the same installment at once
     cannot both succeed and post two ledger rows for one installment. Recording an
     already-paid installment 409s.
+
+    409 plan_not_active if the plan is not 'active' (canceled or already completed).
+    Without this, a CANCELED plan's installments are still paid_at NULL and fully
+    recordable — recording one posts a dues_installment ledger row the cancellation
+    was meant to stop, and once the LAST one is recorded the completion check below
+    would flip status back to 'completed', resurrecting a plan the treasurer
+    explicitly killed. Checked before the paid_at guard so a canceled plan's reason
+    is specific (plan_not_active), not the generic installment_already_paid a
+    fully-paid plan would otherwise also produce.
     """
     plan = await session.get(models.DuesPaymentPlan, plan_id)
     if plan is None or plan.chapter_id != chapter_id:
         raise not_found("dues_payment_plan_not_found")
+    if plan.status != "active":
+        raise conflict("plan_not_active")
 
     installment_result = await session.execute(
         select(models.DuesPlanInstallment).where(

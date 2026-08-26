@@ -302,36 +302,44 @@ async def _dues_overview(chapter_id: uuid.UUID, session: AsyncSession) -> DuesOv
     )
     member_nets = [(row.user_id, row.net) for row in paid_rows]
 
-    # board c195: which of those members are on a plan right now, and how far along
-    # ('active' vs 'completed' — 'canceled' plans are not distinguished from having
-    # no plan at all, since a canceled plan imposes no ongoing obligation of its own
-    # beyond whatever was already collected). ONE more fixed, non-per-member query —
-    # see chapter_overview's STATEMENT BUDGET note; this table adds one to it.
-    plan_status_rows = await session.execute(
-        select(models.DuesPaymentPlan.user_id, models.DuesPaymentPlan.status).where(
+    # board c195: which of those members have an ACTIVE plan right now. Only
+    # 'active' is fetched — NOT 'completed' — because paid is decided on net alone
+    # below (see the adversarial-review note in the loop): a completed plan whose
+    # installments were later corrected away must NOT read as paid just because its
+    # status once reached 'completed', and 'active' is the only status that changes
+    # a member's BUCKET rather than merely explaining a net that already decided it.
+    # ONE more fixed, non-per-member query — see chapter_overview's STATEMENT
+    # BUDGET note; this table adds one to it.
+    active_plan_rows = await session.execute(
+        select(models.DuesPaymentPlan.user_id).where(
             models.DuesPaymentPlan.dues_cycle_id == cycle.id,
-            models.DuesPaymentPlan.status.in_(("active", "completed")),
+            models.DuesPaymentPlan.status == "active",
         )
     )
-    plan_status_by_user = {row.user_id: row.status for row in plan_status_rows}
+    active_plan_user_ids = {row.user_id for row in active_plan_rows}
 
-    # THREE-WAY SPLIT (board c195). Order matters: net reaching the cycle total (or
-    # an explicitly completed plan — normally the same fact twice, since a plan can
-    # only complete once its installments sum to the total, but checked both ways as
-    # a safety net) wins first, so a member is never reported "on_plan" once they
-    # have actually paid in full. Only THEN does an still-active plan route them to
-    # on_plan instead of outstanding. Everyone else keeps the original c172 rule: any
-    # positive net (even a partial one, e.g. after a partial correction) reads as
-    # paid, and the rest are outstanding. Every member falls into exactly one bucket,
-    # so the three counts are exhaustive over the active roster by construction.
+    # THREE-WAY SPLIT (board c195, tightened after adversarial pre-merge review).
+    # PAID IS DECIDED ON NET ALONE — net >= the cycle total, or (unchanged from the
+    # original c172 rule) any positive net at all, covering a lump-sum payer left
+    # with a partial refund. There is deliberately NO "OR plan_status == 'completed'"
+    # path any more: an earlier version of this split treated a completed plan as an
+    # independent, permanent proof of paid, which is a LATCH — a completed plan
+    # whose installments are later corrected away (net back to 0) kept reading as
+    # paid forever, disagreeing with collected_cents and with the self-serve
+    # pay-guard, both of which correctly say the member owes again. A completed plan
+    # reaches net >= total via its own installments in the normal case, so dropping
+    # the OR loses nothing there and only changes the answer for the refunded case,
+    # where the OLD answer was wrong. Only an ACTIVE plan (not yet net-paid) routes a
+    # member to on_plan instead of outstanding. Every member falls into exactly one
+    # bucket, so the three counts are exhaustive over the active roster by
+    # construction.
     paid_members = 0
     on_plan_members = 0
     outstanding_members = 0
     for user_id, net in member_nets:
-        plan_status = plan_status_by_user.get(user_id)
-        if net >= cycle.amount_cents or plan_status == "completed":
+        if net >= cycle.amount_cents:
             paid_members += 1
-        elif plan_status == "active":
+        elif user_id in active_plan_user_ids:
             on_plan_members += 1
         elif net > 0:
             paid_members += 1

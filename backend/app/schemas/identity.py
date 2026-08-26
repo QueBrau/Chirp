@@ -306,8 +306,12 @@ class DuesOverview(_Schema):
     has not yet reached net >= the cycle total — reported separately rather than
     folded into `outstanding_members` because they are not being chased, they are on
     a schedule, and separately rather than folded into `paid_members` because they
-    are not done yet either. A member whose plan has COMPLETED counts as paid, same
-    as a lump-sum payer.
+    are not done yet either. `paid_members` is decided on NET ALONE, never on plan
+    status: a completed plan reaches net >= the cycle total via its own installments
+    in the ordinary case, so it reads as paid the same as a lump-sum payer — but if
+    those installments are later corrected away, net drops and the member correctly
+    falls back to outstanding rather than staying latched as paid by a stale
+    'completed' status.
     """
 
     cycle_id: uuid.UUID | None = None
