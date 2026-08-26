@@ -22,6 +22,25 @@ The correction row's own related_user_id is not trusted for attribution: it is
 nullable and nothing requires it to match the entry being corrected. The user comes
 from the payment the correction points at, which is the only link the schema actually
 guarantees.
+
+PAYMENT-PLAN INSTALLMENTS COUNT TOO (board card c195): the payments side matches
+entry_type IN ('dues_payment', 'dues_installment'), not just 'dues_payment'. A member
+on a payment plan pays the same cycle in several installments over time — each one
+appends its own entry_type='dues_installment' row (routers/finance.py's record-
+installment route) rather than a second 'dues_payment', because
+uq_ledger_dues_payment_once (migration 0010) already means "at most one dues_payment
+row per (cycle, member), EVER". Netting both types together is what makes an
+installment payer's standing move the same way a lump-sum payer's does: pay two of
+three installments and net is 2/3 of the cycle, positive but still short; pay the
+last one and net reaches the total, same as paying in full up front. Both readers of
+this subquery (payments.py's create_dues_payment_intent guard and chapter_overview's
+_dues_overview) inherit that — an installment payer who has paid enough to reach net
+> 0 reads as no different from a lump-sum payer to either surface, which is the
+intended effect: this module is the single definition of "has this member paid",
+and a payment plan is just another way money arrives against a cycle. Corrections
+still join ONLY against the payments CTE (dues_payment or dues_installment rows), so
+a correction may point at either kind — an installment can be refunded/corrected
+exactly like a lump-sum payment.
 """
 import uuid
 
@@ -34,15 +53,16 @@ from app import models
 def dues_contributions_subquery(
     chapter_id: uuid.UUID, dues_cycle_id: uuid.UUID
 ) -> Subquery:
-    """(user_id, amount_cents) rows for one cycle: one per dues_payment, one per
-    correction of it.
+    """(user_id, amount_cents) rows for one cycle: one per dues_payment or
+    dues_installment, one per correction of one of those.
 
     Summing this per user gives that member's NET standing for the cycle — positive
-    means paid, zero or negative means outstanding, including a member refunded in
-    full or over-refunded. A caller that wants one member's status sums after
-    filtering on user_id (payments.py's guard); chapter_overview folds every member's
-    rows at once inside its roster-spined join, which is why this returns the
-    unaggregated rows rather than a pre-summed total.
+    means paid (in full, or enough of a payment plan to cover it), zero or negative
+    means outstanding, including a member refunded in full or over-refunded. A caller
+    that wants one member's status sums after filtering on user_id (payments.py's
+    guard); chapter_overview folds every member's rows at once inside its
+    roster-spined join, which is why this returns the unaggregated rows rather than
+    a pre-summed total.
     """
     payments = (
         select(
@@ -52,7 +72,7 @@ def dues_contributions_subquery(
         )
         .where(
             models.LedgerEntry.chapter_id == chapter_id,
-            models.LedgerEntry.entry_type == "dues_payment",
+            models.LedgerEntry.entry_type.in_(("dues_payment", "dues_installment")),
             models.LedgerEntry.dues_cycle_id == dues_cycle_id,
         )
         .subquery()
