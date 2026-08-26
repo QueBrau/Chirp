@@ -29,3 +29,43 @@
 export function calendarDay(value: string): Date {
   return new Date(`${value.slice(0, 10)}T00:00:00`);
 }
+
+/**
+ * An event's start (and optional end) as a human-readable local string (board c198).
+ *
+ * DELIBERATELY NOT calendarDay(). Apply this file's own test to a party: would two
+ * people in different timezones be right to disagree about when it starts? Yes - a
+ * 9pm party in Greensboro is 6pm for someone reading from California, and rendering
+ * the instant in the viewer's own zone is the correct answer, not a bug. events
+ * .starts_at is a timestamptz precisely so this works; the free-text date_label it
+ * replaced could not express an instant at all.
+ *
+ * The end is appended as a bare time when it falls on the same local day, and as a
+ * full date otherwise - "7:00 PM - 2:00 AM" reads as one night out, while
+ * "Sep 27, 7:00 PM - Sep 28, 2:00 AM" reads as an admin error until you look twice.
+ */
+export function eventWhen(startsAt: string, endsAt?: string | null): string {
+  const start = new Date(startsAt);
+  if (Number.isNaN(start.getTime())) return "Date to be announced";
+
+  const dayPart = start.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  const timePart = start.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const opening = `${dayPart} - ${timePart}`;
+
+  if (!endsAt) return opening;
+  const end = new Date(endsAt);
+  if (Number.isNaN(end.getTime())) return opening;
+
+  const sameLocalDay = start.toDateString() === end.toDateString();
+  const endText = sameLocalDay
+    ? end.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : `${end.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${end.toLocaleTimeString(
+        undefined,
+        { hour: "numeric", minute: "2-digit" },
+      )}`;
+  return `${opening} to ${endText}`;
+}

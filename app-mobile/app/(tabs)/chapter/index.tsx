@@ -54,6 +54,7 @@ import {
   type CreateEventInput,
 } from "@/components";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
+import { eventWhen } from "@/lib/dates";
 import { ROLE_LABELS, roleLabel } from "@/lib/roleTerms";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
@@ -419,8 +420,8 @@ function EventCard({
       <View style={{ height: 160 }}>
         <Image source={{ uri: event.cover_url }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
         <Chip
-          label={event.date_label}
-          variant="accent"
+          label={event.canceled_at ? "Canceled" : eventWhen(event.starts_at, event.ends_at)}
+          variant={event.canceled_at ? "danger" : "accent"}
           style={{ position: "absolute", top: spacing.md, left: spacing.md }}
         />
       </View>
