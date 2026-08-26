@@ -6,8 +6,8 @@
  * (route dirs stay feed/chirps/messages/chapter/profile for backend parity).
  */
 
-import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
-import { Redirect, Tabs } from "expo-router";
+import { Redirect } from "expo-router";
+import { Tabs, type BottomTabBarProps } from "expo-router/js-tabs";
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
 import { Pressable, View } from "react-native";
