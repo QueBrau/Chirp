@@ -297,9 +297,17 @@ class DuesOverview(_Schema):
     Every field is None/zero when the chapter has never opened a cycle, which is a
     real state for a new chapter and not an error.
 
-    `paid_members` + `outstanding_members` == RosterOverview.active, always: both are
-    spined on the current active roster (see the endpoint docstring for why that
-    matters, and why `collected_cents` is deliberately NOT spined the same way).
+    `paid_members` + `on_plan_members` + `outstanding_members` == RosterOverview.active,
+    always: all three are spined on the current active roster (see the endpoint
+    docstring for why that matters, and why `collected_cents` is deliberately NOT
+    spined the same way).
+
+    `on_plan_members` (board card c195) is a member with an ACTIVE payment plan who
+    has not yet reached net >= the cycle total — reported separately rather than
+    folded into `outstanding_members` because they are not being chased, they are on
+    a schedule, and separately rather than folded into `paid_members` because they
+    are not done yet either. A member whose plan has COMPLETED counts as paid, same
+    as a lump-sum payer.
     """
 
     cycle_id: uuid.UUID | None = None
@@ -307,6 +315,7 @@ class DuesOverview(_Schema):
     amount_cents: int | None = None
     due_date: date | None = None
     paid_members: int = 0
+    on_plan_members: int = 0
     outstanding_members: int = 0
     collected_cents: int = 0
 

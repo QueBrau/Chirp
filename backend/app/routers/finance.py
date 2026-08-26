@@ -1,10 +1,12 @@
-"""Finance: dues cycles, append-only ledger (SPEC §8.2 — no update/delete), spend approvals."""
+"""Finance: dues cycles, append-only ledger (SPEC §8.2 — no update/delete), spend
+approvals, dues payment plans (board card c195)."""
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -17,6 +19,10 @@ from app.middleware.org_scope import get_current_membership
 from app.schemas.finance import (
     DuesCycleCreate,
     DuesCycleOut,
+    DuesInstallmentRecordPaymentRequest,
+    DuesPaymentPlanCreate,
+    DuesPaymentPlanOut,
+    DuesPlanInstallmentOut,
     LedgerEntryCreate,
     LedgerEntryOut,
     SpendApprovalCreate,
@@ -307,3 +313,327 @@ async def decide_spend_approval(
     # the response body would report the row as still pending.
     await session.refresh(approval)
     return SpendApprovalOut.model_validate(approval)
+
+
+# ---- dues payment plans (board card c195) ----
+#
+# A member pays one dues cycle either in full (the Stripe/payments.py path or a
+# hand-entered dues_payment ledger row) OR through a plan set up here — never both,
+# which is exactly what these routes and payments.py's create_dues_payment_intent
+# guard (c195 addition) enforce from both directions. Every route below is
+# DUES_ADMIN except the member's own read, matching create_dues_cycle's gate: a plan
+# is treasurer/president-administered, same as the cycle it pays into.
+
+
+def _plan_out(
+    plan: models.DuesPaymentPlan, installments: list[models.DuesPlanInstallment]
+) -> DuesPaymentPlanOut:
+    """Assemble the response shape by hand — like EventOut.rsvps, this codebase has
+    no ORM relationship() wired between the two tables, only the FK column."""
+    return DuesPaymentPlanOut(
+        id=plan.id,
+        chapter_id=plan.chapter_id,
+        dues_cycle_id=plan.dues_cycle_id,
+        user_id=plan.user_id,
+        total_cents=plan.total_cents,
+        installment_count=plan.installment_count,
+        status=plan.status,
+        note=plan.note,
+        created_by=plan.created_by,
+        created_at=plan.created_at,
+        installments=[DuesPlanInstallmentOut.model_validate(i) for i in installments],
+    )
+
+
+async def _load_installments(
+    session: AsyncSession, plan_id: uuid.UUID
+) -> list[models.DuesPlanInstallment]:
+    result = await session.execute(
+        select(models.DuesPlanInstallment)
+        .where(models.DuesPlanInstallment.plan_id == plan_id)
+        .order_by(models.DuesPlanInstallment.seq)
+    )
+    return list(result.scalars().all())
+
+
+@router.post("/chapters/{chapter_id}/dues-cycles/{cycle_id}/plans", status_code=201)
+async def create_dues_payment_plan(
+    chapter_id: uuid.UUID,
+    cycle_id: uuid.UUID,
+    body: DuesPaymentPlanCreate,
+    membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> DuesPaymentPlanOut:
+    """Set up an installment plan for one member's dues cycle; treasurer/president only.
+
+    installments must sum to EXACTLY the cycle's amount_cents (422 otherwise) — the
+    plan's total is never client-asserted, matching how create_dues_payment_intent
+    always charges cycle.amount_cents rather than trusting the request body.
+    installment_count must equal len(installments) (422) so the stored count can
+    never silently disagree with the schedule actually written.
+
+    409 if the member already has a full dues_payment for this cycle (they do not
+    need a plan) or already has an ACTIVE plan for it (uq_dues_payment_plans_active_
+    per_member, migration 0023, is the real guard under concurrency — the read here
+    only picks the honest 409 reason before the race).
+    """
+    cycle = await session.get(models.DuesCycle, cycle_id)
+    if cycle is None or cycle.chapter_id != chapter_id:
+        raise not_found("dues_cycle_not_found")
+
+    member = await session.execute(
+        select(models.Membership.id).where(
+            models.Membership.chapter_id == chapter_id,
+            models.Membership.user_id == body.user_id,
+            models.Membership.status == "active",
+        )
+    )
+    if member.scalar_one_or_none() is None:
+        raise not_found("membership_not_found")
+
+    if body.installment_count != len(body.installments):
+        raise HTTPException(status_code=422, detail="installment_count_mismatch")
+    installments_total = sum(item.amount_cents for item in body.installments)
+    if installments_total != cycle.amount_cents:
+        raise HTTPException(
+            status_code=422, detail="installments_must_sum_to_cycle_amount"
+        )
+
+    existing_payment = await session.execute(
+        select(models.LedgerEntry.id).where(
+            models.LedgerEntry.dues_cycle_id == cycle_id,
+            models.LedgerEntry.related_user_id == body.user_id,
+            models.LedgerEntry.entry_type == "dues_payment",
+        )
+    )
+    if existing_payment.scalar_one_or_none() is not None:
+        raise conflict("already_paid")
+
+    existing_active_plan = await session.execute(
+        select(models.DuesPaymentPlan.id).where(
+            models.DuesPaymentPlan.dues_cycle_id == cycle_id,
+            models.DuesPaymentPlan.user_id == body.user_id,
+            models.DuesPaymentPlan.status == "active",
+        )
+    )
+    if existing_active_plan.scalar_one_or_none() is not None:
+        raise conflict("on_payment_plan")
+
+    plan = models.DuesPaymentPlan(
+        chapter_id=chapter_id,
+        dues_cycle_id=cycle_id,
+        user_id=body.user_id,
+        total_cents=cycle.amount_cents,
+        installment_count=body.installment_count,
+        note=body.note,
+        created_by=membership.user_id,
+    )
+    session.add(plan)
+    await session.flush()  # assign plan.id for the installment rows below
+
+    for seq, item in enumerate(body.installments, start=1):
+        session.add(
+            models.DuesPlanInstallment(
+                plan_id=plan.id,
+                seq=seq,
+                amount_cents=item.amount_cents,
+                due_date=item.due_date,
+            )
+        )
+
+    try:
+        await session.commit()
+    except IntegrityError:
+        # The read above narrows the race but is not the guard — two concurrent
+        # create-plan calls for the same (cycle, member) can both pass it; only one
+        # wins uq_dues_payment_plans_active_per_member (migration 0023), same shape
+        # as c51's uq_dues_intent_live.
+        await session.rollback()
+        raise conflict("on_payment_plan") from None
+
+    await session.refresh(plan)
+    return _plan_out(plan, await _load_installments(session, plan.id))
+
+
+@router.post(
+    "/chapters/{chapter_id}/dues-plans/{plan_id}/installments/{seq}/record-payment"
+)
+async def record_dues_installment_payment(
+    chapter_id: uuid.UUID,
+    plan_id: uuid.UUID,
+    seq: int,
+    body: DuesInstallmentRecordPaymentRequest,
+    membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> DuesPlanInstallmentOut:
+    """Record one installment as paid; treasurer/president only.
+
+    Appends a NEW entry_type='dues_installment' ledger row — never 'dues_payment',
+    which uq_ledger_dues_payment_once (migration 0010) already limits to at most one
+    per (cycle, member) EVER and an installment plan needs several. Marks the plan
+    'completed' once every installment has a paid_at.
+
+    THE GUARD IS THE WRITE, same shape as decide_spend_approval directly above and
+    join_chapter's invite-seat claim: a conditional UPDATE on paid_at IS NULL, not a
+    read-check-then-write, so two treasurers recording the same installment at once
+    cannot both succeed and post two ledger rows for one installment. Recording an
+    already-paid installment 409s.
+    """
+    plan = await session.get(models.DuesPaymentPlan, plan_id)
+    if plan is None or plan.chapter_id != chapter_id:
+        raise not_found("dues_payment_plan_not_found")
+
+    installment_result = await session.execute(
+        select(models.DuesPlanInstallment).where(
+            models.DuesPlanInstallment.plan_id == plan_id,
+            models.DuesPlanInstallment.seq == seq,
+        )
+    )
+    installment = installment_result.scalar_one_or_none()
+    if installment is None:
+        raise not_found("dues_plan_installment_not_found")
+
+    claimed = await session.execute(
+        update(models.DuesPlanInstallment)
+        .where(
+            models.DuesPlanInstallment.id == installment.id,
+            models.DuesPlanInstallment.paid_at.is_(None),
+        )
+        .values(paid_at=datetime.now(timezone.utc))
+        .returning(models.DuesPlanInstallment.id)
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.scalar_one_or_none() is None:
+        raise conflict("installment_already_paid")
+    # synchronize_session=False left the identity-mapped `installment` holding the
+    # pre-UPDATE paid_at (None) — re-read before this request writes anything else
+    # to it or serializes it, same reasoning as decide_spend_approval's refresh.
+    await session.refresh(installment)
+
+    description = f"Dues installment {seq}/{plan.installment_count}"
+    if body.note:
+        description = f"{description} ({body.note})"
+    entry = models.LedgerEntry(
+        chapter_id=chapter_id,
+        entry_type="dues_installment",
+        amount_cents=installment.amount_cents,
+        category="dues",
+        description=description,
+        related_user_id=plan.user_id,
+        dues_cycle_id=plan.dues_cycle_id,
+        created_by=membership.user_id,
+    )
+    session.add(entry)
+    await session.flush()  # assign entry.id
+    installment.ledger_entry_id = entry.id
+
+    remaining_unpaid = await session.scalar(
+        select(func.count())
+        .select_from(models.DuesPlanInstallment)
+        .where(
+            models.DuesPlanInstallment.plan_id == plan_id,
+            models.DuesPlanInstallment.paid_at.is_(None),
+        )
+    )
+    if remaining_unpaid == 0:
+        plan.status = "completed"
+
+    await session.commit()
+    await session.refresh(installment)
+    return DuesPlanInstallmentOut.model_validate(installment)
+
+
+@router.get("/chapters/{chapter_id}/dues-cycles/{cycle_id}/plans")
+async def list_dues_payment_plans(
+    chapter_id: uuid.UUID,
+    cycle_id: uuid.UUID,
+    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> list[DuesPaymentPlanOut]:
+    """Every plan against this cycle, any status, newest first; treasurer/president only."""
+    plans_result = await session.execute(
+        select(models.DuesPaymentPlan)
+        .where(
+            models.DuesPaymentPlan.chapter_id == chapter_id,
+            models.DuesPaymentPlan.dues_cycle_id == cycle_id,
+        )
+        .order_by(models.DuesPaymentPlan.created_at.desc())
+    )
+    plans = list(plans_result.scalars().all())
+    if not plans:
+        return []
+
+    # ONE query for every plan's installments, not one per plan — the same
+    # N+1-avoidance rule chapter_overview's docstring names (c82/c156).
+    installments_result = await session.execute(
+        select(models.DuesPlanInstallment)
+        .where(models.DuesPlanInstallment.plan_id.in_([p.id for p in plans]))
+        .order_by(models.DuesPlanInstallment.seq)
+    )
+    installments_by_plan: dict[uuid.UUID, list[models.DuesPlanInstallment]] = {}
+    for installment in installments_result.scalars().all():
+        installments_by_plan.setdefault(installment.plan_id, []).append(installment)
+
+    return [_plan_out(plan, installments_by_plan.get(plan.id, [])) for plan in plans]
+
+
+@router.get("/chapters/{chapter_id}/dues-cycles/{cycle_id}/plans/mine")
+async def get_my_dues_payment_plan(
+    chapter_id: uuid.UUID,
+    cycle_id: uuid.UUID,
+    membership: models.Membership = Depends(get_current_membership),
+    session: AsyncSession = Depends(get_session),
+) -> DuesPaymentPlanOut:
+    """The caller's own plan for this cycle, whatever its status; any active member.
+
+    Newest first + limit 1 rather than filtering to status='active': a member whose
+    plan just completed (or was canceled) should still be able to read it here
+    rather than get a 404 the moment it stops being active.
+    """
+    plan = await session.scalar(
+        select(models.DuesPaymentPlan)
+        .where(
+            models.DuesPaymentPlan.chapter_id == chapter_id,
+            models.DuesPaymentPlan.dues_cycle_id == cycle_id,
+            models.DuesPaymentPlan.user_id == membership.user_id,
+        )
+        .order_by(models.DuesPaymentPlan.created_at.desc())
+        .limit(1)
+    )
+    if plan is None:
+        raise not_found("dues_payment_plan_not_found")
+    return _plan_out(plan, await _load_installments(session, plan.id))
+
+
+@router.post("/chapters/{chapter_id}/dues-plans/{plan_id}/cancel")
+async def cancel_dues_payment_plan(
+    chapter_id: uuid.UUID,
+    plan_id: uuid.UUID,
+    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> DuesPaymentPlanOut:
+    """Cancel an active plan; treasurer/president only. 409 if it is not active
+    (already completed, or already canceled) — same conditional-UPDATE-as-guard
+    shape as decide_spend_approval, so two officers cancelling at once cannot both
+    believe their action was the one that stuck."""
+    plan = await session.get(models.DuesPaymentPlan, plan_id)
+    if plan is None or plan.chapter_id != chapter_id:
+        raise not_found("dues_payment_plan_not_found")
+
+    canceled = await session.execute(
+        update(models.DuesPaymentPlan)
+        .where(
+            models.DuesPaymentPlan.id == plan_id,
+            models.DuesPaymentPlan.chapter_id == chapter_id,
+            models.DuesPaymentPlan.status == "active",
+        )
+        .values(status="canceled")
+        .returning(models.DuesPaymentPlan.id)
+        .execution_options(synchronize_session=False)
+    )
+    if canceled.scalar_one_or_none() is None:
+        raise conflict("plan_not_active")
+
+    await session.commit()
+    await session.refresh(plan)
+    return _plan_out(plan, await _load_installments(session, plan.id))

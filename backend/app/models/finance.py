@@ -1,4 +1,5 @@
-"""Finance models (append-only ledger): dues cycles, ledger entries, spend approvals (SPEC §3)."""
+"""Finance models (append-only ledger): dues cycles, ledger entries, spend approvals,
+dues payment plans (SPEC §3, board card c195)."""
 
 import uuid
 from datetime import date, datetime
@@ -44,7 +45,7 @@ class LedgerEntry(Base):
     __table_args__ = (
         CheckConstraint(
             "entry_type IN ('dues_payment','expense','budget_allocation',"
-            "'correction','payout')",
+            "'correction','payout','dues_installment')",
             name="ck_ledger_entries_entry_type",
         ),
         Index(
@@ -203,4 +204,91 @@ class ProcessedStripeEvent(Base):
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     processed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class DuesPaymentPlan(Base):
+    """One member's installment plan for one dues cycle (board card c195).
+
+    total_cents/installment_count are the plan as agreed; the actual schedule lives
+    on DuesPlanInstallment rows. status starts 'active', ends 'completed' once every
+    installment is paid, or 'canceled' if DUES_ADMIN calls it off early.
+
+    uq_dues_payment_plans_active_per_member (migration 0023) enforces AT MOST ONE
+    active plan per (dues_cycle_id, user_id) at the database, the same shape as
+    uq_dues_intent_live (c51) and uq_role_terms_open_per_membership (c83) — a second
+    create-plan call for the same cycle/member loses the race here, not in the route.
+    """
+
+    __tablename__ = "dues_payment_plans"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active','completed','canceled')",
+            name="ck_dues_payment_plans_status",
+        ),
+        Index(
+            "uq_dues_payment_plans_active_per_member",
+            "dues_cycle_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    chapter_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False
+    )
+    dues_cycle_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("dues_cycles.id"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    installment_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'active'")
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class DuesPlanInstallment(Base):
+    """One scheduled slice of a DuesPaymentPlan (board card c195).
+
+    paid_at/ledger_entry_id are both NULL until the installment is recorded paid,
+    at which point they are set together with the entry_type='dues_installment'
+    ledger row that records the money (see routers — the ledger stays append-only;
+    this row is never later reversed here, only via a correction on the ledger).
+    ON DELETE CASCADE on plan_id: an installment has no meaning once its plan is
+    gone. UNIQUE(plan_id, seq) so a plan can never carry two rows for one slot.
+    """
+
+    __tablename__ = "dues_plan_installments"
+    __table_args__ = (
+        Index("uq_dues_plan_installments_seq", "plan_id", "seq", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    plan_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("dues_payment_plans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledger_entries.id")
     )

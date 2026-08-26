@@ -276,15 +276,22 @@ async def _dues_overview(chapter_id: uuid.UUID, session: AsyncSession) -> DuesOv
     # dues_contributions_subquery (app/core/dues_status.py) is the SAME netting
     # definition payments.py's create_dues_payment_intent guard reads (board c172)
     # — before that module existed this query and that guard's plain existence
-    # check disagreed about whether a fully-refunded member had paid.
+    # check disagreed about whether a fully-refunded member had paid. It also nets
+    # entry_type='dues_installment' rows in alongside 'dues_payment' (board c195),
+    # so a payment-plan member's net rises with each installment recorded.
     contributions = dues_contributions_subquery(chapter_id, cycle.id)
 
-    # PAID/OUTSTANDING ARE SPINED ON THE ACTIVE ROSTER, so they always sum to
-    # roster.active. Counting DISTINCT payers instead would let a member who paid
+    # PAID/ON_PLAN/OUTSTANDING ARE SPINED ON THE ACTIVE ROSTER, so they always sum
+    # to roster.active. Counting DISTINCT payers instead would let a member who paid
     # and then went inactive make outstanding_members negative — the roster shrinks
-    # under a payment count that cannot.
+    # under a payment count that cannot. user_id is selected alongside the net sum
+    # (board c195) so each row can be cross-referenced against that member's plan
+    # status below — the pre-c195 version of this query only needed the net values.
     paid_rows = await session.execute(
-        select(func.coalesce(func.sum(contributions.c.amount_cents), 0).label("net"))
+        select(
+            models.Membership.user_id,
+            func.coalesce(func.sum(contributions.c.amount_cents), 0).label("net"),
+        )
         .select_from(models.Membership)
         .outerjoin(contributions, contributions.c.user_id == models.Membership.user_id)
         .where(
@@ -293,20 +300,53 @@ async def _dues_overview(chapter_id: uuid.UUID, session: AsyncSession) -> DuesOv
         )
         .group_by(models.Membership.user_id)
     )
-    # Net rather than "has a payment row": a member refunded in full is someone the
-    # president still has to chase, and a partial correction leaves them paid. Both
-    # fall out of the sign of one number. See chapter_overview's original docstring
-    # (git history) for the full c172 discussion this netting resolves.
-    nets = [row.net for row in paid_rows]
-    paid_members = sum(1 for net in nets if net > 0)
+    member_nets = [(row.user_id, row.net) for row in paid_rows]
+
+    # board c195: which of those members are on a plan right now, and how far along
+    # ('active' vs 'completed' — 'canceled' plans are not distinguished from having
+    # no plan at all, since a canceled plan imposes no ongoing obligation of its own
+    # beyond whatever was already collected). ONE more fixed, non-per-member query —
+    # see chapter_overview's STATEMENT BUDGET note; this table adds one to it.
+    plan_status_rows = await session.execute(
+        select(models.DuesPaymentPlan.user_id, models.DuesPaymentPlan.status).where(
+            models.DuesPaymentPlan.dues_cycle_id == cycle.id,
+            models.DuesPaymentPlan.status.in_(("active", "completed")),
+        )
+    )
+    plan_status_by_user = {row.user_id: row.status for row in plan_status_rows}
+
+    # THREE-WAY SPLIT (board c195). Order matters: net reaching the cycle total (or
+    # an explicitly completed plan — normally the same fact twice, since a plan can
+    # only complete once its installments sum to the total, but checked both ways as
+    # a safety net) wins first, so a member is never reported "on_plan" once they
+    # have actually paid in full. Only THEN does an still-active plan route them to
+    # on_plan instead of outstanding. Everyone else keeps the original c172 rule: any
+    # positive net (even a partial one, e.g. after a partial correction) reads as
+    # paid, and the rest are outstanding. Every member falls into exactly one bucket,
+    # so the three counts are exhaustive over the active roster by construction.
+    paid_members = 0
+    on_plan_members = 0
+    outstanding_members = 0
+    for user_id, net in member_nets:
+        plan_status = plan_status_by_user.get(user_id)
+        if net >= cycle.amount_cents or plan_status == "completed":
+            paid_members += 1
+        elif plan_status == "active":
+            on_plan_members += 1
+        elif net > 0:
+            paid_members += 1
+        else:
+            outstanding_members += 1
+
     return DuesOverview(
         cycle_id=cycle.id,
         cycle_name=cycle.name,
         amount_cents=cycle.amount_cents,
         due_date=cycle.due_date,
         paid_members=paid_members,
-        outstanding_members=len(nets) - paid_members,
-        # DELIBERATELY NOT roster-spined, unlike the two counts above. This is "how
+        on_plan_members=on_plan_members,
+        outstanding_members=outstanding_members,
+        # DELIBERATELY NOT roster-spined, unlike the three counts above. This is "how
         # much money came in for this cycle", which includes members who have since
         # gone inactive and payments whose related_user_id was never set. Filtering
         # it to the current roster would quietly under-report the bank balance to
@@ -382,9 +422,11 @@ async def chapter_overview(
     two chapters on it, and wrong in the direction that makes a president think their
     own chapter is being reported. It needs its own campus-labelled call or nothing.
 
-    STATEMENT BUDGET: seven, FIXED, none of them per-member. This endpoint has exactly
-    the shape that produced the c82 and c156 N+1s, so the rule is that roster size
-    changes the numbers and never the number of queries.
+    STATEMENT BUDGET: FIXED, none of them per-member — c195 added one more (a plan-
+    status lookup inside _dues_overview) to what this docstring used to call seven.
+    This endpoint has exactly the shape that produced the c82 and c156 N+1s, so the
+    rule that matters is not the exact count but that roster size changes the
+    numbers and never the number of queries.
 
     The counts are deliberately NOT folded into one another as subqueries, for the
     reason c82's docstring already records: a roster-spined query returns no rows for
