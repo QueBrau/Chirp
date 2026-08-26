@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+#
+# Post-migrate+redeploy verification for the coordinated schema-rename window
+# (c186 kit, built for c179's 0019-0022 migrate+redeploy; see DEPLOY.md's
+# "Coordinated window (schema-rename deploys)" section). Run it after step 4
+# of that section, pointed at whatever base URL you just deployed.
+#
+# Four checks run for real over plain HTTP, with no credentials of its own:
+#   (a) a real auth-gated route, no token          -> expect 401
+#   (b) a route that has never existed (control)   -> expect 404
+#   (c) the route-swap hinge: old /yaks 404, new /chirps still routed
+# Two more are PRINTED, not run, because they need real credentials this
+# script does not have and never will:
+#   (d) the gcloud logging read for c176's "email sent" line
+#   (e) the read-only SQL for c184's four URL-column counts
+#
+# Usage:
+#   scripts/deploy-verify [--base-url URL] [--bearer TOKEN] [--project ID]
+#   DEPLOY_VERIFY_BASE_URL=... DEPLOY_VERIFY_BEARER=... scripts/deploy-verify
+#
+# Defaults to http://localhost:8000 (a local uvicorn stack) so this runs
+# unattended in a dry run. For prod, pass --base-url with the chirp-api
+# service URL from INFRA-PRIVATE.html#cloudrun — deliberately not hardcoded
+# in this tracked file. --bearer is optional; without it, check (c)'s new-route
+# probe is unauthenticated and 401 is the expected pass, same as check (a).
+#
+# WHY NOT /healthz: Google's *.run.app frontend intercepts that exact path and
+# answers with its own 404 before the request reaches the container
+# (INFRA-PRIVATE.html#cloudrun gotcha) — a probe there would misreport a
+# perfectly healthy deploy as down. The app's own liveness route is /_health,
+# but that route is unauthenticated by design and proves nothing about the
+# auth-gated code path this window actually risks (DEPLOY.md section 5: "a 200
+# from health is not evidence a deploy is healthy when the broken path is
+# behind auth"). Check (a) below hits a real auth-gated route instead.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+BASE_URL="${DEPLOY_VERIFY_BASE_URL:-http://localhost:8000}"
+BEARER="${DEPLOY_VERIFY_BEARER:-}"
+PROJECT="${DEPLOY_VERIFY_PROJECT:-chirps-prod}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base-url) BASE_URL="$2"; shift 2 ;;
+    --bearer) BEARER="$2"; shift 2 ;;
+    --project) PROJECT="$2"; shift 2 ;;
+    -h|--help)
+      sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *) echo "unknown arg: $1 (use --base-url / --bearer / --project)" >&2; exit 1 ;;
+  esac
+done
+
+BASE_URL="${BASE_URL%/}"
+DUMMY_UUID="00000000-0000-0000-0000-000000000000"
+PASS=0
+FAIL=0
+
+# $1 = path, remaining args passed through to curl (e.g. -H 'Authorization: ...').
+# Echoes the HTTP status code. curl's own -w already prints "000" on a request
+# that never got a response (connection refused, timeout, DNS failure), so the
+# fallback below only covers the rarer case where curl exits before writing
+# even that (e.g. a malformed URL) — it must not ALSO fire on top of curl's own
+# "000", or the two concatenate into "000000".
+status_of() {
+  local path="$1" out; shift
+  out="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$@" "${BASE_URL}${path}" 2>/dev/null || true)"
+  echo "${out:-000}"
+}
+
+# $1 = label, $2 = actual status, $3.. = acceptable statuses.
+check() {
+  local label="$1" actual="$2"; shift 2
+  local want ok=""
+  for want in "$@"; do
+    [ "$actual" = "$want" ] && ok=1
+  done
+  if [ -n "$ok" ]; then
+    printf 'PASS  %-48s got %-4s (expected one of: %s)\n' "$label" "$actual" "$*"
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL  %-48s got %-4s (expected one of: %s)\n' "$label" "$actual" "$*"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+echo "=== scripts/deploy-verify ==="
+echo "target: ${BASE_URL}"
+if [ "${BASE_URL}" = "http://localhost:8000" ]; then
+  echo "NOTE: default target is localhost. Pass --base-url for prod (INFRA-PRIVATE.html#cloudrun)."
+fi
+echo
+
+echo "--- HTTP probes ---"
+
+# (a) A real auth-gated route with no credentials. GET /auth/campus-
+# verification depends only on get_current_user (no path params), so it is
+# one fixed URL regardless of target or environment, and 401 is the same
+# expectation whether the target is running AUTH_MODE=emulated (local) or
+# AUTH_MODE=firebase (prod) — get_current_user 401s before either mode does
+# anything else.
+status_a=$(status_of "/auth/campus-verification")
+check "(a) real route, no auth -> 401" "$status_a" 401
+
+# (b) Control: a route that has never existed, anywhere, ever. If this is not
+# 404 the target is not answering FastAPI's normal routing at all (wrong host,
+# a proxy, a maintenance page) and every other result here is suspect.
+status_b=$(status_of "/__deploy_verify_bogus_route_c186")
+check "(b) bogus route (control) -> 404" "$status_b" 404
+
+# (c) The route-swap hinge itself (c179's migration 0022). The OLD path must
+# be fully gone, not merely unauthenticated — the yaks router module no longer
+# exists at all, so this must 404 regardless of credentials. The NEW path must
+# still be a real, routed endpoint: 401 unauthenticated, or 200 with a real
+# --bearer token.
+status_old=$(status_of "/campuses/${DUMMY_UUID}/yaks")
+check "(c) old route /campuses/{id}/yaks -> 404" "$status_old" 404
+if [ -n "${BEARER}" ]; then
+  status_new=$(status_of "/campuses/${DUMMY_UUID}/chirps" -H "Authorization: Bearer ${BEARER}")
+  check "(c) new route /campuses/{id}/chirps (with --bearer)" "$status_new" 200 401
+else
+  status_new=$(status_of "/campuses/${DUMMY_UUID}/chirps")
+  check "(c) new route /campuses/{id}/chirps (no token)" "$status_new" 401 200
+fi
+
+echo
+echo "--- manual proof steps (printed, not run) ---"
+echo
+echo "(d) c176 'email sent' log-line proof. The send itself is a manual step —"
+echo "    trigger one real .edu verification send through the app, or a"
+echo "    bearer-authenticated POST /auth/campus-verification — THEN read it back:"
+echo
+cat <<EOF
+gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="chirp-api" AND textPayload:"email sent"' --project=${PROJECT} --freshness=30m --limit=20 --format='value(timestamp,textPayload)'
+EOF
+echo
+echo "    Expect at least one line shaped like:"
+echo "    email sent recipient=[redacted] message_id=..."
+echo "    Zero lines is the c176 regression recurring, not an empty log window —"
+echo "    see that card before assuming it is fine."
+echo
+echo "(e) c184 URL-column data check. Read-only counts of non-http(s) values, for"
+echo "    Jose's psql through the Auth Proxy (connection string in"
+echo "    INFRA-PRIVATE.html#proxy) — NOT executed by this script, and nothing"
+echo "    below mutates a row:"
+echo
+cat <<'SQL'
+SELECT
+  (SELECT count(*) FROM alumni_profiles WHERE linkedin_url IS NOT NULL AND linkedin_url !~* '^https?://') AS alumni_profiles_linkedin_url_bad,
+  (SELECT count(*) FROM job_posts        WHERE apply_url    IS NOT NULL AND apply_url    !~* '^https?://') AS job_posts_apply_url_bad,
+  (SELECT count(*) FROM events           WHERE cover_url    IS NOT NULL AND cover_url    !~* '^https?://') AS events_cover_url_bad,
+  (SELECT count(*) FROM users            WHERE avatar_url   IS NOT NULL AND avatar_url   !~* '^https?://') AS users_avatar_url_bad;
+SQL
+echo
+echo "    All four should read 0 — c184's validator only narrows NEW writes, so a"
+echo "    nonzero count here is pre-existing data, not something this deploy caused."
+echo
+
+echo "=== summary: ${PASS} passed, ${FAIL} failed ==="
+[ "${FAIL}" -eq 0 ]
