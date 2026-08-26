@@ -61,7 +61,7 @@ function AlumniCard({
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
           <Avatar name={name} size={44} />
           <View style={{ flex: 1, gap: 2 }}>
-            <AppText style={{ fontWeight: "600" }}>{name}</AppText>
+            <AppText variant="headline">{name}</AppText>
             {profile.grad_year ? (
               <AppText variant="caption" tone="tertiary">
                 Class of {profile.grad_year}
@@ -127,7 +127,7 @@ function AlumniCard({
             {expanded ? (
               officeLabel === undefined ? (
                 <AppText variant="caption" tone="tertiary">
-                  Checking role history…
+                  Checking role history...
                 </AppText>
               ) : officeLabel === null ? (
                 <AppText variant="caption" tone="tertiary">
@@ -169,7 +169,7 @@ function JobCard({ job }: { job: JobPostOut }) {
         <AppText>{job.description}</AppText>
         {job.apply_url ? (
           <Pressable onPress={() => void Linking.openURL(job.apply_url!)}>
-            <AppText tone="accent" style={{ fontWeight: "600" }}>
+            <AppText variant="bodyBold" tone="accent">
               Apply / learn more
             </AppText>
           </Pressable>
@@ -202,17 +202,7 @@ export default function AlumniScreen() {
   return (
     <Screen title="Alumni" subtitle="Directory and chapter job board">
       <View style={{ gap: spacing.lg }}>
-        <View
-          style={{
-            flexDirection: "row",
-            gap: spacing.sm,
-            padding: spacing.xs,
-            borderRadius: radii.lg,
-            backgroundColor: palette.surface,
-            borderWidth: 1,
-            borderColor: palette.border,
-          }}
-        >
+        <View style={{ flexDirection: "row", gap: spacing.sm }}>
           {(
             [
               ["directory", "Directory"],
@@ -223,19 +213,19 @@ export default function AlumniScreen() {
             return (
               <Pressable
                 key={key}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
                 onPress={() => setSegment(key)}
-                style={{
+                style={({ pressed }) => ({
                   flex: 1,
-                  paddingVertical: spacing.sm,
-                  borderRadius: radii.md,
-                  backgroundColor: active ? palette.accentMuted : "transparent",
                   alignItems: "center",
-                }}
+                  paddingVertical: spacing.sm,
+                  borderRadius: radii.pill,
+                  backgroundColor: active ? palette.accent : palette.surfaceAlt,
+                  opacity: pressed ? 0.85 : 1,
+                })}
               >
-                <AppText
-                  variant="caption"
-                  style={{ fontWeight: "600", color: active ? palette.accent : palette.textSecondary }}
-                >
+                <AppText variant="bodyBold" tone={active ? "onAccent" : "secondary"}>
                   {label}
                 </AppText>
               </Pressable>

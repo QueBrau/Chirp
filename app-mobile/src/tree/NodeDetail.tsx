@@ -9,7 +9,7 @@ import { getRoleTerms, type RoleName, type RoleTerm } from "@/api/chapters";
 import type { LineageEdgeOut, LineageTreeOut } from "@/api/lineage";
 import { chipVariant, currentTerm, roleLabel, termDateLabel } from "@/lib/roleTerms";
 import { AppText, Avatar, Badge, Card, Chip } from "@/components";
-import { radii, spacing, useTheme } from "@/theme";
+import { radii, spacing } from "@/theme";
 
 import { muli } from "./fonts";
 import { edgesForUser } from "./layout";
@@ -49,7 +49,6 @@ export function NodeDetail({
   onAddLittle,
   onUnpair,
 }: NodeDetailProps) {
-  const palette = useTheme();
   const node = tree.nodes.find((n) => n.user_id === userId);
 
   // Current role + its honesty-gated date, fetched once per selection — not
@@ -183,7 +182,7 @@ export function NodeDetail({
                 <AppText style={[{ flex: 1 }, muliRegular]}>
                   {person?.display_name ?? "Unknown"}
                 </AppText>
-                {!edge.confirmed_by_little ? <Badge label="Unconfirmed" tone="danger" /> : null}
+                {!edge.confirmed_by_little ? <Badge label="Unconfirmed" tone="warning" /> : null}
                 {canEdit && onChangeBig ? (
                   <Pressable
                     accessibilityRole="button"
@@ -238,17 +237,13 @@ export function NodeDetail({
                 <AppText style={[{ flex: 1 }, muliRegular]}>
                   {person?.display_name ?? "Unknown"}
                 </AppText>
-                {!edge.confirmed_by_little ? <Badge label="Pending" tone="danger" /> : null}
+                {!edge.confirmed_by_little ? <Badge label="Pending" tone="warning" /> : null}
               </View>
             ))
           )}
         </View>
 
-        <AppText
-          variant="caption"
-          tone="tertiary"
-          style={[muliRegular, { color: palette.textTertiary }]}
-        >
+        <AppText variant="caption" tone="tertiary" style={muliRegular}>
           Drag to pan · pinch or scroll to zoom · tap a node to focus its lineage
         </AppText>
       </View>
