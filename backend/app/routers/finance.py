@@ -102,7 +102,21 @@ async def create_ledger_entry(
     """Append a ledger entry; treasurer/president only.
 
     entry_type="correction" MUST reference a prior entry of the SAME chapter via
-    corrects_entry_id (422 otherwise). Entries are never updated or deleted.
+    corrects_entry_id (422 otherwise), and that target must not itself be a
+    correction (422 otherwise -- board c194). Entries are never updated or
+    deleted.
+
+    Corrections may target any non-correction entry_type (dues_payment, expense,
+    budget_allocation, payout) -- SPEC.md §2.5 rule 5 defines a correction as an
+    offsetting entry for the append-only ledger generally, not only for dues
+    payments, and test_ledger_append_only.py already exercises correcting an
+    expense entry. What must be rejected is chaining: C2(correction) ->
+    C1(correction) -> P is accepted at write time but dues_contributions_
+    subquery (app/core/dues_status.py) joins a correction only directly against
+    the dues_payment row it corrects, so C2 would silently net to zero effect
+    on the number it was meant to move while still returning 201 -- money-
+    correctness finding c191/c194. Rejecting any correction-of-a-correction here
+    closes that hole without narrowing what a correction may otherwise target.
     """
     if body.entry_type == "correction":
         if body.corrects_entry_id is None:
@@ -112,6 +126,10 @@ async def create_ledger_entry(
         target = await session.get(models.LedgerEntry, body.corrects_entry_id)
         if target is None or target.chapter_id != chapter_id:
             raise HTTPException(status_code=422, detail="corrects_entry_not_in_chapter")
+        if target.entry_type == "correction":
+            raise HTTPException(
+                status_code=422, detail="correction_target_is_correction"
+            )
 
     entry = models.LedgerEntry(
         chapter_id=chapter_id,
