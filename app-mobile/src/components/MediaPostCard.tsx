@@ -16,7 +16,7 @@
  * Overflow control (board c35, App Store Guideline 1.2): a discreet
  * more-horizontal icon in the header row of every variant, offering Report
  * and (unless `canBlock` is false) Block — mirrors the Chirps board's own
- * report/block affordance (app/(tabs)/chirp/index.tsx), rolled locally into
+ * report/block affordance (app/(tabs)/chirps/index.tsx), rolled locally into
  * this component rather than the screen since every post here has a KNOWN
  * author (`authorName`/`post.author_id`), unlike Chirp where the client never
  * learns who posted. The sheet/report-reasons Modal is only ever mounted
