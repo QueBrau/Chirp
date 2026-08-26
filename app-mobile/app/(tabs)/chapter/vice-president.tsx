@@ -143,7 +143,7 @@ export default function VicePresidentScreen() {
   return (
     <Screen title="Deputy President" subtitle="A stand-in view of the president's dashboard">
       {loading ? (
-        <EmptyState title="Loading..." />
+        <EmptyState title="Loading deputy dashboard..." />
       ) : loadFailed || overview === null ? (
         <EmptyState
           title="Couldn't load the deputy dashboard"

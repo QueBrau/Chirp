@@ -68,7 +68,7 @@ export default function MemberDetailScreen() {
   const label = member ? (member.display_name.length > 0 ? member.display_name : member.user_id) : "";
 
   return (
-    <Screen title="Member">
+    <Screen title="Member" subtitle="Profile and role history">
       {loading ? (
         <EmptyState title="Loading member..." />
       ) : member === null ? (
