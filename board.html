@@ -2041,7 +2041,7 @@
       "owner": "court",
       "tag": "design",
       "area": "mobile",
-      "title": "c189 IN BUILD Aug 25 - designer's-eye QA over the four surfaces added/changed this week (VP dashboard, member detail + role history, alumni tap-to-expand, tree node inspector role line) on web at 390x844 against DESIGN.md: spacing, hierarchy, empty/loading states, dark canvas rules, no default-looking UI. Small fixes applied in-card; anything structural carded separately. Sonnet worker in chirp-sub-c189",
+      "title": "c189 PR #114 OPEN Aug 25 - all four surfaces passed with small fixes, before/after screenshots: alumni segmented control rebuilt to the canonical pill pattern (DESIGN 8.7) + type-scale variants over hand-rolled weights; tree Unconfirmed/Pending badges danger->warning (sat next to the red Remove chip implying same severity); member detail gains its missing subtitle; VP loading copy joins the convention. Follow-ups proposed not built: repo-wide legacy-token migration, isolatable per-screen error states. Manager verified + tsc clean post-rebase over c187. Awaiting CI then merge",
       "detail": "All four surfaces shipped fast behind functional evidence; none has had a dedicated design pass. Method: local stack (backend :8000, Metro from the worktree :8084, dev seeds incl the 2-term Chris Delgado history), drive every state of each surface (loading, empty, populated, error - errors now VISIBLE on web thanks to c183), screenshot each, judge against DESIGN.md's binding rules, fix the small stuff (spacing tokens, type variants, chip usage, copy tone), screenshot after. tsc cited; no new features; keep diffs minimal (c174 rebases over this)."
     },
     {
