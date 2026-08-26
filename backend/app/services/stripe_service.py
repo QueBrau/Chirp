@@ -145,6 +145,22 @@ async def create_dues_payment_intent(
     )
 
 
+async def retrieve_payment_intent(account_id: str, intent_id: str) -> stripe.PaymentIntent:
+    """Fetch a PaymentIntent live rather than creating a duplicate on retry.
+
+    A same-rail retry against a reservation that already has a stored intent id
+    must never call create_dues_payment_intent again (board c193): Stripe only
+    retains an idempotency key for 24h, while ACH can sit in 'processing' for
+    days, so a create() call past that window mints a genuinely NEW real intent
+    (a second bank debit) instead of resolving to the original. Retrieving the
+    intent we already created is the only safe way to hand the client its
+    client_secret again.
+    """
+    return await stripe.PaymentIntent.retrieve_async(
+        intent_id, api_key=_secret_key(), stripe_account=account_id
+    )
+
+
 def verify_webhook_event(payload: bytes, signature: str) -> stripe.Event:
     """Verify a webhook signature against the RAW body and return the parsed event.
 
