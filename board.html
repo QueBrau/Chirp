@@ -2064,11 +2064,11 @@
     },
     {
       "id": "c197",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "m5",
       "area": "payments",
-      "title": "c197 PR #122 OPEN Aug 26 - member dues screen shows plan progress: an active plan renders a progress card ('On a payment plan - $X of $Y paid, N of M installments', meter, next due, installments checked off, no pay button - treasurer-recorded) via getMyPlan; a completed plan folds into Settled with a 'Plan complete' chip (completed = dues_installment rows, invisible to the ledger paid-check); canceled/none falls through unchanged. Worker corrected the file pointer (real state machine is app/(tabs)/chapter/dues.tsx). Manager verified live render + branching; tsc clean post-rebase. Awaiting CI then merge. NOT ON PROD until Jose's window (rides 0023)",
+      "title": "c197 DONE Aug 26 - MERGED as 7a44ce1 (PR #122, CI 4/4). Member dues screen shows plan progress: an active plan renders a progress card ('On a payment plan - $X of $Y paid, N of M installments', meter, next due, installments checked off, no pay button - treasurer-recorded) via getMyPlan; a completed plan folds into Settled with a 'Plan complete' chip (completed = dues_installment rows, invisible to the ledger paid-check); canceled/none falls through unchanged. Worker corrected the file pointer (real state machine is app/(tabs)/chapter/dues.tsx). Manager verified live render + branching; tsc clean post-rebase. Awaiting CI then merge. NOT ON PROD until Jose's window (rides 0023)",
       "detail": "Starts once c195 merges. The member does NOT self-pay in this tracking build (installments are treasurer-recorded), so the pay button is replaced by the plan-progress card for a member on a plan; honest empty/none state otherwise. DESIGN.md, tsc cited, live render both states."
     },
     {
