@@ -15,7 +15,6 @@ import { useCallback, useEffect, useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
 import { listMembers, myMemberships, type MemberOut, type MyMembershipOut } from "@/api/chapters";
-import { ApiError } from "@/api/client";
 import {
   createMeeting,
   deleteMeeting,
@@ -40,7 +39,7 @@ import {
   Screen,
   SectionHeader,
 } from "@/components";
-import { confirmAction, showAlert } from "@/lib/alert";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { calendarDay } from "@/lib/dates";
 import { shareCsv } from "@/lib/export";
 import { currentSemesterWindow } from "@/org/semester";
@@ -68,12 +67,6 @@ function meetingDate(iso: string): string {
     month: "short",
     day: "numeric",
   });
-}
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  showAlert(title, message);
 }
 
 /**

@@ -37,7 +37,6 @@ import { useRef, useState } from "react";
 import { ActivityIndicator, Image, Modal, Pressable, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { ApiError } from "@/api/client";
 import { createCampusPost, createPost, type PostAudience } from "@/api/feed";
 import {
   getMediaUploadUrl,
@@ -45,7 +44,7 @@ import {
   MAX_UPLOAD_BYTES,
   type AllowedMediaContentType,
 } from "@/api/media";
-import { showAlert } from "@/lib/alert";
+import { showAlert, showApiError } from "@/lib/alert";
 import { light, radii, spacing, typography, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
@@ -94,14 +93,6 @@ export interface CreateSheetProps {
    * refetch mechanism exists in this app, so this is opt-in per caller.
    */
   onPosted?: () => void;
-}
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic
- * fallback. Same shape as the local helper in chirp/index.tsx and treasurer.tsx —
- * there's no shared one, so this mirrors it rather than inventing a new import. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  showAlert(title, message);
 }
 
 function OptionIcon({ icon, muted }: { icon: FeatherIconName; muted?: boolean }) {

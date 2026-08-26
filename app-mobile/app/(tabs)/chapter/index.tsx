@@ -32,7 +32,6 @@ import {
   type MembershipOut,
   type RoleName,
 } from "@/api/chapters";
-import { ApiError } from "@/api/client";
 import { createEvent, listEventsWithRsvps, type EventOut, type EventRsvpOut, type EventWithRsvpsOut } from "@/api/events";
 import { likePost, listPosts, unlikePost, type FeedPostOut } from "@/api/feed";
 import { blockUser, createReport } from "@/api/moderation";
@@ -54,7 +53,8 @@ import {
   SectionHeader,
   type CreateEventInput,
 } from "@/components";
-import { confirmAction, showAlert } from "@/lib/alert";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
+import { ROLE_LABELS, roleLabel } from "@/lib/roleTerms";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -127,23 +127,6 @@ const TOOLS: Tool[] = [
   },
 ];
 
-const ROLE_LABELS: Record<RoleName, string> = {
-  president: "President",
-  vice_president: "Vice President",
-  treasurer: "Treasurer",
-  secretary: "Secretary",
-  historian: "Historian",
-  member: "Member",
-  pledge: "Pledge",
-  alumni: "Alum",
-};
-
-/** Runtime fallback for a role the closed ROLE_LABELS record doesn't know yet —
- * the server owns the taxonomy (c44), so an unmapped value just gets prettified. */
-function roleLabel(role: RoleName): string {
-  return ROLE_LABELS[role] ?? role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 const CATEGORIES = ["Fraternities", "Sororities", "Clubs", "Intramurals"] as const;
 type Category = (typeof CATEGORIES)[number];
 
@@ -167,12 +150,6 @@ function age(iso: string): string {
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours}h`;
   return `${Math.round(hours / 24)}d`;
-}
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  showAlert(title, message);
 }
 
 /** Pill segmented control under the org hero (§8.7): Feed · Events · Tools, org-accent active state. */

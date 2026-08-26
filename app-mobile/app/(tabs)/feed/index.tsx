@@ -25,21 +25,14 @@ import { useCallback, useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useRouter } from "expo-router";
 
-import { ApiError } from "@/api/client";
 import { likePost, listCampusFeed, unlikePost, type FeedPostOut } from "@/api/feed";
 import { blockUser, createReport } from "@/api/moderation";
 // useCampus (not a local getCampus fetch) — main moved campus resolution into
 // SessionProvider (c67) precisely to kill the per-screen duplicate requests.
 import { useCampus, useCampusAccess, useSession } from "@/auth";
 import { AppText, EmptyState, Fab, MediaPostCard, Screen } from "@/components";
-import { showAlert } from "@/lib/alert";
+import { showAlert, showApiError } from "@/lib/alert";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  showAlert(title, message);
-}
 
 type FeedFilter = "forYou" | "campus";
 
