@@ -2023,7 +2023,7 @@
       "owner": "court",
       "tag": "cleanup",
       "area": "mobile",
-      "title": "c187 PR #113 OPEN Aug 25 - 6 local role-helper copies (grep found two beyond the carded four) + 9 byte-identical showApiError bodies consolidated onto src/lib/{roleTerms,alert}.ts, net -133 lines, zero behavior change. Divergent locals PRESERVED not merged: members.tsx plural section labels (renamed SECTION_ROLE_LABELS), vice-president.tsx raw fallback, chapter/index.tsx no-fallback call site. Grep-proven zero remaining; tsc clean re-run by manager post-rebase. Awaiting CI then merge",
+      "title": "c187 DONE Aug 25 - MERGED as 387980d (PR #113, CI 4/4). 6 local role-helper copies + 9 byte-identical showApiError bodies consolidated onto src/lib/{roleTerms,alert}.ts, net -133 lines, zero behavior change. Divergent locals PRESERVED not merged (members.tsx plural section labels renamed SECTION_ROLE_LABELS, vice-president.tsx raw fallback, chapter/index.tsx no-fallback call site). Grep-proven zero remaining; tsc clean re-run by manager post-rebase",
       "detail": "Both flagged as explicit out-of-scope notes by the c181 and c183 workers. Rules: no visual or behavioral change (same labels, same variants, same error strings); showApiError keeps its (error, title) signature at call sites or migrates them all - one convention, not two; grep proof both ways (no local ROLE_LABELS/chipVariant/prettifyRole definitions outside roleTerms.ts, no per-file showApiError bodies), tsc cited. Small diffs per file - c174's upgrade branch rebases over this, so keep it surgical."
     },
     {
