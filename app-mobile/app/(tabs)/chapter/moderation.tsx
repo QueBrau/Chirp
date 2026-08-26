@@ -32,7 +32,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { View } from "react-native";
 
-import { ApiError } from "@/api/client";
 import {
   listReports,
   removeChirp,
@@ -42,16 +41,10 @@ import {
 } from "@/api/moderation";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { AppText, Button, Card, Chip, EmptyState, Screen, SectionHeader } from "@/components";
-import { confirmAction, showAlert } from "@/lib/alert";
+import { confirmAction, showApiError } from "@/lib/alert";
 import { spacing } from "@/theme";
 
 type LoadState = "loading" | "loaded" | "error";
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  showAlert(title, message);
-}
 
 /** Compact relative age ("just now", "5h ago", "2d ago") — matches Home/Chirp. */
 function age(iso: string): string {

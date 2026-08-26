@@ -49,7 +49,7 @@ import {
   Screen,
   SectionHeader,
 } from "@/components";
-import { confirmAction, showAlert } from "@/lib/alert";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { shareCsv } from "@/lib/export";
 import { duesProgress, runningBalance, spendByCategory } from "@/lib/treasury";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
@@ -107,12 +107,6 @@ function dueDate(isoDay: string): string {
     month: "long",
     day: "numeric",
   });
-}
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  showAlert(title, message);
 }
 
 /**

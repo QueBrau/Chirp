@@ -28,7 +28,6 @@ import { useCallback, useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { listMembers } from "@/api/chapters";
-import { ApiError } from "@/api/client";
 import {
   castHouseBallot,
   getHouseLeaderboard,
@@ -48,7 +47,7 @@ import {
   Screen,
   SectionHeader,
 } from "@/components";
-import { showAlert } from "@/lib/alert";
+import { showApiError } from "@/lib/alert";
 import { calendarDay } from "@/lib/dates";
 import { radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
@@ -61,11 +60,6 @@ interface HouseOption {
 
 function houseLabel(house: { org_name: string; chapter_name: string | null }): string {
   return house.chapter_name ? `${house.org_name} ${house.chapter_name}` : house.org_name;
-}
-
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  showAlert(title, message);
 }
 
 export default function HousesScreen() {

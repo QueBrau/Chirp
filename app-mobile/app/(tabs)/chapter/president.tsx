@@ -38,9 +38,9 @@ import {
   type MembershipStatus,
   type RoleName,
 } from "@/api/chapters";
-import { ApiError } from "@/api/client";
-import { confirmAction, showAlert } from "@/lib/alert";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { calendarDay } from "@/lib/dates";
+import { chipVariant, roleLabel } from "@/lib/roleTerms";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { currentSemesterWindow } from "@/org/semester";
 import {
@@ -48,7 +48,6 @@ import {
   Button,
   Card,
   Chip,
-  type ChipVariant,
   EmptyState,
   GradientAvatar,
   ListRow,
@@ -57,31 +56,11 @@ import {
 } from "@/components";
 import { radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
-const ROLE_LABELS: Record<RoleName, string> = {
-  president: "President",
-  vice_president: "Vice President",
-  treasurer: "Treasurer",
-  secretary: "Secretary",
-  historian: "Historian",
-  member: "Member",
-  pledge: "Pledge",
-  alumni: "Alum",
-};
-
 const STATUS_LABELS: Record<MembershipStatus, string> = {
   active: "Active",
   inactive: "Inactive",
   removed: "Removed",
 };
-
-function prettifyRole(role: string): string {
-  return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function chipVariant(role: RoleName, eboard: RoleName[]): ChipVariant {
-  if (eboard.includes(role)) return "accent";
-  return role === "pledge" ? "warning" : "neutral";
-}
 
 /**
  * Whole-dollar money for the summary tiles.
@@ -110,12 +89,6 @@ function dueDate(isoDay: string): string {
 
 function shortUserId(userId: string): string {
   return userId.length > 12 ? `${userId.slice(0, 6)}…${userId.slice(-4)}` : userId;
-}
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  showAlert(title, message);
 }
 
 /**
@@ -394,7 +367,7 @@ export default function PresidentScreen() {
     // The person granting a role can be the person losing it — always confirm,
     // never apply a role change on tap alone.
     confirmAction({
-      title: `Change ${target.display_name || "this member"} to ${ROLE_LABELS[nextRole] ?? prettifyRole(nextRole)}?`,
+      title: `Change ${target.display_name || "this member"} to ${roleLabel(nextRole)}?`,
       message:
         target.role === "president"
           ? "They're currently President. This takes that role away from them."
@@ -550,7 +523,7 @@ export default function PresidentScreen() {
                         left={<GradientAvatar name={label} size={40} photoUrl={member.avatar_url} />}
                         right={
                           <Chip
-                            label={ROLE_LABELS[member.role] ?? prettifyRole(member.role)}
+                            label={roleLabel(member.role)}
                             variant={chipVariant(member.role, eboardRoles)}
                           />
                         }
@@ -580,7 +553,7 @@ export default function PresidentScreen() {
                                   style={({ pressed }) => ({ opacity: pressed || saving ? 0.6 : 1 })}
                                 >
                                   <Chip
-                                    label={ROLE_LABELS[role] ?? prettifyRole(role)}
+                                    label={roleLabel(role)}
                                     variant={member.role === role ? "accent" : "neutral"}
                                   />
                                 </Pressable>

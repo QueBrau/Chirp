@@ -20,6 +20,8 @@
 
 import { Alert, Platform, type AlertButton } from "react-native";
 
+import { ApiError } from "@/api/client";
+
 export interface ConfirmActionOptions {
   title: string;
   /** Optional, matching Alert.alert's own signature — some call sites (e.g.
@@ -90,4 +92,16 @@ export function showAlert(title: string, message?: string): void {
     return;
   }
   Alert.alert(title, message);
+}
+
+/**
+ * Single-button error alert for a failed API call. ApiError carries a
+ * server-provided `.detail`; anything else gets a generic fallback. c183
+ * left each call site's own copy of this in place ("no shared one" per
+ * CreateSheet.tsx's own comment) — c187 consolidates them here since it's
+ * the same showAlert concern, verified byte-identical across every caller.
+ */
+export function showApiError(error: unknown, title: string): void {
+  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
+  showAlert(title, message);
 }

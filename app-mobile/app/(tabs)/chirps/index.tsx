@@ -21,12 +21,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Modal, Pressable, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 
-import { ApiError } from "@/api/client";
 import { createReport, blockChirpAuthor } from "@/api/moderation";
 import { createChirp, listChirps, voteChirp, type ChirpFeedOut, type ChirpVoteValue } from "@/api/chirps";
 import { useCampus, useCampusAccess, useSession } from "@/auth";
 import { AppText, EmptyState, Screen, VotePill } from "@/components";
-import { confirmAction, showAlert } from "@/lib/alert";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import {
   campusNightWash,
   elevation,
@@ -46,12 +45,6 @@ function age(iso: string): string {
   if (hours < 1) return "just now";
   if (hours < 24) return `${hours}h`;
   return `${Math.round(hours / 24)}d`;
-}
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  showAlert(title, message);
 }
 
 /**

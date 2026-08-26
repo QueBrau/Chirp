@@ -22,8 +22,9 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 
-import { getDeputyOverview, type DeputyOverview, type RoleName } from "@/api/chapters";
+import { getDeputyOverview, type DeputyOverview } from "@/api/chapters";
 import { calendarDay } from "@/lib/dates";
+import { ROLE_LABELS } from "@/lib/roleTerms";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import {
   AppText,
@@ -35,17 +36,6 @@ import {
   SectionHeader,
 } from "@/components";
 import { radii, spacing, typography, useAppearance, useTheme } from "@/theme";
-
-const ROLE_LABELS: Record<RoleName, string> = {
-  president: "President",
-  vice_president: "Vice President",
-  treasurer: "Treasurer",
-  secretary: "Secretary",
-  historian: "Historian",
-  member: "Member",
-  pledge: "Pledge",
-  alumni: "Alum",
-};
 
 /** Whole-dollar money for the summary tile — mirrors president.tsx's dollarsRounded
  * (same reasoning: cents are noise at a glance, the exact ledger is the treasurer's
