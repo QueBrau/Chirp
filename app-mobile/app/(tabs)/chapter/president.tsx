@@ -23,6 +23,8 @@
  * server invariant here would be c83's scope, not this card's.
  */
 
+import { useRouter } from "expo-router";
+import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
@@ -247,6 +249,7 @@ function OverviewPanel({
 }
 
 export default function PresidentScreen() {
+  const router = useRouter();
   const palette = useTheme();
   // Spartan gold, the same token the Orgs header bar uses (DESIGN.md 8.5/10.4).
   // NOT palette.warning: warning is the pending-state orange, and dues collected is
@@ -448,6 +451,11 @@ export default function PresidentScreen() {
   // would-be 403s. roleMeta is null while loading OR on a failed fetch — same accepted
   // ambiguity as moderation.tsx's isEboard check, defaulting to "not eligible" rather
   // than ever showing the real president's tools before eligibility is confirmed.
+  // c196: same dues_admin gate treasurer.tsx's "Open a cycle"/payment-plans cards
+  // check — DUES_ADMIN is {treasurer, president} on the backend, a superset of
+  // MEMBERS_ADMIN's {president}, so this is always true once isPresident is, but
+  // the screen asks anyway rather than assuming one capability implies another.
+  const canManagePlans = roleMeta?.capabilities.includes("dues_admin") ?? false;
   const isPresident = roleMeta?.capabilities.includes("members_admin") ?? false;
   if (!isPresident) {
     return (
@@ -469,6 +477,27 @@ export default function PresidentScreen() {
           {overview === null ? null : (
             <OverviewPanel overview={overview} accent={campusColors.secondary} />
           )}
+
+          {/* c196: installment plans for members who can't pay a dues cycle at
+              once — same pushed screen treasurer.tsx links to, so the two
+              officer dashboards never fork the flow. */}
+          {canManagePlans ? (
+            <View>
+              <SectionHeader title="Payment plans" caption="Installments for members who can't pay at once" />
+              <Card onPress={() => router.push("/chapter/dues-plans")}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.lg }}>
+                  <Feather name="calendar" size={typography.title.fontSize} color={palette.accent} />
+                  <View style={{ flex: 1, gap: spacing.xs }}>
+                    <AppText variant="headline">Manage payment plans</AppText>
+                    <AppText variant="caption" tone="secondary">
+                      Set up installments and record payments against them
+                    </AppText>
+                  </View>
+                  <Feather name="chevron-right" size={typography.title.fontSize} color={palette.inkFaint} />
+                </View>
+              </Card>
+            </View>
+          ) : null}
 
           <View>
             <SectionHeader title="Chapter details" caption="Org and chapter name" />
