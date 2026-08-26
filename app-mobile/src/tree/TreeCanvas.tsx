@@ -229,7 +229,7 @@ function GraphNodeView({
       <SvgText
         x={x}
         y={y + 1}
-        fill={node.isGhost ? palette.textTertiary : palette.onAccent}
+        fill={node.isGhost ? palette.inkFaint : palette.onAccent}
         fontSize={9}
         fontFamily={muli.bold}
         fontWeight="700"
@@ -243,7 +243,7 @@ function GraphNodeView({
         <SvgText
           x={x}
           y={y + r + 14}
-          fill={palette.textSecondary}
+          fill={palette.inkSecondary}
           fontSize={11}
           fontFamily={muli.medium}
           fontWeight="500"
