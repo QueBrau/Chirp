@@ -652,3 +652,36 @@ async def test_end_before_start_is_422_on_create_and_on_edit(
 
     unchanged = await client.get(f"/events/{event_id}", headers=setup.president.headers)
     assert unchanged.json()["starts_at"].startswith("2026-09-27T19:00"), "rejected edit persisted"
+
+
+async def test_naive_and_aware_datetimes_mix_is_422_not_500(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """c198 review finding: one naive and one aware datetime used to raise a raw
+    TypeError inside the ordering checks - a 500, not the documented 422. A naive
+    datetime is taken as UTC (the chapters.py / core/invites.py convention).
+    """
+    setup = await make_chapter_with("member")
+    bad = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body(starts_at="2026-09-27T19:00:00", ends_at="2026-09-27T18:00:00Z"),
+        headers=setup.president.headers,
+    )
+    assert bad.status_code == 422, bad.text
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body(starts_at="2026-09-27T19:00:00", ends_at="2026-09-27T23:00:00"),
+        headers=setup.president.headers,
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    assert created.json()["starts_at"].startswith("2026-09-27T19:00")
+
+    moved = await client.patch(
+        f"/events/{event_id}",
+        json={"starts_at": "2026-09-28T02:00:00"},
+        headers=setup.president.headers,
+    )
+    assert moved.status_code == 422, moved.text
+    assert moved.json() == {"detail": "ends_at_must_be_after_starts_at"}

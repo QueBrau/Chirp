@@ -1,7 +1,7 @@
 """Events schemas: chapter events (Partiful-style), invites and RSVPs (c33, c198)."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -47,6 +47,17 @@ class EventCreate(_Schema):
         assert validated is not None  # field is required (min_length=1), never None
         return validated
 
+    # A naive datetime from a client is taken as UTC, same as chapters.py and
+    # core/invites.py. Without this, one naive and one aware value make the ordering
+    # check below (and the tz-aware column writes) raise TypeError, which pydantic
+    # does not translate into a 422 - it surfaces as a raw 500.
+    @field_validator("starts_at", "ends_at")
+    @classmethod
+    def _assume_utc(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
     @model_validator(mode="after")
     def _ends_after_starts(self) -> "EventCreate":
         # The CHECK constraint would also reject this, but a 422 naming the problem
@@ -78,6 +89,16 @@ class EventUpdate(_Schema):
     @classmethod
     def _validate_cover_url(cls, value: str | None) -> str | None:
         return validate_public_url(value) if value is not None else None
+
+    # Same normalization as EventCreate: update_event compares the submitted value
+    # against the STORED one (always aware, the columns are timezone=True), so a naive
+    # datetime here would hit the same TypeError-as-500 inside the route handler.
+    @field_validator("starts_at", "ends_at")
+    @classmethod
+    def _assume_utc(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
 
 
 class EventOut(_Schema):

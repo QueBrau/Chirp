@@ -475,8 +475,15 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
   }, [chapterId]);
 
   const handleCreate = async (input: CreateEventInput) => {
-    await createEvent(chapterId, input);
-    await reload();
+    // The sheet has already closed by the time this rejects, so a failed create has
+    // to say so out loud - otherwise the event simply never appears.
+    try {
+      await createEvent(chapterId, input);
+    } catch (error) {
+      showApiError(error, "Couldn't create the event");
+      return;
+    }
+    await reload().catch(() => {});
   };
 
   return (
