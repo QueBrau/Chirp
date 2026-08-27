@@ -2,14 +2,14 @@
 import asyncio
 import contextlib
 import logging
+import random
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import get_settings
-from app.db import get_session
+from app.db import get_session_factory
 from app.middleware.auth import get_user_by_uid
 from app.ws.pubsub import get_redis
 
@@ -32,6 +32,18 @@ WS_ACCOUNT_SUSPENDED = 4403
 # Keep an already-open session from surviving a moderation suspension indefinitely.
 # This is intentionally coarse; HTTP requests still check suspension on every request.
 WS_SUSPENSION_POLL_SECONDS = 30.0
+# Spread the polls out. Without this every socket on an instance polls on the same
+# cadence, and they START synchronised: a Cloud Run instance dying makes every client
+# reconnect at once, so their timers line up and N sockets then check out N pool
+# connections in the same instant, every 30 seconds, forever. Each poll is short
+# (board c205) but a synchronised burst of them is still a burst, arriving exactly
+# when a cold instance is least able to absorb it.
+#
+# +/- 20%, so the herd is smeared across a 12-second band rather than landing on one
+# tick. Deliberately jitter on EVERY iteration rather than once at connect: a single
+# startup offset keeps the sockets in lockstep with each other, just at a different
+# phase, and any pause that stalls all of them together re-synchronises them for good.
+WS_SUSPENSION_POLL_JITTER = 0.2
 
 
 def _offered_protocol(websocket: WebSocket) -> str | None:
@@ -99,20 +111,40 @@ def _resolve_uid(websocket: WebSocket) -> str | None:
 
 
 @router.websocket("/ws")
-async def websocket_gateway(
-    websocket: WebSocket,
-    session: AsyncSession = Depends(get_session),
-) -> None:
-    """Authenticate the connection, then forward user:{user_id} Redis events until disconnect."""
+async def websocket_gateway(websocket: WebSocket) -> None:
+    """Authenticate the connection, then forward user:{user_id} Redis events until disconnect.
+
+    THIS ROUTE DELIBERATELY TAKES NO `Depends(get_session)`, and that is a fix rather
+    than an oversight (board c205). FastAPI holds a yield-dependency open for the whole
+    endpoint call; on an HTTP route that is milliseconds, but on a WEBSOCKET route it is
+    the entire session - so every connected user pinned one pooled Postgres connection
+    until they closed the app. The pool is 15 per instance and HTTP requests draw from
+    the same one, so a handful of idle sockets could starve the instance's REST API
+    while CPU sat near zero, which autoscaling cannot see and will not rescue.
+
+    Sessions here are therefore SHORT-LIVED and explicit: one to resolve the user, then
+    one per suspension poll. Anything added to this handler later that needs the
+    database must open its own and close it - re-introducing a connection that spans
+    the socket's lifetime re-introduces the whole bug.
+    """
     offered_protocol = _offered_protocol(websocket)
     uid = _resolve_uid(websocket)
     if uid is None:
         await websocket.close(code=4401)
         return
-    user = await get_user_by_uid(session, uid)
-    if user is None:
-        await websocket.close(code=4401)
-        return
+
+    # Scoped tightly on purpose: released before accept(), so a connection is never
+    # held across the part of this function that waits on a human.
+    async with get_session_factory()() as session:
+        user = await get_user_by_uid(session, uid)
+        if user is None:
+            await websocket.close(code=4401)
+            return
+        # Read every attribute needed later WHILE the session is open. `user` is a
+        # detached instance once this block exits, and touching an unloaded attribute
+        # on a detached instance raises rather than lazily loading.
+        user_id = user.id
+        user_suspended_at = user.suspended_at
     # c126: mirrors middleware/auth.py's get_current_user, the HTTP precedent —
     # same field, same "resolved but blocked" meaning. This closes NEW connection
     # attempts only, matching what the HTTP side does (checked per-request, and a
@@ -120,7 +152,7 @@ async def websocket_gateway(
     # already-open socket for someone suspended mid-session — that's a genuinely
     # different problem (periodic re-check or a suspend-triggered kill) and is
     # deliberately out of scope here rather than silently pretended-closed.
-    if user.suspended_at is not None:
+    if user_suspended_at is not None:
         await websocket.close(code=WS_ACCOUNT_SUSPENDED)
         return
 
@@ -129,7 +161,7 @@ async def websocket_gateway(
     # treat a bare accept() as a mismatch. None when auth came via the
     # Authorization header instead — nothing was offered, so nothing to select.
     await websocket.accept(subprotocol=offered_protocol)
-    channel = f"user:{user.id}"
+    channel = f"user:{user_id}"
     pubsub = get_redis().pubsub()
 
     # Subscribe is the first thing here that touches the network, and it runs
@@ -148,7 +180,7 @@ async def websocket_gateway(
     except Exception:
         # user_id only, never ciphertext or token material (SPEC 8.1), and the
         # same warning shape messages.py already uses on the publish side.
-        logger.error("ws subscribe failed, realtime unavailable user_id=%s", user.id)
+        logger.error("ws subscribe failed, realtime unavailable user_id=%s", user_id)
         with contextlib.suppress(Exception):
             await pubsub.aclose()
         await websocket.close(code=WS_REALTIME_UNAVAILABLE)
@@ -165,14 +197,23 @@ async def websocket_gateway(
             await websocket.receive_text()
 
     async def _watch_suspension() -> None:
-        """Close the socket shortly after moderation suspends this account."""
+        """Close the socket shortly after moderation suspends this account.
+
+        Opens its OWN session per poll and closes it immediately (c205). The session
+        is created after the sleep rather than outside the loop, so a connection is
+        checked out for the length of one indexed primary-key lookup and handed back,
+        instead of being held for the socket's lifetime.
+        """
         while True:
-            await asyncio.sleep(WS_SUSPENSION_POLL_SECONDS)
-            result = await session.execute(
-                select(models.User.suspended_at).where(models.User.id == user.id)
-            )
-            if result.scalar_one_or_none() is not None:
-                logger.info("ws closed for suspended account user_id=%s", user.id)
+            jitter = 1.0 + random.uniform(-WS_SUSPENSION_POLL_JITTER, WS_SUSPENSION_POLL_JITTER)
+            await asyncio.sleep(WS_SUSPENSION_POLL_SECONDS * jitter)
+            async with get_session_factory()() as poll_session:
+                result = await poll_session.execute(
+                    select(models.User.suspended_at).where(models.User.id == user_id)
+                )
+                suspended_at = result.scalar_one_or_none()
+            if suspended_at is not None:
+                logger.info("ws closed for suspended account user_id=%s", user_id)
                 with contextlib.suppress(Exception):
                     await websocket.close(code=WS_ACCOUNT_SUSPENDED)
                 return
@@ -199,7 +240,7 @@ async def websocket_gateway(
             error = forward_task.exception()
             logger.error(
                 "ws forward ended mid-connection, realtime lost user_id=%s (%s)",
-                user.id,
+                user_id,
                 type(error).__name__ if error else "stream closed",
             )
             with contextlib.suppress(Exception):
