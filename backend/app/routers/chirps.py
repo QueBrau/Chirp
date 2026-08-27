@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select, tuple_, update
+from sqlalchemy import select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,7 +107,18 @@ async def vote_chirp(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ChirpVoteOut:
-    """Upsert the caller's -1/+1 vote and recompute the chirp's score (idempotent, 200)."""
+    """Upsert the caller's -1/+1 vote (idempotent, 200); the score maintains itself.
+
+    THIS ROUTE DELIBERATELY DOES NOT TOUCH chirps.score (board c206). It used to
+    recompute it with a full `SELECT SUM(value)` over the chirp's votes, which was
+    correct but O(n) per vote and O(n^2) over the chirp's life, with the chirps row lock
+    held for the whole scan - so voters on a popular chirp queued behind a scan that
+    grew with every vote.
+
+    A trigger on chirp_votes (migration 0025) now applies the delta instead. Adding a
+    score write back into this function would double-count: the trigger fires on the
+    vote row, not on anything this route does to the chirp.
+    """
     chirp = await session.get(models.Chirp, chirp_id)
     if chirp is None or chirp.removed_at is not None:
         raise not_found("chirp_not_found")
@@ -133,15 +144,6 @@ async def vote_chirp(
     else:
         vote.value = body.value
         await session.flush()
-    await session.execute(
-        update(models.Chirp)
-        .where(models.Chirp.id == chirp_id)
-        .values(
-            score=select(func.coalesce(func.sum(models.ChirpVote.value), 0))
-            .where(models.ChirpVote.chirp_id == chirp_id)
-            .scalar_subquery()
-        )
-    )
     await session.commit()
     return ChirpVoteOut(chirp_id=chirp_id, value=body.value)
 
