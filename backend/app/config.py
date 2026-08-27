@@ -12,6 +12,22 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://chirp:chirp@localhost:5432/chirp"
     redis_url: str = "redis://localhost:6379/0"
+    # Connection-pool arithmetic (board c207 - S2 of the Aug 26 architecture review).
+    # THE INVARIANT: Cloud Run max-instances x (db_pool_size + db_max_overflow), plus
+    # Postgres's superuser-reserved slots (3) and one proxy/migration session, must
+    # stay <= the database's max_connections. Live topology these defaults were sized
+    # against: maxScale 4 x (3 + 2) = 20 demanded, against db-f1-micro's default
+    # max_connections of 25. The previous hardcoded 5 + 10 = 15 per instance demanded
+    # 60: the database refused connections while every instance sat at near-zero CPU,
+    # which autoscaling cannot see (S1/c205 explains why CPU never moves). Raising
+    # max-instances, the tier, or these numbers means re-doing that arithmetic -
+    # tests/test_db_pool_config.py pins it so the change is conscious.
+    db_pool_size: int = 3
+    db_max_overflow: int = 2
+    # Fail fast: SQLAlchemy's default 30s checkout wait turns pool exhaustion into
+    # requests that hang half a minute before erroring. 10s still rides out a burst
+    # but surfaces saturation while the client is plausibly still waiting.
+    db_pool_timeout: int = 10
     # Deployment tier; non-"local" values enforce safer defaults at startup (SECURITY-REVIEW
     # finding 5) — see app.main.create_app.
     env: Literal["local", "staging", "production"] = "local"
