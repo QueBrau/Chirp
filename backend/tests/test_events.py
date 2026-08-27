@@ -685,3 +685,275 @@ async def test_naive_and_aware_datetimes_mix_is_422_not_500(
     )
     assert moved.status_code == 422, moved.text
     assert moved.json() == {"detail": "ends_at_must_be_after_starts_at"}
+
+
+# ---------------------------------------------------------------------------
+# c201: list_events, list_events_with_rsvps and list_my_invites had no limit at all.
+# Cursor-paginated on (starts_at, id) - the same compound shape as chirps.py /
+# messages.py / feed.py (SECURITY-REVIEW finding 10 class).
+# ---------------------------------------------------------------------------
+
+
+async def test_events_list_limit_is_capped_and_out_of_range_limit_is_422(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """`limit` truncates the page; values outside Query(ge=1, le=200) are 422."""
+    setup = await make_chapter_with("member")
+    for i in range(3):
+        created = await client.post(
+            f"/chapters/{setup.chapter_id}/events",
+            json=_event_body(f"Event {i}", starts_at=f"2026-09-2{i}T19:00:00Z"),
+            headers=setup.member.headers,
+        )
+        assert created.status_code == 201, created.text
+
+    capped = await client.get(
+        f"/chapters/{setup.chapter_id}/events",
+        params={"limit": 2},
+        headers=setup.member.headers,
+    )
+    assert capped.status_code == 200, capped.text
+    assert len(capped.json()) == 2
+
+    too_big = await client.get(
+        f"/chapters/{setup.chapter_id}/events",
+        params={"limit": 201},
+        headers=setup.member.headers,
+    )
+    assert too_big.status_code == 422, too_big.text
+
+    too_small = await client.get(
+        f"/chapters/{setup.chapter_id}/events",
+        params={"limit": 0},
+        headers=setup.member.headers,
+    )
+    assert too_small.status_code == 422, too_small.text
+
+
+async def test_events_list_pages_through_cursor_without_overlap_or_loss(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """Paging with before/before_id across the whole set returns every event exactly
+    once, in the same newest-first order as an unpaginated call."""
+    setup = await make_chapter_with("member")
+    created_ids: list[str] = []
+    for i in range(5):
+        created = await client.post(
+            f"/chapters/{setup.chapter_id}/events",
+            json=_event_body(f"Event {i}", starts_at=f"2026-09-{10 + i}T19:00:00Z"),
+            headers=setup.member.headers,
+        )
+        assert created.status_code == 201, created.text
+        created_ids.append(created.json()["id"])
+
+    full = await client.get(
+        f"/chapters/{setup.chapter_id}/events", headers=setup.member.headers
+    )
+    assert full.status_code == 200, full.text
+    expected_order = [e["id"] for e in full.json()]
+    assert expected_order == list(reversed(created_ids))
+
+    collected: list[str] = []
+    before: str | None = None
+    before_id: str | None = None
+    for _ in range(10):  # generous cap so a regression can't spin the loop forever
+        params: dict[str, str | int] = {"limit": 2}
+        if before is not None:
+            params["before"] = before
+            params["before_id"] = before_id
+        page = await client.get(
+            f"/chapters/{setup.chapter_id}/events",
+            params=params,
+            headers=setup.member.headers,
+        )
+        assert page.status_code == 200, page.text
+        items = page.json()
+        if not items:
+            break
+        collected.extend(e["id"] for e in items)
+        before = items[-1]["starts_at"]
+        before_id = items[-1]["id"]
+
+    assert collected == expected_order
+
+
+async def test_tied_starts_at_at_page_boundary_is_lossless(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """Several events sharing one starts_at, straddled across a page boundary: the
+    compound (starts_at, id) cursor must not drop any of them - same tie-break failure
+    mode as messages.py's created_at cursor (SECURITY-REVIEW finding 10)."""
+    setup = await make_chapter_with("member")
+
+    later = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body("Later", starts_at="2026-10-05T19:00:00Z"),
+        headers=setup.member.headers,
+    )
+    assert later.status_code == 201, later.text
+
+    tied_ids: list[str] = []
+    for i in range(3):
+        tied = await client.post(
+            f"/chapters/{setup.chapter_id}/events",
+            json=_event_body(f"Tied {i}", starts_at="2026-10-01T19:00:00Z"),
+            headers=setup.member.headers,
+        )
+        assert tied.status_code == 201, tied.text
+        tied_ids.append(tied.json()["id"])
+
+    earlier = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body("Earlier", starts_at="2026-09-25T19:00:00Z"),
+        headers=setup.member.headers,
+    )
+    assert earlier.status_code == 201, earlier.text
+
+    all_ids = {later.json()["id"], *tied_ids, earlier.json()["id"]}
+
+    collected: list[str] = []
+    before: str | None = None
+    before_id: str | None = None
+    for _ in range(10):
+        params: dict[str, str | int] = {"limit": 2}
+        if before is not None:
+            params["before"] = before
+            params["before_id"] = before_id
+        page = await client.get(
+            f"/chapters/{setup.chapter_id}/events",
+            params=params,
+            headers=setup.member.headers,
+        )
+        assert page.status_code == 200, page.text
+        items = page.json()
+        if not items:
+            break
+        collected.extend(e["id"] for e in items)
+        before = items[-1]["starts_at"]
+        before_id = items[-1]["id"]
+
+    assert len(collected) == len(set(collected)), "no duplicate rows across pages"
+    assert set(collected) == all_ids, "no rows dropped at the tied-timestamp boundary"
+    # The bounding events keep their fixed position; the tie group can land in
+    # either id order within itself, since starts_at alone doesn't determine it.
+    assert collected[0] == later.json()["id"]
+    assert collected[-1] == earlier.json()["id"]
+    assert set(collected[1:-1]) == set(tied_ids)
+
+
+async def test_events_with_rsvps_page_only_includes_rsvps_for_returned_events(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """The RSVP fan-out must stay bounded by the event page it rides along with: an
+    event left off the page must not have its RSVPs (or itself) show up anywhere in
+    the response, and paging in the leftover event must bring its RSVPs back."""
+    setup = await make_chapter_with("member")
+
+    first = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body("First", starts_at="2026-09-20T19:00:00Z"),
+        headers=setup.member.headers,
+    )
+    second = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body("Second", starts_at="2026-09-25T19:00:00Z"),
+        headers=setup.president.headers,
+    )
+    third = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body("Third", starts_at="2026-09-30T19:00:00Z"),
+        headers=setup.member.headers,
+    )
+    assert first.status_code == second.status_code == third.status_code == 201
+
+    for event in (first, second, third):
+        rsvp = await client.put(
+            f"/events/{event.json()['id']}/rsvps",
+            json={"status": "going"},
+            headers=setup.member.headers,
+        )
+        assert rsvp.status_code == 200, rsvp.text
+
+    page = await client.get(
+        f"/chapters/{setup.chapter_id}/events-with-rsvps",
+        params={"limit": 2},
+        headers=setup.member.headers,
+    )
+    assert page.status_code == 200, page.text
+    rows = page.json()
+    assert [row["event"]["title"] for row in rows] == ["Third", "Second"]
+    for row in rows:
+        assert row["rsvps"], "each returned event kept its own RSVP"
+    returned_event_ids = {row["event"]["id"] for row in rows}
+    assert first.json()["id"] not in returned_event_ids
+
+    second_page = await client.get(
+        f"/chapters/{setup.chapter_id}/events-with-rsvps",
+        params={
+            "limit": 2,
+            "before": rows[-1]["event"]["starts_at"],
+            "before_id": rows[-1]["event"]["id"],
+        },
+        headers=setup.member.headers,
+    )
+    assert second_page.status_code == 200, second_page.text
+    remaining = second_page.json()
+    assert [row["event"]["title"] for row in remaining] == ["First"]
+    assert remaining[0]["rsvps"], "the leftover event's own RSVP came back on page two"
+
+
+async def test_my_invites_lists_soonest_first_and_pages_forward_without_loss(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user
+) -> None:
+    """list_my_invites is ASCENDING (soonest starts_at first), the opposite direction
+    from every other route in this module - its own docstring always said so, but the
+    query sorted descending until c201 fixed it alongside the pagination work.
+    Paginating forward with before/before_id must move to LATER starts_at values, not
+    earlier ones, to match.
+    """
+    setup = await make_chapter_with("member")
+    guest = await _outsider(client, make_user, None, verified=False)
+
+    created_ids: list[str] = []
+    for i in range(4):
+        created = await client.post(
+            f"/chapters/{setup.chapter_id}/events",
+            json=_event_body(f"Invite Event {i}", starts_at=f"2026-09-{10 + i}T19:00:00Z"),
+            headers=setup.president.headers,
+        )
+        assert created.status_code == 201, created.text
+        event_id = created.json()["id"]
+        created_ids.append(event_id)
+        invited = await client.post(
+            f"/events/{event_id}/invites",
+            json={"user_ids": [guest.id]},
+            headers=setup.president.headers,
+        )
+        assert invited.status_code == 201, invited.text
+
+    full = await client.get("/me/event-invites", headers=guest.headers)
+    assert full.status_code == 200, full.text
+    # soonest-first (ascending) is the same order the events were created in here,
+    # since each successive event was given a LATER starts_at than the last.
+    assert [e["id"] for e in full.json()] == created_ids
+
+    collected: list[str] = []
+    before: str | None = None
+    before_id: str | None = None
+    for _ in range(10):  # generous cap so a regression can't spin the loop forever
+        params: dict[str, str | int] = {"limit": 2}
+        if before is not None:
+            params["before"] = before
+            params["before_id"] = before_id
+        page = await client.get(
+            "/me/event-invites", params=params, headers=guest.headers
+        )
+        assert page.status_code == 200, page.text
+        items = page.json()
+        if not items:
+            break
+        collected.extend(e["id"] for e in items)
+        before = items[-1]["starts_at"]
+        before_id = items[-1]["id"]
+
+    assert collected == created_ids
