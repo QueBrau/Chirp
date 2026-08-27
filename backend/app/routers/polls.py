@@ -332,8 +332,22 @@ async def delete_poll(
     _membership: models.Membership = Depends(require_role(*POLLS_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    """Delete a poll and its ballots; secretary/president only."""
+    """Delete a poll NOBODY HAS VOTED ON; secretary/president only.
+
+    c162 policy (Jose-delegated ruling, Aug 24): a poll with even one ballot is a
+    record - deletion is forbidden with 409 poll_has_ballots, and CLOSE is the only
+    lifecycle action left; results stay visible and ballots are immutable. A
+    zero-ballot poll may still hard-delete: a mis-created question nobody answered
+    is clutter, not history.
+    """
     poll = await _get_chapter_poll(session, chapter_id, poll_id)
+    ballot_count = await session.scalar(
+        select(func.count())
+        .select_from(models.PollVote)
+        .where(models.PollVote.poll_id == poll.id)
+    )
+    if ballot_count:
+        raise conflict("poll_has_ballots")
     # Broadcast BEFORE the delete: the payload needs chapter_id and the roster
     # query needs it too, and after the commit the object is expired.
     await _broadcast(session, poll, "deleted", None)

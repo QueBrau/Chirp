@@ -312,9 +312,16 @@ async def test_listing_filters_by_meeting_and_reports_my_own_ballot(
     assert body[0]["total_votes"] == 1
 
 
-async def test_deleting_a_poll_takes_its_ballots_with_it(
+async def test_delete_is_refused_once_any_ballot_exists(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
+    """c162 policy (Jose-delegated ruling, Aug 24): one ballot makes a poll a record.
+
+    This test REPLACES test_deleting_a_poll_takes_its_ballots_with_it, which
+    enshrined the opposite behavior (the review's blocking finding): a voted-on poll
+    could be hard-deleted, ballots and all. Now deletion answers 409
+    poll_has_ballots and the poll survives untouched.
+    """
     setup = await make_chapter_with("secretary")
     poll = await _create_poll(client, setup)
     await client.post(
@@ -322,6 +329,27 @@ async def test_deleting_a_poll_takes_its_ballots_with_it(
         json={"option_id": poll["options"][0]["id"]},
         headers=setup.president.headers,
     )
+
+    refused = await client.delete(
+        f"/chapters/{setup.chapter_id}/polls/{poll['id']}", headers=setup.member.headers
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json() == {"detail": "poll_has_ballots"}
+
+    survived = await client.get(
+        f"/chapters/{setup.chapter_id}/polls/{poll['id']}", headers=setup.member.headers
+    )
+    assert survived.status_code == 200, survived.text
+    assert survived.json()["total_votes"] == 1, "the ballot survived the refused delete"
+
+
+async def test_zero_ballot_poll_may_hard_delete(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """The other half of the ruling: a question nobody answered is clutter, not
+    history - it may still hard-delete."""
+    setup = await make_chapter_with("secretary")
+    poll = await _create_poll(client, setup)
 
     deleted = await client.delete(
         f"/chapters/{setup.chapter_id}/polls/{poll['id']}", headers=setup.member.headers
@@ -332,3 +360,54 @@ async def test_deleting_a_poll_takes_its_ballots_with_it(
         f"/chapters/{setup.chapter_id}/polls/{poll['id']}", headers=setup.member.headers
     )
     assert gone.status_code == 404
+
+
+async def test_a_plain_member_cannot_delete_a_poll(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    setup = await make_chapter_with("member")
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/polls",
+        json={"question": "Approve the budget?", "options": ["Yes", "No"]},
+        headers=setup.president.headers,
+    )
+    assert created.status_code == 201, created.text
+    poll = created.json()
+
+    refused = await client.delete(
+        f"/chapters/{setup.chapter_id}/polls/{poll['id']}", headers=setup.member.headers
+    )
+    assert refused.status_code == 403, refused.text
+
+
+async def test_closed_poll_results_stay_visible(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """CLOSE is the end of a poll's lifecycle, and it must not hide anything: the
+    closed poll still reads back with its counts, total, and the caller's own vote."""
+    setup = await make_chapter_with("secretary")
+    poll = await _create_poll(client, setup)
+    yes = poll["options"][0]["id"]
+    await client.post(
+        f"/chapters/{setup.chapter_id}/polls/{poll['id']}/vote",
+        json={"option_id": yes},
+        headers=setup.president.headers,
+    )
+
+    closed = await client.post(
+        f"/chapters/{setup.chapter_id}/polls/{poll['id']}/close",
+        headers=setup.member.headers,
+    )
+    assert closed.status_code == 200, closed.text
+
+    body = (
+        await client.get(
+            f"/chapters/{setup.chapter_id}/polls/{poll['id']}",
+            headers=setup.president.headers,
+        )
+    ).json()
+    assert body["status"] == "closed"
+    assert body["total_votes"] == 1
+    counts = {opt["id"]: opt["votes"] for opt in body["options"]}
+    assert counts[yes] == 1
+    assert body["my_option_id"] == yes, "the caller's own closed-poll vote stays visible"
