@@ -196,6 +196,25 @@ class EventWithRsvpsOut(_Schema):
     rsvps: list[EventRsvpOut]
 
 
+class EventInviteWithRsvpOut(_Schema):
+    """One row of GET /me/event-invites-with-rsvps (c204): an invited event, plus the
+    two things the mobile client used to fetch per-invite - the same shape of fix c43's
+    EventWithRsvpsOut applied to a chapter's own events, applied here to a cross-chapter
+    invite list.
+
+    my_rsvp_status is the CALLER'S OWN answer, never anyone else's - null means they
+    have not answered. hosted_by is the hosting chapter's display name ("{org_name}
+    {chapter_name}"), safe to show a non-member because an invite already admits them
+    to the event, which shows who is hosting it. It is never a placeholder like the
+    client's old "Another chapter" fallback: chapter_id is a NOT NULL FK on events, so
+    a joined query always resolves a real chapter.
+    """
+
+    event: EventOut
+    my_rsvp_status: RsvpStatus | None
+    hosted_by: str
+
+
 class EventGuestsOut(_Schema):
     """The guest list: who was invited, and how everyone answered.
 

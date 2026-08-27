@@ -1018,3 +1018,226 @@ async def test_explicit_null_clears_ends_at_and_description_omission_leaves_them
     assert edited_again.json()["location"] == "The Annex"
     assert edited_again.json()["ends_at"] is None, "still cleared"
     assert edited_again.json()["title"] == "Rush Week Mixer (updated)"
+
+
+# ---- c204: GET /me/event-invites-with-rsvps ----
+
+
+async def test_invites_with_rsvps_resolves_chapter_label_without_membership_and_hides_others_rsvps(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user
+) -> None:
+    """The whole point of c204: a cross-chapter invitee gets a real chapter label without
+    ever being a member (the "Another chapter" fallback this replaces existed only
+    because GET /chapters/{id} is member-scoped), and their row carries their OWN rsvp
+    status only - never a fellow invitee's, even for the same event.
+    """
+    setup = await make_chapter_with("member")
+    outsider = await _outsider(client, make_user, None, verified=False)
+
+    chapter = await client.get(
+        f"/chapters/{setup.chapter_id}", headers=setup.president.headers
+    )
+    assert chapter.status_code == 200, chapter.text
+    expected_label = f"{chapter.json()['org_name']} {chapter.json()['chapter_name']}"
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body(),
+        headers=setup.president.headers,
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+
+    # Confirm the outsider is genuinely not a member - the label below has to come from
+    # somewhere other than membership.
+    membership_check = await client.get(
+        f"/chapters/{setup.chapter_id}/events", headers=outsider.headers
+    )
+    assert membership_check.status_code == 403, membership_check.text
+
+    invited = await client.post(
+        f"/events/{event_id}/invites",
+        json={"user_ids": [outsider.id, setup.member.id]},
+        headers=setup.president.headers,
+    )
+    assert invited.status_code == 201, invited.text
+
+    # Nobody has answered yet - the outsider's own status is null, not missing.
+    before_rsvp = await client.get(
+        "/me/event-invites-with-rsvps", headers=outsider.headers
+    )
+    assert before_rsvp.status_code == 200, before_rsvp.text
+    rows = before_rsvp.json()
+    assert len(rows) == 1
+    assert rows[0]["event"]["id"] == event_id
+    assert rows[0]["my_rsvp_status"] is None
+    assert rows[0]["hosted_by"] == expected_label
+
+    # The chapter's own member answers the SAME event first.
+    member_rsvp = await client.put(
+        f"/events/{event_id}/rsvps", json={"status": "cant"}, headers=setup.member.headers
+    )
+    assert member_rsvp.status_code == 200, member_rsvp.text
+
+    # The outsider's row must still show null - the member's answer must not leak in.
+    still_null = await client.get(
+        "/me/event-invites-with-rsvps", headers=outsider.headers
+    )
+    assert still_null.status_code == 200, still_null.text
+    assert still_null.json()[0]["my_rsvp_status"] is None
+
+    # Now the outsider answers. Their own row updates to their OWN status, not the
+    # member's "cant" from above.
+    outsider_rsvp = await client.put(
+        f"/events/{event_id}/rsvps", json={"status": "going"}, headers=outsider.headers
+    )
+    assert outsider_rsvp.status_code == 200, outsider_rsvp.text
+
+    after_rsvp = await client.get(
+        "/me/event-invites-with-rsvps", headers=outsider.headers
+    )
+    assert after_rsvp.status_code == 200, after_rsvp.text
+    assert after_rsvp.json()[0]["my_rsvp_status"] == "going"
+    assert after_rsvp.json()[0]["hosted_by"] == expected_label
+
+    # And the member's own row (same event) shows THEIR status, "cant" - proving each
+    # invitee's row is scoped to themselves, not a shared view of the first responder.
+    member_view = await client.get(
+        "/me/event-invites-with-rsvps", headers=setup.member.headers
+    )
+    assert member_view.status_code == 200, member_view.text
+    assert member_view.json()[0]["my_rsvp_status"] == "cant"
+
+
+async def test_invites_with_rsvps_includes_cancelled_events(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user
+) -> None:
+    """A cancelled event stays on the list - "the party is off" is the row that matters
+    most, mirroring list_my_invites' same rule."""
+    setup = await make_chapter_with("member")
+    outsider = await _outsider(client, make_user, None, verified=False)
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body(),
+        headers=setup.president.headers,
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+
+    invited = await client.post(
+        f"/events/{event_id}/invites",
+        json={"user_ids": [outsider.id]},
+        headers=setup.president.headers,
+    )
+    assert invited.status_code == 201, invited.text
+
+    canceled = await client.post(
+        f"/events/{event_id}/cancel", headers=setup.president.headers
+    )
+    assert canceled.status_code == 200, canceled.text
+
+    listed = await client.get(
+        "/me/event-invites-with-rsvps", headers=outsider.headers
+    )
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()
+    assert len(rows) == 1
+    assert rows[0]["event"]["id"] == event_id
+    assert rows[0]["event"]["canceled_at"] is not None
+    assert rows[0]["my_rsvp_status"] is None
+
+
+async def test_invites_with_rsvps_pages_forward_ascending_same_as_my_invites(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user
+) -> None:
+    """Same (starts_at, id) ascending cursor contract as list_my_invites (c201) - see
+    that test's docstring for why ascending, not the DESC every other route uses."""
+    setup = await make_chapter_with("member")
+    guest = await _outsider(client, make_user, None, verified=False)
+
+    created_ids: list[str] = []
+    for i in range(4):
+        created = await client.post(
+            f"/chapters/{setup.chapter_id}/events",
+            json=_event_body(f"Bulk Invite Event {i}", starts_at=f"2026-10-{10 + i}T19:00:00Z"),
+            headers=setup.president.headers,
+        )
+        assert created.status_code == 201, created.text
+        event_id = created.json()["id"]
+        created_ids.append(event_id)
+        invited = await client.post(
+            f"/events/{event_id}/invites",
+            json={"user_ids": [guest.id]},
+            headers=setup.president.headers,
+        )
+        assert invited.status_code == 201, invited.text
+
+    full = await client.get("/me/event-invites-with-rsvps", headers=guest.headers)
+    assert full.status_code == 200, full.text
+    assert [row["event"]["id"] for row in full.json()] == created_ids
+
+    collected: list[str] = []
+    before: str | None = None
+    before_id: str | None = None
+    for _ in range(10):  # generous cap so a regression can't spin the loop forever
+        params: dict[str, str | int] = {"limit": 2}
+        if before is not None:
+            params["before"] = before
+            params["before_id"] = before_id
+        page = await client.get(
+            "/me/event-invites-with-rsvps", params=params, headers=guest.headers
+        )
+        assert page.status_code == 200, page.text
+        items = page.json()
+        if not items:
+            break
+        collected.extend(row["event"]["id"] for row in items)
+        before = items[-1]["event"]["starts_at"]
+        before_id = items[-1]["event"]["id"]
+
+    assert collected == created_ids
+
+
+async def test_old_my_invites_route_still_works_unchanged(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user
+) -> None:
+    """c204 is additive: GET /me/event-invites keeps returning a bare EventOut list."""
+    setup = await make_chapter_with("member")
+    outsider = await _outsider(client, make_user, None, verified=False)
+
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body(),
+        headers=setup.president.headers,
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    invited = await client.post(
+        f"/events/{event_id}/invites",
+        json={"user_ids": [outsider.id]},
+        headers=setup.president.headers,
+    )
+    assert invited.status_code == 201, invited.text
+
+    listed = await client.get("/me/event-invites", headers=outsider.headers)
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()
+    assert len(rows) == 1
+    assert rows[0]["id"] == event_id
+    # Bare EventOut - no my_rsvp_status, no hosted_by. The response shape of the
+    # existing route must not change.
+    assert set(rows[0].keys()) == {
+        "id",
+        "chapter_id",
+        "title",
+        "cover_url",
+        "description",
+        "starts_at",
+        "ends_at",
+        "location",
+        "visibility",
+        "canceled_at",
+        "host_id",
+        "created_at",
+    }

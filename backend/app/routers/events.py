@@ -52,6 +52,7 @@ from app.schemas.events import (
     EventGuestsOut,
     EventInviteCreate,
     EventInviteOut,
+    EventInviteWithRsvpOut,
     EventOut,
     EventRsvpOut,
     EventRsvpUpdate,
@@ -467,6 +468,69 @@ async def list_my_invites(
 
     result = await session.execute(stmt)
     return [EventOut.model_validate(e) for e in result.scalars().all()]
+
+
+@router.get("/me/event-invites-with-rsvps")
+async def list_my_invites_with_rsvps(
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[EventInviteWithRsvpOut]:
+    """The bulk sibling of list_my_invites (c204): same rows, plus the caller's own RSVP
+    status and a hosting-chapter label, in one joined query instead of two per-invite
+    round trips the mobile client used to make itself.
+
+    Those two round trips were: listGuests(event.id) to learn whether the caller had
+    already answered - the N+1 flagged in c203's review, one call per invite - and
+    GET /chapters/{id} to name the hosting chapter, which 404s for a cross-chapter
+    invitee because that route is member-scoped (chapters.py get_chapter), so the
+    client fell back to a bare "Another chapter". Both gaps close here: an OUTER join to
+    EventRsvp scoped to (event_id, user.id) - not just event_id - so only the CALLER'S
+    OWN status can ever come back, never another invitee's, and an INNER join to
+    Chapter for the label, safe for a non-member to read because an invite already
+    admits them to the event, which shows who is hosting it. Exposing the display name
+    this way is not exposing the chapter id: EventOut already carries chapter_id, and
+    that is the only chapter identifier this route or EventOut hands back.
+
+    Same soonest-first ASCENDING order and (starts_at, id) cursor contract as
+    list_my_invites - see that docstring for why ascending is correct here and not the
+    DESC every other list route in this file uses. list_my_invites itself is untouched;
+    this is an additive route, not a replacement.
+    """
+    stmt = (
+        select(models.Event, models.Chapter, models.EventRsvp)
+        .join(models.EventInvite, models.EventInvite.event_id == models.Event.id)
+        .join(models.Chapter, models.Chapter.id == models.Event.chapter_id)
+        .outerjoin(
+            models.EventRsvp,
+            (models.EventRsvp.event_id == models.Event.id)
+            & (models.EventRsvp.user_id == user.id),
+        )
+        .where(models.EventInvite.invited_user_id == user.id)
+    )
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.Event.starts_at, models.Event.id) > (before, before_id)
+        )
+    elif before is not None:
+        stmt = stmt.where(models.Event.starts_at > before)
+    stmt = stmt.order_by(models.Event.starts_at.asc(), models.Event.id.asc()).limit(limit)
+
+    result = await session.execute(stmt)
+    return [
+        EventInviteWithRsvpOut(
+            event=EventOut.model_validate(event),
+            my_rsvp_status=rsvp.status if rsvp is not None else None,
+            hosted_by=(
+                f"{chapter.org_name} {chapter.chapter_name}"
+                if chapter.chapter_name
+                else chapter.org_name
+            ),
+        )
+        for event, chapter, rsvp in result.all()
+    ]
 
 
 @router.get("/events/{event_id}/rsvps")
