@@ -2184,7 +2184,7 @@
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c201 IN BUILD Aug 26 - Sonnet worker in chirp-sub-c201 on court/c201-events-pagination: capped compound-cursor pagination for the three events list routes, response shapes unchanged, no migration. Manager verifies line-level then merges. - list_events, list_events_with_rsvps (pre-existing on main) and list_my_invites (new in c198) run unbounded SELECTs; bring them in line with the chirps.py/feed.py/messages.py capped cursor convention (le=200). Same class as c127. Found+confirmed by c198's adversarial review Aug 26.",
+      "title": "c201 PR #127 REVIEWED, CI RETRIGGERED - manager line-level review PASSED (cursor directions match sorts, tie-break pinned, shapes unchanged, my-invites soonest-first fix included). Actions never ran for 4bf9689 (zero check runs); empty commit eeb64ed retriggered; merge on green. - Sonnet worker in chirp-sub-c201 on court/c201-events-pagination: capped compound-cursor pagination for the three events list routes, response shapes unchanged, no migration. Manager verifies line-level then merges. - list_events, list_events_with_rsvps (pre-existing on main) and list_my_invites (new in c198) run unbounded SELECTs; bring them in line with the chirps.py/feed.py/messages.py capped cursor convention (le=200). Same class as c127. Found+confirmed by c198's adversarial review Aug 26.",
       "detail": "routers/events.py:159-206 and 399-416 on the c198 branch. events-with-rsvps compounds it: unbounded RSVP IN-query fanned over every event ever. Response size grows with chapter age forever."
     },
     {
@@ -2231,6 +2231,15 @@
       "area": "orgs",
       "title": "c204 Bulk invites endpoint: GET /me/event-invites-with-rsvps (c43 pattern) - kills c203's accepted N+1 (listGuests per invite to derive 'already responded') AND returns a non-member-safe hosting-chapter display name, which no route offers today (GET /chapters/{id} is member-scoped, so cross-chapter invites render 'Another chapter'). Surfaced by c203's build Aug 26. Also fold in: list_my_invites orders .desc() against its own soonest-first docstring - c201 fixes the ordering; this endpoint must match.",
       "detail": "Client adoption: swap loadVisibleInvites in app-mobile/app/(tabs)/feed/index.tsx to the new endpoint and delete the per-invite listGuests + per-chapter getChapter calls. Keep the fail-soft-toward-showing rule and the cancellations-always-show rule."
+    },
+    {
+      "id": "c207",
+      "col": "progress",
+      "owner": "court",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c207 S2 (architecture review, Jose assigned to court): CONNECTION-POOL ARITHMETIC - live numbers verified read-only: Cloud Run maxScale 4 x containerConcurrency 80, engine pool 5+10=15/instance = 60 potential vs db-f1-micro default ~25 max_connections (no custom flags). Fix: pool sized to topology via settings (DB_POOL_SIZE 3 + DB_MAX_OVERFLOW 2 = 5/instance; 4x5 + reserved 3 + proxy headroom <= 25), fail-fast DB_POOL_TIMEOUT 10s, invariant documented at the setting. No migration, no client change.",
+      "detail": "Complements S1/c205 (PR #126): once sockets stop pinning connections, HTTP pool sizing IS the ceiling. A db-f1-micro tier upgrade or managed pooling is a separate Jose money decision - carded only if load testing shows the 20-connection budget starving real traffic. S3 = c206 (Q lane). Deploy note: settings defaults change per-instance demand only; no Cloud Run env changes needed."
     }
   ],
   "decisions": [
