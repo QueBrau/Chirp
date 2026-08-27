@@ -58,3 +58,22 @@ def test_engine_is_built_from_the_pool_settings(monkeypatch) -> None:
     assert captured["max_overflow"] == 4
     assert captured["pool_timeout"] == 9
     assert captured["pool_pre_ping"] is True
+
+
+async def test_pool_exhaustion_maps_to_503_with_retry_after() -> None:
+    """Checkout timeout is a capacity signal: 503 + Retry-After, never a generic 500.
+
+    A 500 reads as a crash and invites an immediate retry into the saturated pool;
+    503 tells the client to back off. The handler is registered per-class, so it runs
+    in Starlette's ExceptionMiddleware before ServerErrorMiddleware ever sees it.
+    """
+    from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+
+    from app.main import create_app
+
+    app = create_app()
+    handler = app.exception_handlers[SQLAlchemyTimeoutError]
+    response = await handler(None, SQLAlchemyTimeoutError())
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "5"
+    assert b"over_capacity" in response.body

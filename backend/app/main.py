@@ -5,8 +5,10 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app.config import Settings, get_settings
 from app.core.log_scrub import install_credential_log_scrub
@@ -176,6 +178,19 @@ def create_app() -> FastAPI:
             )
         if "*" in settings.cors_origins:
             raise RuntimeError(f"env={settings.env!r} forbids wildcard cors_origins")
+
+    # c207 (S2): pool-checkout exhaustion is a CAPACITY signal, not an application
+    # bug. SQLAlchemy raises TimeoutError when db_pool_timeout expires with every
+    # pooled connection busy; unhandled, that surfaces as a generic 500 -
+    # indistinguishable from a crash, and inviting the client to retry immediately
+    # into the very pool that is saturated. 503 + Retry-After is the honest answer.
+    @app.exception_handler(SQLAlchemyTimeoutError)
+    async def _pool_exhausted(_request: Request, _exc: SQLAlchemyTimeoutError) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "over_capacity"},
+            headers={"Retry-After": "5"},
+        )
 
     app.add_middleware(
         CORSMiddleware,

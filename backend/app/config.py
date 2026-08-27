@@ -17,7 +17,12 @@ class Settings(BaseSettings):
     # Postgres's superuser-reserved slots (3) and one proxy/migration session, must
     # stay <= the database's max_connections. Live topology these defaults were sized
     # against: maxScale 4 x (3 + 2) = 20 demanded, against db-f1-micro's default
-    # max_connections of 25. The previous hardcoded 5 + 10 = 15 per instance demanded
+    # max_connections of 25. maxScale=4 was read from the live service (gcloud run
+    # services describe, Aug 27); it was set at first deploy and the annotation
+    # persists across --source redeploys, which is why DEPLOY.md's everyday command
+    # never passes it. The c153 media reconciler is a separate process on this same
+    # pool config; it holds at most one connection, sequentially, and fits inside the
+    # same headroom. The previous hardcoded 5 + 10 = 15 per instance demanded
     # 60: the database refused connections while every instance sat at near-zero CPU,
     # which autoscaling cannot see (S1/c205 explains why CPU never moves). Raising
     # max-instances, the tier, or these numbers means re-doing that arithmetic -
