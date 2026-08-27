@@ -2189,11 +2189,11 @@
     },
     {
       "id": "c202",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c202 IN BUILD Aug 26 - Sonnet worker in chirp-sub-c202 on court/c202-event-clear-fields: prove-then-fix explicit-null clearing of ends_at/description end to end (backend pin + mobile sends explicit nulls). Manager verifies line-level then merges. - None means 'not supplied', so an end time once set can never be removed through PATCH /events/{id}. The schema documents the limitation honestly (schemas/events.py EventUpdate docstring); needs an explicit-null PATCH shape or sentinel. From c198's review Aug 26.",
+      "title": "c202 DONE Aug 26 - MERGED ff1d331 (PR #125, squash). Investigation proved the backend ALREADY cleared on explicit null (exclude_unset semantics; stale docstring rewritten, behavior test-pinned); real bug was the client coercing null->undefined which JSON.stringify drops. Manager verified the regression risk: edit sheet prefills all fields from initial, untouched fields resubmit values. CI 4/4 green incl. full suite. - Sonnet worker in chirp-sub-c202 on court/c202-event-clear-fields: prove-then-fix explicit-null clearing of ends_at/description end to end (backend pin + mobile sends explicit nulls). Manager verifies line-level then merges. - None means 'not supplied', so an end time once set can never be removed through PATCH /events/{id}. The schema documents the limitation honestly (schemas/events.py EventUpdate docstring); needs an explicit-null PATCH shape or sentinel. From c198's review Aug 26.",
       "detail": "Mobile edit sheet prefills existing values, so a host deleting the end-time field simply resubmits nothing and the old value survives. Fix touches schema + router merge logic + the edit sheet."
     },
     {
