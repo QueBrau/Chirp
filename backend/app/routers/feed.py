@@ -320,6 +320,9 @@ async def _readable_post(
 async def list_posts(
     chapter_id: uuid.UUID,
     response: Response,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     membership: models.Membership = Depends(get_current_chapter_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[FeedPostOut]:
@@ -339,6 +342,20 @@ async def list_posts(
     already-fetched membership row (`visible_audiences` below), not a per-post
     Python filter over a fully-fetched list — no per-row cost, no N+1.
 
+    PAGINATION (board c210, same bug class as c127's fix to routers/chirps.py
+    list_chirps): this route had no limit at all — a chapter with enough history
+    returned its entire post table on every load, with each row also paying
+    `_post_counts_select`'s three correlated subqueries. Reverse-chron with a
+    compound (created_at, id) cursor (`before` + `before_id`), same shape as this
+    file's own list_campus_feed just below — matching the house pattern (see
+    tests/test_pagination.py) rather than inventing a fourth one. `before` alone
+    still works (legacy clients) but doesn't guarantee the tie-break. Both params
+    are optional and the response body stays the bare FeedPostOut[] array it
+    always was, so app-mobile's existing listPosts() call site (which passes
+    neither today) now simply gets a capped 50-item first page instead of the
+    whole table — see the card for the one screen that call site feeds which
+    still needs cursor adoption to stay correct past that first page.
+
     HONEST SIGNAL (the card's named failure mode): a non-active viewer must be able
     to tell a fuller tier exists rather than reading an indistinguishable-from-quiet
     feed. Carried as the X-Actives-Only-Hidden response header — deliberately NOT a
@@ -356,15 +373,21 @@ async def list_posts(
     """
     is_active = membership.status == "active"
     visible_audiences: tuple[str, ...] = ("org", "org_actives") if is_active else ("org",)
-    stmt = (
-        _post_counts_select(membership.user_id)
-        .where(
-            models.Post.chapter_id == chapter_id,
-            models.Post.deleted_at.is_(None),
-            models.Post.audience.in_(visible_audiences),
-        )
-        .order_by(models.Post.created_at.desc())
+    stmt = _post_counts_select(membership.user_id).where(
+        models.Post.chapter_id == chapter_id,
+        models.Post.deleted_at.is_(None),
+        models.Post.audience.in_(visible_audiences),
     )
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.Post.created_at, models.Post.id) < (before, before_id)
+        )
+    elif before is not None:
+        stmt = stmt.where(models.Post.created_at < before)
+    stmt = stmt.order_by(
+        models.Post.created_at.desc(), models.Post.id.desc()
+    ).limit(limit)
+
     result = await session.execute(stmt)
     posts = [_feed_post_out(row, membership.user_id) for row in result.all()]
 
