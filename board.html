@@ -2180,29 +2180,29 @@
     },
     {
       "id": "c201",
-      "col": "backlog",
+      "col": "progress",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c201 Events list routes are unpaginated - list_events, list_events_with_rsvps (pre-existing on main) and list_my_invites (new in c198) run unbounded SELECTs; bring them in line with the chirps.py/feed.py/messages.py capped cursor convention (le=200). Same class as c127. Found+confirmed by c198's adversarial review Aug 26.",
+      "title": "c201 IN BUILD Aug 26 - Sonnet worker in chirp-sub-c201 on court/c201-events-pagination: capped compound-cursor pagination for the three events list routes, response shapes unchanged, no migration. Manager verifies line-level then merges. - list_events, list_events_with_rsvps (pre-existing on main) and list_my_invites (new in c198) run unbounded SELECTs; bring them in line with the chirps.py/feed.py/messages.py capped cursor convention (le=200). Same class as c127. Found+confirmed by c198's adversarial review Aug 26.",
       "detail": "routers/events.py:159-206 and 399-416 on the c198 branch. events-with-rsvps compounds it: unbounded RSVP IN-query fanned over every event ever. Response size grows with chapter age forever."
     },
     {
       "id": "c202",
-      "col": "backlog",
+      "col": "progress",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c202 EventUpdate cannot express clearing ends_at or description - None means 'not supplied', so an end time once set can never be removed through PATCH /events/{id}. The schema documents the limitation honestly (schemas/events.py EventUpdate docstring); needs an explicit-null PATCH shape or sentinel. From c198's review Aug 26.",
+      "title": "c202 IN BUILD Aug 26 - Sonnet worker in chirp-sub-c202 on court/c202-event-clear-fields: prove-then-fix explicit-null clearing of ends_at/description end to end (backend pin + mobile sends explicit nulls). Manager verifies line-level then merges. - None means 'not supplied', so an end time once set can never be removed through PATCH /events/{id}. The schema documents the limitation honestly (schemas/events.py EventUpdate docstring); needs an explicit-null PATCH shape or sentinel. From c198's review Aug 26.",
       "detail": "Mobile edit sheet prefills existing values, so a host deleting the end-time field simply resubmits nothing and the old value survives. Fix touches schema + router merge logic + the edit sheet."
     },
     {
       "id": "c203",
-      "col": "backlog",
+      "col": "progress",
       "owner": "pool",
       "tag": "frontend",
       "area": "orgs",
-      "title": "c203 Invite discovery UI missing - GET /me/event-invites exists (c198 backend) but no screen calls it, so an invited user who does not already follow the chapter has no in-app way to learn they were invited. Matters most for the cross-chapter 'verified' tier c198 built. From c198's review Aug 26.",
+      "title": "c203 IN BUILD Aug 26 - Sonnet worker in chirp-sub-c203 on court/c203-event-invites-ui: invite-discovery surface calling GET /me/event-invites, DESIGN.md-bound, mobile-only, render QA deferred to device window. Manager verifies line-level then merges. - GET /me/event-invites exists (c198 backend) but no screen calls it, so an invited user who does not already follow the chapter has no in-app way to learn they were invited. Matters most for the cross-chapter 'verified' tier c198 built. From c198's review Aug 26.",
       "detail": "src/api/events.ts:129 defines the client call; nothing imports it. Needs an invites surface (badge/list) and a respond flow entry point that is not the event detail screen."
     }
   ],
