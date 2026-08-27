@@ -25,6 +25,7 @@ from app.models.identity import (
 )
 from app.models.lineage import Family, LineageEdge
 from app.models.meetings import Meeting, MeetingAttendance
+from app.models.polls import Poll, PollOption, PollVote
 from app.models.messaging import (
     Conversation,
     ConversationMember,
@@ -61,6 +62,9 @@ __all__ = [
     "LineageEdge",
     "Meeting",
     "MeetingAttendance",
+    "Poll",
+    "PollOption",
+    "PollVote",
     "Membership",
     "Message",
     "MessageReceipt",

@@ -15,6 +15,7 @@
 
 import { wsAuthProtocol, wsUrl } from "../api/client";
 import type { MessageType } from "../api/messages";
+import type { PollOut } from "../api/polls";
 
 /** New message fan-out, published by the messages router on POST. */
 export interface MessageSocketEvent {
@@ -31,16 +32,39 @@ export interface MessageSocketEvent {
   created_at?: string;
 }
 
+/**
+ * Poll fan-out, published by the polls router on open/vote/close/delete (c162).
+ *
+ * `poll` carries the AGGREGATE only and deliberately has no `my_option_id`: one
+ * message goes to every member of the chapter, and that field means something
+ * different for each of them. A client merging this event must keep whatever
+ * `my_option_id` it already had, which is always correct because only your own
+ * vote can change it.
+ *
+ * Absent on "deleted" — there is no poll left to describe.
+ */
+export interface PollSocketEvent {
+  type: "poll";
+  action: "opened" | "updated" | "deleted";
+  chapter_id: string;
+  poll_id: string;
+  poll?: Omit<PollOut, "my_option_id">;
+}
+
 /** Forward-compatible catch-all for event types added after this file was written. */
 export interface UnknownSocketEvent {
   type: string;
   [key: string]: unknown;
 }
 
-export type SocketEvent = MessageSocketEvent | UnknownSocketEvent;
+export type SocketEvent = MessageSocketEvent | PollSocketEvent | UnknownSocketEvent;
 
 export function isMessageEvent(event: SocketEvent): event is MessageSocketEvent {
   return event.type === "message";
+}
+
+export function isPollEvent(event: SocketEvent): event is PollSocketEvent {
+  return event.type === "poll";
 }
 
 export type SocketStatus = "idle" | "connecting" | "open" | "closed" | "suspended";

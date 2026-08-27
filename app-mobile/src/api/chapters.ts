@@ -108,7 +108,8 @@ export type Capability =
   | "members_admin"
   | "moderation"
   | "lineage_admin"
-  | "deputy_overview";
+  | "deputy_overview"
+  | "polls_admin";
 
 export interface RoleMetaOut {
   roles: RoleName[];

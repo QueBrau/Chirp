@@ -248,16 +248,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // real — which "ready" already guarantees, since loadMe's success path is
   // the same place that sets it.
   useEffect(() => {
-    // An impersonated session has no bearer token, and a browser cannot put a
-    // header on a WebSocket — the gateway authenticates via the subprotocol
-    // (wsAuthProtocol reads whatever setAuthToken last set, which is null here).
-    // So this connection could only ever fail; attempting it just prints a
-    // console error on every dev page load and teaches people to ignore the
-    // console. Realtime is simply not part of what the seeded accounts cover.
-    if (DEV_UID !== null) {
-      chirpSocket.disconnect();
-      return;
-    }
+    // c162 REMOVED a `if (DEV_UID !== null) return` guard here. Its reasoning was
+    // that wsAuthProtocol() "reads whatever setAuthToken last set, which is null
+    // here", so an impersonated session could only ever fail to connect. That is
+    // not what that function does — it is `authToken ?? debugFirebaseUid`, so it
+    // returns the dev uid, and ws/gateway.py's _resolve_uid accepts exactly that
+    // as the offered subprotocol while AUTH_MODE is "emulated".
+    //
+    // Measured before changing it, rather than reasoned about twice: a browser
+    // WebSocket opened to /ws with ["dev-secretary"] as its subprotocol reached
+    // readyState OPEN, Redis reported PUBSUB NUMSUB user:<id> = 1, and a vote cast
+    // by a different member arrived on that socket as a poll event. So the guard
+    // was not protecting anyone from a failing connection — it was the reason
+    // realtime was unreachable for all twelve seeded accounts (c159), for messages
+    // as much as for polls.
+    //
+    // Safe in production regardless: DEV_UID is null in any release build, behind
+    // the three independent locks in auth/devAuth.ts.
     if (status === "ready") {
       chirpSocket.connect();
     } else {

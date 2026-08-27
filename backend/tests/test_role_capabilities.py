@@ -44,7 +44,10 @@ async def test_plain_member_holds_none(
     "role,expected",
     [
         ("treasurer", {"dues_admin", "moderation", "lineage_admin"}),
-        ("secretary", {"minutes_admin", "moderation", "lineage_admin"}),
+        # polls_admin joined minutes_admin here in c162. Kept as a separate capability
+        # rather than folded into minutes_admin: running a vote and writing the minutes
+        # are different jobs that currently share an officer.
+        ("secretary", {"minutes_admin", "polls_admin", "moderation", "lineage_admin"}),
         # The two roles the old hardcoded grid forgot entirely. They are e-board, so
         # they moderate — and they are NOT dues/minutes/members admins, which is the
         # half a "just show e-board everything" fix would have got wrong.
