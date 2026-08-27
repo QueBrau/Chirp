@@ -31,14 +31,19 @@ export interface EventCreate {
   visibility?: EventVisibility;
 }
 
-/** A host's edit. Omitted fields are left alone (PATCH semantics). */
+/**
+ * A host's edit. Omitted fields are left alone (PATCH semantics); an explicit `null`
+ * on ends_at or description CLEARS it (c202) - the backend's exclude_unset check
+ * (routers/events.py update_event) distinguishes "key not sent" from "key sent as
+ * null", so those two fields carry `| null` here where the rest do not.
+ */
 export interface EventUpdate {
   title?: string;
   starts_at?: string;
-  ends_at?: string;
+  ends_at?: string | null;
   location?: string;
   cover_url?: string;
-  description?: string;
+  description?: string | null;
   visibility?: EventVisibility;
 }
 
