@@ -8,10 +8,12 @@
  * afterwards would leave the platform fee mismatched with the rail actually used.
  */
 
+import { Feather } from "@expo/vector-icons";
 import { useState, type ReactElement } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 
 import { ApiError } from "@/api/client";
+import type { DuesPaymentPlanOut } from "@/api/finance";
 import {
   createDuesPaymentIntent,
   platformFeeCents,
@@ -19,6 +21,9 @@ import {
   type PaymentRail,
 } from "@/api/payments";
 import { AppText, Button, Card } from "@/components";
+import { ProgressMeter } from "@/components/charts/ProgressMeter";
+import { showAlert } from "@/lib/alert";
+import { calendarDay } from "@/lib/dates";
 import { radii, spacing, useTheme } from "@/theme";
 
 import { stripeSdk } from "./stripeSdk";
@@ -39,6 +44,21 @@ const RAILS: { value: PaymentRail; label: string; caption: string }[] = [
 
 function dollars(cents: number): string {
   return (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+/** due_date is a bare YYYY-MM-DD (a real scheduled date, not backfilled) — render
+ * it as that calendar day per src/lib/dates.ts, same rule dues.tsx's cycle due
+ * dates already follow. */
+function installmentDueDate(isoDay: string): string {
+  return calendarDay(isoDay).toLocaleDateString(undefined, { month: "long", day: "numeric" });
+}
+
+/** paid_at is a genuine timestamp written the moment a treasurer records the
+ * payment (routers/finance.py's record_dues_installment_payment) — a real
+ * instant, not a calendar day, so it renders directly rather than through
+ * calendarDay(). */
+function installmentPaidDate(isoInstant: string): string {
+  return new Date(isoInstant).toLocaleDateString(undefined, { month: "long", day: "numeric" });
 }
 
 /**
@@ -82,6 +102,94 @@ export async function presentDuesPaymentSheet(
     throw new Error(result.error.message);
   }
   return rail === "card" ? "paid" : "initiated";
+}
+
+export interface PlanProgressCardProps {
+  cycleName: string;
+  plan: DuesPaymentPlanOut;
+}
+
+/**
+ * Read-only progress view for a member's own ACTIVE installment plan (c197).
+ * Replaces the pay-now / outstanding state on dues.tsx for a cycle the member
+ * is on a plan for — no pay button, since installments in this build are
+ * treasurer-recorded (record_dues_installment_payment), never member-initiated.
+ *
+ * A completed or canceled plan never reaches this component — dues.tsx only
+ * renders it for status === "active", folding completed plans into the
+ * existing paid/settled state and letting canceled plans fall back to the
+ * normal pay-now/outstanding rendering.
+ */
+export function PlanProgressCard({ cycleName, plan }: PlanProgressCardProps): ReactElement {
+  const palette = useTheme();
+  const installments = plan.installments; // seq order, per _load_installments
+  const paid = installments.filter((installment) => installment.paid_at !== null);
+  const paidCents = paid.reduce((sum, installment) => sum + installment.amount_cents, 0);
+  const next = installments.find((installment) => installment.paid_at === null) ?? null;
+
+  return (
+    <Card>
+      <View style={{ gap: spacing.md }}>
+        <View style={{ gap: spacing.xs }}>
+          <AppText variant="micro" tone="secondary">
+            {cycleName}
+          </AppText>
+          <AppText variant="headline">On a payment plan</AppText>
+          <AppText variant="caption" tone="secondary">
+            {`${dollars(paidCents)} of ${dollars(plan.total_cents)} paid · ${paid.length} of ${plan.installment_count} installments`}
+          </AppText>
+        </View>
+
+        <ProgressMeter
+          fraction={plan.installment_count > 0 ? paid.length / plan.installment_count : 0}
+          label={`Installments paid: ${paid.length} of ${plan.installment_count}`}
+        />
+
+        {next !== null ? (
+          <AppText variant="bodyBold">
+            {`Next: ${dollars(next.amount_cents)} due ${installmentDueDate(next.due_date)}`}
+          </AppText>
+        ) : null}
+
+        <View style={{ gap: spacing.sm }}>
+          {installments.map((installment) => {
+            const isPaid = installment.paid_at !== null;
+            return (
+              <View
+                key={installment.id}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: spacing.sm,
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                  <Feather
+                    name={isPaid ? "check-circle" : "circle"}
+                    size={16}
+                    color={isPaid ? palette.success : palette.inkFaint}
+                  />
+                  <AppText variant="body" tone={isPaid ? "primary" : "secondary"}>
+                    {`Installment ${installment.seq}`}
+                  </AppText>
+                </View>
+                <AppText variant="caption" tone={isPaid ? "success" : "tertiary"}>
+                  {installment.paid_at !== null
+                    ? `${dollars(installment.amount_cents)} · paid ${installmentPaidDate(installment.paid_at)}`
+                    : `${dollars(installment.amount_cents)} · due ${installmentDueDate(installment.due_date)}`}
+                </AppText>
+              </View>
+            );
+          })}
+        </View>
+
+        <AppText variant="caption" tone="tertiary">
+          Your treasurer records each installment as it comes in — no action needed here.
+        </AppText>
+      </View>
+    </Card>
+  );
 }
 
 function RailOption({
@@ -137,9 +245,9 @@ export default function DuesPaymentScreen({
       const outcome = await presentDuesPaymentSheet(cycleId, rail, amountCents);
       if (outcome === "canceled") return;
       if (outcome === "paid") {
-        Alert.alert("Dues paid", `${cycleName} is settled. Thanks!`);
+        showAlert("Dues paid", `${cycleName} is settled. Thanks!`);
       } else {
-        Alert.alert(
+        showAlert(
           "Bank transfer started",
           "Bank payments take 1–3 business days to clear. Your dues will show as paid once it settles.",
         );
@@ -152,7 +260,7 @@ export default function DuesPaymentScreen({
           : stripeSdk === null
             ? WEB_UNAVAILABLE
             : "Payment could not be started. Try again.";
-      Alert.alert("Payment failed", message);
+      showAlert("Payment failed", message);
     } finally {
       setPaying(false);
     }

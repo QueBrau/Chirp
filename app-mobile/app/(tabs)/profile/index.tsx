@@ -15,10 +15,11 @@ import { Pressable, View } from "react-native";
 
 import { getMyAlumniProfile, type AlumniProfileOut } from "@/api/alumni";
 import { getCampus, type AccountType, type CampusOut } from "@/api/auth";
-import { myMemberships, type MyMembershipOut, type RoleName } from "@/api/chapters";
+import { myMemberships, type MyMembershipOut } from "@/api/chapters";
 import { listPosts } from "@/api/feed";
 import { hasFirebaseConfig, signOutUser, useSession } from "@/auth";
 import { AppText, Card, Chip, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
+import { ROLE_LABELS } from "@/lib/roleTerms";
 // mockProfileLayout is a LOCAL UI preference (section order/visibility), not
 // identity data — no backend concept of a saved layout exists yet, so this
 // stays mock-seeded on purpose (see the top-of-file comment).
@@ -30,17 +31,6 @@ type FeatherName = ComponentProps<typeof Feather>["name"];
 const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   non_greek: "Student",
   greek: "Fraternity or sorority member",
-  alumni: "Alum",
-};
-
-const ROLE_LABELS: Record<RoleName, string> = {
-  president: "President",
-  vice_president: "Vice President",
-  treasurer: "Treasurer",
-  secretary: "Secretary",
-  historian: "Historian",
-  member: "Member",
-  pledge: "Pledge",
   alumni: "Alum",
 };
 
@@ -209,7 +199,7 @@ export default function ProfileScreen() {
       return;
     }
     listPosts(chapterId)
-      .then((posts) => setPostCount(posts.filter((post) => post.author_id === userId).length))
+      .then(({ posts }) => setPostCount(posts.filter((post) => post.author_id === userId).length))
       .catch(() => setPostCount(0));
   }, [memberships, chapterId, userId]);
 

@@ -26,7 +26,7 @@ class ModerationAction(Base):
             name="ck_moderation_actions_action",
         ),
         CheckConstraint(
-            "target_type IN ('user', 'yak', 'post', 'comment')",
+            "target_type IN ('user', 'chirp', 'post', 'comment')",
             name="ck_moderation_actions_target_type",
         ),
         Index("idx_moderation_actions_target", "target_type", "target_id"),

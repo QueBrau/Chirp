@@ -5,11 +5,14 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app.config import Settings, get_settings
 from app.core.log_scrub import install_credential_log_scrub
+from app.core.logging_config import configure_app_logging
 from app.routers import (
     alumni,
     auth,
@@ -18,6 +21,7 @@ from app.routers import (
     events,
     feed,
     finance,
+    house,
     keys,
     lineage,
     media,
@@ -26,7 +30,7 @@ from app.routers import (
     messages,
     moderation,
     payments,
-    yaks,
+    chirps,
 )
 from app.ws import gateway
 
@@ -129,6 +133,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     """Build the Chirp API app; run with `uvicorn app.main:create_app --factory`."""
+    # c176: wire the app's own module loggers (logging.getLogger(__name__) everywhere
+    # under app/) to a stdout handler. Without this, logger.info calls never reached
+    # Cloud Logging at all — see app.core.logging_config for the full mechanism.
+    # First, so every logger call made while building the app is covered too.
+    configure_app_logging()
     # c146: scrub token/access_token/id_token query params from uvicorn's access log
     # before any request is served. A tripwire, not a fallback for c143's fix — see
     # app.core.log_scrub for why a FUTURE client putting a credential back in a URL
@@ -171,12 +180,32 @@ def create_app() -> FastAPI:
         if "*" in settings.cors_origins:
             raise RuntimeError(f"env={settings.env!r} forbids wildcard cors_origins")
 
+    # c207 (S2): pool-checkout exhaustion is a CAPACITY signal, not an application
+    # bug. SQLAlchemy raises TimeoutError when db_pool_timeout expires with every
+    # pooled connection busy; unhandled, that surfaces as a generic 500 -
+    # indistinguishable from a crash, and inviting the client to retry immediately
+    # into the very pool that is saturated. 503 + Retry-After is the honest answer.
+    @app.exception_handler(SQLAlchemyTimeoutError)
+    async def _pool_exhausted(_request: Request, _exc: SQLAlchemyTimeoutError) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "over_capacity"},
+            headers={"Retry-After": "5"},
+        )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
+        # expose_headers is an ALLOWLIST for which response headers browser JS may
+        # read via fetch() — allow_headers=["*"] above only covers REQUEST headers.
+        # Without this, GET /chapters/{id}/posts' X-Actives-Only-Hidden signal
+        # (board c102) would be present on the wire but invisible to Expo web's
+        # fetch(); native iOS/Android fetch has no CORS concept and was never
+        # affected either way.
+        expose_headers=["X-Actives-Only-Hidden"],
     )
 
     for module in (
@@ -186,7 +215,7 @@ def create_app() -> FastAPI:
         keys,
         messages,
         feed,
-        yaks,
+        chirps,
         moderation,
         lineage,
         finance,
@@ -196,6 +225,7 @@ def create_app() -> FastAPI:
         alumni,
         payments,
         events,
+        house,
     ):
         app.include_router(module.router)
     app.include_router(gateway.router)

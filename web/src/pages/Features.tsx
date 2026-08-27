@@ -4,7 +4,7 @@ import { CtaSection } from "../components/CtaSection";
 export function Features() {
   usePageMeta(
     "Features — Chirp",
-    "A tour of what's actually in Chirp: the campus Home feed, private Org tools, the Yak board, private messages, treasurer and secretary tools, and the alumni network.",
+    "A tour of what's actually in Chirp: the campus Home feed, private Org tools, the Chirp board, private messages, treasurer and secretary tools, and the alumni network.",
   );
 
   return (
@@ -109,7 +109,7 @@ export function Features() {
         </div>
       </section>
 
-      {/* Yak. Card-left, text-right — the reverse of the Home feed row above, for rhythm. */}
+      {/* Chirp. Card-left, text-right — the reverse of the Home feed row above, for rhythm. */}
       <section className="section">
         <div className="wrap">
           <div className="grid grid--2" style={{ gap: "var(--space-48)", alignItems: "center" }}>
@@ -122,16 +122,16 @@ export function Features() {
             </div>
 
             <div>
-              <p className="eyebrow">Yak</p>
+              <p className="eyebrow">Chirp</p>
               <h2 className="title" style={{ fontSize: "clamp(22px, 2.6vw, 30px)" }}>A campus board, honestly explained.</h2>
               <div className="accent-bar" aria-hidden="true"></div>
               <p className="lede" style={{ marginTop: "var(--space-5)", fontSize: "16px" }}>
-                Yak is a board for your whole campus, not your org. What you post
+                Chirp is a board for your whole campus, not your org. What you post
                 there shows up without your name attached, to other students.
               </p>
               <div className="note">
                 <p>
-                  The server does still record who posted each Yak, and that record
+                  The server does still record who posted each Chirp, and that record
                   is never returned by the API to other students. It exists only so
                   reports and abuse can be acted on &mdash; most anonymous apps hide this;
                   we&rsquo;d rather say it plainly.
@@ -165,7 +165,7 @@ export function Features() {
               </div>
               <p className="copy" style={{ lineHeight: "1.7" }}>
                 Threads live under the Messages tab, separate from your org&rsquo;s feed
-                and separate from Yak.
+                and separate from Chirp.
               </p>
             </div>
           </div>

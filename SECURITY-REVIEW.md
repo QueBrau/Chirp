@@ -1,138 +1,241 @@
-# Chirp — Security & Code Review (Aug 12 2026)
+# Chirp — Security Review (narrative index, last full review Aug 25 2026)
 
-Multi-agent review of everything on `main` at commit `09c4492`. Five parallel
-review lenses (authz, secrets/crypto, backend correctness, mobile correctness,
-spec-compliance) → every medium+ finding re-checked by an adversarial verifier
-told to refute it. 23 raised, 1 refuted, **15 confirmed** below. Many were
-reproduced live against a real Postgres, not just read.
+`board.html` is the live source of truth for security work — every card, the
+decisions log, and the Aug 25 c182 decisions entry in particular. This file is
+a narrative index over that board: a snapshot of what has run, what shipped,
+and what is still open, written for someone who does not want to read 190
+cards. When the two disagree, the board is right and this file is stale;
+re-run this refresh (c188's pattern) rather than trusting a paraphrase here
+over the board.
 
-Status: **findings recorded, fixes NOT yet applied.** Fix work is carded on the
-board. Fix on a branch off `main`, re-run `backend/` pytest, and add a regression
-test per fix.
-
----
-
-## CRITICAL
-
-### 1. Platform-wide moderator self-escalation → reads plaintext of every reported E2EE message
-`backend/app/routers/moderation.py:27` (`_require_any_eboard`, `list_reports`, `remove_yak`)
-
-Anyone can `POST /chapters` and is auto-inserted as that chapter's **president**
-(an EBOARD role) with no approval. Moderation routes then check only "is the
-caller EBOARD of *any* chapter" — zero campus/chapter scoping. `list_reports`
-does `select(ContentReport)` with **no WHERE clause**, returning every report
-system-wide including `forwarded_plaintext` (the decrypted content of reported
-private E2EE messages, per SPEC §6.7), and `remove_yak` can remove any campus's
-yaks. Violates SPEC §2.3 and the whole "server never reads message content" promise.
-**Fix:** scope moderation to the target's campus/chapter — resolve the report
-target's chapter_id (or yak's campus_id) and require the caller's active EBOARD
-membership *in that specific org*. Gate chapter creation too (self-serve
-presidency is the enabler). Add moderation tests (currently zero).
+This review covers backend, mobile client, web/hosting, and infra/deploy on
+`main` as of this refresh. It does not restate secrets, connection strings, or
+other infra values — those live only in the gitignored `INFRA-PRIVATE.html`,
+referenced here by name.
 
 ---
 
-## HIGH
+## Coverage map — all nine lenses
 
-### 2. Invite-role privilege escalation
-`backend/app/routers/chapters.py:110` — `create_invite` is open to all EBOARD roles
-and `ChapterInviteCreate.role` accepts any role incl. `president`; `join_chapter`
-copies it verbatim. A historian can mint a president invite; anyone redeems it →
-president. Asymmetric with `update_member` (president-only). **Fix:** cap invite
-role at the creator's own role, or require president for EBOARD-granting invites.
+| Lens | Last ran | Verdict | Card refs |
+|---|---|---|---|
+| Backend auth | Aug 13 (5-lens review) → Aug 16 (re-confirmed clean) → Aug 22 (.edu race fix) | All 15 Aug-13 findings closed and test-pinned; no new findings since Aug 16 | c27, c28, c29, c85, c88, c138 |
+| Money path | Aug 16 (webhook lens) + Aug 15 (double-charge guard) + Aug 24 (definitional fix) | No dedicated adversarial pass since dues/Stripe shipped (Aug 14+) — see note below | c51, c11, c40, c172 |
+| Authorization | Aug 13 → Aug 16 (.edu campus gate) → Aug 22 (moderation-tier fix) | Clean; actively hardened, org-scoping tests extended | c27, c85, c88, c142 |
+| Tokens / logging | Aug 22 (WS auth move) → Aug 23 (scrub widened) → Aug 24 (log purge) → Aug 25 (app logger fix) | Clean; four successive hardening rounds | c143, c146, c145, c176 |
+| Media | Aug 22 (upload validation) → Aug 24 (privacy flip + orphan cleanup) | Clean, verified live | c139, c140, c153, c155 |
+| Dependencies | Aug 24 (npm audit review) | No runtime-exploitable findings; toolchain debt tracked | c170, c174 (in progress) |
+| Mobile client | Aug 25 (c182 pass) | Clean aside from one finding, closed same day | c182, c184 |
+| Web / hosting | Aug 22 (CSP) → Aug 25 (c182 pass + repo hygiene) | Clean | c128, c182, c185 |
+| Infra / deploy | Aug 16 (initial findings) → Aug 23 (docs/root hardening) → Aug 25 (re-verified) | Three items still open, queued to Jose | c122, c123, c182 |
 
-### 3. Email squatting at bootstrap
-`backend/app/routers/auth.py:21` — `POST /auth/bootstrap` trusts the client body
-`email` and never checks it against the verified Firebase token's `email` claim.
-An attacker bootstraps first with a victim's real email; the UNIQUE constraint then
-permanently blocks the victim's own signup. **Fix:** in firebase mode, thread the
-token's verified `email` claim through and ignore/verify `body.email`.
-
-### 4. Auth tokens written to logs (SPEC §8.6 violation) — CLOSED
-`backend/app/ws/gateway.py:26` — WS auth accepted `?token=<id-token>` in the URL;
-uvicorn's default access log records the full request line, so real Firebase ID
-tokens landed in stdout/Cloud Run logs verbatim (reproduced live). Worse than the
-in-process log filter this repo shipped first could reach: Cloud Run logs
-`httpRequest.requestUrl` at the platform layer, outside anything the app installs.
-**Fixed (security-pass item 7, board c63's coordinated PR):** WS auth moved to the
-Sec-WebSocket-Protocol subprotocol (RN's WebSocket constructor can set this,
-unlike arbitrary headers) with an `Authorization: Bearer` fallback for callers
-that can set headers; the query string is removed entirely, not deprecated —
-zero real traffic ever depended on it. The now-pointless log filter was removed
-along with it rather than left as dead defensive code. See
-`test_ws_auth_subprotocol.py`.
-
-### 5. Dangerous default config → cross-origin user impersonation
-`backend/app/main.py:28` + `config.py` — defaults are `cors_origins=["*"]` +
-`allow_credentials=True` + `auth_mode="emulated"` (trusts `X-Debug-Firebase-Uid`).
-Starlette reflects any origin with credentials; any website's JS can send the debug
-header and impersonate any uid (reproduced: evil-origin preflight echoed back
-`allow-origin` + `allow-credentials`). **Fix:** never pair `*` with credentials
-(force credentials off when origins is `*`); add an `env` setting (default `local`)
-and refuse emulated mode + `*` origins when `env != local`. Keeps dev/tests working.
-
-### 6-8. Check-then-insert TOCTOU races → 500 instead of clean 409/200 (all reproduced live)
-Same shape in four spots — SELECT-then-INSERT with no `IntegrityError` guard, so a
-double-tap/retry crashes with a bare 500:
-- `chapters.py:146` `join_chapter` (memberships unique) — 4/40 concurrent → 500
-- `yaks.py:90` `vote_yak` (yak_votes pk) — 4/20 → 500
-- `feed.py:139` `like_post` (post_likes pk) + `moderation.py` `create_block` (user_blocks pk) — 4/20 each → 500
-- (also noted: `messages.py` `upsert_receipt`, same shape, lower impact)
-**Fix:** wrap in `try/except IntegrityError → rollback + conflict()`, or use
-`INSERT ... ON CONFLICT`, matching the pattern `lineage.py create_edge` already uses.
+Money path note: the Aug 16 session's record explicitly says "the Stripe
+webhook audited clean (fails closed at 503, verifies before parsing, two-layer
+replay dedup)" — that check is real and current code still matches it
+(`backend/app/routers/payments.py:359-394`: `missing_stripe_signature` on no
+header, `stripe_service.verify_webhook_event` before any parsing,
+`ProcessedStripeEvent` row + a unique partial index on
+`ledger_entries.stripe_payment_intent_id` as two independent replay guards).
+But that is a webhook-shaped check, not a full adversarial sweep of the money
+path as it exists today (reservation flow, cross-rail retry, refund/correction
+interaction). c172 (Aug 24) found and resolved a real definitional gap between
+the double-charge guard and the treasurer dashboard while building an
+unrelated feature — evidence the path has real edges, not that it has been
+swept for them. **Unverified as of this refresh: whether a dedicated
+adversarial money-path lens has ever run end to end.** Recommend one before
+real dues volume.
 
 ---
 
-## MEDIUM
+## Shipped mitigations
 
-### 9. Prekey pool drain (no rate limiting)
-`backend/app/routers/keys.py:235` — `GET /users/{id}/prekey-bundle` consumes a
-one-time prekey (EC + Kyber) on *every* call with no throttle; an attacker drains a
-victim's pool without ever starting a session, forcing weaker last-resort-only
-X3DH. **Fix:** rate-limit per (caller,target), and/or consume OTK on first message
-rather than on bundle fetch. (Needs a rate-limit layer — larger effort.)
-
-### 10. Message pagination silently loses tied-timestamp messages
-`backend/app/routers/messages.py:208` — `before=` cursor uses `created_at <` only,
-index is `created_at`-only. Messages sharing a timestamp at a page boundary appear
-on neither page (reproduced: 5 same-timestamp msgs → 3 vanished from paginated view).
-**Fix:** compound `(created_at, id)` cursor + matching index; client round-trips both.
-
-### 11. Firebase token never refreshed
-`app-mobile/src/auth/session.ts:45` — `onAuthChanged`/`getIdToken` are exported but
-never subscribed; the ~1hr ID token goes stale with no refresh/retry path. **Fix:**
-subscribe `onIdTokenChanged` at root → `setAuthToken`; retry once on 401. (Pairs with
-the Firebase-project work.)
-
-### 12. No way to sign out
-`app-mobile/app/(tabs)/profile/index.tsx:294` — the "Sign out" row has no `onPress`
-(and `ListRow` renders no Pressable without one), so `signOutUser()` is unreachable
-from the UI. **Fix:** wire `onPress` → `signOutUser()` + redirect. (Quick.)
-
-### 13. Account-type routing ignores selection
-`app-mobile/app/(auth)/account-type.tsx:110` — button label branches on the choice
-but `onPress` always routes to `/join-chapter`; a student/alum still gets the
-chapter-code screen. **Fix:** branch onPress — only greek → join-chapter. (Quick.)
-
-### 14 & 15. Test-coverage gaps against SPEC §8 (non-negotiables)
-- **Yak anonymity untested** (`schemas/yak.py:24`): enforcement is correct
-  (YakOut has no author field) but no test guards it. Add `test_yaks.py`.
-- **Cross-chapter 403 test incomplete** (`tests/test_org_scoping.py:8`): covers 5 of
-  8 `/chapters/{id}/*` groups — misses dues-cycles, spend-approvals, invites. SPEC
-  §8.4 mandates the test for every such route. Extend it.
+- **Aug 13 — original 5-lens review (c27):** authz, secrets/crypto, backend
+  correctness, mobile correctness, spec-compliance. 23 raised, 15 confirmed.
+  Fixed in the same pass: moderation campus-scoping, invite-role escalation,
+  email-squatting at bootstrap, the CORS/credentials default, WS-token
+  logging, four TOCTOU check-then-insert races, message pagination. 33 tests
+  added.
+- **Aug 13 — chapter creation gated (c28):** platform-admin only, no
+  self-serve grant API; adversarial audit found no bypass via
+  invites/role-PATCH/join/bootstrap. Closes the mechanism finding 1 depended
+  on (self-serve presidency).
+- **Aug 14 — deferred items shipped (c29):** prekey-bundle rate limiting
+  (per caller/target pair, `backend/app/routers/keys.py:259-265`), Firebase ID
+  token auto-refresh (`app-mobile/src/auth/session.ts:58-60`,
+  `onIdTokenChanged` wired to `setAuthToken`), compound `(created_at, id)`
+  message-pagination index.
+- **Aug 15 — dues double-charge guard (c51):** reserve-before-charging;
+  `dues_payment_intents` written before Stripe is called, one live reservation
+  per (cycle, member) across both rails, failed/canceled payments release the
+  reservation, ledger backstop via a unique constraint.
+- **Aug 16 — campus_id made server-owned (c85):** removed from client-writable
+  schemas; only the .edu verification flow (c86) and chapter-join derivation
+  can set it. Closed a self-asserted-campus hole that a 5-lens authorization
+  pass had missed because it checked consistency, not trustworthiness.
+- **Aug 16 — .edu campus verification gate (c88):** one shared dependency
+  gating six call sites, closing three separately-copied checks plus two
+  bypasses the sweep found on its own (a campus-audience *write* with no
+  campus check at all, and an inline copy in yak voting).
+- **Aug 22 — .edu attempt-cap race fixed (c138):** atomic
+  `UPDATE ... WHERE attempts < MAX ... RETURNING`, so a refused guess is never
+  miscounted; proven under a real concurrent-thread test.
+- **Aug 22 — moderation tier by content audience (c142):** report severity now
+  follows the target's actual audience (yak/post/comment) instead of a
+  one-size gate.
+- **Aug 22 — process hardening, not a vulnerability fix (c120, c121):**
+  named here because the ticket that requested this refresh grouped them with
+  security hardening, so worth being precise about what they actually are.
+  c120 fixed an unhandled-promise-rejection bug in the chapter like/unlike
+  flow (missing error handling, not an auth or data-exposure issue). c121
+  built a static request/route contract checker
+  (`app-mobile/scripts/verify-contract.mjs`) that diffs every client API call
+  against every backend route at CI time — its first real run caught a live
+  bug (the secretary attendance screen was calling a GET that the backend
+  only ever registered as PUT) and, in a sabotage test, caught the exact
+  wrong-HTTP-verb regression class that c115 shipped once already. It is a
+  correctness/regression gate rather than a security control, but it is the
+  kind of gate that would have caught c115 before merge.
+- **Aug 22 — media upload validation (c139):** `media_urls` validated
+  server-side on all three write sites — exact-prefix bucket allowlist, count
+  cap, host-spoof and prefix-extension attempts both verified blocked.
+- **Aug 22 — WS auth moved off the URL (c143):** `Sec-WebSocket-Protocol`
+  subprotocol with an `Authorization: Bearer` fallback; query-string auth
+  removed entirely rather than deprecated.
+- **Aug 23 — credential log scrub widened (c146):** regex now matches any
+  `[a-z0-9_]*token=` query param, not three enumerated literals; also fixed a
+  latent bug where the filter's plain-message branch was unreachable.
+- **Aug 23 — /docs, /redoc, /openapi.json closed on real deployments
+  (`backend/app/main.py:148,153-155`):** `docs_enabled = settings.env ==
+  "local"`. These were live on prod from Aug 13 until this shipped.
+- **Aug 23 — container drops root; prod safety guard un-strippable.**
+- **Aug 24 — repository media privacy flip (c140):** bucket moved to
+  public-access-prevention enforced + `allUsers` read removed; the runtime
+  service account gets a `posts/`-conditioned read grant; the API now issues
+  app-owned HMAC capability URLs (`backend/app/services/storage_service.py`)
+  instead of exposing the bucket. Verified live: capability URL serves exact
+  bytes and is stable on re-check, direct GCS access 403s, the app renders
+  normally. `c155` confirms the same flip also closed `tmp/`.
+- **Aug 24 — media orphan-cleanup dry run (c153):** dedicated runner with
+  read-only DB access and delete-only IAM conditioned to `tmp/`; first dry run
+  scanned=1, referenced=1, eligible=0, deleted=0 — no media deletion
+  attempted.
+- **Aug 24 — Cloud Logging leak purged (c145):** 6,328 request-log and 17,275
+  stderr entries removed after the WS-token exposure window; unrelated logs
+  preserved; post-delete cutoff checks confirmed zero remaining.
+- **Aug 24 — dependency audit (c170):** all 9 high / 13 moderate `npm audit`
+  findings trace to three build-toolchain packages, none reachable at
+  runtime in the shipped app. Real fix needs a major Expo SDK bump, carded and
+  in progress as c174 as of this refresh.
+- **Aug 24 — dues status definitions reconciled where they diverge (c172):**
+  found while building c171 — the double-charge guard treats any payment row
+  as `already_paid` and ignores corrections, while the president dashboard
+  nets corrections, so a refunded member reads as owing on one screen and
+  blocked from re-paying on the other. Both behaviors are individually
+  correct (the guard erring toward "paid" prevents a double charge; the
+  dashboard erring toward "owes" tells the treasurer the truth) — left as a
+  documented seam pending real refund volume, not silently reconciled.
+- **Aug 25 — app-level logger actually wired to stdout (c176):** root cause
+  was an unconfigured `app` ancestor logger, so `logger.info`/`logger.warning`
+  calls were built but never emitted under Cloud Run — including the
+  send-confirmation line for verification emails. Fixed via `dictConfig` on
+  the `app` logger, called first in `create_app`. This is an observability
+  fix, not a data-exposure one — nothing sensitive was ever in those lines.
+- **Aug 25 — URL validation on client-supplied link fields (c184):** shared
+  `validate_public_url` (`backend/app/core/validation.py`) enforces http/https
+  scheme, required host, 2048-char cap, applied to `AlumniProfile.linkedin_url`
+  / `apply_url` plus two more the sweep found unvalidated
+  (`EventCreate.cover_url`, `User.avatar_url`). Closes a phishing / intent-URI
+  vector: the mobile client opens these blind via `Linking.openURL`.
+- **Aug 25 — repository hygiene (c185):** the comment explaining
+  infra-owner reasoning was moved out of public source into
+  `INFRA-PRIVATE.html` (the repo went public Aug 24); `ci.yml` now pins
+  explicit least-privilege `permissions: contents: read`.
+- **Standing — Stripe webhook verification:** signature required and verified
+  before any event parsing (`missing_stripe_signature` 400 with no signature;
+  `stripe_service.verify_webhook_event` gates everything else), replay safety
+  layered at both the event level (`ProcessedStripeEvent`) and the payment
+  level (unique partial index on `ledger_entries.stripe_payment_intent_id`),
+  event payloads never logged. Verified in code this session
+  (`backend/app/routers/payments.py:358-394`).
 
 ---
 
-## Refuted / not findings
-1 finding refuted in verification. Low-severity noted-not-filed: join-chapter deep
-link stale param; api client can send both auth headers (no live harm today);
-treasurer/secretary screens role-gate by hiding the entry card only (not the
-destination) — worth server-trust hardening later; no test asserts ciphertext
-absent from logs; no full-ASGI firebase-mode integration test.
+## Open items
 
-## Verified CLEAN (explicitly checked, no issue)
-Ledger append-only (route absence + DB trigger + test), private keys never stored
-(only public material), prekey consumption atomicity (`FOR UPDATE SKIP LOCKED`,
-incl. Kyber), Kyber last-resort never consumed, message/feed/lineage/finance
-org-scoping, invite code entropy + expiry, Stripe webhook stub doesn't fake
-verification, no raw-SQL injection, migration↔model parity, all CONVENTIONS frozen
-contracts (Settings, `publish_to_user`, Role enum, 61 mounted routes).
+| Item | Severity | Owner | Card ref |
+|---|---|---|---|
+| Default compute SA holds `roles/editor` project-wide AND `secretAccessor` on `DATABASE_URL` + all three Stripe secrets, while nothing runs as that identity (the runtime SA is `chirp-api-run`) | HIGH | Jose (standing credential-shaped exception) | c182 |
+| Cloud SQL: public IPv4 stays for now (Jose's laptop proxy path needs it); `sslMode` should move to `ENCRYPTED_ONLY` — safe because the Auth Proxy always encrypts regardless | Not rated in source; one `gcloud` config change | Jose | c182 |
+| Firebase browser key has no referrer restrictions; needs per-platform keys before a naive allowlist can be applied (a naive fix would break native auth) | Not rated in source; parked deliberately, not a quick-fix | launch-prep | c182 |
+| .edu verification delivery: the SENDING side is proven (`josedev.app` verified in Resend; a real 202 through the live campus-verification flow from `hello@josedev.app` to an arbitrary `.edu` address, c134 closed Aug 25) — the open leg is narrower: no `.edu` mailbox the team controls has ever received a code, so the final inbox-delivery hop is unproven, not broken | Blocking dependency, not a vulnerability | Jose (needs a school mailbox the team can read) | c134, c87 |
+| Messaging is transport-encrypted only today and must not be described as private or end-to-end encrypted in any user-facing or internal text; the E2EE epic (libsignal stubs, key handling) is stale relative to main post-rename and is being re-scoped | Standing labeling discipline, not a severity-rated finding | pool (c190's audit feeds a re-scoped epic for Jose + Q) | c190 |
+
+---
+
+## Superseded from the Aug 13 review
+
+The Aug 13 doc's top-line status read "findings recorded, fixes NOT yet
+applied." **That line is now wrong, not merely stale** — c27 (same day) and
+c29 (Aug 14) shipped fixes for all 15 confirmed findings, and each fix left an
+explicit `SECURITY-REVIEW finding N` comment at its call site, all of which
+were re-opened and read this session:
+
+- Finding 1 (moderator self-escalation / unscoped `list_reports`) —
+  `backend/app/routers/moderation.py:217-262` now resolves and checks
+  `campus_id` server-side before any report is readable.
+- Finding 2 (invite-role escalation) —
+  `backend/app/routers/chapters.py:579-589`: minting an e-board-role invite
+  now requires the creator to already be president.
+- Finding 3 (email squatting at bootstrap) —
+  `backend/app/routers/auth.py:35-43`: in firebase mode, a `body.email` that
+  disagrees with the verified token claim is rejected with 400.
+- Finding 4 (auth tokens in logs) — already marked closed in the Aug 13 text
+  itself (WS auth moved to subprotocol); still true, reinforced by c146.
+- Finding 5 (CORS + credentials default) —
+  `backend/app/main.py:158-178`: wildcard origin and credentialed CORS can
+  never co-exist, and any non-local `env` refuses to boot with emulated auth
+  or a wildcard origin (`RuntimeError`, not `assert`, deliberately).
+- Findings 6-8 (TOCTOU check-then-insert races) — `IntegrityError` handling
+  now present at every write site named in the original finding (`auth.py`,
+  `chapters.py`, `chirps.py`, `feed.py`, `messages.py`, `moderation.py`) plus
+  more added since (`events.py`, `house.py`, `payments.py`).
+- Finding 9 (prekey pool drain) — per-(caller, target) rate limit, confirmed
+  live at `backend/app/routers/keys.py:259-265`.
+- Finding 10 (pagination losing tied-timestamp messages) — compound
+  `(created_at, id)` cursor, confirmed at `backend/app/routers/messages.py:242`.
+- Finding 11 (token never refreshed) — `onIdTokenChanged` wired in
+  `app-mobile/src/auth/session.ts:58-60`.
+- Finding 12 (no way to sign out) — `onPress` wired in
+  `app-mobile/app/(tabs)/profile/index.tsx:387-390`, with a comment citing
+  this exact finding.
+- Finding 13 (account-type routing ignores selection) — fixed in
+  `app-mobile/app/(auth)/account-type.tsx:97-100`, comment cites this finding.
+- Finding 14 (chirp anonymity untested) —
+  `backend/tests/test_chirps.py` now exists, header comment cites this
+  finding explicitly.
+- Finding 15 (cross-chapter 403 coverage gap) —
+  `backend/tests/test_org_scoping.py` now covers dues-cycles, spend-approvals,
+  and invites in addition to the original five groups.
+
+The "Refuted / not findings" and "Verified CLEAN" sections of the Aug 13 doc
+were a snapshot of that single review and are not re-verified here; treat
+them as historical rather than current status. Nothing in them is known to be
+wrong, but nothing in them has been re-checked against `main` as it stands
+today either — **unverified as of this refresh.**
+
+---
+
+## What this refresh did not check
+
+This is a docs-only refresh built from board.html plus a targeted set of
+cheap, direct code reads (cited by file:line above). It is not a new
+adversarial pass. In particular:
+
+- Money path: no dedicated end-to-end adversarial sweep since dues/Stripe
+  shipped, per the coverage-map note above. **Unverified as of this
+  refresh.**
+- The Aug 13 review's "Refuted / not findings" and "Verified CLEAN" items —
+  historical, not re-checked. **Unverified as of this refresh.**
+- E2EE / messaging crypto state — actively being re-audited in parallel
+  (c190); do not treat this file as current on that lens until c190's output
+  lands.

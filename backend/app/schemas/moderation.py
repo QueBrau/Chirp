@@ -9,8 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 ModerationActionName = Literal[
     "suspend_user", "unsuspend_user", "remove_content", "resolve_report"
 ]
-ModerationTargetType = Literal["user", "yak", "post", "comment", "report"]
-# Yaks have their own dedicated removal route (POST /moderation/yaks/{yak_id}/remove,
+ModerationTargetType = Literal["user", "chirp", "post", "comment", "report"]
+# Chirps have their own dedicated removal route (POST /moderation/chirps/{chirp_id}/remove,
 # anonymous-content shaped); this generic endpoint covers the named-author content
 # types instead of a third near-identical route.
 RemovableContentType = Literal["post", "comment"]

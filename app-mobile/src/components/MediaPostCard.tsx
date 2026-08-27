@@ -15,10 +15,10 @@
  *
  * Overflow control (board c35, App Store Guideline 1.2): a discreet
  * more-horizontal icon in the header row of every variant, offering Report
- * and (unless `canBlock` is false) Block — mirrors the Yak board's own
- * report/block affordance (app/(tabs)/yak/index.tsx), rolled locally into
+ * and (unless `canBlock` is false) Block — mirrors the Chirps board's own
+ * report/block affordance (app/(tabs)/chirps/index.tsx), rolled locally into
  * this component rather than the screen since every post here has a KNOWN
- * author (`authorName`/`post.author_id`), unlike Yak where the client never
+ * author (`authorName`/`post.author_id`), unlike Chirp where the client never
  * learns who posted. The sheet/report-reasons Modal is only ever mounted
  * while open for THIS card (`sheet !== null`), not one-per-card-always, so a
  * long feed doesn't carry N idle Modals. The screen owns the actual API
@@ -28,9 +28,10 @@
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
 import { useEffect, useState } from "react";
-import { Alert, Image, Modal, Pressable, View, type ViewStyle } from "react-native";
+import { Image, Modal, Pressable, View, type ViewStyle } from "react-native";
 
 import type { PostOut } from "@/api/feed";
+import { confirmAction } from "@/lib/alert";
 import { cardShadow, light, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
@@ -45,14 +46,14 @@ const PLAY_CIRCLE = 48;
 const ACTION_CHIP = 36;
 
 /** Preset report reasons (backend requires a non-empty `reason` string) — same
- * three presets as the Yak board's report sheet. */
+ * three presets as the Chirps board's report sheet. */
 const REPORT_REASONS = ["Spam", "Harassment", "Inappropriate"];
 
 /**
  * One choice in the action sheet below. Rolled by hand instead of using
  * `Alert` for the menus because Android's Alert supports AT MOST three
  * buttons — the report-reason list (three reasons + Cancel) would silently
- * lose an option there, the exact bug the Yak screen hit first. Alert is
+ * lose an option there, the exact bug the Chirp screen hit first. Alert is
  * still fine for the block confirm/error dialogs below, which never exceed
  * three buttons.
  */
@@ -285,12 +286,16 @@ export function MediaPostCard({
   };
 
   const confirmBlock = () => {
-    // Unlike Yak (client genuinely doesn't know the author), a feed post carries
+    // Unlike Chirp (client genuinely doesn't know the author), a feed post carries
     // a known author_id/display_name — the copy can and should name them.
-    Alert.alert(`Block ${authorName}?`, `You won't see posts from ${authorName} again.`, [
-      { text: "Block", style: "destructive", onPress: onBlock },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    confirmAction({
+      title: `Block ${authorName}?`,
+      message: `You won't see posts from ${authorName} again.`,
+      confirmLabel: "Block",
+      destructive: true,
+      order: "confirm-first",
+      onConfirm: onBlock,
+    });
   };
 
   const openMenu = () => {
@@ -395,7 +400,13 @@ export function MediaPostCard({
           <View style={{ flexShrink: 1 }}>
             <CompactHeader name={authorName} time={timeLabel} photoUrl={authorPhotoUrl} />
           </View>
-          <OverflowButton onPress={openMenu} />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+            {/* Tier indicator (board c102): a viewer only ever receives this post
+                at all if they're active, so the badge is purely informative — it
+                tells them WHY this post reads differently, not a gate. */}
+            {post.audience === "org_actives" ? <Chip label="Actives only" variant="accent" /> : null}
+            <OverflowButton onPress={openMenu} />
+          </View>
         </View>
         <AppText>{post.body}</AppText>
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.lg }}>
@@ -518,6 +529,16 @@ export function MediaPostCard({
           <Chip
             label={formatDuration(post.duration_sec)}
             style={{ position: "absolute", top: spacing.md, right: spacing.md }}
+          />
+        ) : null}
+
+        {/* Tier indicator (board c102), top-left mirroring the duration Chip's
+            top-right — purely informative, see the text-variant comment above. */}
+        {post.audience === "org_actives" ? (
+          <Chip
+            label="Actives only"
+            variant="accent"
+            style={{ position: "absolute", top: spacing.md, left: spacing.md }}
           />
         ) : null}
       </View>

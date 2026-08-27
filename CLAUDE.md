@@ -79,8 +79,46 @@ see what is going on. Update it at EVERY step, not just at the end of a task:
 - backend/.venv is Python **3.12** (it was 3.9, which pyproject's `requires-python
   >=3.11` rejects; rebuilt Aug 13 on Homebrew python3.12).
 - Because that container is postgres:16, test runs here match prod's PG16.
-- The EAS dev build is STALE: expo-file-system, expo-sharing and
-  @stripe/stripe-react-native were all added after it was cut (board c39).
+- **An EAS dev build is a SNAPSHOT of native modules, and it decays silently.** It
+  holds only the modules that existed when it was cut; anything added since is simply
+  absent and the app RED-SCREENS AT LAUNCH rather than degrading (c166: "NativeModule:
+  AsyncStorage is null" at src/auth/firebase.ts:40, on any build cut before bcbbe9c).
+  Never trust a written-down list of what is missing - that list stales exactly as
+  fast as the build did, and one here already misled a session. Ask the .app instead:
+  the binary is stripped, so `strings`/`nm` find nothing, but every pod ships a
+  resource bundle - `ls <sim-container>/chirp.app | grep RNCAsyncStorage` settles it
+  in one command. Booted simulators hold builds of DIFFERENT ages, so take the
+  newest-dated .app across ALL of them, not the first sim that boots. Rebuilding
+  locally is not possible on this Mac (no CocoaPods, and Xcode 15.3 is below what
+  Expo SDK 54 / RN 0.81 with newArchEnabled needs): cut a cloud build with the
+  `development-simulator` profile in app-mobile/eas.json (`npx eas-cli`, logged in
+  as quebrau).
+
+## Multi-session lessons (Aug 23-24, Jose-approved) — ALWAYS ON
+
+- **Worktree mobile checks.** A fresh worktree has no node_modules; `npx tsc` there
+  fetches the npm PLACEHOLDER package named `tsc`, prints a red banner, exits 1, and
+  type-checks NOTHING — the danger is a human misreading the red as an environment
+  hiccup and reporting "tsc ran". Copy node_modules in with an APFS clone
+  (`cp -Rc` from the main checkout) — a symlink satisfies tsc but BREAKS Metro's
+  serverRoot. Any typecheck claim must cite `tsc --version`; no version, no check.
+- **Never read an exit code through a pipe.** A pipeline reports its LAST stage's
+  status — `cmd | head` returning 0 proves nothing about cmd. Capture unpiped or use
+  PIPESTATUS. This exact mistake produced a false bug report once already.
+- **Grep before build.** Cards record what was true the day they were written. Before
+  designing from any card older than a couple of days: grep for the thing the card
+  says does not exist, and `git log --oneline --grep` the card id AND its PREV-ID
+  (renumbered cards' commits carry the old id). Three same-day tickets were already
+  done on main; two commands would have caught each in minutes.
+- **Board edits are edit+commit in one breath.** In the shared tree, the uncommitted
+  window between editing board.html and committing is where a concurrent session's
+  `git add` sweeps your lines into their commit — or a stale-copy commit drops them.
+  Order: edit, commit immediately, `scripts/board-check` the COMMITTED state, amend
+  if it fails, push, `board-check --pushed`.
+- **Full test suites are serialized.** Five concurrent suites drove load to 384 and
+  made clean runs blow 10-minute timeouts. Full backend runs go through
+  `scripts/with-suite-lock`; targeted files run unlocked during development; a suite
+  that timed out under load is a rerun, not a failure.
 
 ## Conventions that keep biting
 

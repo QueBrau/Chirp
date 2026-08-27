@@ -12,10 +12,9 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, TextInput, View } from "react-native";
+import { Pressable, TextInput, View } from "react-native";
 
 import { listMembers, myMemberships, type MemberOut, type MyMembershipOut } from "@/api/chapters";
-import { ApiError } from "@/api/client";
 import {
   createMeeting,
   deleteMeeting,
@@ -25,7 +24,6 @@ import {
   putAttendance,
   updateMeeting,
   type AttendanceStatus,
-  type AttendanceWindow,
   type ChapterAttendanceSummary,
   type MeetingAttendanceOut,
   type MeetingOut,
@@ -49,7 +47,10 @@ import {
   listPolls,
   type PollOut,
 } from "@/api/polls";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
+import { calendarDay } from "@/lib/dates";
 import { shareCsv } from "@/lib/export";
+import { currentSemesterWindow } from "@/org/semester";
 import { chirpSocket, isPollEvent } from "@/realtime/socket";
 import { radii, spacing, typography, useTheme, type Palette } from "@/theme";
 
@@ -76,17 +77,13 @@ const ATTENDANCE_OPTIONS: { key: AttendanceStatus; label: string; short: string 
 ];
 
 function meetingDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
+  // c165: meeting_date is a calendar DAY, not an instant. Formatting the instant
+  // directly rendered the previous day everywhere west of UTC.
+  return calendarDay(iso).toLocaleDateString(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
   });
-}
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
 }
 
 /**
@@ -121,22 +118,6 @@ const WINDOW_OPTIONS: { key: WindowKey; label: string }[] = [
   { key: "semester", label: "Semester" },
   { key: "all", label: "All time" },
 ];
-
-/**
- * The current academic term as an inclusive ISO window: fall is August through
- * December, spring is January through July. A chapter calendar does not exist in
- * the schema, so this is a client-side convention rather than a fact the server
- * knows — which is exactly why the toggle to "All time" sits next to it, and why
- * the caption always states the meeting count the numbers are drawn from.
- */
-function currentSemesterWindow(now: Date): AttendanceWindow {
-  const year = now.getFullYear();
-  const isFall = now.getMonth() >= 7;
-  return {
-    start: new Date(Date.UTC(year, isFall ? 7 : 0, 1)).toISOString(),
-    end: new Date(Date.UTC(year, isFall ? 11 : 6, 31, 23, 59, 59)).toISOString(),
-  };
-}
 
 function statusTagColors(palette: Palette, status: AttendanceStatus): { bg: string; fg: string } {
   switch (status) {
@@ -363,6 +344,9 @@ export default function SecretaryScreen() {
       });
       setNewTitle("");
       setNewDateText("");
+      // The totals' denominator counts meetings in the window; refetch rather than
+      // try to add this one in locally (mirrors removeMeeting below).
+      await loadSummary(chapterId, windowKey);
     } catch (error) {
       showApiError(error, "Couldn't create meeting");
     } finally {
@@ -394,6 +378,9 @@ export default function SecretaryScreen() {
     setSavingMinutes(true);
     try {
       const trimmed = minutesDraft.trim();
+      // MeetingUpdate.meeting_date exists on the type, but this screen never edits
+      // it — only minutes_md is patched here, so the attendance window's membership
+      // can't shift as a side effect of this call and loadSummary need not rerun.
       const updated = await updateMeeting(chapterId, meeting.id, {
         minutes_md: trimmed.length > 0 ? trimmed : null,
       });
@@ -442,20 +429,17 @@ export default function SecretaryScreen() {
    */
   const confirmDeleteMeeting = (meeting: MeetingOut) => {
     if (chapterId === null || deletingMeetingId !== null) return;
-    Alert.alert(
-      "Delete this meeting?",
-      `"${meeting.title}" on ${meetingDate(meeting.meeting_date)} and its attendance ` +
+    confirmAction({
+      title: "Delete this meeting?",
+      message:
+        `"${meeting.title}" on ${meetingDate(meeting.meeting_date)} and its attendance ` +
         "will be removed for everyone, and it will drop out of the CSV export. " +
         "This cannot be undone.",
-      [
-        { text: "Keep", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => void removeMeeting(meeting),
-        },
-      ],
-    );
+      confirmLabel: "Delete",
+      cancelLabel: "Keep",
+      destructive: true,
+      onConfirm: () => void removeMeeting(meeting),
+    });
   };
 
   const removeMeeting = async (meeting: MeetingOut) => {
@@ -490,7 +474,7 @@ export default function SecretaryScreen() {
         // EAS dev build is rebuilt, shareCsv fails at native-module resolution even
         // though the CSV text above resolved fine. Surface that plainly instead of
         // letting it fall through as an unhandled rejection.
-        Alert.alert(
+        showAlert(
           "Can't share yet",
           "The CSV was generated, but sharing needs a native module that isn't in this " +
             "build yet. Rebuild the app (EAS dev build) and try again.",

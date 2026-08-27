@@ -10,11 +10,14 @@
  * sees an EmptyState instead of a wall of 403s.
  */
 
+import { useRouter } from "expo-router";
+import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Linking, Pressable, TextInput, View } from "react-native";
+import { Linking, Pressable, TextInput, View } from "react-native";
 
 import { listMembers, myMemberships, type MyMembershipOut } from "@/api/chapters";
 import { ApiError } from "@/api/client";
+import { calendarDay } from "@/lib/dates";
 import {
   createDuesCycle,
   createLedgerEntry,
@@ -48,6 +51,7 @@ import {
   Screen,
   SectionHeader,
 } from "@/components";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { shareCsv } from "@/lib/export";
 import { duesProgress, runningBalance, spendByCategory } from "@/lib/treasury";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
@@ -101,16 +105,10 @@ function entryDate(iso: string): string {
 }
 
 function dueDate(isoDay: string): string {
-  return new Date(`${isoDay}T00:00:00`).toLocaleDateString(undefined, {
+  return calendarDay(isoDay).toLocaleDateString(undefined, {
     month: "long",
     day: "numeric",
   });
-}
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
 }
 
 /**
@@ -138,6 +136,7 @@ function FieldLabel({ children }: { children: string }) {
 }
 
 export default function TreasurerScreen() {
+  const router = useRouter();
   const palette = useTheme();
   // Campus secondary = Spartan gold (DESIGN §8.5). Used for exactly one decorative
   // mark on this screen, and deliberately NOWHERE in the charts: gold is 1.74:1 on
@@ -268,7 +267,7 @@ export default function TreasurerScreen() {
       // A decision is one-way; 409 `already_decided` means someone else beat us
       // to it. That's a stale UI, not a real error — refetch instead of alarming.
       if (error instanceof ApiError && error.status === 409) {
-        Alert.alert("Already decided", "Someone else already decided this request — refreshing.");
+        showAlert("Already decided", "Someone else already decided this request — refreshing.");
         try {
           setApprovals(await listSpendApprovals(chapterId));
         } catch (refetchError) {
@@ -357,17 +356,16 @@ export default function TreasurerScreen() {
     if (!canSubmitEntry || parsedCents === null || direction === null) return;
     const signedCents = direction === "out" ? -parsedCents : parsedCents;
     const typeLabel = ENTRY_TYPE_OPTIONS.find((o) => o.value === entryType)?.label ?? entryType;
-    Alert.alert(
-      "Add this ledger entry?",
-      `${signedCents >= 0 ? "+" : ""}${dollars(signedCents)} · ${typeLabel}` +
+    confirmAction({
+      title: "Add this ledger entry?",
+      message:
+        `${signedCents >= 0 ? "+" : ""}${dollars(signedCents)} · ${typeLabel}` +
         (description.trim().length > 0 ? `\n${description.trim()}` : "") +
         "\n\nThis entry is permanent — the ledger is append-only. It can't be edited or " +
         "deleted, only offset later by a separate correction entry.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Add entry", onPress: () => void submitEntry(signedCents) },
-      ],
-    );
+      confirmLabel: "Add entry",
+      onConfirm: () => void submitEntry(signedCents),
+    });
   };
 
   const exportCsv = async () => {
@@ -383,7 +381,7 @@ export default function TreasurerScreen() {
         // expo-file-system/expo-sharing are newly-added native modules — until the
         // EAS dev build is rebuilt, shareCsv fails at native-module resolution even
         // though the CSV text above resolved fine. Surface that plainly.
-        Alert.alert(
+        showAlert(
           "Can't share yet",
           "The CSV was generated, but sharing needs a native module that isn't in this " +
             "build yet. Rebuild the app (EAS dev build) and try again.",
@@ -507,6 +505,28 @@ export default function TreasurerScreen() {
                   onPress={() => void submitCycle()}
                   disabled={!canSubmitCycle}
                 />
+              </View>
+            </Card>
+          </View>
+        ) : null}
+
+        {/* c196: installment plans for members who can't pay a cycle in one shot.
+            Same dues_admin gate as "Open a cycle" above — a pushed screen, not
+            another card of controls stacked here, since it has its own create
+            flow and per-installment record/cancel actions. */}
+        {canOpenCycle && cycle !== undefined ? (
+          <View>
+            <SectionHeader title="Payment plans" caption="Installments for members who can't pay at once" />
+            <Card onPress={() => router.push("/chapter/dues-plans")}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.lg }}>
+                <Feather name="calendar" size={typography.title.fontSize} color={palette.accent} />
+                <View style={{ flex: 1, gap: spacing.xs }}>
+                  <AppText variant="headline">Manage payment plans</AppText>
+                  <AppText variant="caption" tone="secondary">
+                    Set up installments and record payments against them
+                  </AppText>
+                </View>
+                <Feather name="chevron-right" size={typography.title.fontSize} color={palette.inkFaint} />
               </View>
             </Card>
           </View>

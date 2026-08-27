@@ -9,7 +9,7 @@ The bypass they protect against, for whoever reads this after it breaks: the onl
 campus check used to be `user.campus_id != campus_id`. That was safe while nothing
 wrote campus_id. c96 made an invite redemption write it, and per c105 an invite code is
 an unlimited-use bearer token with no revocation — so one forwarded code granted read
-AND write on a campus's Yak board and campus feed with no email of any kind.
+AND write on a campus's Chirp board and campus feed with no email of any kind.
 
 DO NOT "fix" a failure here by relaxing the assertion or by letting a non-null
 campus_id satisfy the gate. That is the bypass, restored.
@@ -60,11 +60,11 @@ async def test_campus_feed_refuses_an_unverified_user(client: AsyncClient, unver
     assert response.json()["detail"] == UNVERIFIED
 
 
-async def test_yak_list_refuses_an_unverified_user(client: AsyncClient, unverified) -> None:
-    """GET /campuses/{id}/yaks — the other half of the ruling."""
+async def test_chirp_list_refuses_an_unverified_user(client: AsyncClient, unverified) -> None:
+    """GET /campuses/{id}/chirps — the other half of the ruling."""
     user, campus_id = unverified
 
-    response = await client.get(f"/campuses/{campus_id}/yaks", headers=user.headers)
+    response = await client.get(f"/campuses/{campus_id}/chirps", headers=user.headers)
 
     assert response.status_code == 403, response.text
     assert response.json()["detail"] == UNVERIFIED
@@ -75,13 +75,13 @@ async def test_yak_list_refuses_an_unverified_user(client: AsyncClient, unverifi
 # ---------------------------------------------------------------------------
 
 
-async def test_posting_a_yak_refuses_an_unverified_user(client: AsyncClient, unverified) -> None:
-    """POST /campuses/{id}/yaks. Gating the read alone would let an unverified user
+async def test_posting_a_chirp_refuses_an_unverified_user(client: AsyncClient, unverified) -> None:
+    """POST /campuses/{id}/chirps. Gating the read alone would let an unverified user
     broadcast to a board they cannot read."""
     user, campus_id = unverified
 
     response = await client.post(
-        f"/campuses/{campus_id}/yaks", json={"body": "hello"}, headers=user.headers
+        f"/campuses/{campus_id}/chirps", json={"body": "hello"}, headers=user.headers
     )
 
     assert response.status_code == 403, response.text
@@ -91,20 +91,20 @@ async def test_posting_a_yak_refuses_an_unverified_user(client: AsyncClient, unv
 async def test_voting_refuses_an_unverified_user(
     client: AsyncClient, unverified, verified
 ) -> None:
-    """PUT /yaks/{id}/vote had its OWN inline copy of the old check that the shared
+    """PUT /chirps/{id}/vote had its OWN inline copy of the old check that the shared
     dependency never covered — a third copy, in the file that already had two."""
     author, campus_id = verified
     create = await client.post(
-        f"/campuses/{campus_id}/yaks", json={"body": "votable"}, headers=author.headers
+        f"/campuses/{campus_id}/chirps", json={"body": "votable"}, headers=author.headers
     )
     assert create.status_code == 201, create.text
-    yak_id = create.json()["id"]
+    chirp_id = create.json()["id"]
 
     voter, _ = unverified
     await set_campus(voter.id, campus_id, verified=False)
 
     response = await client.put(
-        f"/yaks/{yak_id}/vote", json={"value": 1}, headers=voter.headers
+        f"/chirps/{chirp_id}/vote", json={"value": 1}, headers=voter.headers
     )
 
     assert response.status_code == 403, response.text
@@ -192,27 +192,27 @@ async def test_a_verified_user_can_still_use_their_campus(
     user, campus_id = verified
 
     feed = await client.get(f"/campuses/{campus_id}/feed", headers=user.headers)
-    yaks = await client.get(f"/campuses/{campus_id}/yaks", headers=user.headers)
+    chirps = await client.get(f"/campuses/{campus_id}/chirps", headers=user.headers)
 
     assert feed.status_code == 200, feed.text
-    assert yaks.status_code == 200, yaks.text
+    assert chirps.status_code == 200, chirps.text
 
 
-async def test_deleting_your_own_yak_survives_a_lapsed_verification(
+async def test_deleting_your_own_chirp_survives_a_lapsed_verification(
     client: AsyncClient, verified
 ) -> None:
     """Author deletion is deliberately NOT campus-gated. Gating it would trap content:
     a student whose yearly re-check lapsed could no longer retract their own post."""
     user, campus_id = verified
     create = await client.post(
-        f"/campuses/{campus_id}/yaks", json={"body": "mine"}, headers=user.headers
+        f"/campuses/{campus_id}/chirps", json={"body": "mine"}, headers=user.headers
     )
     assert create.status_code == 201, create.text
-    yak_id = create.json()["id"]
+    chirp_id = create.json()["id"]
 
     await set_campus(user.id, campus_id, verified=False)
 
-    response = await client.delete(f"/yaks/{yak_id}", headers=user.headers)
+    response = await client.delete(f"/chirps/{chirp_id}", headers=user.headers)
 
     assert response.status_code == 204, response.text
 
@@ -222,10 +222,10 @@ async def test_deleting_your_own_yak_survives_a_lapsed_verification(
 # ---------------------------------------------------------------------------
 
 
-async def _open_report_on_a_yak(client: AsyncClient, reporter, yak_id: str) -> str:
+async def _open_report_on_a_chirp(client: AsyncClient, reporter, chirp_id: str) -> str:
     response = await client.post(
         "/moderation/reports",
-        json={"target_type": "yak", "target_id": yak_id, "reason": "test"},
+        json={"target_type": "chirp", "target_id": chirp_id, "reason": "test"},
         headers=reporter.headers,
     )
     assert response.status_code == 201, response.text
@@ -240,13 +240,13 @@ async def test_an_unverified_officer_cannot_moderate_campus_content(
 
     Jose ruled Aug 16 that moderating campus content requires a verified .edu — stricter
     than the officer-role-is-enough recommendation on that card. So a president who has
-    never proved an .edu keeps every chapter power and loses the campus Yak board.
+    never proved an .edu keeps every chapter power and loses the campus Chirp board.
 
     If this starts passing 204s back, the verification line came out of
     _require_eboard_for_campus and all three endpoints regressed together.
     """
     setup = await make_chapter_with("member")
-    # A verified author to create the yak the officer will try to remove.
+    # A verified author to create the chirp the officer will try to remove.
     from tests.conftest import verify_campus
 
     await verify_campus(setup.member.id)
@@ -254,16 +254,16 @@ async def test_an_unverified_officer_cannot_moderate_campus_content(
     assert campus.status_code == 200, campus.text
     campus_id = campus.json()["campus_id"]
 
-    yak = await client.post(
-        f"/campuses/{campus_id}/yaks", json={"body": "moderate me"}, headers=setup.member.headers
+    chirp = await client.post(
+        f"/campuses/{campus_id}/chirps", json={"body": "moderate me"}, headers=setup.member.headers
     )
-    assert yak.status_code == 201, yak.text
-    yak_id = yak.json()["id"]
-    report_id = await _open_report_on_a_yak(client, setup.member, yak_id)
+    assert chirp.status_code == 201, chirp.text
+    chirp_id = chirp.json()["id"]
+    report_id = await _open_report_on_a_chirp(client, setup.member, chirp_id)
 
     # The president is active e-board on this campus but has never verified.
-    remove_yak = await client.post(
-        f"/moderation/yaks/{yak_id}/remove",
+    remove_chirp = await client.post(
+        f"/moderation/chirps/{chirp_id}/remove",
         json={"reason": "spam"},
         headers=setup.president.headers,
     )
@@ -273,7 +273,7 @@ async def test_an_unverified_officer_cannot_moderate_campus_content(
         headers=setup.president.headers,
     )
 
-    for label, response in (("remove_yak", remove_yak), ("resolve_yak_report", resolve)):
+    for label, response in (("remove_chirp", remove_chirp), ("resolve_chirp_report", resolve)):
         assert response.status_code == 403, f"{label}: {response.text}"
         assert response.json()["detail"] == UNVERIFIED, f"{label}: {response.text}"
 
@@ -283,7 +283,7 @@ async def test_an_unverified_officer_can_still_moderate_their_own_chapter(
 ) -> None:
     """THE OTHER HALF OF c108, and the one that keeps it from being an over-reach.
 
-    _require_eboard_for_campus gates BOTH tiers - yaks, which are campus-wide, and posts
+    _require_eboard_for_campus gates BOTH tiers - chirps, which are campus-wide, and posts
     and comments, which are chapter content. Putting the .edu check in unconditionally
     would lock an unverified president out of moderating their OWN chapter's posts,
     which is the exact opposite of the ruling that chapter membership grants chapter
@@ -322,13 +322,13 @@ async def test_a_verified_officer_can_still_moderate(
     campus = await client.get(f"/chapters/{setup.chapter_id}", headers=setup.president.headers)
     campus_id = campus.json()["campus_id"]
 
-    yak = await client.post(
-        f"/campuses/{campus_id}/yaks", json={"body": "moderate me"}, headers=setup.member.headers
+    chirp = await client.post(
+        f"/campuses/{campus_id}/chirps", json={"body": "moderate me"}, headers=setup.member.headers
     )
-    assert yak.status_code == 201, yak.text
+    assert chirp.status_code == 201, chirp.text
 
     response = await client.post(
-        f"/moderation/yaks/{yak.json()['id']}/remove",
+        f"/moderation/chirps/{chirp.json()['id']}/remove",
         json={"reason": "spam"},
         headers=setup.president.headers,
     )

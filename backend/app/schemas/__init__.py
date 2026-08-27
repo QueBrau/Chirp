@@ -37,6 +37,7 @@ from app.schemas.finance import (
     SpendApprovalUpdate,
 )
 from app.schemas.identity import (
+    AttendanceOverview,
     CampusOut,
     ChapterCreate,
     ChapterInviteCreate,
@@ -44,7 +45,13 @@ from app.schemas.identity import (
     ChapterJoin,
     ChapterJoinRequest,
     ChapterOut,
+    ChapterOverview,
     ChapterUpdate,
+    DuesOverview,
+    InviteOverview,
+    LineageOverview,
+    RoleCount,
+    RosterOverview,
     MembershipOut,
     MembershipUpdate,
     UserCreate,
@@ -91,16 +98,16 @@ from app.schemas.social import (
     PostOut,
     PostUpdate,
 )
-from app.schemas.yak import (
+from app.schemas.chirp import (
     ContentReportCreate,
     ContentReportOut,
     UserBlockCreate,
     UserBlockOut,
-    YakCreate,
-    YakOut,
-    YakRemoveRequest,
-    YakVoteCreate,
-    YakVoteOut,
+    ChirpCreate,
+    ChirpOut,
+    ChirpRemoveRequest,
+    ChirpVoteCreate,
+    ChirpVoteOut,
 )
 
 __all__ = [
@@ -137,6 +144,7 @@ __all__ = [
     "SpendApprovalOut",
     "SpendApprovalUpdate",
     # identity
+    "AttendanceOverview",
     "CampusOut",
     "ChapterCreate",
     "ChapterInviteCreate",
@@ -144,7 +152,13 @@ __all__ = [
     "ChapterJoin",
     "ChapterJoinRequest",
     "ChapterOut",
+    "ChapterOverview",
     "ChapterUpdate",
+    "DuesOverview",
+    "InviteOverview",
+    "LineageOverview",
+    "RoleCount",
+    "RosterOverview",
     "MembershipOut",
     "MembershipUpdate",
     "UserCreate",
@@ -185,14 +199,14 @@ __all__ = [
     "PostLikeOut",
     "PostOut",
     "PostUpdate",
-    # yak
+    # chirp
     "ContentReportCreate",
     "ContentReportOut",
     "UserBlockCreate",
     "UserBlockOut",
-    "YakCreate",
-    "YakOut",
-    "YakRemoveRequest",
-    "YakVoteCreate",
-    "YakVoteOut",
+    "ChirpCreate",
+    "ChirpOut",
+    "ChirpRemoveRequest",
+    "ChirpVoteCreate",
+    "ChirpVoteOut",
 ]

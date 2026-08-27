@@ -22,7 +22,7 @@ import type { DeviceOut, PrekeyBundleOut } from "../api/keys";
 import type { ConversationOut, MessageOut } from "../api/messages";
 import type { PostCommentOut, PostLikeOut, PostOut } from "../api/feed";
 import type { EventOut, EventRsvpOut, RsvpStatus } from "../api/events";
-import type { YakOut } from "../api/yaks";
+import type { ChirpOut } from "../api/chirps";
 import type { ContentReportOut, UserBlockOut } from "../api/moderation";
 import type { LineageTreeOut } from "../api/lineage";
 import type { DuesCycleOut, LedgerEntryOut, SpendApprovalOut } from "../api/finance";
@@ -526,32 +526,32 @@ export const MOCK_MOMENTS: MockMoment[] = [
   { id: "mom-7", userId: "usr-noah" },
 ];
 
-// ---------- yaks (anonymous — NO author fields, SPEC §8.3) ----------
+// ---------- chirps (anonymous — NO author fields, SPEC §8.3) ----------
 
-export const MOCK_YAKS: YakOut[] = [
+export const MOCK_CHIRPS: ChirpOut[] = [
   {
-    id: "yak-1",
+    id: "chirp-1",
     campus_id: MOCK_CAMPUS.id,
     body: "the EUC put out 'street tacos' today. brother, that was a fold of sadness",
     score: 41,
     created_at: "2026-08-11T12:20:00Z",
   },
   {
-    id: "yak-2",
+    id: "chirp-2",
     campus_id: MOCK_CAMPUS.id,
     body: "whoever keeps playing saxophone on Tate Street at 8am: you're getting better and I hate that I know that",
     score: 87,
     created_at: "2026-08-11T09:02:00Z",
   },
   {
-    id: "yak-3",
+    id: "chirp-3",
     campus_id: MOCK_CAMPUS.id,
     body: "Jackson Library 4th floor AC is broken again. finals week speedrun any% sweat category",
     score: 12,
     created_at: "2026-08-10T22:47:00Z",
   },
   {
-    id: "yak-4",
+    id: "chirp-4",
     campus_id: MOCK_CAMPUS.id,
     body: "hot take: the Spartan Village geese run this campus and we just live here",
     score: -3,
@@ -559,8 +559,8 @@ export const MOCK_YAKS: YakOut[] = [
   },
 ];
 
-/** The current user's own votes (yak_id → value), so vote UI can render state. */
-export const MOCK_MY_YAK_VOTES: Record<string, 1 | -1> = { "yak-2": 1 };
+/** The current user's own votes (chirp_id → value), so vote UI can render state. */
+export const MOCK_MY_CHIRP_VOTES: Record<string, 1 | -1> = { "chirp-2": 1 };
 
 // ---------- messaging ----------
 // MOCK ONLY: mock_plaintext exists so thread screens can render. Real messages are
@@ -977,8 +977,8 @@ export const MOCK_REPORTS: ContentReportOut[] = [
   {
     id: "rpt-1",
     reporter_id: "usr-sam",
-    target_type: "yak",
-    target_id: "yak-4",
+    target_type: "chirp",
+    target_id: "chirp-4",
     forwarded_plaintext: null,
     reason: "Goose slander",
     status: "dismissed",
@@ -1018,7 +1018,11 @@ export const MOCK_ORG_EVENTS: EventOut[] = [
     chapter_id: MOCK_CHAPTER.id,
     title: "Rush Week Cookout at Peabody Park",
     cover_url: "https://picsum.photos/seed/sigchi-cookout/900/600",
-    date_label: "Sat, Aug 15 · 12:00 PM",
+    description: "Burgers, cornhole and the annual tug-of-war. Bring a friend.",
+    starts_at: "2026-08-15T16:00:00Z",
+    ends_at: "2026-08-15T20:00:00Z",
+    visibility: "campus",
+    canceled_at: null,
     location: "Peabody Park, UNCG",
     host_id: "usr-tyler",
     created_at: "2026-08-05T12:00:00Z",
@@ -1028,7 +1032,11 @@ export const MOCK_ORG_EVENTS: EventOut[] = [
     chapter_id: MOCK_CHAPTER.id,
     title: "Founders Day Formal",
     cover_url: "https://picsum.photos/seed/sigchi-formal/900/600",
-    date_label: "Sun, Sep 27 · 7:00 PM",
+    description: null,
+    starts_at: "2026-09-27T23:00:00Z",
+    ends_at: null,
+    visibility: "chapter",
+    canceled_at: null,
     location: "Blandwood Mansion, Greensboro",
     host_id: "usr-jake",
     created_at: "2026-08-06T12:00:00Z",
@@ -1038,7 +1046,11 @@ export const MOCK_ORG_EVENTS: EventOut[] = [
     chapter_id: MOCK_CHAPTER.id,
     title: "Homecoming Tailgate",
     cover_url: "https://picsum.photos/seed/sigchi-tailgate/900/600",
-    date_label: "Sat, Oct 24 · 10:00 AM",
+    description: "Tailgate opens two hours before kickoff.",
+    starts_at: "2026-10-24T14:00:00Z",
+    ends_at: null,
+    visibility: "public",
+    canceled_at: null,
     location: "Sigma Chi House, College Ave",
     host_id: "usr-priya",
     created_at: "2026-08-07T12:00:00Z",

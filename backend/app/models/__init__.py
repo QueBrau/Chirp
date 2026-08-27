@@ -2,21 +2,25 @@
 
 from app.models.alumni import AlumniProfile, JobPost
 from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
-from app.models.events import Event, EventRsvp
+from app.models.events import Event, EventInvite, EventRsvp
 from app.models.finance import (
     ChapterStripeCustomer,
-    DuesPaymentIntent,
     DuesCycle,
+    DuesPaymentIntent,
+    DuesPaymentPlan,
+    DuesPlanInstallment,
     LedgerEntry,
     ProcessedStripeEvent,
     SpendApproval,
 )
+from app.models.house import HouseBallot
 from app.models.identity import (
     Campus,
     CampusVerification,
     Chapter,
     ChapterInvite,
     Membership,
+    RoleTerm,
     User,
 )
 from app.models.lineage import Family, LineageEdge
@@ -30,7 +34,7 @@ from app.models.messaging import (
 )
 from app.models.moderation import ModerationAction
 from app.models.social import Post, PostComment, PostLike
-from app.models.yak import ContentReport, UserBlock, Yak, YakVote
+from app.models.chirp import ContentReport, UserBlock, Chirp, ChirpVote
 
 __all__ = [
     "AlumniProfile",
@@ -45,11 +49,15 @@ __all__ = [
     "ConversationMember",
     "Device",
     "DuesCycle",
+    "DuesPaymentPlan",
+    "DuesPlanInstallment",
     "Event",
+    "EventInvite",
     "EventRsvp",
     "Family",
     "JobPost",
     "KyberPrekey",
+    "HouseBallot",
     "LedgerEntry",
     "LineageEdge",
     "Meeting",
@@ -66,10 +74,11 @@ __all__ = [
     "PostComment",
     "PostLike",
     "ProcessedStripeEvent",
+    "RoleTerm",
     "SignedPrekey",
     "SpendApproval",
     "User",
     "UserBlock",
-    "Yak",
-    "YakVote",
+    "Chirp",
+    "ChirpVote",
 ]

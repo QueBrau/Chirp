@@ -34,7 +34,7 @@ export function About() {
 
             <h2>Campus-first, not Greek-first</h2>
             <p>
-              Every student gets the same Home feed and the same campus-wide Yak
+              Every student gets the same Home feed and the same campus-wide Chirp
               board. Fraternities, sororities, clubs, and intramural teams are
               orgs you can join on top of that, by invite code &mdash; never a
               requirement to use the app.

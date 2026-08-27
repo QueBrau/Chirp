@@ -12,12 +12,14 @@
     "verify:auth": "node scripts/verify-auth.mjs",
     "verify:invites": "node scripts/verify-invites.mjs",
     "verify:charts": "tsc -p tsconfig.chart-verify.json && node scripts/verify-charts.mjs",
-    "verify:contract": "node scripts/verify-contract.mjs"
+    "verify:contract": "node scripts/verify-contract.mjs",
+    "verify:dates": "node scripts/verify-dates.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/muli": "^0.1.0",
     "@expo/metro-runtime": "~6.1.2",
     "@expo/vector-icons": "^15.0.3",
+    "@react-native-async-storage/async-storage": "^2.2.0",
     "@stripe/stripe-react-native": "0.50.3",
     "babel-preset-expo": "~54.0.10",
     "d3-force": "^3.0.0",

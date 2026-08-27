@@ -1,4 +1,4 @@
-"""Yak (anonymous board) schemas: yaks, votes, content reports, user blocks."""
+"""Chirp (anonymous board) schemas: chirps, votes, content reports, user blocks."""
 
 import uuid
 from datetime import datetime
@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ReportTargetType = Literal["yak", "post", "comment", "message_forward", "user"]
+ReportTargetType = Literal["chirp", "post", "comment", "message_forward", "user"]
 ReportStatus = Literal["open", "actioned", "dismissed"]
 
 
@@ -14,14 +14,14 @@ class _Schema(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
-# ---- yaks ----
+# ---- chirps ----
 
 
-class YakCreate(_Schema):
+class ChirpCreate(_Schema):
     body: str = Field(min_length=1)
 
 
-class YakOut(_Schema):
+class ChirpOut(_Schema):
     """Anonymous to peers: NO author field of any kind (SPEC §8.3)."""
 
     id: uuid.UUID
@@ -34,14 +34,14 @@ class YakOut(_Schema):
 # ---- votes ----
 
 
-class YakVoteCreate(_Schema):
-    """Body for PUT /yaks/{yak_id}/vote."""
+class ChirpVoteCreate(_Schema):
+    """Body for PUT /chirps/{chirp_id}/vote."""
 
     value: Literal[-1, 1]
 
 
-class YakVoteOut(_Schema):
-    yak_id: uuid.UUID
+class ChirpVoteOut(_Schema):
+    chirp_id: uuid.UUID
     value: int
 
 
@@ -68,11 +68,11 @@ class ContentReportOut(_Schema):
     created_at: datetime
 
 
-# ---- moderation: yak removal ----
+# ---- moderation: chirp removal ----
 
 
-class YakRemoveRequest(_Schema):
-    """Body for POST /moderation/yaks/{yak_id}/remove."""
+class ChirpRemoveRequest(_Schema):
+    """Body for POST /moderation/chirps/{chirp_id}/remove."""
 
     reason: str = Field(min_length=1)
 

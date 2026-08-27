@@ -174,10 +174,10 @@ async def test_unsuspend_restores_access_and_is_also_audited(
     assert again.status_code == 409, again.text
 
 
-async def test_remove_yak_writes_audit_row(
+async def test_remove_chirp_writes_audit_row(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
-    """The pre-existing yak-removal route now leaves an audit trail too (it already
+    """The pre-existing chirp-removal route now leaves an audit trail too (it already
     marked removed_at/removed_reason; what was missing was WHO)."""
     chapter = await make_chapter_with("president")
     await verify_campus(chapter.president.id)
@@ -194,32 +194,32 @@ async def test_remove_yak_writes_audit_row(
         "/auth/bootstrap",
         json={
             "email": f"{uid}@example.edu",
-            "display_name": "Yakker",
+            "display_name": "Chirpker",
             "account_type": "greek",
         },
         headers=headers,
     )
     assert bootstrap.status_code == 201, bootstrap.text
     # c85: campus is server-owned, so pin it directly instead of claiming it in the
-    # bootstrap body. Without this the yak POST below 403s and the audit-row assertion
+    # bootstrap body. Without this the chirp POST below 403s and the audit-row assertion
     # never runs — which would look like the audit trail is broken rather than like
-    # the yakker simply has no campus.
+    # the chirpker simply has no campus.
     await set_campus(bootstrap.json()["id"], campus_id)
 
-    yak = await client.post(
-        f"/campuses/{campus_id}/yaks", json={"body": "bad yak"}, headers=headers
+    chirp = await client.post(
+        f"/campuses/{campus_id}/chirps", json={"body": "bad chirp"}, headers=headers
     )
-    assert yak.status_code == 201, yak.text
-    yak_id = yak.json()["id"]
+    assert chirp.status_code == 201, chirp.text
+    chirp_id = chirp.json()["id"]
 
     removal = await client.post(
-        f"/moderation/yaks/{yak_id}/remove",
+        f"/moderation/chirps/{chirp_id}/remove",
         json={"reason": "rule violation"},
         headers=chapter.president.headers,
     )
     assert removal.status_code == 204, removal.text
 
-    rows = await _moderation_action_rows("yak", yak_id)
+    rows = await _moderation_action_rows("chirp", chirp_id)
     assert len(rows) == 1, rows
     assert rows[0]["action"] == "remove_content"
     assert rows[0]["actor_id"] == uuid.UUID(chapter.president.id)
@@ -274,7 +274,7 @@ async def test_remove_content_cross_campus_is_403(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
     """An e-board member of an unrelated campus cannot remove another campus's post
-    (mirrors test_remove_yak_cross_campus_is_403 for the new generic route)."""
+    (mirrors test_remove_chirp_cross_campus_is_403 for the new generic route)."""
     chapter_a = await make_chapter_with("president")
     chapter_b = await make_chapter_with("president")
     await verify_campus(chapter_a.president.id)

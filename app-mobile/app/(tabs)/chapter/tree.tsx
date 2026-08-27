@@ -10,7 +10,7 @@
 
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 
 import { listMembers, type MemberOut } from "@/api/chapters";
 import { ApiError } from "@/api/client";
@@ -24,6 +24,7 @@ import {
 import { useSession } from "@/auth";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { AppText, Button, EmptyState, Screen } from "@/components";
+import { confirmAction, showAlert } from "@/lib/alert";
 import { radii, spacing, useTheme } from "@/theme";
 import { muli, useMuliFonts } from "@/tree/fonts";
 import { unplacedCount } from "@/tree/layout";
@@ -116,7 +117,7 @@ export default function TreeScreen() {
             },
       );
     } catch (error) {
-      Alert.alert(
+      showAlert(
         "Couldn't confirm",
         error instanceof ApiError ? error.detail : "Something went wrong. Try again.",
       );
@@ -133,31 +134,28 @@ export default function TreeScreen() {
 
   const confirmUnpair = (edge: LineageEdgeOut) => {
     if (chapterId === null) return;
-    Alert.alert(
-      "Remove this pairing?",
-      `${nameOf(edge.big_user_id)} stops being ${nameOf(edge.little_user_id)}'s big. ` +
+    confirmAction({
+      title: "Remove this pairing?",
+      message:
+        `${nameOf(edge.big_user_id)} stops being ${nameOf(edge.little_user_id)}'s big. ` +
         "The tree redraws without the branch; nothing else is deleted.",
-      [
-        { text: "Keep it", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              try {
-                await deleteEdge(chapterId, edge.id);
-                await load();
-              } catch (error) {
-                Alert.alert(
-                  "Couldn't remove it",
-                  error instanceof ApiError ? error.detail : "Something went wrong. Try again.",
-                );
-              }
-            })();
-          },
-        },
-      ],
-    );
+      confirmLabel: "Remove",
+      cancelLabel: "Keep it",
+      destructive: true,
+      onConfirm: () => {
+        void (async () => {
+          try {
+            await deleteEdge(chapterId, edge.id);
+            await load();
+          } catch (error) {
+            showAlert(
+              "Couldn't remove it",
+              error instanceof ApiError ? error.detail : "Something went wrong. Try again.",
+            );
+          }
+        })();
+      },
+    });
   };
 
   if (!fontsLoaded) {
@@ -273,11 +271,13 @@ export default function TreeScreen() {
             onSelectUser={setSelectedUserId}
           />
 
-          {selectedUserId ? (
+          {selectedUserId && chapterId !== null ? (
             <NodeDetail
               tree={tree}
               userId={selectedUserId}
               onClose={() => setSelectedUserId(null)}
+              chapterId={chapterId}
+              eboard={roleMeta?.eboard ?? []}
               canEdit={canEdit}
               onChangeBig={(littleId) => openPair(littleId, null)}
               onAddLittle={(bigId) => openPair(null, bigId)}

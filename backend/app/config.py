@@ -12,6 +12,27 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://chirp:chirp@localhost:5432/chirp"
     redis_url: str = "redis://localhost:6379/0"
+    # Connection-pool arithmetic (board c207 - S2 of the Aug 26 architecture review).
+    # THE INVARIANT: Cloud Run max-instances x (db_pool_size + db_max_overflow), plus
+    # Postgres's superuser-reserved slots (3) and one proxy/migration session, must
+    # stay <= the database's max_connections. Live topology these defaults were sized
+    # against: maxScale 4 x (3 + 2) = 20 demanded, against db-f1-micro's default
+    # max_connections of 25. maxScale=4 was read from the live service (gcloud run
+    # services describe, Aug 27); it was set at first deploy and the annotation
+    # persists across --source redeploys, which is why DEPLOY.md's everyday command
+    # never passes it. The c153 media reconciler is a separate process on this same
+    # pool config; it holds at most one connection, sequentially, and fits inside the
+    # same headroom. The previous hardcoded 5 + 10 = 15 per instance demanded
+    # 60: the database refused connections while every instance sat at near-zero CPU,
+    # which autoscaling cannot see (S1/c205 explains why CPU never moves). Raising
+    # max-instances, the tier, or these numbers means re-doing that arithmetic -
+    # tests/test_db_pool_config.py pins it so the change is conscious.
+    db_pool_size: int = 3
+    db_max_overflow: int = 2
+    # Fail fast: SQLAlchemy's default 30s checkout wait turns pool exhaustion into
+    # requests that hang half a minute before erroring. 10s still rides out a burst
+    # but surfaces saturation while the client is plausibly still waiting.
+    db_pool_timeout: int = 10
     # Deployment tier; non-"local" values enforce safer defaults at startup (SECURITY-REVIEW
     # finding 5) — see app.main.create_app.
     env: Literal["local", "staging", "production"] = "local"
@@ -24,7 +45,7 @@ class Settings(BaseSettings):
     # rejects custom schemes, so a chirp:// deep link cannot be used directly.
     app_public_base_url: str | None = None
     cors_origins: list[str] = ["*"]
-    # Soft-deleted posts/comments/yaks are hard-deleted by app.jobs.purge once this many
+    # Soft-deleted posts/comments/chirps are hard-deleted by app.jobs.purge once this many
     # days have passed since deleted_at/removed_at. Matches the 30-day response window
     # /privacy section 14 already commits to (board c69) — do not let these drift apart.
     purge_retention_days: int = 30

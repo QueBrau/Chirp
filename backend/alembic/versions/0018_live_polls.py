@@ -16,11 +16,15 @@ unrepresentable rather than merely discouraged:
    wrong in a way no test would think to look for: every count is a plausible
    number, just not the right one.
 
-PARENTED ON 0013, WHICH IS THE HEAD. Not on 0017, which is the highest filename
-and is in the middle of the chain: 0011 -> 0014 -> 0017 -> 0015 -> 0016 -> 0013.
-Alembic walks down_revision, not filenames. `alembic heads` was run and read 0013
-before this file was written, per HANDOFF's migration rules, and 0018 was claimed
-on the board first so a second branch cannot take the same number.
+PARENTED ON 0026, THE HEAD AT MERGE TIME (Aug 27). This file was written when the
+head was 0013 and originally parented there, but 0019 (c102) took 0013 as its
+parent and merged first, so keeping 0013 here would have produced two heads the
+moment this branch landed - the same trap 0024/c198 hit. Re-pointed at merge per
+HANDOFF's rule: the side that has not merged re-points at the current head (which
+moved again, 0025 -> 0026, between the first re-point and this one - c208's index
+merged mid-takeover). The revision id stays 0018 per the Aug 24 ruling; filename
+order != chain order in this repo and 0018 now ends the chain:
+... -> 0023 -> 0024 -> 0025 -> 0026 -> 0018.
 
 Ballot secrecy is a schema-level intent here too: nothing in the read path joins
 poll_votes to users, and no index invites it. See models/polls.py.
@@ -32,7 +36,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "0018"
-down_revision = "0013"
+down_revision = "0026"
 branch_labels = None
 depends_on = None
 

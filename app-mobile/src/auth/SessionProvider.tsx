@@ -79,7 +79,7 @@ export interface SessionContextValue {
   /**
    * Whether the user currently holds a valid .edu verification (c110).
    *
-   * REQUIRED FOR ANY CAMPUS-CONTENT DECISION. Since c88 the campus feed and Yak
+   * REQUIRED FOR ANY CAMPUS-CONTENT DECISION. Since c88 the campus feed and Chirp
    * are gated on a verification timestamp, NOT on having a campus_id — a user who
    * joined by chapter invite has a campus and is still refused. Screens that branch
    * on `user.campus_id !== null` will send that user into a 403.

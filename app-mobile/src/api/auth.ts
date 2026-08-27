@@ -81,7 +81,7 @@ export interface CampusVerificationStatus {
  * The caller's .edu verification state.
  *
  * WHY THIS EXISTS RATHER THAN A campus_id CHECK (c110): since c88 the campus feed
- * and Yak are gated on a verification timestamp, not on having a campus. A user
+ * and Chirp are gated on a verification timestamp, not on having a campus. A user
  * who joined by chapter invite HAS a campus_id and is still refused, so branching
  * on `user.campus_id !== null` sends them down the call-the-endpoint path into a
  * 403 — which is exactly the mistake the server was just moved off.
@@ -95,7 +95,7 @@ export async function startCampusVerification(eduEmail: string): Promise<void> {
   await request("/auth/campus-verification", { method: "POST", body: { edu_email: eduEmail } });
 }
 
-/** Redeem a code; on success the campus feed and Yak open. */
+/** Redeem a code; on success the campus feed and Chirp open. */
 export async function redeemCampusVerification(code: string): Promise<CampusVerificationStatus> {
   return request<CampusVerificationStatus>("/auth/campus-verification/redeem", {
     method: "POST",

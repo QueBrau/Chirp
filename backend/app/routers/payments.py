@@ -1,14 +1,16 @@
 """Payments: Stripe Connect onboarding, dues PaymentIntents, and the webhook sink."""
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import get_settings
+from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
 from app.core.permissions import Role, require_role
 from app.db import get_session
@@ -24,6 +26,7 @@ from app.schemas.payments import (
 from app.services import stripe_service
 
 router = APIRouter(tags=["payments"])
+logger = logging.getLogger(__name__)
 
 
 def _onboarding_urls() -> tuple[str, str]:
@@ -175,15 +178,79 @@ async def create_dues_payment_intent(
     if membership.scalar_one_or_none() is None:
         raise forbidden("not_a_member")
 
-    already_paid = await session.execute(
-        select(models.LedgerEntry.id).where(
-            models.LedgerEntry.dues_cycle_id == cycle_id,
-            models.LedgerEntry.related_user_id == user.id,
-            models.LedgerEntry.entry_type == "dues_payment",
+    # c195: a member on an ACTIVE payment plan pays this cycle in installments, not
+    # through this self-serve full-cycle charge path. Checked BEFORE the existence
+    # guard below so the reason surfaced is specific (on_payment_plan) rather than
+    # the generic already_paid/refunded_contact_treasurer split, which assumes a
+    # single lump-sum obligation and would be a confusing lie to a plan member who
+    # has paid some, but not all, of what they owe. The mobile client is expected to
+    # gate this itself (it shows the installment schedule instead of a pay button for
+    # a plan member), but that is a client-side courtesy, not the security boundary —
+    # this is.
+    active_plan = await session.execute(
+        select(models.DuesPaymentPlan.id).where(
+            models.DuesPaymentPlan.dues_cycle_id == cycle_id,
+            models.DuesPaymentPlan.user_id == user.id,
+            models.DuesPaymentPlan.status == "active",
         )
     )
-    if already_paid.scalar_one_or_none() is not None:
-        raise conflict("already_paid")
+    if active_plan.scalar_one_or_none() is not None:
+        raise conflict("on_payment_plan")
+
+    # EXISTENCE still blocks the charge path (board c172) — re-payment for one dues
+    # cycle is structurally UNREPRESENTABLE in this ledger today, not merely
+    # undesirable: uq_ledger_dues_payment_once allows at most one dues_payment row
+    # per (cycle, member) EVER, so a second Stripe payment settling here would
+    # capture real money at Stripe and then silently have no ledger row to show for
+    # it when the webhook's insert loses to that constraint (see _record_dues_payment
+    # and the RESIDUAL EDGE note below). An earlier version of this fix let net<=0
+    # (a full refund) through to Stripe, which is exactly the money-loss path — closed
+    # by going back to existence, not by NOT netting at all: dues_contributions_subquery
+    # (same definition chapter_overview reads, board c171) still decides WHICH honest
+    # reason accompanies the block, so the two surfaces agree on whether the member
+    # owes money even though this endpoint cannot yet let them pay again. Actually
+    # reopening self-serve repayment after a refund needs the cycle/member's dues
+    # status modeled explicitly (c83-shaped work), not a same-day guard change.
+    #
+    # c195 ADDS 'dues_installment' to this existence check's entry_type filter. A
+    # member who FINISHED a payment plan has entry_type='dues_installment' rows on
+    # the ledger and — because they never paid through this lump-sum path — NO
+    # dues_payment row. Leaving this filtered to 'dues_payment' alone would silently
+    # reopen exactly the double-charge this whole guard exists to close: the active-
+    # plan check above only catches an IN-PROGRESS plan, so a completed one would
+    # sail through both checks and let this route create a second, full-price Stripe
+    # intent for a cycle already paid off in installments. Matching both types here
+    # reuses the existing net-based reason split below rather than inventing a new
+    # one — dues_contributions_subquery already nets both types together (c195,
+    # app/core/dues_status.py), so a completed plan's net reads as >= the cycle
+    # amount and this correctly resolves to already_paid.
+    # LIMIT 1: unlike a bare 'dues_payment' row (uq_ledger_dues_payment_once caps that
+    # at exactly one per cycle/member, so scalar_one_or_none() used to be safe on its
+    # own), a member can have SEVERAL 'dues_installment' rows for one cycle — one per
+    # installment recorded. Without the limit, scalar_one_or_none() raises
+    # MultipleResultsFound the moment a plan member has paid a second installment;
+    # this query only needs to know whether at least one qualifying row exists.
+    existing_payment = await session.execute(
+        select(models.LedgerEntry.id)
+        .where(
+            models.LedgerEntry.dues_cycle_id == cycle_id,
+            models.LedgerEntry.related_user_id == user.id,
+            models.LedgerEntry.entry_type.in_(("dues_payment", "dues_installment")),
+        )
+        .limit(1)
+    )
+    if existing_payment.scalar_one_or_none() is not None:
+        contributions = dues_contributions_subquery(cycle.chapter_id, cycle.id)
+        net_cents = await session.scalar(
+            select(func.coalesce(func.sum(contributions.c.amount_cents), 0)).where(
+                contributions.c.user_id == user.id
+            )
+        )
+        # net > 0: the money is genuinely still in hand — "already_paid" (unchanged).
+        # net <= 0: a correction refunded it, and the member DOES owe again, but this
+        # endpoint cannot self-serve that yet — say so rather than repeating the
+        # already_paid lie the President overview no longer tells.
+        raise conflict("already_paid" if net_cents > 0 else "refunded_contact_treasurer")
 
     chapter = await session.get(models.Chapter, cycle.chapter_id)
     if chapter is None or chapter.stripe_account_id is None:
@@ -211,14 +278,22 @@ async def create_dues_payment_intent(
     reservation = live.scalar_one_or_none()
     if reservation is not None:
         if reservation.status == "succeeded":
+            # Effectively unreachable in normal operation (board c172): a reservation
+            # only reaches 'succeeded' via the webhook's _resolve_reservation, which
+            # commits in the SAME transaction as _record_dues_payment's ledger insert
+            # — so whenever this is true, the existence check above has already
+            # raised (with the honest already_paid/refunded_contact_treasurer split)
+            # before this line runs. Left as a defensive backstop rather than removed,
+            # matching uq_ledger_dues_payment_once's own "independent of the
+            # reservation" backstop reasoning (migration 0010).
             raise conflict("already_paid")
         if reservation.rail != body.rail:
             # THE double-charge case: an ACH debit is still processing (days) and
             # the member is now trying to pay the same cycle by card. The per-rail
             # Stripe idempotency key would happily mint a second real intent.
             raise conflict("payment_already_in_progress")
-        # Same rail — an ordinary client retry. Reuse the reservation; the
-        # idempotency key is identical, so Stripe resolves it to the same intent.
+        # Same rail — an ordinary client retry. Handled below: reused if we already
+        # have a stored intent id, created if we do not.
     else:
         reservation = models.DuesPaymentIntent(
             chapter_id=chapter.id, dues_cycle_id=cycle.id, user_id=user.id, rail=body.rail
@@ -232,25 +307,46 @@ async def create_dues_payment_intent(
             await session.rollback()
             raise conflict("payment_already_in_progress") from None
 
-    try:
-        intent = await stripe_service.create_dues_payment_intent(
-            account_id=account_id,
-            customer_id=customer_id,
-            amount_cents=cycle.amount_cents,
-            rail=body.rail,
-            cycle_id=cycle.id,
-            user_id=user.id,
-            chapter_id=chapter.id,
+    if reservation.stripe_payment_intent_id is not None:
+        # A same-rail retry against an intent we already created (board c193). Stripe
+        # only retains an idempotency key for 24h, while ACH can sit in 'processing'
+        # for DAYS with no payment_intent.processing webhook to move the reservation
+        # out of 'open' in the meantime — a create() call here past that window would
+        # mint a genuinely NEW real intent (a second bank debit) instead of resolving
+        # to the original. Retrieve, never create, once an intent id is on file.
+        intent = await stripe_service.retrieve_payment_intent(
+            account_id, reservation.stripe_payment_intent_id
         )
-    except Exception:
-        # Stripe never created an intent, so the reservation must not keep
-        # blocking a legitimate retry.
-        reservation.status = "canceled"
-        await session.commit()
-        raise
+    else:
+        # Either a freshly-inserted reservation (the else branch above), or one that
+        # exists but has not gotten a Stripe answer yet — either way there is no
+        # intent to retrieve, so this is the only branch allowed to create one, and
+        # therefore the only branch allowed to cancel the reservation if Stripe
+        # rejects the call.
+        try:
+            intent = await stripe_service.create_dues_payment_intent(
+                account_id=account_id,
+                customer_id=customer_id,
+                amount_cents=cycle.amount_cents,
+                rail=body.rail,
+                cycle_id=cycle.id,
+                user_id=user.id,
+                chapter_id=chapter.id,
+            )
+        except Exception:
+            # Stripe never created an intent, so the reservation must not keep
+            # blocking a legitimate retry. Safe ONLY here: stripe_payment_intent_id
+            # was still None going in, so this reservation was never live at Stripe.
+            # A reservation that already points at a live intent must NEVER be
+            # canceled from an exception — that would release uq_dues_intent_live
+            # and reopen the cross-rail double-charge this guard exists to close.
+            reservation.status = "canceled"
+            await session.commit()
+            raise
 
-    reservation.stripe_payment_intent_id = intent.id
-    await session.commit()
+        reservation.stripe_payment_intent_id = intent.id
+        await session.commit()
+
     customer_session_secret = await stripe_service.create_customer_session(
         account_id, customer_id
     )
@@ -322,6 +418,45 @@ async def _record_dues_payment(session: AsyncSession, intent: dict) -> None:
     )
 
 
+async def _log_if_second_capture_unrecordable(session: AsyncSession, intent: dict) -> None:
+    """After a commit loses to a constraint, tell whether real money just went
+    unrecorded (board c193, finding 5).
+
+    uq_ledger_dues_payment_once does not know WHY an insert lost to it — an exact
+    replay of the intent we already recorded hits it too (the index has no intent id
+    in its key), and that case is harmless: the ledger already holds the money. Only
+    a DIFFERENT intent id losing here is the dangerous case: Stripe captured real
+    money on a second, distinct PaymentIntent for this (cycle, member), and this
+    append-only ledger can structurally never hold a second dues_payment row for it
+    (board c172). That capture is now invisible unless this line exists. Only
+    internal ids are logged — never email, name, or the raw event payload.
+    """
+    metadata = intent.get("metadata") or {}
+    cycle_id = metadata.get("chirp_dues_cycle_id")
+    user_id = metadata.get("chirp_user_id")
+    if not cycle_id or not user_id:
+        return
+
+    recorded = await session.execute(
+        select(models.LedgerEntry.stripe_payment_intent_id).where(
+            models.LedgerEntry.dues_cycle_id == uuid.UUID(cycle_id),
+            models.LedgerEntry.related_user_id == uuid.UUID(user_id),
+            models.LedgerEntry.entry_type == "dues_payment",
+        )
+    )
+    recorded_intent_id = recorded.scalar_one_or_none()
+    if recorded_intent_id is not None and recorded_intent_id != intent["id"]:
+        logger.error(
+            "dues payment reconciliation: cycle=%s user=%s intent=%s captured but "
+            "NOT recorded on the ledger — a dues_payment for a DIFFERENT intent (%s) "
+            "is already there. Verify both against Stripe and reconcile manually.",
+            cycle_id,
+            user_id,
+            intent["id"],
+            recorded_intent_id,
+        )
+
+
 @router.post("/webhooks/stripe")
 async def stripe_webhook(
     request: Request,
@@ -359,6 +494,13 @@ async def stripe_webhook(
     try:
         await session.commit()
     except IntegrityError:
-        # Replayed event id, or a second event for an intent already in the ledger.
+        # Replayed event id, or a second event for an intent already in the ledger —
+        # or (board c193, finding 5) a genuine second capture on a DIFFERENT intent
+        # that this append-only ledger can never hold. Distinguish and surface the
+        # dangerous case rather than swallowing it silently; still return 200 below
+        # either way, because a non-2xx just makes Stripe retry an event that can
+        # never succeed.
         await session.rollback()
+        if event["type"] == "payment_intent.succeeded":
+            await _log_if_second_capture_unrecordable(session, event["data"]["object"])
     return {"received": True}

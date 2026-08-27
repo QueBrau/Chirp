@@ -2,8 +2,8 @@
  * Tabs layout with the DESIGN.md §5 floating pill tab bar:
  * surface container radius 28, inset 12 horizontal / 8 bottom, border + card
  * shadow. Active tab = accentSoft pill behind accent Feather icon+label;
- * inactive = inkFaint Feather icon only. Tabs: Home, Yak, Messages, Orgs, Profile
- * (route dirs stay feed/yak/messages/chapter/profile for backend parity).
+ * inactive = inkFaint Feather icon only. Tabs: Home, Chirps, Messages, Orgs, Profile
+ * (route dirs stay feed/chirps/messages/chapter/profile for backend parity).
  */
 
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
@@ -24,7 +24,7 @@ type FeatherIconName = ComponentProps<typeof Feather>["name"];
 /** Route name → tab label + Feather icon (DESIGN §7: home/radio/message-circle/grid/user). */
 const TAB_META: Record<string, { label: string; icon: FeatherIconName }> = {
   feed: { label: "Home", icon: "home" },
-  yak: { label: "Yak", icon: "radio" },
+  chirps: { label: "Chirps", icon: "radio" },
   messages: { label: "Messages", icon: "message-circle" },
   chapter: { label: "Orgs", icon: "grid" },
   profile: { label: "Profile", icon: "user" },
@@ -39,7 +39,8 @@ function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   // Slides the pill down past its own height plus the bottom inset and fades it,
   // driven by the shared value Screen's scroll handler writes. Kept as a
   // transform+opacity so it never affects layout — content clearance
-  // (TAB_BAR_CLEARANCE) stays constant whether the bar is shown or hidden.
+  // (Screen's useOverlayClearance, theme/index.ts) stays constant whether the
+  // bar is shown or hidden.
   const animatedStyle = useAnimatedStyle(() => {
     const shown = tabBar?.visible.value ?? 1;
     return {
@@ -154,7 +155,7 @@ export default function TabsLayout() {
         screenOptions={{ headerShown: false }}
       >
         <Tabs.Screen name="feed" options={{ title: "Home" }} />
-        <Tabs.Screen name="yak" options={{ title: "Yak" }} />
+        <Tabs.Screen name="chirps" options={{ title: "Chirps" }} />
         <Tabs.Screen name="messages" options={{ title: "Messages" }} />
         <Tabs.Screen name="chapter" options={{ title: "Orgs" }} />
         <Tabs.Screen name="profile" options={{ title: "Profile" }} />

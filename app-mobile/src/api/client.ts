@@ -141,6 +141,23 @@ export async function requestText(path: string, options: RequestOptions = {}): P
 }
 
 /**
+ * Same auth/URL/error handling as `request`, but also returns the raw response
+ * Headers alongside the parsed JSON body. For the rare endpoint that carries
+ * metadata OUTSIDE the body — today just GET /chapters/{id}/posts' actives-only
+ * "hidden content exists" signal (board c102) — rather than changing that
+ * endpoint's long-established bare-array response shape, which several existing
+ * backend tests and app-mobile's own listPosts() already parse directly.
+ */
+export async function requestWithHeaders<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<{ data: T; headers: Headers }> {
+  const response = await fetchWithAuthRetry(path, options);
+  const data = await parseResponse<T>(response);
+  return { data, headers: response.headers };
+}
+
+/**
  * WebSocket URL for the gateway at `/ws` — no auth material on it (security-pass
  * item 7, ~Aug 22). It used to carry `?token=` because RN's WebSocket
  * constructor can't set arbitrary headers, but Cloud Run logs the full request

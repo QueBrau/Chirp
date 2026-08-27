@@ -79,7 +79,7 @@ CAST = [
     # A second chapter, so org colour scoping (DESIGN §8.6) is provable rather than
     # assumed: this president's whole Orgs stack should render in ADPi's colours.
     ("dev-sorority-president", "Naomi Frazier", "naomi", "greek", "president", "adpi", True),
-    # c71's first-class user: belongs to no org at all. Campus tab and Yak work,
+    # c71's first-class user: belongs to no org at all. Campus tab and Chirp work,
     # the Orgs tab shows the "find your org" state.
     ("dev-campus-student", "Dana Brooks", "dana", "non_greek", None, None, True),
     # The c88 gate state. Has a campus but NO .edu verification, so campus content
@@ -91,25 +91,33 @@ CAST = [
     ("dev-admin", "Platform Admin", "admin", "non_greek", None, None, True),
 ]
 
+# (days ago, entry_type, cents, category, description, payer uid or None)
+#
+# THE PAYER UID IS LOAD-BEARING, not decoration. Every dues_payment here used to name
+# its payer in the DESCRIPTION only and leave related_user_id NULL, so the money existed
+# and belonged to nobody. Anything that answers "who has paid" by grouping on that column
+# read zero: the President overview (c171) showed "$2,250 collected / 0 of 8 paid" on a
+# freshly seeded stack, and the double-charge guard (payments.py) would have let every
+# seeded member pay again. Production was never affected - the Stripe webhook sets
+# related_user_id - so this was purely a fixture lying to whoever opened the app next.
 LEDGER = [
-    # (days ago, entry_type, cents, category, description)
     # Opening carryover, so the running-balance line starts somewhere real rather
     # than at zero and the chapter is not left looking insolvent on a demo screen.
-    (104, "budget_allocation", 150_000, "carryover", "Carryover from spring term"),
-    (95, "dues_payment", 45_000, "dues", "Dues - Marcus Webb"),
-    (94, "dues_payment", 45_000, "dues", "Dues - Andre Coleman"),
-    (93, "dues_payment", 45_000, "dues", "Dues - Priya Raman"),
-    (88, "expense", -48_000, "rush", "Rush week cookout"),
-    (74, "expense", -96_000, "formal", "Formal venue deposit"),
-    (66, "dues_payment", 45_000, "dues", "Dues - Jordan Ellis"),
-    (54, "expense", -31_000, "house", "House repairs"),
-    (43, "expense", -22_000, "philanthropy", "Derby Days donation"),
-    (36, "budget_allocation", 30_000, "operations", "Operating float"),
-    (31, "expense", -14_500, "letters", "Chapter letters and merch"),
-    (22, "dues_payment", 45_000, "dues", "Dues - Chris Delgado"),
-    (15, "expense", -9_000, "socials", "Mixer supplies"),
-    (8, "expense", -6_200, "operations", "Printing and postage"),
-    (3, "expense", -4_100, "philanthropy", "Canned food drive"),
+    (104, "budget_allocation", 150_000, "carryover", "Carryover from spring term", None),
+    (95, "dues_payment", 45_000, "dues", "Dues - Marcus Webb", "dev-president"),
+    (94, "dues_payment", 45_000, "dues", "Dues - Andre Coleman", "dev-vice-president"),
+    (93, "dues_payment", 45_000, "dues", "Dues - Priya Raman", "dev-treasurer"),
+    (88, "expense", -48_000, "rush", "Rush week cookout", None),
+    (74, "expense", -96_000, "formal", "Formal venue deposit", None),
+    (66, "dues_payment", 45_000, "dues", "Dues - Jordan Ellis", "dev-secretary"),
+    (54, "expense", -31_000, "house", "House repairs", None),
+    (43, "expense", -22_000, "philanthropy", "Derby Days donation", None),
+    (36, "budget_allocation", 30_000, "operations", "Operating float", None),
+    (31, "expense", -14_500, "letters", "Chapter letters and merch", None),
+    (22, "dues_payment", 45_000, "dues", "Dues - Chris Delgado", "dev-member"),
+    (15, "expense", -9_000, "socials", "Mixer supplies", None),
+    (8, "expense", -6_200, "operations", "Printing and postage", None),
+    (3, "expense", -4_100, "philanthropy", "Canned food drive", None),
 ]
 
 
@@ -219,7 +227,7 @@ async def main() -> None:
             )
         ).scalars().all()
         if not existing_entries:
-            for days_ago, entry_type, cents, category, description in LEDGER:
+            for days_ago, entry_type, cents, category, description, payer_uid in LEDGER:
                 session.add(
                     models.LedgerEntry(
                         chapter_id=sigma.id,
@@ -230,6 +238,12 @@ async def main() -> None:
                         created_by=treasurer.id,
                         created_at=NOW - timedelta(days=days_ago),
                         dues_cycle_id=cycle.id if entry_type == "dues_payment" else None,
+                        # Attributed, so "who has paid" is answerable from the column
+                        # rather than only from the description text. Deliberately leaves
+                        # three of the eight actives unpaid - a roster where everyone has
+                        # paid cannot show the outstanding state any dues screen exists to
+                        # surface.
+                        related_user_id=users[payer_uid].id if payer_uid else None,
                     )
                 )
 

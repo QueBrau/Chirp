@@ -30,7 +30,7 @@ export function HowItWorks() {
                 <h2 className="headline">Sign up with your school email</h2>
                 <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
                   Create an account with your school email and pick your campus.
-                  That&rsquo;s what puts you on the right Home feed and the right Yak
+                  That&rsquo;s what puts you on the right Home feed and the right Chirp
                   board.
                 </p>
               </div>

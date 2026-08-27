@@ -26,7 +26,7 @@ export default function PostJobScreen() {
 
   const inputStyle = {
     ...typography.body,
-    color: palette.textPrimary,
+    color: palette.ink,
     backgroundColor: palette.surface,
     borderWidth: 1,
     borderColor: palette.border,
@@ -75,7 +75,7 @@ export default function PostJobScreen() {
             value={title}
             onChangeText={setTitle}
             placeholder="e.g. Summer Analyst Intern"
-            placeholderTextColor={palette.textTertiary}
+            placeholderTextColor={palette.inkFaint}
             style={inputStyle}
           />
         </View>
@@ -88,7 +88,7 @@ export default function PostJobScreen() {
             value={company}
             onChangeText={setCompany}
             placeholder="Where you're hiring"
-            placeholderTextColor={palette.textTertiary}
+            placeholderTextColor={palette.inkFaint}
             style={inputStyle}
           />
         </View>
@@ -101,7 +101,7 @@ export default function PostJobScreen() {
             value={location}
             onChangeText={setLocation}
             placeholder="City, hybrid, or Remote"
-            placeholderTextColor={palette.textTertiary}
+            placeholderTextColor={palette.inkFaint}
             style={inputStyle}
           />
         </View>
@@ -114,7 +114,7 @@ export default function PostJobScreen() {
             value={description}
             onChangeText={setDescription}
             placeholder="What the role is, who should apply, how members can reach you"
-            placeholderTextColor={palette.textTertiary}
+            placeholderTextColor={palette.inkFaint}
             multiline
             style={[inputStyle, { minHeight: 120, textAlignVertical: "top" }]}
           />
@@ -128,7 +128,7 @@ export default function PostJobScreen() {
             value={applyUrl}
             onChangeText={setApplyUrl}
             placeholder="https://"
-            placeholderTextColor={palette.textTertiary}
+            placeholderTextColor={palette.inkFaint}
             autoCapitalize="none"
             keyboardType="url"
             style={inputStyle}

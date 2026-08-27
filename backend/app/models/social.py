@@ -13,8 +13,14 @@ from app.db import Base
 class Post(Base):
     __tablename__ = "posts"
     __table_args__ = (
+        # 'org_actives' added by migration 0019 (board c102): a third value layered
+        # ON TOP of 'org' rather than a fourth privacy dimension - it is still
+        # chapter-scoped exactly like 'org' (ck_posts_org_requires_chapter below
+        # still applies, since its OR clause only exempts 'campus'), just visible to
+        # a narrower slice of the same chapter. See routers/feed.py list_posts for
+        # the actual gate.
         CheckConstraint(
-            "audience IN ('org', 'campus')",
+            "audience IN ('org', 'campus', 'org_actives')",
             name="ck_posts_audience",
         ),
         CheckConstraint(
@@ -74,9 +80,11 @@ class Post(Base):
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
     media_urls: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
-    # 'org' (private to the chapter) or 'campus' (visible campus-wide); author-chosen
-    # at compose time, defaults to 'org' so a client that omits it never accidentally
-    # broadcasts (board Decisions log, Aug 14).
+    # 'org' (chapter-public - any non-removed member), 'campus' (visible campus-wide),
+    # or 'org_actives' (chapter-scoped like 'org', but only a viewer whose OWN
+    # membership.status == 'active' sees it - board c102). Author-chosen at compose
+    # time, defaults to 'org' so a client that omits it never accidentally broadcasts
+    # (board Decisions log, Aug 14).
     audience: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'org'")
     )
@@ -110,6 +118,19 @@ class PostLike(Base):
 
 class PostComment(Base):
     __tablename__ = "post_comments"
+    __table_args__ = (
+        # Every reader of this table filters (post_id, deleted_at IS NULL): the feed's
+        # comment count in routers/feed.py _post_counts_select, and list_comments. Until
+        # 0026 the only index here was the primary key on `id`, so both seq-scanned the
+        # whole table - 50 times per feed page. Partial so deleted rows are not carried;
+        # created_at trailing so the same index also serves list_comments' ORDER BY.
+        Index(
+            "idx_post_comments_post_live",
+            "post_id",
+            "created_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")

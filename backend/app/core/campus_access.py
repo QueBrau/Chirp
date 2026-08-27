@@ -2,8 +2,8 @@
 
 EVERY campus-wide read and write goes through here. Not "should" — the whole reason
 this module exists rather than an if-statement per route is that routers/feed.py and
-routers/yaks.py each grew their own copy of the old check, and yaks.py then grew a
-THIRD copy inline in vote_yak that the shared dependency never covered. A check that
+routers/chirps.py each grew their own copy of the old check, and chirps.py then grew a
+THIRD copy inline in vote_chirp that the shared dependency never covered. A check that
 lives in three places is a check someone forgets to add to place number four.
 
 WHAT CHANGED AND WHY IT IS NOT A REFACTOR. The old check was:
@@ -14,7 +14,7 @@ That asks "is this user associated with this campus". It was safe only while not
 wrote users.campus_id. c96 made redeeming a chapter invite write it, and per c105 an
 invite code is an unlimited-use bearer token with no revocation, so that question
 became answerable by anyone holding a forwarded code. Jose ruled on Aug 16 that
-chapter membership grants CHAPTER content only and that the campus feed and Yak both
+chapter membership grants CHAPTER content only and that the campus feed and Chirp both
 require a real .edu. So the question changed to "has this user PROVED an address at
 this campus, recently". Both halves are required, and the second is the new one.
 
@@ -79,7 +79,7 @@ async def require_campus_member(
     """FastAPI dependency for routes with `{campus_id}` in the path.
 
     Replaces the `_require_campus_user` helpers that used to live in feed.py and
-    yaks.py separately.
+    chirps.py separately.
     """
     require_verified_campus(user, campus_id)
     return user

@@ -23,45 +23,40 @@
  * server invariant here would be c83's scope, not this card's.
  */
 
+import { useRouter } from "expo-router";
+import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, TextInput, View } from "react-native";
+import { Pressable, TextInput, View } from "react-native";
 
 import {
   getChapter,
+  getChapterOverview,
   listMembers,
   updateChapter,
   updateMember,
   type ChapterOut,
+  type ChapterOverview,
   type MemberOut,
   type MembershipStatus,
   type RoleName,
 } from "@/api/chapters";
-import { ApiError } from "@/api/client";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
+import { calendarDay } from "@/lib/dates";
+import { chipVariant, roleLabel } from "@/lib/roleTerms";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
+import { currentSemesterWindow } from "@/org/semester";
 import {
   AppText,
   Button,
   Card,
   Chip,
-  type ChipVariant,
   EmptyState,
   GradientAvatar,
   ListRow,
   Screen,
   SectionHeader,
 } from "@/components";
-import { radii, spacing, typography, useTheme } from "@/theme";
-
-const ROLE_LABELS: Record<RoleName, string> = {
-  president: "President",
-  vice_president: "Vice President",
-  treasurer: "Treasurer",
-  secretary: "Secretary",
-  historian: "Historian",
-  member: "Member",
-  pledge: "Pledge",
-  alumni: "Alum",
-};
+import { radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 const STATUS_LABELS: Record<MembershipStatus, string> = {
   active: "Active",
@@ -69,32 +64,206 @@ const STATUS_LABELS: Record<MembershipStatus, string> = {
   removed: "Removed",
 };
 
-function prettifyRole(role: string): string {
-  return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+/**
+ * Whole-dollar money for the summary tiles.
+ *
+ * The ledger shows exact cents and treasurer.tsx is the authority for them; at a
+ * glance the cents are noise that pushes the figure wider than the tile it sits in,
+ * and the exact number is one screen away either way. Same reasoning as
+ * treasurer.tsx's dollarsRounded, which this deliberately mirrors rather than
+ * inventing a third money format.
+ */
+function dollarsRounded(cents: number): string {
+  return (cents / 100).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  });
 }
 
-function chipVariant(role: RoleName, eboard: RoleName[]): ChipVariant {
-  if (eboard.includes(role)) return "accent";
-  return role === "pledge" ? "warning" : "neutral";
+/** Due date as a calendar day. See @/lib/dates for why this cannot use the raw value. */
+function dueDate(isoDay: string): string {
+  return calendarDay(isoDay).toLocaleDateString(undefined, {
+    month: "long",
+    day: "numeric",
+  });
 }
 
 function shortUserId(userId: string): string {
   return userId.length > 12 ? `${userId.slice(0, 6)}…${userId.slice(-4)}` : userId;
 }
 
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
+/**
+ * The at-a-glance half of the President dashboard (board card c171).
+ *
+ * DESIGN.md rule 1 (zones, not card soup) drives the shape: one prominent money card,
+ * a two-up row of compact counts, then a quiet attention list that only renders rows
+ * that need action. An even stack of identical cards is the slop tell the rule names.
+ *
+ * The gold moment (rule 4, "never zero gold either") is the collected figure — the
+ * chapter's analogue of the treasurer balance the design notes already single out.
+ * Outstanding uses `warning`, not gold: it is a pending state, not a delight.
+ *
+ * Everything here is READ-ONLY on purpose. Each number belongs to an officer screen
+ * that owns the actions on it, and a president who wants to act is one tap from the
+ * Tools grid. Duplicating the controls here would mean two places to keep correct.
+ */
+function OverviewPanel({
+  overview,
+  accent,
+}: {
+  overview: ChapterOverview;
+  accent: string;
+}) {
+  const palette = useTheme();
+  const { roster, dues, attendance, lineage, invites } = overview;
+
+  // Only rows that need action are rendered. A list padded out with "0 pairs waiting"
+  // is card soup with extra steps (DESIGN.md rule 1), and a president scanning for what
+  // to do should not have to read past the things that are already fine.
+  //
+  // No status badge on these rows: the label IS the status, and an amber "Open" chip
+  // beside it competed with the collected figure for the screen's one gold moment
+  // (rule 4) while saying nothing the sentence had not already said.
+  const attention: { key: string; label: string; detail: string }[] = [];
+  if (dues.outstanding_members > 0) {
+    attention.push({
+      key: "dues",
+      label: `${dues.outstanding_members} still owe dues`,
+      detail: dues.cycle_name ?? "current cycle",
+    });
+  }
+  if (attendance.members_with_absence > 0) {
+    attention.push({
+      key: "attendance",
+      label: `${attendance.members_with_absence} missed a meeting`,
+      detail: `${attendance.meetings_in_window} this semester`,
+    });
+  }
+  if (lineage.unconfirmed_edges > 0) {
+    attention.push({
+      key: "lineage",
+      label: `${lineage.unconfirmed_edges} big/little ${
+        lineage.unconfirmed_edges === 1 ? "pair" : "pairs"
+      } unconfirmed`,
+      detail: "waiting on the little",
+    });
+  }
+  if (invites.live_codes > 0) {
+    attention.push({
+      key: "invites",
+      label: `${invites.live_codes} invite ${invites.live_codes === 1 ? "code" : "codes"} live`,
+      detail: `${invites.remaining_uses} more could join`,
+    });
+  }
+
+  const tile = {
+    flex: 1,
+    backgroundColor: palette.surface,
+    borderRadius: radii.card,
+    padding: spacing.lg,
+    gap: spacing.xs,
+  } as const;
+
+  return (
+    <View style={{ gap: spacing.lg }}>
+      <SectionHeader
+        title="This chapter, right now"
+        caption={`Updated ${new Date(overview.generated_at).toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        })}`}
+      />
+
+      <Card>
+        {dues.cycle_id === null ? (
+          <View style={{ gap: spacing.xs }}>
+            <AppText variant="caption" tone="tertiary">
+              DUES
+            </AppText>
+            <AppText variant="body" tone="secondary">
+              No dues cycle has been opened yet. Your treasurer starts one from the Dues
+              screen.
+            </AppText>
+          </View>
+        ) : (
+          <View style={{ gap: spacing.sm }}>
+            <AppText variant="caption" tone="tertiary">
+              {dues.cycle_name?.toUpperCase()}
+            </AppText>
+            {/* Rule 6: money in the stat face, tabular, and this is the screen's gold. */}
+            <AppText style={{ ...typography.stat, fontSize: 28, lineHeight: 34, color: accent }}>
+              {dollarsRounded(dues.collected_cents)}
+            </AppText>
+            <AppText variant="caption" tone="secondary">
+              {dues.paid_members} of {roster.active} paid
+              {dues.due_date === null ? "" : ` \u00b7 due ${dueDate(dues.due_date)}`}
+            </AppText>
+          </View>
+        )}
+      </Card>
+
+      <View style={{ flexDirection: "row", gap: spacing.md }}>
+        <View style={tile}>
+          <AppText variant="caption" tone="tertiary">
+            ROSTER
+          </AppText>
+          <AppText style={{ ...typography.stat, color: palette.ink }}>
+            {roster.active}
+          </AppText>
+          <AppText variant="caption" tone="secondary">
+            {roster.inactive === 0 ? "all active" : `${roster.inactive} inactive`}
+          </AppText>
+        </View>
+        <View style={tile}>
+          <AppText variant="caption" tone="tertiary">
+            MEETINGS
+          </AppText>
+          <AppText style={{ ...typography.stat, color: palette.ink }}>
+            {attendance.meetings_in_window}
+          </AppText>
+          <AppText variant="caption" tone="secondary">
+            this semester
+          </AppText>
+        </View>
+      </View>
+
+      {attention.length === 0 ? (
+        <AppText variant="caption" tone="secondary">
+          Nothing needs your attention right now.
+        </AppText>
+      ) : (
+        <Card>
+          {attention.map((item, index) => (
+            <ListRow
+              key={item.key}
+              title={item.label}
+              subtitle={item.detail}
+              divider={index < attention.length - 1}
+            />
+          ))}
+        </Card>
+      )}
+    </View>
+  );
 }
 
 export default function PresidentScreen() {
+  const router = useRouter();
   const palette = useTheme();
+  // Spartan gold, the same token the Orgs header bar uses (DESIGN.md 8.5/10.4).
+  // NOT palette.warning: warning is the pending-state orange, and dues collected is
+  // the screen's delight number, not a caution.
+  const { campusColors } = useAppearance();
   const { sessionStatus, membership, chapterLoading, roleMeta } = useOwnChapter();
   const chapterId = membership?.chapter_id ?? null;
 
   const [members, setMembers] = useState<MemberOut[] | null>(null);
   const [chapter, setChapter] = useState<ChapterOut | null>(null);
+  // null while loading OR after a failed fetch. The overview is a summary of screens
+  // that all still work on their own, so a failure here hides the panel rather than
+  // taking down the roster editing this screen exists for.
+  const [overview, setOverview] = useState<ChapterOverview | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
 
@@ -118,6 +287,18 @@ export default function PresidentScreen() {
   useEffect(() => {
     void refreshMembers();
   }, [refreshMembers]);
+
+  useEffect(() => {
+    if (chapterId === null) {
+      setOverview(null);
+      return;
+    }
+    // Same window the Secretary dashboard computes, from the one shared helper, so the
+    // meeting counts on the two screens cannot disagree by a boundary meeting.
+    getChapterOverview(chapterId, currentSemesterWindow(new Date()))
+      .then(setOverview)
+      .catch(() => setOverview(null));
+  }, [chapterId]);
 
   useEffect(() => {
     if (chapterId === null) {
@@ -163,7 +344,7 @@ export default function PresidentScreen() {
     const nextStatus = changes.status ?? target.status;
 
     if (wouldOrphanChapter(target, nextRole, nextStatus)) {
-      Alert.alert(
+      showAlert(
         "This chapter would lose its last president",
         "At least one active president has to remain, or nobody will be able to change a " +
           "role here again — recovery would need to go outside the app. Promote someone " +
@@ -188,32 +369,27 @@ export default function PresidentScreen() {
     if (nextRole === target.role) return;
     // The person granting a role can be the person losing it — always confirm,
     // never apply a role change on tap alone.
-    Alert.alert(
-      `Change ${target.display_name || "this member"} to ${ROLE_LABELS[nextRole] ?? prettifyRole(nextRole)}?`,
-      target.role === "president"
-        ? "They're currently President. This takes that role away from them."
-        : undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Confirm", onPress: () => void applyMemberChange(target, { role: nextRole }) },
-      ],
-    );
+    confirmAction({
+      title: `Change ${target.display_name || "this member"} to ${roleLabel(nextRole)}?`,
+      message:
+        target.role === "president"
+          ? "They're currently President. This takes that role away from them."
+          : undefined,
+      confirmLabel: "Confirm",
+      onConfirm: () => void applyMemberChange(target, { role: nextRole }),
+    });
   };
 
   const confirmStatusChange = (target: MemberOut, nextStatus: MembershipStatus) => {
     if (nextStatus === target.status) return;
-    Alert.alert(
-      `Mark ${target.display_name || "this member"} ${STATUS_LABELS[nextStatus].toLowerCase()}?`,
-      nextStatus !== "active" ? "They'll drop out of the active roster and role-gated tools." : undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Confirm",
-          style: nextStatus === "removed" ? "destructive" : "default",
-          onPress: () => void applyMemberChange(target, { status: nextStatus }),
-        },
-      ],
-    );
+    confirmAction({
+      title: `Mark ${target.display_name || "this member"} ${STATUS_LABELS[nextStatus].toLowerCase()}?`,
+      message:
+        nextStatus !== "active" ? "They'll drop out of the active roster and role-gated tools." : undefined,
+      confirmLabel: "Confirm",
+      destructive: nextStatus === "removed",
+      onConfirm: () => void applyMemberChange(target, { status: nextStatus }),
+    });
   };
 
   const savePledgeClass = async (target: MemberOut) => {
@@ -255,7 +431,7 @@ export default function PresidentScreen() {
 
   const inputStyle = {
     ...typography.body,
-    color: palette.textPrimary,
+    color: palette.ink,
     backgroundColor: palette.surfaceAlt,
     borderRadius: radii.input,
     paddingHorizontal: spacing.md,
@@ -275,6 +451,11 @@ export default function PresidentScreen() {
   // would-be 403s. roleMeta is null while loading OR on a failed fetch — same accepted
   // ambiguity as moderation.tsx's isEboard check, defaulting to "not eligible" rather
   // than ever showing the real president's tools before eligibility is confirmed.
+  // c196: same dues_admin gate treasurer.tsx's "Open a cycle"/payment-plans cards
+  // check — DUES_ADMIN is {treasurer, president} on the backend, a superset of
+  // MEMBERS_ADMIN's {president}, so this is always true once isPresident is, but
+  // the screen asks anyway rather than assuming one capability implies another.
+  const canManagePlans = roleMeta?.capabilities.includes("dues_admin") ?? false;
   const isPresident = roleMeta?.capabilities.includes("members_admin") ?? false;
   if (!isPresident) {
     return (
@@ -293,6 +474,31 @@ export default function PresidentScreen() {
         <EmptyState title="Loading..." />
       ) : (
         <View style={{ gap: spacing.xl }}>
+          {overview === null ? null : (
+            <OverviewPanel overview={overview} accent={campusColors.secondary} />
+          )}
+
+          {/* c196: installment plans for members who can't pay a dues cycle at
+              once — same pushed screen treasurer.tsx links to, so the two
+              officer dashboards never fork the flow. */}
+          {canManagePlans ? (
+            <View>
+              <SectionHeader title="Payment plans" caption="Installments for members who can't pay at once" />
+              <Card onPress={() => router.push("/chapter/dues-plans")}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.lg }}>
+                  <Feather name="calendar" size={typography.title.fontSize} color={palette.accent} />
+                  <View style={{ flex: 1, gap: spacing.xs }}>
+                    <AppText variant="headline">Manage payment plans</AppText>
+                    <AppText variant="caption" tone="secondary">
+                      Set up installments and record payments against them
+                    </AppText>
+                  </View>
+                  <Feather name="chevron-right" size={typography.title.fontSize} color={palette.inkFaint} />
+                </View>
+              </Card>
+            </View>
+          ) : null}
+
           <View>
             <SectionHeader title="Chapter details" caption="Org and chapter name" />
             <Card>
@@ -311,7 +517,7 @@ export default function PresidentScreen() {
                     value={chapterName}
                     onChangeText={setChapterName}
                     placeholder="e.g. Alpha"
-                    placeholderTextColor={palette.textTertiary}
+                    placeholderTextColor={palette.inkFaint}
                     style={inputStyle}
                   />
                 </View>
@@ -346,7 +552,7 @@ export default function PresidentScreen() {
                         left={<GradientAvatar name={label} size={40} photoUrl={member.avatar_url} />}
                         right={
                           <Chip
-                            label={ROLE_LABELS[member.role] ?? prettifyRole(member.role)}
+                            label={roleLabel(member.role)}
                             variant={chipVariant(member.role, eboardRoles)}
                           />
                         }
@@ -376,7 +582,7 @@ export default function PresidentScreen() {
                                   style={({ pressed }) => ({ opacity: pressed || saving ? 0.6 : 1 })}
                                 >
                                   <Chip
-                                    label={ROLE_LABELS[role] ?? prettifyRole(role)}
+                                    label={roleLabel(role)}
                                     variant={member.role === role ? "accent" : "neutral"}
                                   />
                                 </Pressable>
@@ -423,7 +629,7 @@ export default function PresidentScreen() {
                                 setPledgeDrafts((current) => ({ ...current, [member.id]: text }))
                               }
                               placeholder="e.g. Fall 2026"
-                              placeholderTextColor={palette.textTertiary}
+                              placeholderTextColor={palette.inkFaint}
                               editable={!saving}
                               // onEndEditing is a native-only RN event — react-native-web's
                               // TextInput does not implement it at all (checked against

@@ -1,12 +1,13 @@
 """Identity & org schemas: users, campuses, chapters, memberships, invites."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.invites import INVITE_DEFAULT_MAX_USES, INVITE_MAX_USES_CAP
+from app.core.validation import validate_public_url
 
 AccountType = Literal["greek", "non_greek", "alumni"]
 RoleName = Literal[
@@ -49,6 +50,14 @@ class UserCreate(_Schema):
     avatar_url: str | None = None
     account_type: AccountType
 
+    # c184 sweep: avatar_url is client-supplied and written straight through to
+    # users.avatar_url with no validation (routers/auth.py bootstrap_account),
+    # the same shape of gap the card flagged in alumni.linkedin_url / apply_url.
+    @field_validator("avatar_url")
+    @classmethod
+    def _validate_avatar_url(cls, value: str | None) -> str | None:
+        return validate_public_url(value)
+
 
 class UserUpdate(_Schema):
     """No campus_id here either, for the same reason (c85).
@@ -60,6 +69,11 @@ class UserUpdate(_Schema):
 
     display_name: str | None = None
     avatar_url: str | None = None
+
+    @field_validator("avatar_url")
+    @classmethod
+    def _validate_avatar_url(cls, value: str | None) -> str | None:
+        return validate_public_url(value)
 
 
 class UserOut(_Schema):
@@ -162,6 +176,20 @@ class MemberOut(_Schema):
     avatar_url: str | None = None
 
 
+class RoleTermOut(_Schema):
+    """Body for GET /chapters/{chapter_id}/members/{user_id}/role-terms — one dated
+    span of a membership holding a role (board card c83: a chapter role is a DATED
+    TERM, not a plain fact). Rows come back newest first; ended_at NULL marks the
+    OPEN term, i.e. the role the member holds right now."""
+
+    id: uuid.UUID
+    membership_id: uuid.UUID
+    role: RoleName
+    started_at: datetime
+    ended_at: datetime | None = None
+    changed_by: uuid.UUID | None = None
+
+
 class RoleMetaOut(_Schema):
     """Body for GET /chapters/{id}/role-meta — the role taxonomy, served so the app
     never hand-mirrors permissions.py (c44).
@@ -237,3 +265,130 @@ class ChapterJoinRequest(_Schema):
 
 
 ChapterJoin = ChapterJoinRequest
+
+
+# ---- president overview (board card c171) ----
+
+
+class RoleCount(_Schema):
+    """How many ACTIVE members hold one role."""
+
+    role: RoleName
+    count: int
+
+
+class RosterOverview(_Schema):
+    """Who is on the roster right now.
+
+    `by_role` counts active members only, so the counts sum to `active` and never to
+    `active + inactive` — a breakdown that silently included inactive members would
+    make the two numbers on screen disagree with no way to tell which was wrong.
+    Roles nobody holds are omitted rather than reported as zero.
+    """
+
+    active: int
+    inactive: int
+    by_role: list[RoleCount]
+
+
+class DuesOverview(_Schema):
+    """The current dues cycle and how far through collecting it the chapter is.
+
+    Every field is None/zero when the chapter has never opened a cycle, which is a
+    real state for a new chapter and not an error.
+
+    `paid_members` + `on_plan_members` + `outstanding_members` == RosterOverview.active,
+    always: all three are spined on the current active roster (see the endpoint
+    docstring for why that matters, and why `collected_cents` is deliberately NOT
+    spined the same way).
+
+    `on_plan_members` (board card c195) is a member with an ACTIVE payment plan who
+    has not yet reached net >= the cycle total — reported separately rather than
+    folded into `outstanding_members` because they are not being chased, they are on
+    a schedule, and separately rather than folded into `paid_members` because they
+    are not done yet either. `paid_members` is decided on NET ALONE, never on plan
+    status: a completed plan reaches net >= the cycle total via its own installments
+    in the ordinary case, so it reads as paid the same as a lump-sum payer — but if
+    those installments are later corrected away, net drops and the member correctly
+    falls back to outstanding rather than staying latched as paid by a stale
+    'completed' status.
+    """
+
+    cycle_id: uuid.UUID | None = None
+    cycle_name: str | None = None
+    amount_cents: int | None = None
+    due_date: date | None = None
+    paid_members: int = 0
+    on_plan_members: int = 0
+    outstanding_members: int = 0
+    collected_cents: int = 0
+
+
+class AttendanceOverview(_Schema):
+    """Meeting attendance over the same window the Secretary dashboard uses.
+
+    `members_with_absence` counts active members with at least one recorded ABSENT in
+    the window. Deliberately not "members below X%": there is no attendance policy in
+    the schema, so any percentage would be this endpoint inventing a rule the chapter
+    never agreed to.
+    """
+
+    meetings_in_window: int = 0
+    members_with_absence: int = 0
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+
+
+class LineageOverview(_Schema):
+    """Big/little pairs still waiting on the little to confirm (board c79)."""
+
+    unconfirmed_edges: int = 0
+
+
+class InviteOverview(_Schema):
+    """Invite codes that could still be redeemed right now.
+
+    Live means all three of: not revoked, not expired, and uses < max_uses — the same
+    three conditions c105 made a code carry. `remaining_uses` is how many more people
+    could walk in on codes already in circulation, which is the number that matters
+    when deciding whether to revoke something.
+    """
+
+    live_codes: int = 0
+    remaining_uses: int = 0
+
+
+class ChapterOverview(_Schema):
+    """One request's worth of chapter health, for the President dashboard (c171).
+
+    Chapter-scoped throughout. Moderation is absent on purpose: content_reports
+    carries campus_id, not chapter_id, so an "open reports" count here would be campus
+    data wearing a chapter label.
+    """
+
+    chapter_id: uuid.UUID
+    generated_at: datetime
+    roster: RosterOverview
+    dues: DuesOverview
+    attendance: AttendanceOverview
+    lineage: LineageOverview
+    invites: InviteOverview
+
+
+class DeputyOverview(_Schema):
+    """Body for GET /chapters/{id}/deputy-overview — the Vice President's deputy-
+    president dashboard (board card c163, Jose's product ruling).
+
+    A trimmed sibling of ChapterOverview, not a client-side slice of it: attendance is
+    the Secretary's domain and lineage is the Historian's/e-board's, and the Vice
+    President holds neither minutes_admin nor lineage_admin from this card, so those
+    two sections are absent from the RESPONSE, not merely hidden in the UI. Gated on
+    the deputy_overview capability (permissions.py), which is read-only and holds no
+    delegation - the ruling that named this a read view, not a stand-in with powers.
+    """
+
+    chapter_id: uuid.UUID
+    generated_at: datetime
+    roster: RosterOverview
+    dues: DuesOverview
+    invites: InviteOverview

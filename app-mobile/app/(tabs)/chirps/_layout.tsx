@@ -1,10 +1,10 @@
-/** Yak tab stack — headerless, canvas bg behind transitions. */
+/** Chirps tab stack — headerless, canvas bg behind transitions. */
 
 import { Stack } from "expo-router";
 
 import { useTheme } from "@/theme";
 
-export default function YakLayout() {
+export default function ChirpLayout() {
   const palette = useTheme();
   return (
     <Stack

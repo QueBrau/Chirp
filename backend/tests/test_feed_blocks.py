@@ -1,10 +1,10 @@
 """Blocked-author filtering on feed endpoints (board card c35): a Block button on
 the feed is theater unless the server actually hides that author's posts. Before
 this fix, routers/feed.py did not filter blocked authors at all (unlike
-routers/yaks.py, tests/test_blocks.py) — a blocked person's posts kept appearing
+routers/chirps.py, tests/test_blocks.py) — a blocked person's posts kept appearing
 on both GET /chapters/{chapter_id}/posts and GET /campuses/{campus_id}/feed.
 
-Mirrors the anti-join proven for yaks: outerjoin user_blocks on
+Mirrors the anti-join proven for chirps: outerjoin user_blocks on
 (blocked_id == author_id) AND (blocker_id == caller), then WHERE blocker_id IS
 NULL. Two failure modes matter, per endpoint: a blocked author's posts vanish
 for the blocker but stay visible to a bystander (the filter actually hides

@@ -6,6 +6,7 @@ application fee, connected account) — the part that moves real money.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -48,7 +49,12 @@ def stripe_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, An
         "customer_create": [],
         "customer_session": [],
         "payment_intent": [],
+        "payment_intent_retrieve": [],
     }
+    # intent id -> client_secret, so the retrieve fake can hand back the SAME
+    # secret a prior create returned (real Stripe would); keyed rather than a
+    # constant so tests can tell "the original intent" apart from "a new one".
+    created_intents: dict[str, str] = {}
 
     async def fake_account_create(**params: Any) -> FakeStripeObject:
         calls["account_create"].append(params)
@@ -75,7 +81,19 @@ def stripe_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, An
 
     async def fake_payment_intent_create(**params: Any) -> FakeStripeObject:
         calls["payment_intent"].append(params)
-        return FakeStripeObject(id=f"pi_{uuid.uuid4().hex[:12]}", client_secret="pi_secret")
+        intent_id = f"pi_{uuid.uuid4().hex[:12]}"
+        client_secret = f"{intent_id}_secret"
+        created_intents[intent_id] = client_secret
+        return FakeStripeObject(id=intent_id, client_secret=client_secret)
+
+    async def fake_payment_intent_retrieve(intent_id: str, **params: Any) -> FakeStripeObject:
+        """Default: behaves like real Stripe GET — same id, same client_secret as
+        whatever create_async originally returned for it. Individual tests
+        override this via monkeypatch to simulate a retrieve failure."""
+        calls["payment_intent_retrieve"].append({"id": intent_id, **params})
+        return FakeStripeObject(
+            id=intent_id, client_secret=created_intents.get(intent_id, "pi_secret")
+        )
 
     monkeypatch.setattr(stripe.Account, "create_async", fake_account_create)
     monkeypatch.setattr(stripe.Account, "retrieve_async", fake_account_retrieve)
@@ -85,6 +103,7 @@ def stripe_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, An
         stripe.CustomerSession, "create_async", fake_customer_session_create
     )
     monkeypatch.setattr(stripe.PaymentIntent, "create_async", fake_payment_intent_create)
+    monkeypatch.setattr(stripe.PaymentIntent, "retrieve_async", fake_payment_intent_retrieve)
     return calls
 
 
@@ -103,6 +122,45 @@ async def _create_dues_cycle(
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
+
+
+async def _pay_on_ledger(
+    client: AsyncClient, setup: ChapterSetup, cycle_id: str, user_id: str, cents: int = 25_000
+) -> str:
+    """Record a dues payment the way a treasurer enters a cash payment: straight onto
+    the ledger, no Stripe involved. Same helper shape as test_chapter_overview.py's
+    _pay — used here so a board c172 test can put a member in the "paid" state
+    without ever creating a DuesPaymentIntent reservation, isolating the netted
+    already_paid guard (payments.py) from the separate reservation-table gate (c51)."""
+    response = await client.post(
+        f"/chapters/{setup.chapter_id}/ledger",
+        json={
+            "entry_type": "dues_payment",
+            "amount_cents": cents,
+            "related_user_id": user_id,
+            "dues_cycle_id": cycle_id,
+        },
+        headers=setup.president.headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def _correct(
+    client: AsyncClient, setup: ChapterSetup, entry_id: str, cents: int
+) -> None:
+    """Append a correction against a prior ledger entry (SPEC 8.2) — a refund is a
+    NEW row, never an update to the original."""
+    response = await client.post(
+        f"/chapters/{setup.chapter_id}/ledger",
+        json={
+            "entry_type": "correction",
+            "amount_cents": cents,
+            "corrects_entry_id": entry_id,
+        },
+        headers=setup.president.headers,
+    )
+    assert response.status_code == 201, response.text
 
 
 async def _onboard(client: AsyncClient, setup: ChapterSetup) -> str:
@@ -330,21 +388,37 @@ async def test_dues_intent_is_idempotent_per_cycle_member_and_rail(
     stripe_env: None,
     stripe_calls: dict[str, list[dict[str, Any]]],
 ) -> None:
-    """A client retry must resolve to the same intent, not create a second one."""
+    """A client retry must resolve to the same intent, not create a second one.
+
+    Post-c193: the retry does not lean on Stripe's idempotency layer at all — it
+    retrieves the intent this endpoint already stored, because that layer only
+    retains a key for 24h while ACH can sit in 'processing' for days (see the
+    c51/c193 tests below for the case that actually bites).
+    """
     setup = await make_chapter_with(role="member")
     await _onboard(client, setup)
     cycle_id = await _create_dues_cycle(client, setup)
 
+    responses = []
     for _ in range(2):
-        await client.post(
-            f"/payments/dues/{cycle_id}/intent",
-            json={"rail": "card"},
-            headers=setup.member.headers,
+        responses.append(
+            await client.post(
+                f"/payments/dues/{cycle_id}/intent",
+                json={"rail": "card"},
+                headers=setup.member.headers,
+            )
         )
 
-    keys = [params["idempotency_key"] for params in stripe_calls["payment_intent"]]
-    assert keys[0] == keys[1]
-    assert cycle_id in keys[0]
+    assert [r.status_code for r in responses] == [200, 200]
+    # Only ONE create call ever reaches Stripe.
+    assert len(stripe_calls["payment_intent"]) == 1
+    assert cycle_id in stripe_calls["payment_intent"][0]["idempotency_key"]
+    # The retry retrieved the SAME intent instead of creating a second one.
+    assert len(stripe_calls["payment_intent_retrieve"]) == 1
+    assert (
+        responses[0].json()["payment_intent_client_secret"]
+        == responses[1].json()["payment_intent_client_secret"]
+    )
 
 
 async def test_dues_intent_409_when_chapter_not_onboarded(
@@ -410,6 +484,217 @@ async def test_dues_intent_409_after_the_member_already_paid(
     )
     assert response.status_code == 409
     assert response.json()["detail"] == "already_paid"
+
+
+# ---- c172: an honest reason for the same block, not a reopened charge path ----
+#
+# Before the fix, this endpoint's already_paid check read the mere EXISTENCE of a
+# dues_payment row and never looked at corrections, while chapter_overview NETTED them
+# per member. A member refunded in full showed as still owing on the President
+# dashboard while their own pay button told them they had already paid.
+#
+# THE FIRST FIX ATTEMPT let the charge path itself net corrections and reopen for a
+# fully-refunded member — reviewed and reverted (board c172) because it is a
+# money-loss bug, not a fix: a member whose ORIGINAL payment was hand-entered by the
+# treasurer has no DuesPaymentIntent reservation to block a retry, so netting alone
+# let them create a fresh intent, pay through Stripe for real, and then hit
+# uq_ledger_dues_payment_once (at most one dues_payment row per (cycle, member) EVER)
+# when the webhook tried to record the second payment — money captured at Stripe,
+# no ledger row, and _record_dues_payment's IntegrityError handling swallows exactly
+# that as if it were a harmless replay. The test below is the one that would have
+# caught it, rewritten to assert the correct (refused) outcome instead of stopping at
+# a green "200, intent created" that never exercised the webhook leg where the loss
+# actually happens.
+#
+# THE LANDED FIX keeps the charge path closed on existence — re-payment for one dues
+# cycle is structurally unrepresentable in this ledger until dues status is modeled
+# explicitly (c83-shaped) — and uses dues_contributions_subquery only to pick an
+# honest 409 reason: already_paid (net > 0) or refunded_contact_treasurer (net <= 0).
+
+
+async def test_dues_intent_refuses_with_an_honest_reason_after_a_full_refund(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """THE TEST THAT WOULD HAVE CAUGHT THE MONEY-LOSS REGRESSION.
+
+    A hand-entered original payment (no DuesPaymentIntent reservation exists to
+    block a retry on its own) refunded in full. The charge path must REFUSE the
+    retry outright — asserting refusal here, rather than a 200 that goes on to
+    settle a real Stripe payment, is what keeps the webhook-settlement leg (where
+    uq_ledger_dues_payment_once would silently swallow the second payment)
+    unreachable in the first place.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
+    entry_id = await _pay_on_ledger(client, setup, cycle_id, setup.member.id, 25_000)
+
+    # Before the refund: blocked, same as the plain already-paid case below.
+    blocked = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "already_paid"
+
+    await _correct(client, setup, entry_id, -25_000)
+
+    # After the refund: STILL blocked (the charge path never reopens), but the 409
+    # now tells the truth about why instead of repeating "already_paid".
+    refused = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == "refunded_contact_treasurer"
+
+
+async def test_dues_intent_stays_blocked_after_a_partial_refund(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Netting, not "has any correction": refunded $10 of $250 is still paid, and
+    must stay blocked here exactly as they stay off the overview's chase list."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
+    entry_id = await _pay_on_ledger(client, setup, cycle_id, setup.member.id, 25_000)
+    await _correct(client, setup, entry_id, -1_000)
+
+    response = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "already_paid"
+
+
+async def test_a_plain_paid_member_with_no_correction_is_unaffected(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Regression guard: netting must not change the ordinary paid-with-no-refund
+    case, which is the overwhelming majority of real payments."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
+    await _pay_on_ledger(client, setup, cycle_id, setup.member.id, 25_000)
+
+    response = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "already_paid"
+
+
+async def test_full_refund_agrees_on_both_the_president_overview_and_the_pay_button(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Both surfaces named in board c172, read through the exact endpoints they use:
+    GET .../overview (the President dashboard) and POST .../intent (the pay button).
+
+    THE HONEST RESOLUTION of c172's disagreement is this exact pair, not full
+    alignment: the president sees OUTSTANDING (the member genuinely owes again),
+    and the pay button still refuses them — but with a reason that agrees with the
+    dashboard (refunded_contact_treasurer) instead of contradicting it
+    (already_paid, which is what it said before this fix).
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
+    entry_id = await _pay_on_ledger(client, setup, cycle_id, setup.member.id, 25_000)
+    await _correct(client, setup, entry_id, -25_000)
+
+    overview = await client.get(
+        f"/chapters/{setup.chapter_id}/overview", headers=setup.president.headers
+    )
+    assert overview.status_code == 200, overview.text
+    assert overview.json()["dues"]["paid_members"] == 0
+    assert overview.json()["dues"]["outstanding_members"] == 2  # president + member
+
+    intent = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert intent.status_code == 409, intent.text
+    assert intent.json()["detail"] == "refunded_contact_treasurer"
+
+
+async def test_a_reservation_settled_through_stripe_stays_blocked_after_a_refund(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """The SAME refusal for a payment that settled through THIS endpoint's real
+    Stripe flow, not just a treasurer's manual ledger entry — proving the existence
+    check (not the DuesPaymentIntent reservation) is what is actually doing the work.
+
+    A real payment here leaves a reservation behind in 'succeeded' status (board c51
+    / migration 0010), and nothing transitions that row when a later correction
+    refunds the payment it belongs to. That reservation's own 'succeeded' branch
+    would still unconditionally raise already_paid — but it never gets the chance:
+    the existence check above it in the function runs first, finds the SAME
+    dues_payment row this reservation is tied to, and raises refunded_contact_treasurer
+    before the reservation check is ever reached. This backstops that invariant: if a
+    future change ever let a dues_payment row and its reservation disagree, this is
+    the test that would notice.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
+
+    created = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert created.status_code == 200, created.text
+    intent_id = await _reserved_intent_id(cycle_id, setup.member.id)
+    assert intent_id is not None
+
+    settled = await _post_webhook(
+        client, _succeeded_event(cycle_id, setup.member.id, intent_id, "evt_settled")
+    )
+    assert settled.status_code == 200
+
+    entries = await client.get(
+        f"/chapters/{setup.chapter_id}/ledger", headers=setup.president.headers
+    )
+    paid_entry = next(
+        e for e in entries.json()
+        if e["entry_type"] == "dues_payment" and e["related_user_id"] == setup.member.id
+    )
+    await _correct(client, setup, paid_entry["id"], -25_000)
+
+    overview = await client.get(
+        f"/chapters/{setup.chapter_id}/overview", headers=setup.president.headers
+    )
+    assert overview.json()["dues"]["outstanding_members"] == 2  # correctly refunded
+
+    retry = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert retry.status_code == 409
+    assert retry.json()["detail"] == "refunded_contact_treasurer"
 
 
 async def test_dues_intent_rejects_non_member(
@@ -694,6 +979,119 @@ async def test_switching_rail_while_a_payment_is_in_flight_is_rejected(
     assert len(stripe_calls["payment_intent"]) == 1
 
 
+# ---- c193: same-rail ACH retry past Stripe's 24h idempotency window ----
+#
+# The bug: a same-rail 'open' reservation that already has a stripe_payment_intent_id
+# fell through the reuse comment above into an UNCONDITIONAL create_dues_payment_intent
+# call, relying solely on Stripe's idempotency key to dedupe it. That key is retained
+# for only 24h; ACH can sit in Stripe's 'processing' state for DAYS, and there is no
+# payment_intent.processing webhook handler to move the reservation out of 'open' in
+# the meantime. A retry past 24h therefore mints a genuinely NEW real PaymentIntent —
+# a second bank debit — whose eventual ledger row is then silently dropped by
+# uq_ledger_dues_payment_once while the webhook still returns 200.
+
+
+async def test_same_rail_ach_retry_past_the_idempotency_window_does_not_mint_a_second_intent(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """The fake hands back a brand new id/secret on EVERY create_async call — exactly
+    what real Stripe does once the idempotency key has expired. So if the endpoint
+    calls create() a second time at all for a same-rail retry, this test catches it:
+    a second create call here IS a second real charge attempt.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    first = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "ach"},
+        headers=setup.member.headers,
+    )
+    assert first.status_code == 200, first.text
+    original_secret = first.json()["payment_intent_client_secret"]
+
+    retry = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "ach"},
+        headers=setup.member.headers,
+    )
+    assert retry.status_code == 200, retry.text
+
+    assert len(stripe_calls["payment_intent"]) == 1
+    assert retry.json()["payment_intent_client_secret"] == original_secret
+
+
+async def _reservation_status(cycle_id: str, user_id: str) -> str | None:
+    """Raw status of the (only) reservation row for this (cycle, member), whatever
+    it is — unlike _reserved_intent_id this does NOT filter to open/succeeded, so it
+    can see a wrongly-canceled row too."""
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            text(
+                "SELECT status FROM dues_payment_intents "
+                "WHERE dues_cycle_id = :c AND user_id = :u"
+            ),
+            {"c": cycle_id, "u": user_id},
+        )
+        return result.scalar_one_or_none()
+
+
+async def test_a_failed_stripe_call_on_retry_does_not_cancel_a_reservation_holding_a_live_intent(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """The blanket except around the Stripe call used to set
+    reservation.status = 'canceled' on ANY exception — even when the reservation
+    already held a live intent from an EARLIER successful call. Canceling it releases
+    uq_dues_intent_live, the only thing stopping a second, cross-rail charge for the
+    same cycle. A transient failure on a RETRY must leave that reservation exactly as
+    it was: open, still pointing at the live intent.
+
+    Both create_async and retrieve_async are made to fail here so this test is
+    agnostic to which one the implementation actually calls on a same-rail retry.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    first = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "ach"},
+        headers=setup.member.headers,
+    )
+    assert first.status_code == 200, first.text
+    intent_id_before = await _reserved_intent_id(cycle_id, setup.member.id)
+    assert intent_id_before is not None
+
+    async def boom_create(**params: Any) -> FakeStripeObject:
+        raise stripe.APIConnectionError("network blip")
+
+    async def boom_retrieve(intent_id: str, **params: Any) -> FakeStripeObject:
+        raise stripe.APIConnectionError("network blip")
+
+    monkeypatch.setattr(stripe.PaymentIntent, "create_async", boom_create)
+    monkeypatch.setattr(stripe.PaymentIntent, "retrieve_async", boom_retrieve)
+
+    with pytest.raises(stripe.APIConnectionError):
+        await client.post(
+            f"/payments/dues/{cycle_id}/intent",
+            json={"rail": "ach"},
+            headers=setup.member.headers,
+        )
+
+    assert await _reservation_status(cycle_id, setup.member.id) == "open"
+    assert await _reserved_intent_id(cycle_id, setup.member.id) == intent_id_before
+
+
 async def test_a_failed_payment_releases_the_reservation_so_the_member_can_retry(
     client: AsyncClient,
     make_chapter_with: MakeChapterWith,
@@ -755,3 +1153,77 @@ async def test_two_distinct_intents_for_one_cycle_cannot_both_reach_the_ledger(
     # Stripe must still get a 2xx or it retries for days.
     assert second.status_code == 200
     assert await _ledger_count(setup.chapter_id) == 1
+
+
+async def test_a_second_distinct_capture_that_cannot_be_recorded_logs_a_reconciliation_error(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Finding 5 (board c193): the scenario above — a real second capture on a
+    DIFFERENT intent, dropped by uq_ledger_dues_payment_once — used to be entirely
+    silent. The 200 to Stripe is correct (a non-2xx would just retry an event that
+    can never succeed), but the drop itself must be visible somewhere, or nobody
+    ever finds out the chapter was paid twice and only credited once.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    first = await _post_webhook(
+        client, _succeeded_event(cycle_id, setup.member.id, "pi_ach", "evt_ach")
+    )
+    assert first.status_code == 200
+
+    with caplog.at_level("ERROR", logger="app.routers.payments"):
+        second = await _post_webhook(
+            client, _succeeded_event(cycle_id, setup.member.id, "pi_card", "evt_card")
+        )
+
+    assert second.status_code == 200  # still 2xx — Stripe must not retry this forever
+    assert await _ledger_count(setup.chapter_id) == 1  # unchanged: one dues_payment, ever
+
+    reconciliation_errors = [
+        r for r in caplog.records
+        if r.name == "app.routers.payments" and r.levelno >= logging.ERROR
+    ]
+    assert reconciliation_errors, "a dropped second capture must log at ERROR/CRITICAL"
+    message = reconciliation_errors[0].getMessage()
+    assert "pi_card" in message  # the capture that could NOT be recorded
+    assert "pi_ach" in message  # what IS already on the ledger, for reconciliation
+    assert "@" not in message  # no email/PII, only internal ids
+
+
+async def test_a_replayed_event_for_the_same_intent_does_not_log_a_reconciliation_error(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression guard: an exact replay of the SAME intent under a different event id
+    (test_two_events_for_one_intent_still_produce_one_entry above) also loses to
+    uq_ledger_dues_payment_once, but nothing was actually dropped — the ledger already
+    holds this exact payment. That benign case must stay quiet.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    await _post_webhook(
+        client, _succeeded_event(cycle_id, setup.member.id, "pi_x", "evt_a")
+    )
+    with caplog.at_level("ERROR", logger="app.routers.payments"):
+        second = await _post_webhook(
+            client, _succeeded_event(cycle_id, setup.member.id, "pi_x", "evt_b")
+        )
+
+    assert second.status_code == 200
+    assert await _ledger_count(setup.chapter_id) == 1
+    reconciliation_errors = [
+        r for r in caplog.records
+        if r.name == "app.routers.payments" and r.levelno >= logging.ERROR
+    ]
+    assert reconciliation_errors == []

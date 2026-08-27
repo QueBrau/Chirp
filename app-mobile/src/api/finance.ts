@@ -4,7 +4,7 @@
  * corrections are new entries with entry_type="correction" + corrects_entry_id.
  */
 
-import { request, requestText } from "./client";
+import { ApiError, request, requestText } from "./client";
 
 export type LedgerEntryType =
   | "dues_payment"
@@ -28,6 +28,35 @@ export interface DuesCycleOut {
   amount_cents: number;
   due_date: string;
   created_at: string;
+}
+
+/** Status of a member's installment plan for one dues cycle (c197). */
+export type DuesPaymentPlanStatus = "active" | "completed" | "canceled";
+
+/** One scheduled slice of a DuesPaymentPlanOut — routers/finance.py's DuesPlanInstallmentOut. */
+export interface DuesPlanInstallmentOut {
+  id: string;
+  plan_id: string;
+  seq: number;
+  amount_cents: number;
+  due_date: string; // ISO date (YYYY-MM-DD) — a real scheduled date, honest to render
+  paid_at: string | null; // real timestamp once a treasurer records the payment
+  ledger_entry_id: string | null;
+}
+
+/** Response of GET /chapters/{chapterId}/dues-cycles/{cycleId}/plans/mine — routers/finance.py. */
+export interface DuesPaymentPlanOut {
+  id: string;
+  chapter_id: string;
+  dues_cycle_id: string;
+  user_id: string;
+  total_cents: number;
+  installment_count: number;
+  status: DuesPaymentPlanStatus;
+  note: string | null;
+  created_by: string;
+  created_at: string;
+  installments: DuesPlanInstallmentOut[];
 }
 
 /** created_by comes from auth server-side. */
@@ -84,6 +113,27 @@ export async function createDuesCycle(
   return request<DuesCycleOut>(`/chapters/${chapterId}/dues-cycles`, { method: "POST", body });
 }
 
+/**
+ * The signed-in member's own most-recent installment plan for one dues cycle
+ * (any status), or null if they've never had one. The backend 404s
+ * ("dues_payment_plan_not_found") rather than returning an empty body when no
+ * plan exists — that 404 is the expected "no plan" case here, not a failure,
+ * so it's swallowed into null; any other status still throws.
+ */
+export async function getMyPlan(
+  chapterId: string,
+  cycleId: string,
+): Promise<DuesPaymentPlanOut | null> {
+  try {
+    return await request<DuesPaymentPlanOut>(
+      `/chapters/${chapterId}/dues-cycles/${cycleId}/plans/mine`,
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
 /** Treasurer ledger view with optional filters. */
 export async function listLedger(
   chapterId: string,
@@ -136,4 +186,86 @@ export async function decideSpendApproval(
     `/chapters/${chapterId}/spend-approvals/${approvalId}/decide`,
     { method: "POST", body: { status } },
   );
+}
+
+// ---- dues payment plans (board card c195/c196) ----
+//
+// A member pays a dues cycle in full OR through a plan, never both — the backend
+// enforces this (409 already_paid / on_payment_plan / payment_in_progress) and this
+// client surfaces those as honest errors rather than pre-guessing every case.
+// Kept in this file, not chapters.ts, so c197's parallel work on the member/roster
+// client stays a clean rebase against this addition.
+
+// DuesPaymentPlanStatus / DuesPlanInstallmentOut / DuesPaymentPlanOut are defined
+// once above (c197's read-side addition); the create-body types below are c196's.
+
+/** One scheduled slice in the body of POST .../dues-cycles/{cycleId}/plans. */
+export interface DuesPlanInstallmentCreate {
+  amount_cents: number; // > 0
+  due_date: string; // ISO date (YYYY-MM-DD)
+}
+
+/**
+ * Body for POST /chapters/{chapterId}/dues-cycles/{cycleId}/plans. total_cents is
+ * NOT sent — the server always uses the cycle's own amount_cents and 422s
+ * (installments_must_sum_to_cycle_amount) unless `installments` sums to exactly
+ * that; installment_count must equal installments.length (422
+ * installment_count_mismatch otherwise).
+ */
+export interface DuesPaymentPlanCreate {
+  user_id: string;
+  installment_count: number; // > 0
+  note?: string | null;
+  installments: DuesPlanInstallmentCreate[];
+}
+
+/** Every plan against this cycle, any status, newest first; treasurer/president only. */
+export async function listDuesPaymentPlans(
+  chapterId: string,
+  cycleId: string,
+): Promise<DuesPaymentPlanOut[]> {
+  return request<DuesPaymentPlanOut[]>(`/chapters/${chapterId}/dues-cycles/${cycleId}/plans`);
+}
+
+/**
+ * Set up an installment plan for one member's dues cycle; treasurer/president only.
+ * 422 installments_must_sum_to_cycle_amount / installment_count_mismatch.
+ * 409 already_paid / on_payment_plan / payment_in_progress.
+ */
+export async function createDuesPaymentPlan(
+  chapterId: string,
+  cycleId: string,
+  body: DuesPaymentPlanCreate,
+): Promise<DuesPaymentPlanOut> {
+  return request<DuesPaymentPlanOut>(`/chapters/${chapterId}/dues-cycles/${cycleId}/plans`, {
+    method: "POST",
+    body,
+  });
+}
+
+/**
+ * Record one installment as paid; treasurer/president only. Appends a
+ * dues_installment ledger row and completes the plan once every installment is
+ * paid. 409 installment_already_paid / plan_not_active.
+ */
+export async function recordDuesInstallmentPayment(
+  chapterId: string,
+  planId: string,
+  seq: number,
+  note?: string | null,
+): Promise<DuesPlanInstallmentOut> {
+  return request<DuesPlanInstallmentOut>(
+    `/chapters/${chapterId}/dues-plans/${planId}/installments/${seq}/record-payment`,
+    { method: "POST", body: { note: note ?? null } },
+  );
+}
+
+/** Cancel an active plan; treasurer/president only. 409 plan_not_active. */
+export async function cancelDuesPaymentPlan(
+  chapterId: string,
+  planId: string,
+): Promise<DuesPaymentPlanOut> {
+  return request<DuesPaymentPlanOut>(`/chapters/${chapterId}/dues-plans/${planId}/cancel`, {
+    method: "POST",
+  });
 }

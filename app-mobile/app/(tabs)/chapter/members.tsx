@@ -1,24 +1,22 @@
 /** Members: chapter roster grouped by role — SectionHeader per group, GradientAvatar rows, role Chips. */
 
+import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 
 import { listMembers, type MemberOut, type RoleName } from "@/api/chapters";
+import { chipVariant, prettifyRole, roleLabel } from "@/lib/roleTerms";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
-import {
-  AppText,
-  Chip,
-  type ChipVariant,
-  Card,
-  EmptyState,
-  GradientAvatar,
-  ListRow,
-  Screen,
-  SectionHeader,
-} from "@/components";
+import { AppText, Chip, Card, EmptyState, GradientAvatar, ListRow, Screen, SectionHeader } from "@/components";
 import { spacing } from "@/theme";
 
-const ROLE_LABELS: Record<RoleName, string> = {
+/**
+ * Section-header labels, PLURAL — deliberately NOT the shared roleTerms.ts
+ * ROLE_LABELS (which is singular, "Member"/"Pledge"/"Alum"): this screen's
+ * group headers read "5 Pledges", not "5 Pledge". Kept local on purpose
+ * (c187 audit): the per-row Chip below uses the shared singular roleLabel().
+ */
+const SECTION_ROLE_LABELS: Record<RoleName, string> = {
   president: "President",
   vice_president: "Vice President",
   treasurer: "Treasurer",
@@ -29,37 +27,13 @@ const ROLE_LABELS: Record<RoleName, string> = {
   alumni: "Alumni",
 };
 
-/** Singular label for the per-row role Chip (section headers use the plural ROLE_LABELS). */
-const ROLE_CHIP_LABELS: Record<RoleName, string> = {
-  president: "President",
-  vice_president: "Vice President",
-  treasurer: "Treasurer",
-  secretary: "Secretary",
-  historian: "Historian",
-  member: "Member",
-  pledge: "Pledge",
-  alumni: "Alum",
-};
-
-/** Prettified fallback for a role the closed label records don't know yet — the
- * server owns the taxonomy (c44), so an unmapped value degrades gracefully. */
-function prettifyRole(role: string): string {
-  return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-/** E-board roles pop with the accent Chip (e-board set comes from role-meta, c44);
- * pledges keep the pending-flavored warning Chip — a purely cosmetic, local rule. */
-function chipVariant(role: RoleName, eboard: RoleName[]): ChipVariant {
-  if (eboard.includes(role)) return "accent";
-  return role === "pledge" ? "warning" : "neutral";
-}
-
 /** Fallback label for the rare row whose display_name comes back empty. */
 function shortUserId(userId: string): string {
   return userId.length > 12 ? `${userId.slice(0, 6)}…${userId.slice(-4)}` : userId;
 }
 
 export default function MembersScreen() {
+  const router = useRouter();
   const { sessionStatus, membership, chapterLoading, roleMeta } = useOwnChapter();
   const chapterId = membership?.chapter_id ?? null;
   const [members, setMembers] = useState<MemberOut[] | null>(null);
@@ -103,7 +77,7 @@ export default function MembersScreen() {
           {groups.map(({ role, rows }) => (
             <View key={role}>
               <SectionHeader
-                title={ROLE_LABELS[role] ?? prettifyRole(role)}
+                title={SECTION_ROLE_LABELS[role] ?? prettifyRole(role)}
                 caption={`${rows.length} ${rows.length === 1 ? "member" : "members"}`}
               />
               <Card>
@@ -117,11 +91,15 @@ export default function MembersScreen() {
                       left={<GradientAvatar name={label} size={40} photoUrl={member.avatar_url} />}
                       right={
                         <Chip
-                          label={ROLE_CHIP_LABELS[role] ?? prettifyRole(role)}
+                          label={roleLabel(role)}
                           variant={chipVariant(role, roleMeta?.eboard ?? [])}
                         />
                       }
                       divider={index < rows.length - 1}
+                      // Opens the member's own detail surface (c180), which is
+                      // where role-term history (c83) lives — the roster row
+                      // itself only has room for the CURRENT role Chip.
+                      onPress={() => router.push(`/chapter/member/${member.user_id}`)}
                     />
                   );
                 })}

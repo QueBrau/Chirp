@@ -27,7 +27,7 @@ import {
      what forwarded_plaintext on content_reports is.
   3. Deleted content is hidden immediately, and erased for good 30 days later by
      app.jobs.purge.purge_expired_soft_deletes (board c69). That function is the
-     only place that runs DELETE FROM on posts/comments/yaks — grep it before
+     only place that runs DELETE FROM on posts/comments/chirps — grep it before
      changing the retention number below, which reads Settings.purge_retention_days
      (backend/app/config.py) so the two can never drift apart silently.
 
@@ -299,7 +299,7 @@ export function Privacy() {
 
           <h2>14. How long we keep things</h2>
           <p>
-            When you delete a post or comment, or remove a yak, it is hidden from everyone
+            When you delete a post or comment, or remove a chirp, it is hidden from everyone
             immediately. <strong>An automated job then erases it from the database for good 30
             days later</strong> &mdash; a hard delete, not another layer of hiding. That 30-day
             number is a setting in our backend, not a guess, and it will not quietly change

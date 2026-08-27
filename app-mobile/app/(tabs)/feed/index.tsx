@@ -22,23 +22,20 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { Image, Pressable, View } from "react-native";
 import { useRouter } from "expo-router";
+import { Feather } from "@expo/vector-icons";
 
-import { ApiError } from "@/api/client";
 import { likePost, listCampusFeed, unlikePost, type FeedPostOut } from "@/api/feed";
+import { listMyInvitesWithRsvps, type EventInviteWithRsvpOut } from "@/api/events";
 import { blockUser, createReport } from "@/api/moderation";
 // useCampus (not a local getCampus fetch) — main moved campus resolution into
 // SessionProvider (c67) precisely to kill the per-screen duplicate requests.
 import { useCampus, useCampusAccess, useSession } from "@/auth";
-import { AppText, EmptyState, Fab, MediaPostCard, Screen } from "@/components";
+import { AppText, Card, Chip, EmptyState, Fab, MediaPostCard, Screen } from "@/components";
+import { showAlert, showApiError } from "@/lib/alert";
+import { eventWhen } from "@/lib/dates";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
-}
 
 type FeedFilter = "forYou" | "campus";
 
@@ -62,6 +59,94 @@ const FILTERS: { key: FeedFilter; label: string }[] = [
   { key: "forYou", label: "For You" },
   { key: "campus", label: "Campus" },
 ];
+
+/**
+ * c203: GET /me/event-invites exists and has since c33/c198, but nothing in
+ * the app called it — an invite is worthless if the only way to learn about
+ * it is a link somebody sends you, and that hits hardest for a cross-chapter
+ * invite via the 'verified' tier (c198), where the invitee has no other
+ * reason to ever open that chapter's screens.
+ *
+ * c203 shipped this by calling listMyInvites() (bare EventOut) and then, per
+ * invite, listGuests(event.id) to derive "already responded" and
+ * getChapter(event.chapter_id) to name the hosting chapter — an N+1 in each
+ * direction, and the chapter lookup 404s for exactly the invitee this feature
+ * exists for (GET /chapters/{id} is member-scoped), so it fell back to a bare
+ * "Another chapter". c204 replaces both with one call to
+ * GET /me/event-invites-with-rsvps (listMyInvitesWithRsvps): the caller's own
+ * rsvp status and a real chapter label — resolved server-side from a single
+ * joined query, safe for a non-member because the invite already admits them
+ * to the event — come back on every row, no per-invite fallback needed.
+ *
+ * Cancelled events are always kept (mirrors the backend docstring: the party
+ * being off is the single most important row this can return) even if
+ * already answered — everyone else is filtered down to the not-yet-answered
+ * ones (my_rsvp_status === null) so a responded invite stops nagging. The
+ * endpoint itself is already soonest-first ascending (c201/c204), so no
+ * client-side re-sort is needed.
+ */
+async function loadVisibleInvites(): Promise<EventInviteWithRsvpOut[]> {
+  const rows = await listMyInvitesWithRsvps();
+  return rows.filter((row) => row.event.canceled_at !== null || row.my_rsvp_status === null);
+}
+
+/** Invites section (c203): the discovery surface for GET /me/event-invites-with-rsvps
+ * (c204). Home rather than the Orgs tab — the point is reaching someone who does NOT
+ * follow the hosting chapter, so a surface buried inside that chapter's own tab would
+ * never reach exactly the person it exists for. Renders nothing while loading and
+ * nothing when there is genuinely nothing to show, rather than a permanent EmptyState
+ * box on the app's main landing screen for the near-universal case of zero invites. */
+function InvitesSection() {
+  const router = useRouter();
+  const palette = useTheme();
+  const [invites, setInvites] = useState<EventInviteWithRsvpOut[] | null>(null);
+
+  useEffect(() => {
+    // Fail soft (matches OrgEventsSegment): a failed load must not crash Home.
+    void loadVisibleInvites()
+      .then(setInvites)
+      .catch(() => setInvites([]));
+  }, []);
+
+  if (invites === null || invites.length === 0) return null;
+
+  return (
+    <View style={{ marginBottom: spacing.xl, gap: spacing.md }}>
+      <AppText variant="micro" tone="secondary">
+        INVITES
+      </AppText>
+      {invites.map(({ event, hosted_by }) => (
+        <Card key={event.id} onPress={() => router.push(`/chapter/event/${event.id}`)}>
+          <View style={{ flexDirection: "row", gap: spacing.md }}>
+            <Image
+              source={{ uri: event.cover_url }}
+              style={{ width: 56, height: 56, borderRadius: radii.thumb }}
+              resizeMode="cover"
+            />
+            <View style={{ flex: 1, gap: spacing.xs }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                <AppText variant="headline" numberOfLines={1} style={{ flex: 1 }}>
+                  {event.title}
+                </AppText>
+                <Feather name="chevron-right" size={16} color={palette.inkFaint} />
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+                <Feather name="users" size={12} color={palette.inkFaint} />
+                <AppText variant="caption" tone="secondary" numberOfLines={1}>
+                  {hosted_by}
+                </AppText>
+              </View>
+              <Chip
+                label={event.canceled_at !== null ? "Canceled" : eventWhen(event.starts_at, event.ends_at)}
+                variant={event.canceled_at !== null ? "danger" : "accent"}
+              />
+            </View>
+          </View>
+        </Card>
+      ))}
+    </View>
+  );
+}
 
 export default function FeedScreen() {
   const router = useRouter();
@@ -140,7 +225,7 @@ export default function FeedScreen() {
   const reportPost = async (item: FeedPostOut, reason: string) => {
     try {
       await createReport({ target_type: "post", target_id: item.id, reason });
-      Alert.alert("Reported", "Thanks for letting us know.");
+      showAlert("Reported", "Thanks for letting us know.");
     } catch (error) {
       showApiError(error, "Couldn't send that report");
     }
@@ -187,7 +272,18 @@ export default function FeedScreen() {
         eyebrow={campus ? campus.name.toUpperCase() : undefined}
         accentBarColor={campusColors.secondary}
         subtitle="Your campus, right now."
+        // Fab below only renders once campusId resolves non-null — matched
+        // exactly here so scroll content clears it whenever it's actually
+        // showing (c168).
+        hasFab={campusId !== null}
       >
+        {/* Above the campus-feed gate below on purpose: an invite admits the
+            invitee regardless of chapter membership or .edu verification
+            (backend/app/routers/events.py _readable_event checks the invite
+            before any visibility tier), so this must not disappear behind
+            the "confirm your school" / "no campus feed" states further down. */}
+        {user !== null ? <InvitesSection /> : null}
+
         <View style={{ flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg }}>
           {FILTERS.map((option) => {
             const active = option.key === filter;
@@ -277,6 +373,7 @@ export default function FeedScreen() {
           chapterId={chapterId}
           campusId={campusId}
           campusName={campus?.name ?? null}
+          isActiveMember={memberships[0]?.status === "active"}
           onPosted={() => void load()}
         />
       ) : null}

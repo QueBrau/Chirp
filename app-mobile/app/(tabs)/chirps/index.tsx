@@ -1,13 +1,13 @@
 /**
- * Yak: anonymous campus board (DESIGN §6/§7, §10 rules 5/6) — the board is a
+ * Chirps: the anonymous campus board (DESIGN §6/§7, §10 rules 5/6) — the board is a
  * PLACE, not a list: it renders on a deep-navy wash of the campus primary
  * color (campusNightWash), the SAME value in both light and dark system mode,
  * so it always feels like the campus at night — instantly distinct from
- * Home's neutral canvas. Cards stay light-tinted (yakTints) floating on that
+ * Home's neutral canvas. Cards stay light-tinted (chirpTints) floating on that
  * canvas regardless of system scheme, so all card content is pinned to the
  * LIGHT palette's ink tones on purpose (not `useTheme()`'s system-following
  * ones) — otherwise text would vanish in system dark mode. Active up-votes
- * and the single top-scoring yak's number use campus gold (§10 rule 6);
+ * and the single top-scoring chirp's number use campus gold (§10 rule 6);
  * down-votes stay danger red. NO mask/avatar of any kind (a small tinted dot
  * is the only marker, DESIGN §6).
  *
@@ -18,14 +18,14 @@
 
 import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Modal, Pressable, TextInput, View } from "react-native";
+import { Modal, Pressable, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 
-import { ApiError } from "@/api/client";
-import { createReport, blockYakAuthor } from "@/api/moderation";
-import { createYak, listYaks, voteYak, type YakFeedOut, type YakVoteValue } from "@/api/yaks";
+import { createReport, blockChirpAuthor } from "@/api/moderation";
+import { createChirp, listChirps, voteChirp, type ChirpFeedOut, type ChirpVoteValue } from "@/api/chirps";
 import { useCampus, useCampusAccess, useSession } from "@/auth";
 import { AppText, EmptyState, Screen, VotePill } from "@/components";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import {
   campusNightWash,
   elevation,
@@ -47,12 +47,6 @@ function age(iso: string): string {
   return `${Math.round(hours / 24)}d`;
 }
 
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
-}
-
 /**
  * One choice in the action sheet below. We roll our own sheet instead of using
  * Alert for the menus because Android's Alert supports AT MOST three buttons —
@@ -66,7 +60,7 @@ interface SheetOption {
   onPress: () => void;
 }
 
-export default function YakScreen() {
+export default function ChirpScreen() {
   const router = useRouter();
   const { campusColors } = useAppearance();
   const navyWash = campusNightWash(campusColors);
@@ -82,66 +76,66 @@ export default function YakScreen() {
   const access = useCampusAccess();
 
   const campus = useCampus();
-  const [yaks, setYaks] = useState<YakFeedOut[] | null>(null);
-  const [myVotes, setMyVotes] = useState<Record<string, YakVoteValue>>({});
+  const [chirps, setChirps] = useState<ChirpFeedOut[] | null>(null);
+  const [myVotes, setMyVotes] = useState<Record<string, ChirpVoteValue>>({});
   const [composerText, setComposerText] = useState("");
   const [posting, setPosting] = useState(false);
   const [sheet, setSheet] = useState<{ title: string; options: SheetOption[] } | null>(null);
 
-  const loadYaks = useCallback(async (id: string) => {
-    const feed = await listYaks(id);
-    setYaks(feed);
+  const loadChirps = useCallback(async (id: string) => {
+    const feed = await listChirps(id);
+    setChirps(feed);
     // Server-owned vote state: seed from each item's own `my_vote`.
-    const votes: Record<string, YakVoteValue> = {};
-    for (const yak of feed) {
-      if (yak.my_vote === 1 || yak.my_vote === -1) votes[yak.id] = yak.my_vote;
+    const votes: Record<string, ChirpVoteValue> = {};
+    for (const chirp of feed) {
+      if (chirp.my_vote === 1 || chirp.my_vote === -1) votes[chirp.id] = chirp.my_vote;
     }
     setMyVotes(votes);
   }, []);
 
   useEffect(() => {
     if (campusId === null || access !== "ok") return; // no campus, or not verified yet
-    void loadYaks(campusId).catch((error: unknown) => showApiError(error, "Couldn't load the board"));
-  }, [campusId, access, loadYaks]);
+    void loadChirps(campusId).catch((error: unknown) => showApiError(error, "Couldn't load the board"));
+  }, [campusId, access, loadChirps]);
 
 
-  const vote = async (yak: YakFeedOut, value: YakVoteValue) => {
-    const previous: number = myVotes[yak.id] ?? 0;
+  const vote = async (chirp: ChirpFeedOut, value: ChirpVoteValue) => {
+    const previous: number = myVotes[chirp.id] ?? 0;
     if (previous === value) return; // one vote per user; PUT is idempotent
 
     // Optimistic score adjustment, rolled back below if the request fails.
-    setMyVotes((votes) => ({ ...votes, [yak.id]: value }));
-    setYaks((current) =>
+    setMyVotes((votes) => ({ ...votes, [chirp.id]: value }));
+    setChirps((current) =>
       (current ?? []).map((y) =>
-        y.id === yak.id ? { ...y, score: y.score + value - previous } : y,
+        y.id === chirp.id ? { ...y, score: y.score + value - previous } : y,
       ),
     );
 
     try {
-      await voteYak(yak.id, value);
+      await voteChirp(chirp.id, value);
     } catch (error) {
       setMyVotes((votes) => {
         const next = { ...votes };
-        if (previous === 1 || previous === -1) next[yak.id] = previous;
-        else delete next[yak.id];
+        if (previous === 1 || previous === -1) next[chirp.id] = previous;
+        else delete next[chirp.id];
         return next;
       });
-      setYaks((current) =>
+      setChirps((current) =>
         (current ?? []).map((y) =>
-          y.id === yak.id ? { ...y, score: y.score - (value - previous) } : y,
+          y.id === chirp.id ? { ...y, score: y.score - (value - previous) } : y,
         ),
       );
       showApiError(error, "Couldn't save your vote");
     }
   };
 
-  const submitYak = async () => {
+  const submitChirp = async () => {
     const body = composerText.trim();
     if (body.length === 0 || posting || campusId === null) return;
     setPosting(true);
     try {
-      const created = await createYak(campusId, { body });
-      setYaks((current) => [{ ...created, my_vote: null }, ...(current ?? [])]);
+      const created = await createChirp(campusId, { body });
+      setChirps((current) => [{ ...created, my_vote: null }, ...(current ?? [])]);
       setComposerText("");
     } catch (error) {
       showApiError(error, "Couldn't post that");
@@ -150,60 +144,64 @@ export default function YakScreen() {
     }
   };
 
-  const submitReport = async (yak: YakFeedOut, reason: string) => {
+  const submitReport = async (chirp: ChirpFeedOut, reason: string) => {
     try {
-      await createReport({ target_type: "yak", target_id: yak.id, reason });
-      Alert.alert("Reported", "Thanks for letting us know.");
+      await createReport({ target_type: "chirp", target_id: chirp.id, reason });
+      showAlert("Reported", "Thanks for letting us know.");
     } catch (error) {
       showApiError(error, "Couldn't send that report");
     }
   };
 
-  const submitBlock = async (yak: YakFeedOut) => {
+  const submitBlock = async (chirp: ChirpFeedOut) => {
     try {
-      await blockYakAuthor(yak.id);
+      await blockChirpAuthor(chirp.id);
       // Drop the tapped card immediately so the UI reacts at once...
-      setYaks((current) => (current ?? []).filter((y) => y.id !== yak.id));
-      // ...then refetch, because the server hides EVERY yak by that author, not
+      setChirps((current) => (current ?? []).filter((y) => y.id !== chirp.id));
+      // ...then refetch, because the server hides EVERY chirp by that author, not
       // just this one. Without this the author's other posts linger on screen and
       // contradict the promise the confirmation just made ("posts", plural).
-      if (campusId !== null) await loadYaks(campusId);
+      if (campusId !== null) await loadChirps(campusId);
     } catch (error) {
       showApiError(error, "Couldn't block that");
     }
   };
 
-  const openReportReasons = (yak: YakFeedOut) => {
+  const openReportReasons = (chirp: ChirpFeedOut) => {
     setSheet({
       title: "What's wrong with it?",
       options: ["Spam", "Harassment", "Inappropriate"].map((reason) => ({
         label: reason,
-        onPress: () => void submitReport(yak, reason),
+        onPress: () => void submitReport(chirp, reason),
       })),
     });
   };
 
-  const confirmBlock = (yak: YakFeedOut) => {
+  const confirmBlock = (chirp: ChirpFeedOut) => {
     // The client genuinely doesn't know who posted this (SPEC §8.3) — the copy
     // must never imply otherwise.
-    Alert.alert("Block?", "You won't see posts from this person again.", [
-      { text: "Block", style: "destructive", onPress: () => void submitBlock(yak) },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    confirmAction({
+      title: "Block?",
+      message: "You won't see posts from this person again.",
+      confirmLabel: "Block",
+      destructive: true,
+      order: "confirm-first",
+      onConfirm: () => void submitBlock(chirp),
+    });
   };
 
-  const openMenu = (yak: YakFeedOut) => {
+  const openMenu = (chirp: ChirpFeedOut) => {
     setSheet({
       title: "More options",
       options: [
-        { label: "Report", onPress: () => openReportReasons(yak) },
-        { label: "Block", destructive: true, onPress: () => confirmBlock(yak) },
+        { label: "Report", onPress: () => openReportReasons(chirp) },
+        { label: "Block", destructive: true, onPress: () => confirmBlock(chirp) },
       ],
     });
   };
 
   // §10 rule 6: the single highest score on the board is the "notable number" that gets gold.
-  const topScore = (yaks ?? []).reduce((max, y) => Math.max(max, y.score), -Infinity);
+  const topScore = (chirps ?? []).reduce((max, y) => Math.max(max, y.score), -Infinity);
   const canCompose = composerText.trim().length > 0 && !posting;
 
   return (
@@ -222,27 +220,67 @@ export default function YakScreen() {
             {campus.name.toUpperCase()}
           </AppText>
         ) : null}
-        <AppText variant="display" tone="onAccent">
-          Yak
-        </AppText>
-        <View
-          style={{
-            width: metrics.accentBarWidth,
-            height: metrics.accentBarHeight,
-            borderRadius: metrics.accentBarRadius,
-            backgroundColor: campusColors.secondary,
-            marginTop: spacing.xs,
-          }}
-        />
+        {/* Hand-rolled rather than Screen's, because this canvas is forced navy and the
+            header text is pinned to onAccent. Kept structurally identical to Screen's so
+            the two headers cannot drift: bar LEADS the title, no alignItems so it
+            inherits `stretch` and matches the title's height. */}
+        <View style={{ flexDirection: "row", gap: spacing.sm }}>
+          <View
+            style={{
+              width: metrics.accentBarWidth,
+              alignSelf: "stretch",
+              borderRadius: metrics.accentBarRadius,
+              backgroundColor: campusColors.secondary,
+            }}
+          />
+          <AppText variant="display" tone="onAccent">
+            Chirps
+          </AppText>
+        </View>
         <AppText variant="caption" tone="onAccent" style={{ marginTop: spacing.xs }}>
           Anonymous and campus-wide — no names, ever.
         </AppText>
       </View>
 
+      {/* c175: the house leaderboard is the other campus-wide surface and shares Chirps'
+          electorate (verified .edu), so it hangs off this tab rather than earning a
+          sixth one. Deliberately a quiet row, not a hero: Chirps is the PLACE this screen
+          is (DESIGN.md rule 5) and a second loud card here would fight it. */}
+      {access === "ok" && campusId !== null ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.push("/(tabs)/chirps/houses")}
+          style={({ pressed }) => ({
+            opacity: pressed ? 0.7 : 1,
+            marginBottom: spacing.lg,
+            paddingVertical: spacing.md,
+            paddingHorizontal: spacing.lg,
+            borderRadius: radii.card,
+            // The canvas here is forced navy in BOTH schemes, so this cannot use a
+            // system-following surface token - it would go near-black in dark mode on an
+            // already-dark wash. A translucent white sits on the navy in either scheme.
+            backgroundColor: "rgba(255,255,255,0.10)",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+          })}
+        >
+          <View style={{ gap: 2 }}>
+            <AppText variant="headline" tone="onAccent">
+              Touse of the week
+            </AppText>
+            <AppText variant="caption" tone="onAccent">
+              One vote a week. The whole school decides.
+            </AppText>
+          </View>
+          <Feather name="chevron-right" size={20} color={campusColors.secondary} />
+        </Pressable>
+      ) : null}
+
       {access === "loading" ? (
         <EmptyState title="Opening the board..." />
       ) : access === "unverified" || access === "lapsed" ? (
-        // The designed refusal (c110). Yak is the surface the .edu rule exists
+        // The designed refusal (c110). Chirp is the surface the .edu rule exists
         // for — a stranger reading your school's anonymous board is precisely
         // what it costs something to allow.
         <EmptyState
@@ -250,7 +288,7 @@ export default function YakScreen() {
           message={
             access === "lapsed"
               ? "It's been a year since you last confirmed your .edu address. Verify again to get back on the board."
-              : "Yak is your school's anonymous board, so it's limited to students. Confirm your .edu address to join in."
+              : "Chirp is your school's anonymous board, so it's limited to students. Confirm your .edu address to join in."
           }
           actionLabel={access === "lapsed" ? "Verify again" : "Verify my .edu"}
           onAction={() => router.push("/(auth)/verify-campus")}
@@ -261,7 +299,7 @@ export default function YakScreen() {
         // so there is now an actual next step to point at.
         <EmptyState
           title="Campus-only"
-          message="Yak needs a campus. Join your org from the Orgs tab and it opens up."
+          message="Chirp needs a campus. Join your org from the Orgs tab and it opens up."
         />
       ) : (
         <>
@@ -298,7 +336,7 @@ export default function YakScreen() {
                 accessibilityLabel="Post"
                 accessibilityState={{ disabled: !canCompose }}
                 disabled={!canCompose}
-                onPress={() => void submitYak()}
+                onPress={() => void submitChirp()}
                 style={({ pressed }) => ({
                   width: 36,
                   height: 36,
@@ -314,20 +352,20 @@ export default function YakScreen() {
             </View>
           </View>
 
-          {yaks !== null && yaks.length === 0 ? (
+          {chirps !== null && chirps.length === 0 ? (
             <EmptyState
               title="Quiet campus"
               message="Be the first to say something (anonymously)."
             />
           ) : (
             <View style={{ gap: spacing.md }}>
-              {(yaks ?? []).map((yak, index) => {
-                const mine = myVotes[yak.id];
-                const tint = light.yakTints[index % light.yakTints.length] ?? light.surface;
-                const isTop = yak.score === topScore && yak.score > 0;
+              {(chirps ?? []).map((chirp, index) => {
+                const mine = myVotes[chirp.id];
+                const tint = light.chirpTints[index % light.chirpTints.length] ?? light.surface;
+                const isTop = chirp.score === topScore && chirp.score > 0;
                 return (
                   <View
-                    key={yak.id}
+                    key={chirp.id}
                     style={{
                       backgroundColor: tint,
                       borderRadius: radii.card,
@@ -353,7 +391,7 @@ export default function YakScreen() {
                         </View>
                       </View>
                       <View style={{ flex: 1, gap: spacing.sm }}>
-                        <AppText style={{ color: light.ink }}>{yak.body}</AppText>
+                        <AppText style={{ color: light.ink }}>{chirp.body}</AppText>
                         <View
                           style={{
                             flexDirection: "row",
@@ -362,7 +400,7 @@ export default function YakScreen() {
                           }}
                         >
                           <AppText variant="caption" style={{ color: light.inkFaint }}>
-                            {age(yak.created_at)} · anonymous
+                            {age(chirp.created_at)} · anonymous
                           </AppText>
                           {/* Overflow control (report/block) — NOT an avatar, NOT a mask;
                               as discreet as the timestamp it sits next to. */}
@@ -370,19 +408,19 @@ export default function YakScreen() {
                             accessibilityRole="button"
                             accessibilityLabel="More options"
                             hitSlop={spacing.sm}
-                            onPress={() => openMenu(yak)}
+                            onPress={() => openMenu(chirp)}
                           >
                             <Feather name="more-horizontal" size={14} color={light.inkFaint} />
                           </Pressable>
                         </View>
                       </View>
                       <VotePill
-                        score={yak.score}
+                        score={chirp.score}
                         vote={mine === 1 ? "up" : mine === -1 ? "down" : null}
                         upColor={campusColors.secondary}
                         scoreColor={isTop ? campusColors.secondary : undefined}
-                        onUpvote={() => void vote(yak, 1)}
-                        onDownvote={() => void vote(yak, -1)}
+                        onUpvote={() => void vote(chirp, 1)}
+                        onDownvote={() => void vote(chirp, -1)}
                       />
                     </View>
                   </View>

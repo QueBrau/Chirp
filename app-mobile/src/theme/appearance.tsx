@@ -128,14 +128,14 @@ export function resolvePalette(
 }
 
 /**
- * Yak's "campus at night" canvas (DESIGN §10.5). The Yak board renders on a deep
+ * The Chirps "campus at night" canvas (DESIGN §10.5). The Chirps board renders on a deep
  * dark wash of the user's campus PRIMARY color as its full-bleed background, the
- * SAME value in both light and dark mode — Yak deliberately ignores system scheme
+ * SAME value in both light and dark mode — Chirp deliberately ignores system scheme
  * so it always feels like the campus at night, instantly distinct from Home.
  * Darkens toward black (rather than mixing toward a neutral bg like the §8.5
  * background-tint does) so the campus's own hue survives — UNCG's navy primary
  * stays navy, just deeper; a lighter campus primary still lands on a legible
- * dark canvas. Light tinted cards (palette.yakTints) float on top of this.
+ * dark canvas. Light tinted cards (palette.chirpTints) float on top of this.
  */
 export function campusNightWash(campusColors: CampusColors): string {
   return darken(campusColors.primary, 0.55);

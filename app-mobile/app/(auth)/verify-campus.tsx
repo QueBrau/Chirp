@@ -1,7 +1,7 @@
 /**
  * Verify your .edu — the designed destination for c88's 403 (board c90).
  *
- * Jose's call, Aug 16: an unverified user opening Yak or the campus feed sees a REAL
+ * Jose's call, Aug 16: an unverified user opening Chirps or the campus feed sees a REAL
  * SCREEN explaining they need to confirm an .edu for their school, WITH THE FORM ON IT,
  * rather than an empty feed (indistinguishable from a broken app) or a bare error toast.
  * c110 gave the two tabs an honest refusal; this is the place that refusal sends them.
@@ -96,7 +96,7 @@ export default function VerifyCampusScreen() {
     return (
       <Screen
         title="You're verified"
-        subtitle="Your campus feed and Yak are open. Welcome in."
+        subtitle="Your campus feed and Chirps are open. Welcome in."
       >
         <View style={{ gap: spacing.xl }}>
           <Card>
@@ -171,7 +171,7 @@ export default function VerifyCampusScreen() {
       subtitle={
         lapsed
           ? "It's been a year since you last confirmed your .edu address. One code and you're back in."
-          : "Your campus feed and Yak are for students at your school. Confirm your .edu address to unlock them."
+          : "Your campus feed and Chirps are for students at your school. Confirm your .edu address to unlock them."
       }
     >
       <View style={{ gap: spacing.xl }}>

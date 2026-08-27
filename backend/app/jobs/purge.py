@@ -1,6 +1,6 @@
 """Hard-delete job for soft-deleted content (board c69; /privacy section 14).
 
-Posts, comments and yaks are soft-deleted in place: the API sets deleted_at /
+Posts, comments and chirps are soft-deleted in place: the API sets deleted_at /
 removed_at and every read path filters the row out, but until this job existed
 nothing ever issued a DELETE FROM for them. This module is that job. It finds rows
 whose soft-delete timestamp is older than Settings.purge_retention_days and erases
@@ -10,13 +10,13 @@ Models covered — every soft-deleting model in app/models/, found by grepping f
 deleted_at / removed_at:
   - Post          (app.models.social)  -- deleted_at
   - PostComment   (app.models.social)  -- deleted_at
-  - Yak           (app.models.yak)     -- removed_at
+  - Chirp           (app.models.chirp)     -- removed_at
 
 Nothing else in app/models/ soft-deletes (no other deleted_at/removed_at column
 exists), so there is nothing else for this job to cover.
 
-Purging a Post or a Yak also removes its PostLike / YakVote rows first. Those
-tables have a plain `REFERENCES posts(id)` / `REFERENCES yaks(id)` FK with no
+Purging a Post or a Chirp also removes its PostLike / ChirpVote rows first. Those
+tables have a plain `REFERENCES posts(id)` / `REFERENCES chirps(id)` FK with no
 ON DELETE CASCADE at the DB level (see alembic/versions/0001_initial.py), so
 deleting the parent while a like/vote still points at it would raise a foreign key
 violation, not silently cascade. A purged post's comments are removed the same way
@@ -24,7 +24,7 @@ regardless of the comment's own deleted_at — once the post is gone forever the
 no route that can ever surface those comments again, so keeping them around only to
 honor their own not-yet-expired window would just delay an inevitable orphan.
 content_reports.target_id is intentionally not a foreign key (it is polymorphic
-across yak/post/comment/message_forward/user), so a report that named purged
+across chirp/post/comment/message_forward/user), so a report that named purged
 content is left as-is: a dangling but harmless historical record, matching
 /privacy section 13's existing promise to keep report records reviewable.
 """
@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.social import Post, PostComment, PostLike
-from app.models.yak import Yak, YakVote
+from app.models.chirp import Chirp, ChirpVote
 
 
 @dataclass(frozen=True)
@@ -48,11 +48,11 @@ class PurgeResult:
 
     posts: int
     post_comments: int
-    yaks: int
+    chirps: int
 
     @property
     def total(self) -> int:
-        return self.posts + self.post_comments + self.yaks
+        return self.posts + self.post_comments + self.chirps
 
 
 async def purge_expired_soft_deletes(
@@ -61,7 +61,7 @@ async def purge_expired_soft_deletes(
     now: datetime | None = None,
     retention_days: int | None = None,
 ) -> PurgeResult:
-    """Hard-delete posts/comments/yaks whose soft-delete timestamp is past the window.
+    """Hard-delete posts/comments/chirps whose soft-delete timestamp is past the window.
 
     Pass `now` / `retention_days` to make the boundary deterministic in tests; both
     default to real time / Settings.purge_retention_days for the real job. Does not
@@ -101,22 +101,22 @@ async def purge_expired_soft_deletes(
         )
     )
 
-    expired_yak_ids = (
+    expired_chirp_ids = (
         await session.execute(
-            select(Yak.id).where(Yak.removed_at.is_not(None), Yak.removed_at < cutoff)
+            select(Chirp.id).where(Chirp.removed_at.is_not(None), Chirp.removed_at < cutoff)
         )
     ).scalars().all()
 
-    yaks_deleted = 0
-    if expired_yak_ids:
-        await session.execute(delete(YakVote).where(YakVote.yak_id.in_(expired_yak_ids)))
-        yak_result = await session.execute(delete(Yak).where(Yak.id.in_(expired_yak_ids)))
-        yaks_deleted = yak_result.rowcount or 0
+    chirps_deleted = 0
+    if expired_chirp_ids:
+        await session.execute(delete(ChirpVote).where(ChirpVote.chirp_id.in_(expired_chirp_ids)))
+        chirp_result = await session.execute(delete(Chirp).where(Chirp.id.in_(expired_chirp_ids)))
+        chirps_deleted = chirp_result.rowcount or 0
 
     return PurgeResult(
         posts=posts_deleted,
         post_comments=comments_result.rowcount or 0,
-        yaks=yaks_deleted,
+        chirps=chirps_deleted,
     )
 
 
@@ -135,7 +135,7 @@ def main() -> None:
     result = asyncio.run(_run_and_report())
     print(
         f"purge: posts={result.posts} post_comments={result.post_comments} "
-        f"yaks={result.yaks} total={result.total}"
+        f"chirps={result.chirps} total={result.total}"
     )
 
 

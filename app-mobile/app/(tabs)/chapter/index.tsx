@@ -17,7 +17,7 @@ import { useRouter, type Href } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Image, Pressable, Share, View, type ViewStyle } from "react-native";
+import { Image, Pressable, Share, View, type ViewStyle } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 
 import {
@@ -32,7 +32,6 @@ import {
   type MembershipOut,
   type RoleName,
 } from "@/api/chapters";
-import { ApiError } from "@/api/client";
 import { createEvent, listEventsWithRsvps, type EventOut, type EventRsvpOut, type EventWithRsvpsOut } from "@/api/events";
 import { likePost, listPosts, unlikePost, type FeedPostOut } from "@/api/feed";
 import { blockUser, createReport } from "@/api/moderation";
@@ -54,6 +53,9 @@ import {
   SectionHeader,
   type CreateEventInput,
 } from "@/components";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
+import { eventWhen } from "@/lib/dates";
+import { ROLE_LABELS, roleLabel } from "@/lib/roleTerms";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -117,24 +119,14 @@ const TOOLS: Tool[] = [
     description: "Roles, status, and chapter details",
     capability: "members_admin",
   },
+  {
+    href: "/chapter/vice-president",
+    icon: "eye",
+    title: "Deputy President",
+    description: "Read-only roster, invites, and dues",
+    capability: "deputy_overview",
+  },
 ];
-
-const ROLE_LABELS: Record<RoleName, string> = {
-  president: "President",
-  vice_president: "Vice President",
-  treasurer: "Treasurer",
-  secretary: "Secretary",
-  historian: "Historian",
-  member: "Member",
-  pledge: "Pledge",
-  alumni: "Alum",
-};
-
-/** Runtime fallback for a role the closed ROLE_LABELS record doesn't know yet —
- * the server owns the taxonomy (c44), so an unmapped value just gets prettified. */
-function roleLabel(role: RoleName): string {
-  return ROLE_LABELS[role] ?? role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 const CATEGORIES = ["Fraternities", "Sororities", "Clubs", "Intramurals"] as const;
 type Category = (typeof CATEGORIES)[number];
@@ -159,12 +151,6 @@ function age(iso: string): string {
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours}h`;
   return `${Math.round(hours / 24)}d`;
-}
-
-/** ApiError carries a server-provided `.detail`; anything else gets a generic fallback. */
-function showApiError(error: unknown, title: string): void {
-  const message = error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
-  Alert.alert(title, message);
 }
 
 /** Pill segmented control under the org hero (§8.7): Feed · Events · Tools, org-accent active state. */
@@ -235,6 +221,10 @@ function OrgFeedSegment({
 }) {
   const { user } = useSession();
   const [items, setItems] = useState<OrgFeedItem[] | null>(null);
+  // Honest signal (board c102): true only for a non-active viewer when this
+  // chapter genuinely has actives-only content they cannot see. Never true for an
+  // active member, who already sees everything.
+  const [activesOnlyHidden, setActivesOnlyHidden] = useState(false);
 
   // ONE round trip: GET /chapters/{id}/posts returns FeedPostOut, which already
   // carries the author's display identity and batched like/comment counts (c43).
@@ -245,7 +235,8 @@ function OrgFeedSegment({
   // blockAuthor's refetch below without that refetch masquerading as a block failure.
   const load = useCallback(async () => {
     try {
-      const posts = await listPosts(chapterId);
+      const { posts, activesOnlyHidden: hidden } = await listPosts(chapterId);
+      setActivesOnlyHidden(hidden);
       setItems(
         posts.map((post) => ({
           post,
@@ -265,7 +256,7 @@ function OrgFeedSegment({
   const reportPost = async (item: OrgFeedItem, reason: string) => {
     try {
       await createReport({ target_type: "post", target_id: item.post.id, reason });
-      Alert.alert("Reported", "Thanks for letting us know.");
+      showAlert("Reported", "Thanks for letting us know.");
     } catch (error) {
       showApiError(error, "Couldn't send that report");
     }
@@ -318,17 +309,28 @@ function OrgFeedSegment({
     }
   };
 
+  // Shown ABOVE both the empty state and the list (board c102's named failure
+  // mode): a non-active viewer who sees zero posts must still be able to tell
+  // that's because the chapter-public tier is genuinely empty, not because an
+  // actives-only tier exists and is simply invisible to them. Gating this behind
+  // items.length > 0 would silently recreate exactly that ambiguity.
+  const hiddenNotice = activesOnlyHidden ? <ActivesOnlyHiddenNotice /> : null;
+
   if (items !== null && items.length === 0) {
     return (
-      <EmptyState
-        title="Nothing posted yet"
-        message={`Chapter-only posts land here — only ${orgName} members ever see this feed.`}
-      />
+      <View style={{ gap: spacing.md }}>
+        {hiddenNotice}
+        <EmptyState
+          title="Nothing posted yet"
+          message={`Chapter-only posts land here — only ${orgName} members ever see this feed.`}
+        />
+      </View>
     );
   }
 
   return (
     <View style={{ gap: spacing.md }}>
+      {hiddenNotice}
       {(items ?? []).map((item) => (
         <MediaPostCard
           key={item.post.id}
@@ -345,6 +347,37 @@ function OrgFeedSegment({
           canBlock={user !== null && item.post.author_id !== user.id}
         />
       ))}
+    </View>
+  );
+}
+
+/** Honest-signal row (board c102's named failure mode): tells a non-active member
+ * a fuller, actives-only tier exists in this chapter, rather than leaving them
+ * reading an indistinguishable-from-quiet feed. Modest — one row, no dismiss,
+ * matches the "stated, not offered" info box CreateSheet uses for its own
+ * audience-picker constraint. */
+function ActivesOnlyHiddenNotice() {
+  const palette = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: spacing.md,
+        padding: spacing.md,
+        borderRadius: radii.input,
+        backgroundColor: palette.surfaceAlt,
+        borderWidth: 1,
+        borderColor: palette.border,
+      }}
+    >
+      <Feather name="eye-off" size={18} color={palette.inkFaint} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <AppText variant="bodyBold">Actives-only posts are hidden</AppText>
+        <AppText variant="caption" tone="secondary">
+          Some posts here are visible only to active members.
+        </AppText>
+      </View>
     </View>
   );
 }
@@ -387,8 +420,8 @@ function EventCard({
       <View style={{ height: 160 }}>
         <Image source={{ uri: event.cover_url }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
         <Chip
-          label={event.date_label}
-          variant="accent"
+          label={event.canceled_at ? "Canceled" : eventWhen(event.starts_at, event.ends_at)}
+          variant={event.canceled_at ? "danger" : "accent"}
           style={{ position: "absolute", top: spacing.md, left: spacing.md }}
         />
       </View>
@@ -442,8 +475,15 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
   }, [chapterId]);
 
   const handleCreate = async (input: CreateEventInput) => {
-    await createEvent(chapterId, input);
-    await reload();
+    // The sheet has already closed by the time this rejects, so a failed create has
+    // to say so out loud - otherwise the event simply never appears.
+    try {
+      await createEvent(chapterId, input);
+    } catch (error) {
+      showApiError(error, "Couldn't create the event");
+      return;
+    }
+    await reload().catch(() => {});
   };
 
   return (
@@ -571,30 +611,26 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
   // Confirmed rather than instant: this is not undoable through any screen in the
   // app, and the whole point of the code is that other people are holding it.
   const confirmRevoke = (target: ChapterInviteOut) => {
-    Alert.alert(
-      "Turn off this code?",
-      `${target.code} stops working immediately. Anyone still holding it will need a new one.`,
-      [
-        { text: "Keep it", style: "cancel" },
-        {
-          text: "Turn it off",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              setRevoking(target.code);
-              try {
-                await revokeInvite(chapterId, target.code);
-                await refreshExisting();
-              } catch {
-                setError("Couldn't turn that code off. Try again.");
-              } finally {
-                setRevoking(null);
-              }
-            })();
-          },
-        },
-      ],
-    );
+    confirmAction({
+      title: "Turn off this code?",
+      message: `${target.code} stops working immediately. Anyone still holding it will need a new one.`,
+      confirmLabel: "Turn it off",
+      cancelLabel: "Keep it",
+      destructive: true,
+      onConfirm: () => {
+        void (async () => {
+          setRevoking(target.code);
+          try {
+            await revokeInvite(chapterId, target.code);
+            await refreshExisting();
+          } catch {
+            setError("Couldn't turn that code off. Try again.");
+          } finally {
+            setRevoking(null);
+          }
+        })();
+      },
+    });
   };
 
   return (
@@ -768,7 +804,7 @@ function OrgToolsSegment({ chapterId, role }: { chapterId: string; role: RoleNam
       href: "/chapter/moderation",
       icon: "shield",
       title: "Moderation",
-      description: "Open reports and yak removal",
+      description: "Open reports and chirp removal",
       capability: "moderation",
     },
   ];
@@ -953,6 +989,11 @@ export default function OrgsScreen() {
                 ? `Find your org at ${campus.name}`
                 : "Find your org"
         }
+        // Fab below only renders on the feed segment once membership resolves
+        // — matched exactly here so scroll content (including the Tools grid
+        // on other segments) clears whichever overlays are actually showing
+        // (c168).
+        hasFab={!loading && membership !== null && segment === "feed"}
       >
         {loading ? (
           <EmptyState title="Loading your org..." />
@@ -974,6 +1015,7 @@ export default function OrgsScreen() {
           chapterId={membership.chapter_id}
           campusId={campus?.id ?? null}
           campusName={campus?.name ?? null}
+          isActiveMember={membership.status === "active"}
           onPosted={() => setFeedRefreshKey((key) => key + 1)}
         />
       ) : null}

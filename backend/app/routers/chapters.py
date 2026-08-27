@@ -4,30 +4,49 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
 from app.core.invites import clamp_invite_expiry
-from app.core.permissions import EBOARD, MEMBERS_ADMIN, Role, capabilities_for, require_role
+from app.core.permissions import (
+    DEPUTY_OVERVIEW,
+    EBOARD,
+    MEMBERS_ADMIN,
+    Role,
+    capabilities_for,
+    require_role,
+)
+from app.core.windows import meeting_window
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.middleware.org_scope import get_current_membership
 from app.schemas.identity import (
+    AttendanceOverview,
     ChapterCreate,
     ChapterInviteCreate,
     ChapterInviteOut,
     ChapterInviteRevokeRequest,
     ChapterJoinRequest,
     ChapterOut,
+    ChapterOverview,
     ChapterUpdate,
+    DeputyOverview,
+    DuesOverview,
+    InviteOverview,
+    LineageOverview,
     MemberOut,
     MembershipOut,
     MembershipUpdate,
+    RoleCount,
     RoleMetaOut,
+    RoleTermOut,
+    RosterOverview,
 )
+from app.services.role_term_service import apply_role_change, open_initial_term
 
 router = APIRouter(tags=["chapters"])
 
@@ -56,13 +75,14 @@ async def create_chapter(
     )
     session.add(chapter)
     await session.flush()
-    session.add(
-        models.Membership(
-            user_id=user.id,
-            chapter_id=chapter.id,
-            role=Role.president.value,
-        )
+    membership = models.Membership(
+        user_id=user.id,
+        chapter_id=chapter.id,
+        role=Role.president.value,
     )
+    session.add(membership)
+    await session.flush()
+    await open_initial_term(session, membership=membership)
     # c96, same rule as join_chapter: the founding president belongs to the
     # campus they just created a chapter on. Safe here for the stronger reason
     # that this route is platform-admin-only.
@@ -182,14 +202,365 @@ async def get_role_meta(
     )
 
 
+async def _roster_overview(chapter_id: uuid.UUID, session: AsyncSession) -> RosterOverview:
+    """Who is on the roster right now (1 statement).
+
+    Grouped by (status, role) rather than counted per status: one pass gives both the
+    active/inactive totals and the by-role breakdown, and they cannot disagree because
+    they are folded from the same rows. "removed" is neither active nor inactive and is
+    intentionally not reported — a removed member is not on the roster in any sense a
+    president (or, per c163, the vice president's deputy view) is asking about.
+
+    Shared by chapter_overview (president) and deputy_overview (VP/president, c163) so
+    the roster panel cannot report two different numbers on the same chapter.
+    """
+    roster_rows = await session.execute(
+        select(
+            models.Membership.status,
+            models.Membership.role,
+            func.count().label("count"),
+        )
+        .where(models.Membership.chapter_id == chapter_id)
+        .group_by(models.Membership.status, models.Membership.role)
+    )
+    active_by_role: dict[str, int] = {}
+    active_total = 0
+    inactive_total = 0
+    for status, role, count in roster_rows:
+        if status == "active":
+            active_by_role[role] = active_by_role.get(role, 0) + count
+            active_total += count
+        elif status == "inactive":
+            inactive_total += count
+    return RosterOverview(
+        active=active_total,
+        inactive=inactive_total,
+        # Biggest group first, then role name, so the order is stable between calls
+        # when two roles tie — the same reason attendance_summary orders by id after
+        # display_name.
+        by_role=[
+            RoleCount(role=role, count=count)  # type: ignore[arg-type]
+            for role, count in sorted(active_by_role.items(), key=lambda kv: (-kv[1], kv[0]))
+        ],
+    )
+
+
+async def _dues_overview(chapter_id: uuid.UUID, session: AsyncSession) -> DuesOverview:
+    """The current dues cycle and how far through collecting it the chapter is
+    (3 statements: cycle, per-member net, chapter net).
+
+    Shared by chapter_overview (president) and deputy_overview (VP/president, c163) —
+    see that shared use for why this is a function rather than being inlined twice,
+    which would risk the two dashboards silently disagreeing about the same cycle.
+
+    "Current cycle" is the most recently CREATED one, matching list_dues_cycles'
+    ordering and therefore treasurer.tsx's cycles[0]. Picking the nearest due_date
+    here instead would be defensible in isolation and would put a different cycle name
+    on the President and Treasurer screens on the same day — the exact class of silent
+    disagreement _meeting_window exists to prevent.
+    """
+    cycle = await session.scalar(
+        select(models.DuesCycle)
+        .where(models.DuesCycle.chapter_id == chapter_id)
+        .order_by(models.DuesCycle.created_at.desc())
+        .limit(1)
+    )
+    if cycle is None:
+        return DuesOverview()
+
+    # A dues payment can be CORRECTED — ledger_entries is append-only, so a refund
+    # or a mistake is a new entry_type="correction" row pointing at the original via
+    # corrects_entry_id (SPEC 8.2). Reading only entry_type="dues_payment" would
+    # report money the chapter gave back as money it collected.
+    #
+    # dues_contributions_subquery (app/core/dues_status.py) is the SAME netting
+    # definition payments.py's create_dues_payment_intent guard reads (board c172)
+    # — before that module existed this query and that guard's plain existence
+    # check disagreed about whether a fully-refunded member had paid. It also nets
+    # entry_type='dues_installment' rows in alongside 'dues_payment' (board c195),
+    # so a payment-plan member's net rises with each installment recorded.
+    contributions = dues_contributions_subquery(chapter_id, cycle.id)
+
+    # PAID/ON_PLAN/OUTSTANDING ARE SPINED ON THE ACTIVE ROSTER, so they always sum
+    # to roster.active. Counting DISTINCT payers instead would let a member who paid
+    # and then went inactive make outstanding_members negative — the roster shrinks
+    # under a payment count that cannot. user_id is selected alongside the net sum
+    # (board c195) so each row can be cross-referenced against that member's plan
+    # status below — the pre-c195 version of this query only needed the net values.
+    paid_rows = await session.execute(
+        select(
+            models.Membership.user_id,
+            func.coalesce(func.sum(contributions.c.amount_cents), 0).label("net"),
+        )
+        .select_from(models.Membership)
+        .outerjoin(contributions, contributions.c.user_id == models.Membership.user_id)
+        .where(
+            models.Membership.chapter_id == chapter_id,
+            models.Membership.status == "active",
+        )
+        .group_by(models.Membership.user_id)
+    )
+    member_nets = [(row.user_id, row.net) for row in paid_rows]
+
+    # board c195: which of those members have an ACTIVE plan right now. Only
+    # 'active' is fetched — NOT 'completed' — because paid is decided on net alone
+    # below (see the adversarial-review note in the loop): a completed plan whose
+    # installments were later corrected away must NOT read as paid just because its
+    # status once reached 'completed', and 'active' is the only status that changes
+    # a member's BUCKET rather than merely explaining a net that already decided it.
+    # ONE more fixed, non-per-member query — see chapter_overview's STATEMENT
+    # BUDGET note; this table adds one to it.
+    active_plan_rows = await session.execute(
+        select(models.DuesPaymentPlan.user_id).where(
+            models.DuesPaymentPlan.dues_cycle_id == cycle.id,
+            models.DuesPaymentPlan.status == "active",
+        )
+    )
+    active_plan_user_ids = {row.user_id for row in active_plan_rows}
+
+    # THREE-WAY SPLIT (board c195, tightened after adversarial pre-merge review).
+    # PAID IS DECIDED ON NET ALONE — net >= the cycle total, or (unchanged from the
+    # original c172 rule) any positive net at all, covering a lump-sum payer left
+    # with a partial refund. There is deliberately NO "OR plan_status == 'completed'"
+    # path any more: an earlier version of this split treated a completed plan as an
+    # independent, permanent proof of paid, which is a LATCH — a completed plan
+    # whose installments are later corrected away (net back to 0) kept reading as
+    # paid forever, disagreeing with collected_cents and with the self-serve
+    # pay-guard, both of which correctly say the member owes again. A completed plan
+    # reaches net >= total via its own installments in the normal case, so dropping
+    # the OR loses nothing there and only changes the answer for the refunded case,
+    # where the OLD answer was wrong. Only an ACTIVE plan (not yet net-paid) routes a
+    # member to on_plan instead of outstanding. Every member falls into exactly one
+    # bucket, so the three counts are exhaustive over the active roster by
+    # construction.
+    paid_members = 0
+    on_plan_members = 0
+    outstanding_members = 0
+    for user_id, net in member_nets:
+        if net >= cycle.amount_cents:
+            paid_members += 1
+        elif user_id in active_plan_user_ids:
+            on_plan_members += 1
+        elif net > 0:
+            paid_members += 1
+        else:
+            outstanding_members += 1
+
+    return DuesOverview(
+        cycle_id=cycle.id,
+        cycle_name=cycle.name,
+        amount_cents=cycle.amount_cents,
+        due_date=cycle.due_date,
+        paid_members=paid_members,
+        on_plan_members=on_plan_members,
+        outstanding_members=outstanding_members,
+        # DELIBERATELY NOT roster-spined, unlike the three counts above. This is "how
+        # much money came in for this cycle", which includes members who have since
+        # gone inactive and payments whose related_user_id was never set. Filtering
+        # it to the current roster would quietly under-report the bank balance to
+        # make it agree with a headcount, and the two are not the same question.
+        collected_cents=await session.scalar(
+            select(func.coalesce(func.sum(contributions.c.amount_cents), 0))
+        )
+        or 0,
+    )
+
+
+async def _invite_overview(
+    chapter_id: uuid.UUID, session: AsyncSession, now: datetime
+) -> InviteOverview:
+    """Invite codes that could still be redeemed right now (1 statement).
+
+    All three conditions c105 gave a code, together: a code that is merely unexpired is
+    not live if it was revoked or has been fully redeemed. remaining_uses answers "how
+    many more people could walk in on codes already out there", which is the number
+    that decides whether something needs revoking.
+
+    Shared by chapter_overview (president) and deputy_overview (VP/president, c163).
+    """
+    live_invite = [
+        models.ChapterInvite.chapter_id == chapter_id,
+        models.ChapterInvite.revoked_at.is_(None),
+        models.ChapterInvite.expires_at > now,
+        models.ChapterInvite.uses < models.ChapterInvite.max_uses,
+    ]
+    invite_row = (
+        await session.execute(
+            select(
+                func.count().label("live_codes"),
+                func.coalesce(
+                    func.sum(models.ChapterInvite.max_uses - models.ChapterInvite.uses), 0
+                ).label("remaining_uses"),
+            ).where(*live_invite)
+        )
+    ).one()
+    return InviteOverview(
+        live_codes=invite_row.live_codes,
+        remaining_uses=invite_row.remaining_uses,
+    )
+
+
+@router.get("/chapters/{chapter_id}/overview")
+async def chapter_overview(
+    chapter_id: uuid.UUID,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    _membership: models.Membership = Depends(require_role(*MEMBERS_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> ChapterOverview:
+    """Chapter health in one request, for the President dashboard (board card c171).
+
+    The president is the only role holding every capability (dues_admin, minutes_admin,
+    members_admin, moderation, lineage_admin) and theirs was the only e-board screen
+    showing no state at all — president.tsx was two text inputs and a tappable roster,
+    so "are dues collected" and "is anyone failing attendance" meant walking into other
+    officers' screens one at a time. This is the single call that answers both.
+
+    GATED ON MEMBERS_ADMIN (president-only), which is the tightest HONEST gate rather
+    than a convenient one. The payload mixes dues, attendance and lineage; a treasurer
+    must not read attendance and a secretary must not read dues, so the only role that
+    may see all of it at once is the one that already holds all three capabilities. No
+    new capability is introduced — a sixth name in CAPABILITIES that happened to mean
+    "president" would be a second spelling of members_admin and would drift from it.
+
+    MODERATION IS ABSENT ON PURPOSE. content_reports carries campus_id, NOT chapter_id,
+    and list_reports scopes to campuses the caller moderates (SECURITY-REVIEW finding
+    1). An "open reports" field inside a response shaped /chapters/{id}/overview would
+    be campus data wearing a chapter label — a number that is wrong for any campus with
+    two chapters on it, and wrong in the direction that makes a president think their
+    own chapter is being reported. It needs its own campus-labelled call or nothing.
+
+    STATEMENT BUDGET: FIXED, none of them per-member — c195 added one more (a plan-
+    status lookup inside _dues_overview) to what this docstring used to call seven.
+    This endpoint has exactly the shape that produced the c82 and c156 N+1s, so the
+    rule that matters is not the exact count but that roster size changes the
+    numbers and never the number of queries.
+
+    The counts are deliberately NOT folded into one another as subqueries, for the
+    reason c82's docstring already records: a roster-spined query returns no rows for
+    an empty roster, so any denominator riding along inside it disappears exactly when
+    a brand-new chapter loads this screen. Every panel here must render zeroes rather
+    than nothing.
+
+    THE WINDOW is _meeting_window's, shared with attendance_summary (c82) and
+    list_meetings_with_attendance (c156) so the meeting count on this screen cannot
+    disagree with the Secretary dashboard's by a boundary meeting. Callers pass the
+    same [start, end] the Secretary screen computes; omitting both means all time.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Roster/dues/invites are shared with deputy_overview below (c163) — see each
+    # helper's docstring for why they are functions rather than inlined twice.
+    roster = await _roster_overview(chapter_id, session)
+    dues = await _dues_overview(chapter_id, session)
+
+    # ---- attendance (2 statements) ----
+    window = meeting_window(chapter_id, start, end)
+    meetings_in_window = await session.scalar(
+        select(func.count()).select_from(models.Meeting).where(*window)
+    )
+    # THE JOIN IS THE CORRECTNESS ARGUMENT, and it is c82's argument verbatim: attendance
+    # is joined against meeting ids ALREADY filtered to this chapter and window, never
+    # joined out to `meetings` afterwards. The natural-looking version leaves the meetings
+    # side NULL on a LEFT JOIN while `status` stays non-null, so a dual-chapter member's
+    # absences from their OTHER chapter get counted here.
+    windowed_meeting_ids = select(models.Meeting.id).where(*window)
+    members_with_absence = await session.scalar(
+        select(func.count(func.distinct(models.Membership.user_id)))
+        .select_from(models.Membership)
+        .join(
+            models.MeetingAttendance,
+            and_(
+                models.MeetingAttendance.user_id == models.Membership.user_id,
+                models.MeetingAttendance.meeting_id.in_(windowed_meeting_ids),
+            ),
+        )
+        .where(
+            models.Membership.chapter_id == chapter_id,
+            models.Membership.status == "active",
+            models.MeetingAttendance.status == "absent",
+        )
+    )
+
+    # ---- lineage (1 statement) ----
+    unconfirmed_edges = await session.scalar(
+        select(func.count())
+        .select_from(models.LineageEdge)
+        .where(
+            models.LineageEdge.chapter_id == chapter_id,
+            models.LineageEdge.confirmed_by_little.is_(False),
+        )
+    )
+
+    invites = await _invite_overview(chapter_id, session, now)
+
+    return ChapterOverview(
+        chapter_id=chapter_id,
+        generated_at=now,
+        roster=roster,
+        dues=dues,
+        attendance=AttendanceOverview(
+            meetings_in_window=meetings_in_window or 0,
+            members_with_absence=members_with_absence or 0,
+            window_start=start,
+            window_end=end,
+        ),
+        lineage=LineageOverview(unconfirmed_edges=unconfirmed_edges or 0),
+        invites=invites,
+    )
+
+
+@router.get("/chapters/{chapter_id}/deputy-overview")
+async def deputy_overview(
+    chapter_id: uuid.UUID,
+    _membership: models.Membership = Depends(require_role(*DEPUTY_OVERVIEW)),
+    session: AsyncSession = Depends(get_session),
+) -> DeputyOverview:
+    """Roster, dues status, and open invites for the Vice President's deputy-president
+    dashboard (board card c163).
+
+    Jose's product ruling (board decisions log): the VP dashboard is DEPUTY PRESIDENT —
+    a READ view of president-admin data (roster, open invites, dues status) framed as a
+    stand-in, with delegation (acting on any of it) explicitly out of the alpha build.
+
+    GATED ON deputy_overview, a capability of its own rather than members_admin.
+    chapter_overview above is deliberately gated on members_admin BECAUSE its payload
+    mixes dues, attendance and lineage, and no role short of president may read all
+    three - reusing that gate here (or reusing that endpoint's response and trimming
+    fields client-side) would ship attendance and lineage over the wire to a role
+    that holds neither minutes_admin nor lineage_admin. This endpoint computes only
+    the sections deputy_overview actually grants.
+
+    Same roster/dues/invites helpers chapter_overview uses, so the two dashboards
+    cannot report different numbers for the same chapter.
+    """
+    now = datetime.now(timezone.utc)
+    roster = await _roster_overview(chapter_id, session)
+    dues = await _dues_overview(chapter_id, session)
+    invites = await _invite_overview(chapter_id, session, now)
+    return DeputyOverview(
+        chapter_id=chapter_id,
+        generated_at=now,
+        roster=roster,
+        dues=dues,
+        invites=invites,
+    )
+
+
 @router.patch("/chapters/{chapter_id}/members")
 async def update_member(
     chapter_id: uuid.UUID,
     body: MembershipUpdate,
-    _actor: models.Membership = Depends(require_role(*MEMBERS_ADMIN)),
+    actor: models.Membership = Depends(require_role(*MEMBERS_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> MembershipOut:
-    """Update a member's role/status/pledge_class; president only."""
+    """Update a member's role/status/pledge_class; president only.
+
+    A role change (board card c83) closes the member's open role_terms row and
+    opens a new one via apply_role_change — a no-op if the requested role equals
+    the current one. memberships.role stays the current-role source of truth;
+    role_terms is the dated history layered on top of it.
+    """
     result = await session.execute(
         select(models.Membership).where(
             models.Membership.chapter_id == chapter_id,
@@ -200,13 +571,50 @@ async def update_member(
     if target is None:
         raise not_found("membership_not_found")
     if body.role is not None:
-        target.role = body.role
+        await apply_role_change(
+            session, membership=target, new_role=body.role, changed_by=actor.user_id
+        )
     if body.status is not None:
         target.status = body.status
     if body.pledge_class is not None:
         target.pledge_class = body.pledge_class
     await session.commit()
     return MembershipOut.model_validate(target)
+
+
+@router.get("/chapters/{chapter_id}/members/{user_id}/role-terms")
+async def list_role_terms(
+    chapter_id: uuid.UUID,
+    user_id: uuid.UUID,
+    _membership: models.Membership = Depends(get_current_membership),
+    session: AsyncSession = Depends(get_session),
+) -> list[RoleTermOut]:
+    """Role history for one member of the chapter, newest first (board card c83).
+
+    Gated the same way the roster itself is (GET /chapters/{chapter_id}/members):
+    any active member of the chapter may read it, via get_current_membership —
+    reusing that capability pattern rather than inventing a tighter one, since this
+    is more history alongside data (current role, status) the roster already shows
+    every member. org-scoped the same way that lookup is: the membership row below
+    is matched on BOTH chapter_id and user_id, so a caller can never walk another
+    chapter's user_id in through this route and a non-member of chapter_id never
+    gets past get_current_membership's 403 to try.
+    """
+    result = await session.execute(
+        select(models.Membership.id).where(
+            models.Membership.chapter_id == chapter_id,
+            models.Membership.user_id == user_id,
+        )
+    )
+    membership_id = result.scalar_one_or_none()
+    if membership_id is None:
+        raise not_found("membership_not_found")
+    result = await session.execute(
+        select(models.RoleTerm)
+        .where(models.RoleTerm.membership_id == membership_id)
+        .order_by(models.RoleTerm.started_at.desc(), models.RoleTerm.id.desc())
+    )
+    return [RoleTermOut.model_validate(term) for term in result.scalars().all()]
 
 
 @router.post("/chapters/{chapter_id}/invites", status_code=201)
@@ -388,13 +796,15 @@ async def join_chapter(
         role=invite.role,
     )
     session.add(membership)
+    await session.flush()
+    await open_initial_term(session, membership=membership)
 
     # c96 — a chapter you were INVITED to is proof of a campus, so inherit it.
     #
     # Before this, nothing anywhere wrote users.campus_id: c85 correctly stopped
     # trusting the client to assert one at bootstrap, and named c86's .edu
     # redemption as the only writer. But c86 is deferred, so every user sat at
-    # campus_id NULL forever, which dead-ends Home's Campus tab AND the whole Yak
+    # campus_id NULL forever, which dead-ends Home's Campus tab AND the whole Chirp
     # tab and makes board gate c71 unreachable.
     #
     # This is NOT a rollback of c85. The value is read off the CHAPTER, which

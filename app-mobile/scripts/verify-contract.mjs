@@ -129,7 +129,10 @@ for (const file of readdirSync(ROUTERS_DIR)) {
 
 // --- client: every request<...>(...) across api/*.ts (excluding the wrapper itself) ---
 
-const REQUEST_CALL = /\brequest\s*(?=<|\()/g;
+// requestWithHeaders (board c102) is the same call shape as request/requestText —
+// it just also hands back the raw Headers — so it must be recognized here too, or
+// its one caller (listPosts) silently drops out of contract coverage.
+const REQUEST_CALL = /\brequest(?:WithHeaders)?\s*(?=<|\()/g;
 
 function skipGeneric(text, i) {
   if (text[i] !== "<") return i;

@@ -6,7 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Audience = Literal["org", "campus"]
+Audience = Literal["org", "campus", "org_actives"]
+
 PostType = Literal["text", "photo", "video"]
 
 
@@ -25,7 +26,10 @@ class PostCreate(_Schema):
     media_object_names: list[str] | None = None
     # Author-chosen at compose time; defaults to 'org' so a client that omits this
     # field can never accidentally broadcast a chapter post campus-wide (board
-    # Decisions log, Aug 14).
+    # Decisions log, Aug 14). 'org_actives' (c102) is reachable here too - this
+    # route already requires an ACTIVE membership to reach at all (get_current_membership
+    # in routers/feed.py), so there is no caller who could set it who is not
+    # themselves already in the tier it names.
     audience: Audience = "org"
     post_type: PostType = "text"
     duration_sec: int | None = None  # video posts only

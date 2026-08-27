@@ -3,8 +3,8 @@
  * title + caption subtitle header (24 top pad, no nav chrome), and bottom
  * clearance so scroll content never hides under the floating tab bar.
  *
- * §10.1 header zones (Home/Yak/Orgs): optional `eyebrow` (micro uppercase line
- * above the title) and `accentBarColor` (the 4x28 accent bar under the title —
+ * §10.1 header zones (Home/Chirp/Orgs): optional `eyebrow` (micro uppercase line
+ * above the title) and `accentBarColor` (the accent bar LEADING the title —
  * pass the screen's own "one gold moment" color; omit on screens that don't
  * use the header-zone pattern, e.g. Messages/Profile, and nothing renders).
  *
@@ -34,7 +34,7 @@ import {
   SCROLL_TOP_THRESHOLD,
   useTabBarVisibility,
 } from "@/nav/TabBarVisibility";
-import { metrics, radii, spacing, TAB_BAR_CLEARANCE, useTheme } from "@/theme";
+import { metrics, radii, spacing, useOverlayClearance, useTheme } from "@/theme";
 
 import { AppText } from "./AppText";
 
@@ -48,12 +48,20 @@ export interface ScreenProps {
   subtitle?: string;
   /** Micro uppercase eyebrow above the title (§10.1 — e.g. "UNC GREENSBORO"). */
   eyebrow?: string;
-  /** Renders the §10.1/§10.4 accent bar (4x28, radius 2) under the title in this color. */
+  /** Renders the §10.1/§10.4 accent bar LEADING the title in this color (4 wide, title-height). */
   accentBarColor?: string;
-  /** Canvas override (Yak's deep-navy campus wash, §10.5) — default `palette.bg`. */
+  /** Canvas override (Chirp's deep-navy campus wash, §10.5) — default `palette.bg`. */
   backgroundColor?: string;
   /** Wrap content in a ScrollView (default true — most screens are lists). */
   scroll?: boolean;
+  /**
+   * Pass `true` when this screen also renders a sibling `<Fab/>` (Home, Orgs)
+   * so the scroll content reserves clearance for BOTH floating overlays, not
+   * just the tab bar (c168 — the FAB floats further above the tab bar than
+   * the tab bar alone needs room for, and previously nothing accounted for
+   * that difference).
+   */
+  hasFab?: boolean;
   /**
    * Show the back control. Defaults to `router.canGoBack()`, which is the right
    * answer almost everywhere: false on tab roots, true on pushed screens. Pass
@@ -64,7 +72,7 @@ export interface ScreenProps {
   onBack?: () => void;
   /**
    * Icon color for the back control. Defaults to the theme's ink. Screens that
-   * override `backgroundColor` with a dark canvas (Yak's navy wash) must pass a
+   * override `backgroundColor` with a dark canvas (Chirp's navy wash) must pass a
    * light tint here or the chevron disappears into the background.
    */
   backTint?: string;
@@ -78,6 +86,7 @@ export function Screen({
   accentBarColor,
   backgroundColor,
   scroll = true,
+  hasFab = false,
   showBack,
   onBack,
   backTint,
@@ -85,6 +94,7 @@ export function Screen({
   const palette = useTheme();
   const router = useRouter();
   const tabBar = useTabBarVisibility();
+  const overlayClearance = useOverlayClearance(hasFab);
 
   // Hooks can't be conditional, but the provider is absent outside the tabs
   // subtree (the (auth) stack also renders <Screen>). Local fallbacks keep the
@@ -162,18 +172,24 @@ export function Screen({
             {eyebrow}
           </AppText>
         ) : null}
-        <AppText variant="display">{title}</AppText>
-        {accentBarColor !== undefined ? (
-          <View
-            style={{
-              width: metrics.accentBarWidth,
-              height: metrics.accentBarHeight,
-              borderRadius: metrics.accentBarRadius,
-              backgroundColor: accentBarColor,
-              marginTop: spacing.xs,
-            }}
-          />
-        ) : null}
+        {/* The accent bar LEADS the title rather than sitting under it (braul, Aug 25).
+            No alignItems on this row, so the bar inherits the default `stretch` and
+            takes the title's own height — a fixed 28 would sit short against the
+            display face's 35 line-height, and would drift the moment that scale
+            changes. The old fixed accentBarHeight is gone from the metrics block. */}
+        <View style={{ flexDirection: "row", gap: spacing.sm }}>
+          {accentBarColor !== undefined ? (
+            <View
+              style={{
+                width: metrics.accentBarWidth,
+                alignSelf: "stretch",
+                borderRadius: metrics.accentBarRadius,
+                backgroundColor: accentBarColor,
+              }}
+            />
+          ) : null}
+          <AppText variant="display">{title}</AppText>
+        </View>
         {subtitle !== undefined ? (
           <AppText variant="caption" tone="secondary" style={{ marginTop: spacing.xs }}>
             {subtitle}
@@ -190,7 +206,7 @@ export function Screen({
           contentContainerStyle={{
             paddingHorizontal: spacing.gutter,
             paddingTop: spacing.xl,
-            paddingBottom: TAB_BAR_CLEARANCE,
+            paddingBottom: overlayClearance,
           }}
           showsVerticalScrollIndicator={false}
           onScroll={scrollHandler}

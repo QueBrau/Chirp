@@ -204,6 +204,100 @@ endpoint — see the warning in section 5.
 > `ENV=staging` is NOT enough (same guard) — either finish Firebase first, or test
 > locally behind ngrok with `ENV=local` (never expose ENV=local publicly).
 
+## Coordinated window (schema-rename deploys)
+
+Sections 5 and 7 above assume migrate and redeploy can each be done whenever —
+prod tolerates old code running against a newly-migrated schema because a normal
+migration only ever *adds*. A migration that **renames or drops** something old
+code still reads breaks that assumption: old code cannot read the new names, new
+code cannot read the old ones, and there is no ordering of "migrate" then "wait"
+then "redeploy" that avoids an error gap in between. c179's migration 0022
+(`yaks`/`yak_votes` → `chirps`/`chirp_votes`, plus the `content_reports` /
+`moderation_actions` target_type backfill) is the current example, and it is not
+alone on the chain — 0019, 0020 and 0021 are also unapplied to prod, so this
+window applies to all four (0019 → 0022), not just the rename at the tip.
+
+Treat migrate + redeploy as **one window**, at a quiet hour, run start-to-finish
+without gaps between the steps below. Do not migrate and then walk away.
+
+1. **(Jose) Migrate.** Start the Cloud SQL Auth Proxy and run
+   `alembic upgrade head` through it exactly as section 5 describes — proxy on
+   port 5433, `DATABASE_URL` decomposed from the `DATABASE_URL` secret, never a
+   typed placeholder. The exact proxy command and the ready-to-paste
+   `postgresql+asyncpg://...@localhost:5433/chirp` URL (real password included)
+   live in `INFRA-PRIVATE.html#proxy` and `#migrate` — this file intentionally
+   never inlines that password. Then run `alembic current` and **read the
+   revision it prints** — confirm it says `0022 (head)` before moving to step 2.
+   Section 5's Aug 16 lesson still applies: "no errors" is not "applied".
+2. **(Jose → manager) Signal.** Say the migration landed and `alembic current`
+   read back `0022`. This is what starts the clock on the error gap below —
+   step 3 should follow within minutes, not whenever the manager gets to it.
+3. **(manager) Redeploy the API.** Section 7's everyday command, no env flags:
+   `cd backend && gcloud run deploy chirp-api --source . --region=$REGION`.
+   Between step 1 finishing and this step finishing, the live backend is old
+   code serving against renamed tables — every request that touches
+   yaks/chirps, content_reports, moderation_actions, house_ballots or
+   role_terms 500s or 404s depending what the old code was trying to do. **This
+   gap is unavoidable with a table rename and is not itself a signal to abort**
+   — see the abort criteria below for what actually is.
+4. **(manager) Rebuild and deploy the web client.**
+   `cd web && npm run build && firebase deploy --only hosting`. The compiled
+   client still calls `/campuses/{id}/yaks` until this runs, so web stays
+   broken on the new API even after step 3 completes — this is not optional
+   just because the API is already up.
+5. **(manager) Verify.** `scripts/deploy-verify --base-url <chirp-api service
+   URL from INFRA-PRIVATE.html#cloudrun>` — see below for what it checks. Follow
+   with a real signed-in request through the app per the section 5 / gotcha #4
+   warning: a 200 from health, or from this script's control checks alone, is
+   not evidence the deploy is healthy on the paths that matter.
+
+**Abort / rollback.** 0022's downgrade is real and tested (c179: migration
+up → down → up run against a database holding a real `yak` report row; the
+downgrade restores `yak_id` and all four `yak`-named constraints exactly). If
+step 3 fails outright, or does not complete within a few minutes of step 1,
+that — not the expected error gap itself — is the abort signal: downgrade back
+through the same proxy session (`alembic downgrade -1` from `0022`, repeat down
+to `0013` — prod's last verified head per `INFRA-PRIVATE.html#latest` — if the
+whole 0019-0022 window needs to unwind) so the schema matches whatever Cloud Run
+revision is still serving traffic, then retry the window from step 1 once the
+redeploy problem is fixed. Do not leave the database migrated ahead of the code
+running against it — that is the exact state this section exists to keep brief
+instead of open-ended.
+
+### scripts/deploy-verify
+
+Run after step 4, pointed at whatever you just deployed. It probes four things
+over plain HTTP — no credentials of its own, so it never needs prod access to
+exist or to be rehearsed locally — and prints (never runs) the two manual proof
+steps that do need real credentials:
+
+- **(a)** a real auth-gated route with no token → expects `401`. Deliberately
+  **not** `/healthz` — Google's `*.run.app` frontend intercepts that exact path
+  and answers with its own 404 before the request reaches the container
+  (`INFRA-PRIVATE.html#cloudrun` gotcha), which would misreport a healthy
+  deploy as down.
+- **(b)** a route that has never existed, as a control — expects `404`. If this
+  is not 404, the target isn't answering normal FastAPI routing at all (wrong
+  host, a proxy, a maintenance page) and nothing else the script reports can be
+  trusted.
+- **(c)** the route-swap hinge itself: `/campuses/{id}/yaks` must be fully gone
+  (`404` — the router module that served it no longer exists), and
+  `/campuses/{id}/chirps` must still be routed (`401` unauthenticated, or `200`
+  if run with `--bearer`).
+- **(d)** prints the exact `gcloud logging read` command for c176's "email
+  sent" log-line proof. The send itself stays a manual step (trigger one real
+  `.edu` verification through the app, or a bearer-authenticated
+  `POST /auth/campus-verification`) — the script only prints the read.
+- **(e)** prints the read-only SQL for c184's four URL-column counts
+  (`alumni_profiles.linkedin_url`, `job_posts.apply_url`, `events.cover_url`,
+  `users.avatar_url`) for Jose to run by hand through the proxy — the script
+  never executes it.
+
+Defaults to `http://localhost:8000` so it runs unattended against a local
+stack; pass `--base-url` (or `DEPLOY_VERIFY_BASE_URL`) for the prod service URL,
+which lives in `INFRA-PRIVATE.html#cloudrun` and is deliberately not hardcoded
+here.
+
 ## Env var reference (Settings → env)
 | env var | required | example |
 |---|---|---|
