@@ -2321,6 +2321,15 @@
       "area": "orgs",
       "title": "c216 [high/L, c209 finding - JOSE PRODUCT DECISION] Zero behavioral telemetry exists: only domain-row timestamps - no DAU/retention/funnel/screen data for 'collect data like a real social media app'. Options scoped by the sweep: append-only events table (write cost on the small DB) vs structured logs -> BigQuery sink (cheapest, no schema migration) vs client SDK. HARD CONSTRAINT the skeptics flagged: chirp anonymity - no event pipeline may link chirp authorship the API itself withholds.",
       "detail": "Recommend logs->BigQuery first pass. Needs Jose's scope + privacy sign-off before any build."
+    },
+    {
+      "id": "c217",
+      "col": "backlog",
+      "owner": "pool",
+      "tag": "frontend",
+      "area": "orgs",
+      "title": "c217 Profile 'posts by me' stat will undercount once a chapter passes c210's 50-post first page - app/(tabs)/profile/index.tsx (~201) client-filters the FULL listPosts() response by author_id; after the cap it only sees page one. Found by c210's worker during the mobile-caller sweep (flagged in PR #136's body, not silently shipped). Fix: dedicated count endpoint (or fold into an existing summary route) + swap the screen off the full-history filter. Theoretical today (no prod chapter near 50 posts) - fix before alpha volume.",
+      "detail": "Do NOT un-cap the route to fix a stat. Backend: a count is one cheap aggregate. Mobile: profile screen swaps one call. Cursor adoption for the org feed screen itself is a separate, larger follow-up if infinite scroll is wanted - the segment currently renders page one fine."
     }
   ],
   "decisions": [
