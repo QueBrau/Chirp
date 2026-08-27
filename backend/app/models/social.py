@@ -118,6 +118,19 @@ class PostLike(Base):
 
 class PostComment(Base):
     __tablename__ = "post_comments"
+    __table_args__ = (
+        # Every reader of this table filters (post_id, deleted_at IS NULL): the feed's
+        # comment count in routers/feed.py _post_counts_select, and list_comments. Until
+        # 0026 the only index here was the primary key on `id`, so both seq-scanned the
+        # whole table - 50 times per feed page. Partial so deleted rows are not carried;
+        # created_at trailing so the same index also serves list_comments' ORDER BY.
+        Index(
+            "idx_post_comments_post_live",
+            "post_id",
+            "created_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
