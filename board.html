@@ -2270,11 +2270,11 @@
     },
     {
       "id": "c211",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c211 IN BUILD Aug 27 [critical/S, c209 finding] Media signing blocks the single event loop: generate_upload_url/signed_read_url make SYNCHRONOUS network calls to GCP IAM signBlob from async routes (storage_service.py:253-267,637-649; single uvicorn process, Dockerfile:48) - one slow call stalls up to 80 unrelated in-flight requests. Fix: asyncio.to_thread at the route call sites. Worker assigned.",
+      "title": "c211 DONE Aug 27 - MERGED 1a26c9a (PR #135, squash). Both signing call sites offloaded via asyncio.to_thread (manager-verified in the diff); the memo's now-real thread race fixed with a lock scoped to cache access only (network call outside it - the right trade, duplicate sign beats re-serializing); 16-thread stress test reproduces and pins the race. Serializer path confirmed safe (mint_media_token is pure HMAC). Suite 636p + CI 4/4. Benign leftover: _storage_client singleton cold-start race, flagged not fixed (worst case a duplicate Client object). - one slow call stalls up to 80 unrelated in-flight requests. Fix: asyncio.to_thread at the route call sites. Worker assigned.",
       "detail": "S fix; behavior identical, latency isolated. The 6h read-url memo stays."
     },
     {
