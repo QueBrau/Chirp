@@ -2234,11 +2234,11 @@
     },
     {
       "id": "c204",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c204 IN BUILD Aug 27 - Sonnet worker in chirp-sub-c204 on court/c204-bulk-invites: GET /me/event-invites-with-rsvps (c43 pattern) with caller's own RSVP + non-member-safe hosting-chapter label; client swaps loadVisibleInvites off the per-invite listGuests N+1 and the 'Another chapter' fallback. Soonest-first + c201's cursor params from day one. No migration. Manager verifies line-level then merges. - kills c203's accepted N+1 (listGuests per invite to derive 'already responded') AND returns a non-member-safe hosting-chapter display name, which no route offers today (GET /chapters/{id} is member-scoped, so cross-chapter invites render 'Another chapter'). Surfaced by c203's build Aug 26. Also fold in: list_my_invites orders .desc() against its own soonest-first docstring - c201 fixes the ordering; this endpoint must match.",
+      "title": "c204 DONE Aug 27 - MERGED f5a990f (PR #132, squash). Bulk endpoint with caller-scoped RSVP outer join (manager-verified: the user filter is in the ON clause, so no other user's status can leak and un-RSVPd rows survive) + non-member-safe chapter label; client swapped to one call, visibility rules preserved, old route shape regression-pinned. Full suite 608p, CI 4/4 green. Worker self-caught and fixed a truncation mistake. - Sonnet worker in chirp-sub-c204 on court/c204-bulk-invites: GET /me/event-invites-with-rsvps (c43 pattern) with caller's own RSVP + non-member-safe hosting-chapter label; client swaps loadVisibleInvites off the per-invite listGuests N+1 and the 'Another chapter' fallback. Soonest-first + c201's cursor params from day one. No migration. Manager verifies line-level then merges. - kills c203's accepted N+1 (listGuests per invite to derive 'already responded') AND returns a non-member-safe hosting-chapter display name, which no route offers today (GET /chapters/{id} is member-scoped, so cross-chapter invites render 'Another chapter'). Surfaced by c203's build Aug 26. Also fold in: list_my_invites orders .desc() against its own soonest-first docstring - c201 fixes the ordering; this endpoint must match.",
       "detail": "Client adoption: swap loadVisibleInvites in app-mobile/app/(tabs)/feed/index.tsx to the new endpoint and delete the per-invite listGuests + per-chapter getChapter calls. Keep the fail-soft-toward-showing rule and the cancellations-always-show rule."
     },
     {
