@@ -2198,12 +2198,21 @@
     },
     {
       "id": "c203",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "frontend",
       "area": "orgs",
-      "title": "c203 IN BUILD Aug 26 - Sonnet worker in chirp-sub-c203 on court/c203-event-invites-ui: invite-discovery surface calling GET /me/event-invites, DESIGN.md-bound, mobile-only, render QA deferred to device window. Manager verifies line-level then merges. - GET /me/event-invites exists (c198 backend) but no screen calls it, so an invited user who does not already follow the chapter has no in-app way to learn they were invited. Matters most for the cross-chapter 'verified' tier c198 built. From c198's review Aug 26.",
+      "title": "c203 DONE Aug 26 - MERGED 5525ea4 (PR #124, squash). Invites section on Home above the verification gate (invite read-path admits invitees pre-tier, manager-verified against _readable_event). Line-level review passed: route target matches chapter/index.tsx:530's working push, tokens/variants/signatures all verified, CI 4/4 green. Render QA deferred to device window (on the c39 walk list). Known accepted N+1 (listGuests per invite) -> c204. - Sonnet worker in chirp-sub-c203 on court/c203-event-invites-ui: invite-discovery surface calling GET /me/event-invites, DESIGN.md-bound, mobile-only, render QA deferred to device window. Manager verifies line-level then merges. - GET /me/event-invites exists (c198 backend) but no screen calls it, so an invited user who does not already follow the chapter has no in-app way to learn they were invited. Matters most for the cross-chapter 'verified' tier c198 built. From c198's review Aug 26.",
       "detail": "src/api/events.ts:129 defines the client call; nothing imports it. Needs an invites surface (badge/list) and a respond flow entry point that is not the event detail screen."
+    },
+    {
+      "id": "c204",
+      "col": "backlog",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c204 Bulk invites endpoint: GET /me/event-invites-with-rsvps (c43 pattern) - kills c203's accepted N+1 (listGuests per invite to derive 'already responded') AND returns a non-member-safe hosting-chapter display name, which no route offers today (GET /chapters/{id} is member-scoped, so cross-chapter invites render 'Another chapter'). Surfaced by c203's build Aug 26. Also fold in: list_my_invites orders .desc() against its own soonest-first docstring - c201 fixes the ordering; this endpoint must match.",
+      "detail": "Client adoption: swap loadVisibleInvites in app-mobile/app/(tabs)/feed/index.tsx to the new endpoint and delete the per-invite listGuests + per-chapter getChapter calls. Keep the fail-soft-toward-showing rule and the cancellations-always-show rule."
     }
   ],
   "decisions": [
