@@ -22,6 +22,7 @@ in a loop. All four are enforced here.
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -32,6 +33,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.core.errors import forbidden, not_found, too_many_requests
 from app.services import email_service, rate_limit
+
+logger = logging.getLogger(__name__)
 
 CODE_DIGITS = 6
 CODE_TTL = timedelta(minutes=15)
@@ -127,17 +130,47 @@ async def start_verification(
 
     # Sent AFTER the commit: a delivered code whose row failed to persist is
     # unredeemable, and the student has no way to know that is why.
-    await email_service.send_email(
-        to=address,
-        subject=f"Your {campus.name} verification code",
-        html=(
-            f"<p>Your Chirp verification code is <strong>{code}</strong>.</p>"
-            f"<p>It expires in {int(CODE_TTL.total_seconds() // 60)} minutes. "
-            f"If you did not ask for this, you can ignore it.</p>"
-        ),
-        text=f"Your Chirp verification code is {code}. "
-        f"It expires in {int(CODE_TTL.total_seconds() // 60)} minutes.",
-    )
+    try:
+        await email_service.send_email(
+            to=address,
+            subject=f"Your {campus.name} verification code",
+            html=(
+                f"<p>Your Chirp verification code is <strong>{code}</strong>.</p>"
+                f"<p>It expires in {int(CODE_TTL.total_seconds() // 60)} minutes. "
+                f"If you did not ask for this, you can ignore it.</p>"
+            ),
+            text=f"Your Chirp verification code is {code}. "
+            f"It expires in {int(CODE_TTL.total_seconds() // 60)} minutes.",
+        )
+    except Exception as exc:
+        # c214: the row above already committed, so a provider failure here must not
+        # leave it looking like a normal live code for the next CODE_TTL minutes — no
+        # one holds this code, since it never left this process.
+        #
+        # Retiring it is not a new idea bolted on: _consume_pending already sets
+        # consumed_at on a row for a reason OTHER than redemption (superseded by a
+        # resend), and this codebase has never needed a second column to say which of
+        # the two happened — "off the live path" is the one fact consumed_at records.
+        # A row that failed to send joins that same bucket by the same rule, so no
+        # migration earns its keep here.
+        #
+        # The user's next request is unaffected by this either way: _consume_pending
+        # would have retired this exact row the moment they asked again, and c138's
+        # guess cap is tracked per row, so a fresh row starts at zero guesses
+        # regardless of what happened to this one. Retiring it now just makes that
+        # true immediately instead of eventually, so a crash that never triggers a
+        # retry doesn't leave a phantom "pending" row sitting there in the meantime.
+        failed_at = _now()
+        verification.consumed_at = failed_at
+        session.add(verification)
+        await session.commit()
+        logger.warning(
+            "campus verification send failed verification_id=%s campus_id=%s error=%s",
+            verification.id,
+            campus.id,
+            type(exc).__name__,
+        )
+        raise
     return verification
 
 

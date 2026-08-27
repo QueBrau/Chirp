@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy import text
 
@@ -218,6 +219,58 @@ async def test_resending_retires_the_previous_code(
 
     assert response.status_code == 403, response.text
     assert response.json()["detail"] == "verification_code_invalid"
+
+
+async def test_a_send_failure_after_commit_is_recorded_and_retry_is_fair(
+    client: AsyncClient, campus_user, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """c214: the row commits before mail is attempted (see the module docstring), so a
+    provider failure happens strictly after the row exists. The row must not go on
+    looking like a normal live code — nobody holds that code, it never left this
+    process — and the student's very next request must succeed with a full, untouched
+    guess budget on the code that actually gets delivered."""
+    user, _ = campus_user
+    body = {"edu_email": f"student@{DOMAIN}"}
+
+    async def _boom(**kwargs):
+        raise HTTPException(status_code=502, detail="email_send_failed")
+
+    monkeypatch.setattr(campus_verification.email_service, "send_email", _boom)
+
+    failed = await client.post("/auth/campus-verification", json=body, headers=user.headers)
+
+    assert failed.status_code == 502, failed.text
+    assert failed.json()["detail"] == "email_send_failed"
+    dead_row = await _pending_row(user.id)
+    assert dead_row["consumed_at"] is not None, (
+        "a code that never left this process must not still look pending"
+    )
+
+    # The provider recovers; a retry must work, cost nothing extra, and be redeemable
+    # with a fresh MAX_ATTEMPTS budget.
+    captured: list[dict] = []
+
+    async def _capture(*, to: str, subject: str, html: str, text: str | None = None) -> str:
+        captured.append({"to": to, "subject": subject, "html": html, "text": text})
+        return "msg_test"
+
+    monkeypatch.setattr(campus_verification.email_service, "send_email", _capture)
+
+    retried = await client.post("/auth/campus-verification", json=body, headers=user.headers)
+
+    assert retried.status_code == 202, retried.text
+    assert len(captured) == 1
+    live_row = await _pending_row(user.id)
+    assert live_row["consumed_at"] is None
+    assert live_row["attempts"] == 0
+
+    redeemed = await client.post(
+        "/auth/campus-verification/redeem",
+        json={"code": _code_from(captured[0])},
+        headers=user.headers,
+    )
+    assert redeemed.status_code == 200, redeemed.text
+    assert redeemed.json()["verified"] is True
 
 
 # ---------------------------------------------------------------------------
