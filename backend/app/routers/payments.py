@@ -178,6 +178,25 @@ async def create_dues_payment_intent(
     if membership.scalar_one_or_none() is None:
         raise forbidden("not_a_member")
 
+    # c195: a member on an ACTIVE payment plan pays this cycle in installments, not
+    # through this self-serve full-cycle charge path. Checked BEFORE the existence
+    # guard below so the reason surfaced is specific (on_payment_plan) rather than
+    # the generic already_paid/refunded_contact_treasurer split, which assumes a
+    # single lump-sum obligation and would be a confusing lie to a plan member who
+    # has paid some, but not all, of what they owe. The mobile client is expected to
+    # gate this itself (it shows the installment schedule instead of a pay button for
+    # a plan member), but that is a client-side courtesy, not the security boundary —
+    # this is.
+    active_plan = await session.execute(
+        select(models.DuesPaymentPlan.id).where(
+            models.DuesPaymentPlan.dues_cycle_id == cycle_id,
+            models.DuesPaymentPlan.user_id == user.id,
+            models.DuesPaymentPlan.status == "active",
+        )
+    )
+    if active_plan.scalar_one_or_none() is not None:
+        raise conflict("on_payment_plan")
+
     # EXISTENCE still blocks the charge path (board c172) — re-payment for one dues
     # cycle is structurally UNREPRESENTABLE in this ledger today, not merely
     # undesirable: uq_ledger_dues_payment_once allows at most one dues_payment row
@@ -192,12 +211,33 @@ async def create_dues_payment_intent(
     # owes money even though this endpoint cannot yet let them pay again. Actually
     # reopening self-serve repayment after a refund needs the cycle/member's dues
     # status modeled explicitly (c83-shaped work), not a same-day guard change.
+    #
+    # c195 ADDS 'dues_installment' to this existence check's entry_type filter. A
+    # member who FINISHED a payment plan has entry_type='dues_installment' rows on
+    # the ledger and — because they never paid through this lump-sum path — NO
+    # dues_payment row. Leaving this filtered to 'dues_payment' alone would silently
+    # reopen exactly the double-charge this whole guard exists to close: the active-
+    # plan check above only catches an IN-PROGRESS plan, so a completed one would
+    # sail through both checks and let this route create a second, full-price Stripe
+    # intent for a cycle already paid off in installments. Matching both types here
+    # reuses the existing net-based reason split below rather than inventing a new
+    # one — dues_contributions_subquery already nets both types together (c195,
+    # app/core/dues_status.py), so a completed plan's net reads as >= the cycle
+    # amount and this correctly resolves to already_paid.
+    # LIMIT 1: unlike a bare 'dues_payment' row (uq_ledger_dues_payment_once caps that
+    # at exactly one per cycle/member, so scalar_one_or_none() used to be safe on its
+    # own), a member can have SEVERAL 'dues_installment' rows for one cycle — one per
+    # installment recorded. Without the limit, scalar_one_or_none() raises
+    # MultipleResultsFound the moment a plan member has paid a second installment;
+    # this query only needs to know whether at least one qualifying row exists.
     existing_payment = await session.execute(
-        select(models.LedgerEntry.id).where(
+        select(models.LedgerEntry.id)
+        .where(
             models.LedgerEntry.dues_cycle_id == cycle_id,
             models.LedgerEntry.related_user_id == user.id,
-            models.LedgerEntry.entry_type == "dues_payment",
+            models.LedgerEntry.entry_type.in_(("dues_payment", "dues_installment")),
         )
+        .limit(1)
     )
     if existing_payment.scalar_one_or_none() is not None:
         contributions = dues_contributions_subquery(cycle.chapter_id, cycle.id)

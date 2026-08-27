@@ -11,11 +11,17 @@ import { useCallback, useEffect, useState } from "react";
 import { Linking, View } from "react-native";
 
 import { myMemberships, type MyMembershipOut } from "@/api/chapters";
-import { listDuesCycles, listLedger, type DuesCycleOut } from "@/api/finance";
+import {
+  getMyPlan,
+  listDuesCycles,
+  listLedger,
+  type DuesCycleOut,
+  type DuesPaymentPlanOut,
+} from "@/api/finance";
 import { getChapterPaymentsStatus } from "@/api/payments";
 import { AppText, Card, Chip, EmptyState, Screen, SectionHeader } from "@/components";
 import { calendarDay } from "@/lib/dates";
-import DuesPaymentScreen from "@/payments/dues";
+import DuesPaymentScreen, { PlanProgressCard } from "@/payments/dues";
 import { spacing } from "@/theme";
 
 function dollars(cents: number): string {
@@ -35,6 +41,10 @@ export default function DuesScreen() {
   const [cyclesFailed, setCyclesFailed] = useState(false);
   const [paidCycleIds, setPaidCycleIds] = useState<Set<string>>(new Set());
   const [acceptsPayments, setAcceptsPayments] = useState(false);
+  // Keyed by dues_cycle_id. Only ever holds a plan when one exists (c197) — a
+  // cycle with no plan at all just has no entry, same "absence over sentinel"
+  // shape as paidCycleIds above.
+  const [planByCycle, setPlanByCycle] = useState<Map<string, DuesPaymentPlanOut>>(new Map());
 
   const load = useCallback(async (chapterId: string, userId: string) => {
     const [duesCycles, ledger, status] = await Promise.all([
@@ -49,7 +59,8 @@ export default function DuesScreen() {
       })),
     ]);
     setCyclesFailed(duesCycles === null);
-    setCycles(duesCycles ?? []);
+    const cyclesList = duesCycles ?? [];
+    setCycles(cyclesList);
     setAcceptsPayments(status.onboarded);
     setPaidCycleIds(
       new Set(
@@ -63,6 +74,20 @@ export default function DuesScreen() {
           .map((entry) => entry.dues_cycle_id as string),
       ),
     );
+
+    // One request per cycle (not per member — this is always "my" plans), so no
+    // N+1 growth with roster size the way c181's directory warning was about.
+    // A per-cycle failure (e.g. a transient network blip) just leaves that cycle
+    // without a plan entry rather than failing the whole screen.
+    const plans = await Promise.all(
+      cyclesList.map((cycle) => getMyPlan(chapterId, cycle.id).catch(() => null)),
+    );
+    const nextPlanByCycle = new Map<string, DuesPaymentPlanOut>();
+    cyclesList.forEach((cycle, index) => {
+      const plan = plans[index];
+      if (plan !== null) nextPlanByCycle.set(cycle.id, plan);
+    });
+    setPlanByCycle(nextPlanByCycle);
   }, []);
 
   useEffect(() => {
@@ -94,8 +119,20 @@ export default function DuesScreen() {
     );
   }
 
-  const outstanding = cycles.filter((cycle) => !paidCycleIds.has(cycle.id));
-  const settled = cycles.filter((cycle) => paidCycleIds.has(cycle.id));
+  // A completed plan has no single dues_payment ledger row to key paidCycleIds
+  // off of — record_dues_installment_payment appends one dues_installment entry
+  // per installment instead (see @/api/finance getMyPlan's doc comment) — so a
+  // plan reaching "completed" is a second, independent way a cycle counts as
+  // settled here.
+  const completedPlanCycleIds = new Set(
+    [...planByCycle.entries()]
+      .filter(([, plan]) => plan.status === "completed")
+      .map(([cycleId]) => cycleId),
+  );
+  const isSettled = (cycle: DuesCycleOut) =>
+    paidCycleIds.has(cycle.id) || completedPlanCycleIds.has(cycle.id);
+  const outstanding = cycles.filter((cycle) => !isSettled(cycle));
+  const settled = cycles.filter(isSettled);
 
   return (
     <Screen title="Dues" subtitle="Pay your chapter, not the app">
@@ -116,8 +153,17 @@ export default function DuesScreen() {
           <View>
             <SectionHeader title="Outstanding" caption="Due soonest first" />
             <View style={{ gap: spacing.md }}>
-              {outstanding.map((cycle) =>
-                acceptsPayments ? (
+              {outstanding.map((cycle) => {
+                const plan = planByCycle.get(cycle.id) ?? null;
+                // An active plan replaces pay-now/outstanding entirely: the member
+                // does not self-pay installments in this build (a treasurer records
+                // each one), so there is no pay button here. A canceled plan is not
+                // handled here — it falls through to the normal rendering below,
+                // same as a member with no plan at all.
+                if (plan !== null && plan.status === "active") {
+                  return <PlanProgressCard key={cycle.id} cycleName={cycle.name} plan={plan} />;
+                }
+                return acceptsPayments ? (
                   <DuesPaymentScreen
                     key={cycle.id}
                     cycleId={cycle.id}
@@ -139,8 +185,8 @@ export default function DuesScreen() {
                       </AppText>
                     </View>
                   </Card>
-                ),
-              )}
+                );
+              })}
             </View>
           </View>
         ) : null}
@@ -166,7 +212,15 @@ export default function DuesScreen() {
                         {dollars(cycle.amount_cents)}
                       </AppText>
                     </View>
-                    <Chip label="Paid" variant="success" />
+                    <Chip
+                      // paidCycleIds takes precedence per the backend's own guard
+                      // (create_dues_payment_intent / create_dues_payment_plan
+                      // enforce a member never has both a ledger dues_payment AND
+                      // a plan for the same cycle) — this is a label choice for
+                      // the rare edge case, not a claim that both are expected.
+                      label={paidCycleIds.has(cycle.id) ? "Paid" : "Plan complete"}
+                      variant="success"
+                    />
                   </View>
                 ))}
               </View>

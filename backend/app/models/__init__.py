@@ -5,8 +5,10 @@ from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
 from app.models.events import Event, EventInvite, EventRsvp
 from app.models.finance import (
     ChapterStripeCustomer,
-    DuesPaymentIntent,
     DuesCycle,
+    DuesPaymentIntent,
+    DuesPaymentPlan,
+    DuesPlanInstallment,
     LedgerEntry,
     ProcessedStripeEvent,
     SpendApproval,
@@ -46,6 +48,8 @@ __all__ = [
     "ConversationMember",
     "Device",
     "DuesCycle",
+    "DuesPaymentPlan",
+    "DuesPlanInstallment",
     "Event",
     "EventInvite",
     "EventRsvp",

@@ -10,6 +10,8 @@
  * sees an EmptyState instead of a wall of 403s.
  */
 
+import { useRouter } from "expo-router";
+import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
 import { Linking, Pressable, TextInput, View } from "react-native";
 
@@ -134,6 +136,7 @@ function FieldLabel({ children }: { children: string }) {
 }
 
 export default function TreasurerScreen() {
+  const router = useRouter();
   const palette = useTheme();
   // Campus secondary = Spartan gold (DESIGN §8.5). Used for exactly one decorative
   // mark on this screen, and deliberately NOWHERE in the charts: gold is 1.74:1 on
@@ -502,6 +505,28 @@ export default function TreasurerScreen() {
                   onPress={() => void submitCycle()}
                   disabled={!canSubmitCycle}
                 />
+              </View>
+            </Card>
+          </View>
+        ) : null}
+
+        {/* c196: installment plans for members who can't pay a cycle in one shot.
+            Same dues_admin gate as "Open a cycle" above — a pushed screen, not
+            another card of controls stacked here, since it has its own create
+            flow and per-installment record/cancel actions. */}
+        {canOpenCycle && cycle !== undefined ? (
+          <View>
+            <SectionHeader title="Payment plans" caption="Installments for members who can't pay at once" />
+            <Card onPress={() => router.push("/chapter/dues-plans")}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.lg }}>
+                <Feather name="calendar" size={typography.title.fontSize} color={palette.accent} />
+                <View style={{ flex: 1, gap: spacing.xs }}>
+                  <AppText variant="headline">Manage payment plans</AppText>
+                  <AppText variant="caption" tone="secondary">
+                    Set up installments and record payments against them
+                  </AppText>
+                </View>
+                <Feather name="chevron-right" size={typography.title.fontSize} color={palette.inkFaint} />
               </View>
             </Card>
           </View>
