@@ -2279,11 +2279,11 @@
     },
     {
       "id": "c212",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c212 IN BUILD Aug 27 [high/S, c209 finding] conversation_members has NO index on user_id - GET /conversations full-scans the table on every messaging inbox load (messages.py:120-155; models/messaging.py:47-60). Fix: index via MIGRATION 0027 (CLAIMED HERE, parents on 0018 - the true head). Worker assigned.",
+      "title": "c212 DONE Aug 27 - MERGED cbc34ca (PR #133, squash). Partial index conversation_members(user_id) WHERE left_at IS NULL via migration 0027 (parents 0018; up/down/up proven on real rows; head now 0027). Manager line-level: index matches the exact inbox predicate, PK reasoning correct, schema-shape tests per c208 precedent. Suite 634p + CI 4/4. NOT yet applied to prod - next migrate paste expects 0027 (head). - GET /conversations full-scans the table on every messaging inbox load (messages.py:120-155; models/messaging.py:47-60). Fix: index via MIGRATION 0027 (CLAIMED HERE, parents on 0018 - the true head). Worker assigned.",
       "detail": "Index shape from the actual query predicate; up/down tested."
     },
     {
