@@ -46,6 +46,21 @@ class Conversation(Base):
 
 class ConversationMember(Base):
     __tablename__ = "conversation_members"
+    __table_args__ = (
+        # The primary key is (conversation_id, user_id) - conversation_id leads, so its
+        # index cannot serve a lookup keyed on user_id alone. list_conversations
+        # (routers/messages.py) is the one reader that filters this table by user_id -
+        # `WHERE conversation_members.user_id = :user_id AND left_at IS NULL` - to build
+        # a user's inbox, and until this index existed that predicate had no choice but
+        # to scan every row in the table. Partial on `left_at IS NULL`, matching that
+        # filter exactly (c208's post_comments precedent: index the predicate readers
+        # actually use, not a plain column). Board card c212.
+        Index(
+            "idx_conversation_members_user_active",
+            "user_id",
+            postgresql_where=text("left_at IS NULL"),
+        ),
+    )
 
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conversations.id"), primary_key=True
