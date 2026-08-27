@@ -2297,11 +2297,11 @@
     },
     {
       "id": "c214",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c214 IN BUILD Aug 27 [high/M, c209 finding] Verification-email send is not transactional with its DB write and failure is uncompensated (campus_verification.py:110-141) - a crash between commit and send strands the attempt silently. Fix: send after commit with explicit failure marking on the row so the user-facing state is honest and retryable. Worker assigned.",
+      "title": "c214 DONE Aug 27 - MERGED a512618 (PR #134, squash). Send failure now retires the attempt row (consumed_at, existing semantics - no migration) and commits INSIDE the except before re-raising (manager line-level checked exactly that); log carries ids + exception type only; c138 guard untouched; retry fairness proven by test. Suite 632p + CI 4/4. - a crash between commit and send strands the attempt silently. Fix: send after commit with explicit failure marking on the row so the user-facing state is honest and retryable. Worker assigned.",
       "detail": "Not an outbox build - the minimal compensation consistent with c176's logging."
     },
     {
