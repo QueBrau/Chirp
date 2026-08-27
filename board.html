@@ -2252,12 +2252,75 @@
     },
     {
       "id": "c209",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "infra",
       "area": "orgs",
-      "title": "c209 DDIA ASSESSMENT Aug 27 (Jose directive: data safety + 100s-1000s concurrent users, per Designing Data-Intensive Applications) - systematic read-only sweep of the REAL system, five lenses: durability/backups (Cloud SQL backup+PITR config has NEVER been verified), next-ceiling capacity after S1-S3, data-model/index coverage on hot paths, concurrency-consistency (transactions/idempotency/side-effects), analytics/event-collection readiness. Findings adversarially verified refute-by-default, then ranked into cards. Complements, not repeats, Q's S1-S3 (all fixed+merged today).",
+      "title": "c209 DONE Aug 27 - DDIA assessment complete: 15 agents, 20 raw findings, top 10 adversarially verified, 8 CONFIRMED (2 refuted by skeptics, 10 lower-severity dropped by the cap - recorded, not silent). Confirmed -> c210-c216. Manager-verified directly: prod backups HEALTHY (daily, 14 retained, PITR 7-day tx logs, deletion protection on, last 3 SUCCESSFUL) - the durability gaps are single-zone + unrehearsed restore, NOT missing backups.",
       "detail": "Workflow-run, Sonnet agents, read-only: no code changes under this card, no INFRA-PRIVATE.html access for workers, gcloud describe-only for the durability lens. Output: ranked gap list with DDIA principle, severity, effort; manager files follow-up cards and hands Jose the money-shaped decisions (tier upgrades, backup retention). Q's Load Ceiling artifact remains unreadable to the manager (platform blocks non-member artifact reads twice-verified) - if it has sections past S3, Q should post them to the board."
+    },
+    {
+      "id": "c210",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c210 IN BUILD Aug 27 [critical/S, c209 finding] Chapter feed GET /chapters/{id}/posts is UNBOUNDED - the exact c127/c201 bug class, unfixed on the PRIMARY chapter feed: no limit, no cursor, plus 3 correlated subqueries PER post of the chapter's entire history (feed.py:319-385). Fix: same (created_at, id) capped cursor as list_campus_feed in the same file. Worker assigned.",
+      "detail": "Response shape unchanged, params optional (mobile gets capped first page). No migration."
+    },
+    {
+      "id": "c211",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c211 IN BUILD Aug 27 [critical/S, c209 finding] Media signing blocks the single event loop: generate_upload_url/signed_read_url make SYNCHRONOUS network calls to GCP IAM signBlob from async routes (storage_service.py:253-267,637-649; single uvicorn process, Dockerfile:48) - one slow call stalls up to 80 unrelated in-flight requests. Fix: asyncio.to_thread at the route call sites. Worker assigned.",
+      "detail": "S fix; behavior identical, latency isolated. The 6h read-url memo stays."
+    },
+    {
+      "id": "c212",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c212 IN BUILD Aug 27 [high/S, c209 finding] conversation_members has NO index on user_id - GET /conversations full-scans the table on every messaging inbox load (messages.py:120-155; models/messaging.py:47-60). Fix: index via MIGRATION 0027 (CLAIMED HERE, parents on 0018 - the true head). Worker assigned.",
+      "detail": "Index shape from the actual query predicate; up/down tested."
+    },
+    {
+      "id": "c213",
+      "col": "backlog",
+      "owner": "court",
+      "tag": "infra",
+      "area": "orgs",
+      "title": "c213 [critical/L, c209 finding] WebSockets share Cloud Run's HTTP concurrency budget: every open socket holds one of 80 slots per instance for the whole app session, so ~320 concurrently-online users starve REST - and raising maxScale breaks the S2 pool arithmetic (the two levers fight). DESIGN NEEDED before code: split /ws to its own Cloud Run service (own scaling, own pool budget) vs dedicated always-on realtime instance. Court scopes options + costs for Jose.",
+      "detail": "This is the honest ceiling for 100s-1000s concurrent. L effort; sequenced after the S fixes land."
+    },
+    {
+      "id": "c214",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c214 IN BUILD Aug 27 [high/M, c209 finding] Verification-email send is not transactional with its DB write and failure is uncompensated (campus_verification.py:110-141) - a crash between commit and send strands the attempt silently. Fix: send after commit with explicit failure marking on the row so the user-facing state is honest and retryable. Worker assigned.",
+      "detail": "Not an outbox build - the minimal compensation consistent with c176's logging."
+    },
+    {
+      "id": "c215",
+      "col": "backlog",
+      "owner": "J",
+      "tag": "infra",
+      "area": "orgs",
+      "title": "c215 [high/M, c209 finding - JOSE DECISION, money] DB resilience: chirp-db is ZONAL and db-f1-micro cannot do HA at all (structural, not a toggle). Backups verified healthy Aug 27 (daily/14 retained/PITR 7d/deletion protection). Decisions: (a) rehearse + script a restore once (free, court can draft the runbook), (b) tier upgrade for HA-capable dedicated core (~$50+/mo class) - defensible to defer past alpha with (a) done.",
+      "detail": "Zone outage today = down until the zone recovers or a manual restore. (a) turns that from unknown-hours to known-minutes."
+    },
+    {
+      "id": "c216",
+      "col": "backlog",
+      "owner": "J",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c216 [high/L, c209 finding - JOSE PRODUCT DECISION] Zero behavioral telemetry exists: only domain-row timestamps - no DAU/retention/funnel/screen data for 'collect data like a real social media app'. Options scoped by the sweep: append-only events table (write cost on the small DB) vs structured logs -> BigQuery sink (cheapest, no schema migration) vs client SDK. HARD CONSTRAINT the skeptics flagged: chirp anonymity - no event pipeline may link chirp authorship the API itself withholds.",
+      "detail": "Recommend logs->BigQuery first pass. Needs Jose's scope + privacy sign-off before any build."
     }
   ],
   "decisions": [
