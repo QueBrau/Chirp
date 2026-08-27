@@ -151,12 +151,20 @@ export default function EventDetailScreen() {
   const handleEdit = async (input: CreateEventInput) => {
     if (!event) return;
     try {
+      // c202: ends_at and description go through AS-IS, null included. The sheet
+      // always resolves both to a concrete value (a string, or null when the field
+      // reads empty) rather than leaving them unset, so `?? undefined` here used to
+      // turn "the host cleared this" into "omitted" - JSON.stringify drops undefined
+      // keys (api/client.ts doFetch), which the backend reads as "leave it alone",
+      // so a cleared end time or description silently kept its old value. Sending the
+      // null through lets the backend's exclude_unset check see it and clear the
+      // column instead.
       await updateEvent(event.id, {
         title: input.title,
         starts_at: input.starts_at,
-        ends_at: input.ends_at ?? undefined,
+        ends_at: input.ends_at,
         location: input.location,
-        description: input.description ?? undefined,
+        description: input.description,
         visibility: input.visibility,
       });
       setEditing(false);

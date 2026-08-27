@@ -957,3 +957,64 @@ async def test_my_invites_lists_soonest_first_and_pages_forward_without_loss(
         before_id = items[-1]["id"]
 
     assert collected == created_ids
+async def test_explicit_null_clears_ends_at_and_description_omission_leaves_them(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """c202: clearing an end time and a description is reachable through PATCH today.
+
+    body.model_dump(exclude_unset=True) in update_event relies on a pydantic v2
+    distinction the EventUpdate docstring understated: {"ends_at": null} in the request
+    body IS an explicit assignment (the field lands in model_fields_set), which is a
+    different thing from the client leaving ends_at out of the JSON altogether (never
+    set, excluded by exclude_unset). So an explicit null already flows through to
+    setattr(event, "ends_at", None) and clears the column - no sentinel needed.
+    """
+    setup = await make_chapter_with("member")
+    created = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body(
+            starts_at="2026-09-27T19:00:00Z",
+            ends_at="2026-09-27T23:00:00Z",
+            description="BYOB, RSVP required",
+        ),
+        headers=setup.president.headers,
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    assert created.json()["ends_at"] is not None
+    assert created.json()["description"] == "BYOB, RSVP required"
+
+    # Omitting the fields entirely leaves them alone - the ordinary "not_supplied" case.
+    untouched = await client.patch(
+        f"/events/{event_id}", json={"title": "Rush Week Mixer (updated)"},
+        headers=setup.president.headers,
+    )
+    assert untouched.status_code == 200, untouched.text
+    assert untouched.json()["ends_at"] is not None, "omitted field must be left alone"
+    assert untouched.json()["description"] == "BYOB, RSVP required"
+
+    # Explicit null clears both. Note ends_at=None must also survive the merged-state
+    # ordering re-check (`event.ends_at is not None and ...`), which it does by being
+    # skipped rather than compared.
+    cleared = await client.patch(
+        f"/events/{event_id}",
+        json={"ends_at": None, "description": None},
+        headers=setup.president.headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["ends_at"] is None
+    assert cleared.json()["description"] is None
+
+    fetched = await client.get(f"/events/{event_id}", headers=setup.president.headers)
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["ends_at"] is None
+    assert fetched.json()["description"] is None
+
+    # A cleared event still edits normally afterwards - clearing did not brick the row.
+    edited_again = await client.patch(
+        f"/events/{event_id}", json={"location": "The Annex"}, headers=setup.president.headers
+    )
+    assert edited_again.status_code == 200, edited_again.text
+    assert edited_again.json()["location"] == "The Annex"
+    assert edited_again.json()["ends_at"] is None, "still cleared"
+    assert edited_again.json()["title"] == "Rush Week Mixer (updated)"

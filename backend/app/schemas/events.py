@@ -70,11 +70,18 @@ class EventCreate(_Schema):
 class EventUpdate(_Schema):
     """A host's edit. Every field optional; omitted fields are left alone.
 
-    NOTE THAT ends_at IS NOT NULLABLE-BY-OMISSION HERE, which is a real limitation
-    stated rather than hidden: with `None` meaning "not supplied", this shape cannot
-    express "remove the end time I set earlier". Clearing an end time is not currently
-    reachable through this endpoint; a future card wanting it needs a sentinel or a
-    PATCH-with-explicit-nulls shape, not a quiet reinterpretation of None.
+    OMITTED VS EXPLICIT-NULL IS THE WHOLE CONTRACT HERE, and pydantic v2 already gives
+    it to us for free: update_event reads body.model_dump(exclude_unset=True), and
+    exclude_unset looks at model_fields_set, not at the value. A field left out of the
+    JSON body entirely never enters model_fields_set and is excluded - "leave it
+    alone". A field sent as explicit `null` (e.g. {"ends_at": null}) DOES enter
+    model_fields_set with a value of None, survives exclude_unset, and reaches
+    setattr(event, "ends_at", None) - "clear it". So {"ends_at": null} in the request
+    body clears a previously-set end time (and likewise for description); leaving
+    ends_at out of the body keeps whatever was stored. See test_events.py's
+    test_explicit_null_clears_ends_at_and_description_omission_leaves_them (c202) for
+    the proof, including that a cleared ends_at correctly skips the ends-after-starts
+    check on the next edit rather than failing it.
     """
 
     title: str | None = Field(default=None, min_length=1)
