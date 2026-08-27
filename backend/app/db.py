@@ -24,10 +24,14 @@ def get_engine() -> AsyncEngine:
     """Create the async engine on first call; importing app.main never touches the network."""
     global _engine
     if _engine is None:
+        settings = get_settings()
+        # Pool numbers come from settings; the sizing invariant and the live topology
+        # they encode are documented at their definition in app.config (c207).
         _engine = create_async_engine(
-            get_settings().database_url,
-            pool_size=5,
-            max_overflow=10,
+            settings.database_url,
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_timeout=settings.db_pool_timeout,
             pool_pre_ping=True,
         )
     return _engine
