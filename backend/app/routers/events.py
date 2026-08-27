@@ -34,8 +34,8 @@ its own card.
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -159,21 +159,44 @@ def _may_manage(event: models.Event, membership: models.Membership) -> bool:
 @router.get("/chapters/{chapter_id}/events")
 async def list_events(
     chapter_id: uuid.UUID,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     _membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
 ) -> list[EventOut]:
-    """List the chapter's events, soonest-first by start time."""
-    result = await session.execute(
-        select(models.Event)
-        .where(models.Event.chapter_id == chapter_id)
-        .order_by(models.Event.starts_at.desc())
-    )
+    """List the chapter's events, soonest-first by start time.
+
+    Board card c201 (same bug class as c127 / SECURITY-REVIEW finding 10): this had no
+    limit at all, so a chapter with enough event history returned its entire events
+    table on every load. Cursor-paginated on (starts_at, id) - `before` + `before_id` -
+    the same compound-cursor shape as chirps.py's list_chirps and messages.py's
+    list_messages, so a page boundary landing on two events with an identical
+    starts_at never silently drops one of them. `before` alone still works (legacy
+    clients) but does not guarantee that tie-break.
+
+    Mobile does not send these params yet - out of scope for c201 - so every existing
+    caller keeps getting the same (now capped) first page it always did.
+    """
+    stmt = select(models.Event).where(models.Event.chapter_id == chapter_id)
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.Event.starts_at, models.Event.id) < (before, before_id)
+        )
+    elif before is not None:
+        stmt = stmt.where(models.Event.starts_at < before)
+    stmt = stmt.order_by(models.Event.starts_at.desc(), models.Event.id.desc()).limit(limit)
+
+    result = await session.execute(stmt)
     return [EventOut.model_validate(e) for e in result.scalars().all()]
 
 
 @router.get("/chapters/{chapter_id}/events-with-rsvps")
 async def list_events_with_rsvps(
     chapter_id: uuid.UUID,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     _membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
 ) -> list[EventWithRsvpsOut]:
@@ -181,12 +204,22 @@ async def list_events_with_rsvps(
 
     Collapses the Events segment's 1+N (listEvents + listRsvps per event) into two
     queries total: one for the events, one IN-clause for their RSVPs.
+
+    Same (starts_at, id) cursor as list_events (c201) - `before` + `before_id`, capped
+    `limit`. The RSVP IN-query below fans out over whatever page of events comes back
+    from THIS query, so bounding the event page bounds the RSVP query as a
+    consequence; it does not need (and must not grow) a second cursor of its own.
     """
-    result = await session.execute(
-        select(models.Event)
-        .where(models.Event.chapter_id == chapter_id)
-        .order_by(models.Event.starts_at.desc())
-    )
+    stmt = select(models.Event).where(models.Event.chapter_id == chapter_id)
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.Event.starts_at, models.Event.id) < (before, before_id)
+        )
+    elif before is not None:
+        stmt = stmt.where(models.Event.starts_at < before)
+    stmt = stmt.order_by(models.Event.starts_at.desc(), models.Event.id.desc()).limit(limit)
+
+    result = await session.execute(stmt)
     events = result.scalars().all()
     rsvps_by_event: dict[uuid.UUID, list[EventRsvpOut]] = {}
     if events:
@@ -397,6 +430,9 @@ async def list_guests(
 
 @router.get("/me/event-invites")
 async def list_my_invites(
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[EventOut]:
@@ -406,13 +442,30 @@ async def list_my_invites(
     find it is a link somebody sent you. Cancelled events are INCLUDED rather than
     filtered - "the thing you were invited to is off" is the single most important row
     this endpoint can return.
+
+    SOONEST-FIRST HERE MEANS ASCENDING starts_at - the opposite direction from every
+    other list route in this module, which are reverse-chron (furthest-in-future
+    first). Fixed alongside c201 pagination: this docstring already said soonest-first,
+    but the query sorted descending before this change, so an invitee's nearest
+    upcoming event was buried at the bottom instead of surfaced at the top. The cursor
+    direction has to match the sort it's paginating: continuing past the last row of a
+    page here means moving to a LATER starts_at, so the compound comparison is
+    `> (before, before_id)`, not `<` like every DESC route in this file.
     """
-    result = await session.execute(
+    stmt = (
         select(models.Event)
         .join(models.EventInvite, models.EventInvite.event_id == models.Event.id)
         .where(models.EventInvite.invited_user_id == user.id)
-        .order_by(models.Event.starts_at.desc())
     )
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.Event.starts_at, models.Event.id) > (before, before_id)
+        )
+    elif before is not None:
+        stmt = stmt.where(models.Event.starts_at > before)
+    stmt = stmt.order_by(models.Event.starts_at.asc(), models.Event.id.asc()).limit(limit)
+
+    result = await session.execute(stmt)
     return [EventOut.model_validate(e) for e in result.scalars().all()]
 
 
