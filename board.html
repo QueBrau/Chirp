@@ -2206,6 +2206,15 @@
       "detail": "src/api/events.ts:129 defines the client call; nothing imports it. Needs an invites surface (badge/list) and a respond flow entry point that is not the event detail screen."
     },
     {
+      "id": "c208",
+      "col": "progress",
+      "owner": "court",
+      "tag": "backend",
+      "area": "fyp",
+      "title": "c208 IN BUILD Aug 27 - S4 from the architecture review, and the REVIEW WAS WRONG ABOUT THE CAUSE. post_comments has NO INDEX ON post_id - only post_comments_pkey on (id) - so the feed's comment-count subquery SEQ SCANS THE WHOLE COMMENTS TABLE once per row, 50 times per page, and list_comments does the same on every post open. Measured on realistic data (5k posts, 100k comments, ~20 each): one feed page 612ms -> 2.6ms, a 235x difference, from an index alone. MIGRATION 0026 CLAIMED",
+      "detail": "THE REVIEW BLAMED THE QUERY SHAPE AND THAT WAS THE WRONG DIAGNOSIS, recorded because the wrong fix was one step away. S4 said the correlated scalar subqueries were the problem and proposed a LATERAL join or pre-aggregation. The EXPLAIN says otherwise: `loops=50` confirms the subqueries run once per OUTPUT row, not per candidate row, so 50 cheap index probes per page is a perfectly good shape. Rewriting to LATERAL would have been a large, risky change to the c109 count/blocked-author agreement and bought almost nothing. The shape is fine. The index was missing. Nothing here changes a single line of query logic.\\n\\nMEASURED, not argued (5000 posts, 100000 comments, ~20 per post - the cardinality that decides whether an index helps at all):\\n  BEFORE: Seq Scan on post_comments, loops=50, Execution Time 612.768 ms\\n  AFTER:  Bitmap Index Scan on the new index, loops=50, Execution Time 2.603 ms\\nAnd it degrades LINEARLY with the comments table, so this gets worse forever until fixed - 1M comments is roughly six seconds per feed page.\\n\\nTWO BENCHMARKS WERE THROWN AWAY BEFORE THIS ONE, and the reason is worth keeping: both put every comment on ONE post, because `CROSS JOIN LATERAL (SELECT id FROM posts ORDER BY random() LIMIT 1)` is not correlated and Postgres evaluates it once. With 1-3 distinct post_id values an index is genuinely useless and a seq scan is genuinely correct, so the first run 'proved' the index did nothing. A benchmark whose data shape is wrong does not measure the thing it names.\\n\\nINDEX IS (post_id, created_at) WHERE deleted_at IS NULL. Partial because every reader filters deleted_at IS NULL, so index-only the live rows; created_at trailing because list_comments orders by it, so one index serves the count AND the comment list.\\n\\nCREATE INDEX CONCURRENTLY in an alembic autocommit_block: a plain CREATE INDEX takes a SHARE lock and blocks writes to post_comments for its duration, which is fine on a small table and an outage on a big one. The cost is that a failed CONCURRENTLY build leaves an INVALID index that must be dropped by hand before retrying - documented in the migration rather than discovered."
+    },
+    {
       "id": "c206",
       "col": "progress",
       "owner": "court",
