@@ -5,6 +5,8 @@ proxied, why signing is keyless, and why reads are a capability url in front of 
 redirect rather than a signed url handed straight to the client.
 """
 
+import asyncio
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 
@@ -35,7 +37,16 @@ async def create_upload_url(
     location and is what actually decides whether the resulting post is allowed to
     exist, same as it always has. Any authenticated user may request an upload url.
     """
-    upload = generate_upload_url(str(user.id), body.content_type, body.byte_size)
+    # c211: generate_upload_url() is a synchronous call that hits the network
+    # (google.auth credentials.refresh + IAM signBlob - see storage_service's module
+    # docstring for why signing is keyless). This process runs one uvicorn worker with
+    # no --workers (Dockerfile) at concurrency=80, i.e. one event loop serving every
+    # in-flight request - calling a blocking function directly here would stall all of
+    # them for the duration of the network round trip. to_thread moves the call off
+    # the loop onto a worker thread so only this request waits on it.
+    upload = await asyncio.to_thread(
+        generate_upload_url, str(user.id), body.content_type, body.byte_size
+    )
     return MediaUploadUrlOut(
         upload_url=upload.upload_url,
         preview_url=upload.preview_url,
@@ -68,7 +79,14 @@ async def read_media(token: str) -> RedirectResponse:
     url is per-viewer by construction and must never land in a shared/proxy cache.
     """
     object_name = verify_media_token(token)
-    target = signed_read_url(object_name)
+    # c211: same reasoning as create_upload_url() above - signed_read_url() is
+    # synchronous and, on a memo miss, makes the same google.auth refresh + IAM
+    # signBlob network call. Offload to a worker thread so a cold cache entry cannot
+    # stall the single event loop this process serves every other in-flight request
+    # on. The 6h memo (storage_service._signed_read_cache) keeps most calls off this
+    # path entirely; see that dict's own lock for what changed once misses can now
+    # happen concurrently from multiple worker threads.
+    target = await asyncio.to_thread(signed_read_url, object_name)
     return RedirectResponse(
         target,
         status_code=302,

@@ -32,6 +32,9 @@ Note for whoever does that pass: Expo WEB proves nothing here - on web RN's Imag
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -39,6 +42,7 @@ import pytest
 from fastapi import HTTPException
 from httpx import AsyncClient
 
+import app.routers.media as media_router
 from app.services import storage_service
 from tests.conftest import MakeChapterWith, MakeUser
 
@@ -323,6 +327,42 @@ def test_the_signed_read_is_a_get(monkeypatch: pytest.MonkeyPatch) -> None:
     assert kwargs["version"] == "v4"
 
 
+def test_the_memo_survives_concurrent_calls_from_multiple_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """c211: signed_read_url() now runs inside asyncio.to_thread() worker threads (see
+    routers/media.py), so _signed_read_cache can be touched from more than one thread
+    at once for the first time - previously the caller's own blocking call already
+    serialized every access. Before the lock this section's module-level comment
+    describes, the stale-entry cleanup's `[k for k in dict if ...]` followed by a `del`
+    per key could raise KeyError (another thread already deleted the same key) or
+    RuntimeError: dictionary changed size during iteration (another thread inserted
+    mid-comprehension) - both real exceptions on a live request. This drives enough
+    concurrent misses and hits across enough objects, from real OS threads (not just
+    asyncio tasks on one thread), to make either race fire reliably if the lock ever
+    regresses away."""
+    calls: list = []
+    _install_fake_signer(monkeypatch, calls)
+    now = datetime(2026, 8, 23, 6, 0, 0, tzinfo=timezone.utc)
+    objects = [f"posts/stress/{i}.jpg" for i in range(8)]
+    errors: list[BaseException] = []
+
+    def _worker(i: int) -> None:
+        try:
+            for _ in range(50):
+                storage_service.signed_read_url(objects[i % len(objects)], now=now)
+        except BaseException as exc:  # noqa: BLE001 - capture, don't crash the thread
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_worker, args=(i,)) for i in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"concurrent signed_read_url calls raised: {errors!r}"
+
+
 # ---------------------------------------------------------------------------
 # GET /media/{token}
 # ---------------------------------------------------------------------------
@@ -359,6 +399,80 @@ async def test_the_route_rejects_a_forged_token(client: AsyncClient) -> None:
     response = await client.get("/media/not-a-real-token")
     assert response.status_code == 403, response.text
     assert response.json()["detail"] == "invalid_media_token"
+
+
+# ---------------------------------------------------------------------------
+# c211: signed_read_url() is synchronous and, on a memo miss, hits the network the
+# same way generate_upload_url() does. The route now runs it via asyncio.to_thread()
+# so a cold cache entry cannot stall the one event loop this process serves every
+# other in-flight request on. Same two-part proof as the upload-url route: the call
+# actually lands off-thread, and concurrent requests actually overlap.
+# ---------------------------------------------------------------------------
+
+
+async def test_read_media_route_runs_the_signer_off_the_event_loop_thread(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    test_thread = threading.current_thread()
+    calling_threads: list[threading.Thread] = []
+
+    def _fake_signed_read_url(object_name: str, *, now: datetime | None = None) -> str:
+        calling_threads.append(threading.current_thread())
+        return f"https://storage.googleapis.com/{BUCKET}/{object_name}?sig=fake"
+
+    monkeypatch.setattr(media_router, "signed_read_url", _fake_signed_read_url)
+    token = storage_service.mint_media_token(OBJECT, VIEWER)
+
+    response = await client.get(f"/media/{token}")
+    assert response.status_code == 302, response.text
+    assert len(calling_threads) == 1
+    assert calling_threads[0] is not test_thread
+
+
+async def test_two_read_media_requests_overlap_instead_of_serializing(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The behavioral proof, same shape as the upload-url route's: a signer that sleeps
+    0.3s on a cold memo entry must run its two calls in OVERLAPPING time windows
+    (separate worker threads), not back-to-back - which is what a direct, un-threaded
+    sync call on the event loop would produce, stalling every other in-flight request
+    for its duration.
+
+    Asserts on the signer calls' own recorded start/end timestamps rather than total
+    request wall-clock time - see the upload-url route's equivalent test for why a
+    total-elapsed-under-threshold assertion is flaky here (fresh app + DB truncation
+    per test adds real cold-start latency ahead of the signer call itself).
+    """
+    lock = threading.Lock()
+    intervals: list[tuple[float, float]] = []
+
+    def _slow_signed_read_url(object_name: str, *, now: datetime | None = None) -> str:
+        call_start = time.monotonic()
+        time.sleep(0.3)
+        call_end = time.monotonic()
+        with lock:
+            intervals.append((call_start, call_end))
+        return f"https://storage.googleapis.com/{BUCKET}/{object_name}?sig=fake"
+
+    monkeypatch.setattr(media_router, "signed_read_url", _slow_signed_read_url)
+    token_a = storage_service.mint_media_token("posts/stress/a.jpg", VIEWER)
+    token_b = storage_service.mint_media_token("posts/stress/b.jpg", VIEWER)
+
+    async def _request(token: str):
+        return await client.get(f"/media/{token}")
+
+    responses = await asyncio.gather(_request(token_a), _request(token_b))
+
+    for response in responses:
+        assert response.status_code == 302, response.text
+
+    assert len(intervals) == 2
+    (start_1, end_1), (start_2, end_2) = intervals
+    assert start_1 < end_2 and start_2 < end_1, (
+        f"signer calls did not overlap: {(start_1, end_1)} vs {(start_2, end_2)} - "
+        "looks like the route ran the signer directly on the event loop instead of "
+        "via to_thread"
+    )
 
 
 async def test_the_route_reports_expiry_as_410(
