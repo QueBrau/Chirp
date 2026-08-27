@@ -87,6 +87,7 @@ import binascii
 import hashlib
 import hmac
 import logging
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -589,6 +590,21 @@ def object_name_from_stored_url(url: str) -> str | None:
 
 
 _signed_read_cache: dict[tuple[str, int], str] = {}
+# c211: signed_read_url() is called via asyncio.to_thread() from routers/media.py, so
+# this dict can now be touched from more than one worker thread at once - previously
+# the caller's own blocking (sync-in-async) call already serialized every access, so
+# plain dict mutation was safe by accident. It no longer is: the stale-entry cleanup
+# below builds a key list with `[k for k in _signed_read_cache if ...]` and then `del`s
+# each one - two threads doing that concurrently can raise KeyError (one thread deletes
+# a key the other already deleted) or RuntimeError: dictionary changed size during
+# iteration (one thread inserts/deletes while another is mid-comprehension), and either
+# one is a real exception on a live request, not a theoretical one. The lock below
+# wraps only the dict get/cleanup/set - never the signBlob network call itself, since
+# holding it across that call would re-serialize the exact request path this whole
+# change (to_thread) exists to stop serializing. The accepted trade: two threads racing
+# a COLD entry for the same (object, window) can both call signBlob and the second
+# write just overwrites the first - a wasted duplicate call, never a wrong url.
+_signed_read_cache_lock = threading.Lock()
 
 
 def signed_read_url(object_name: str, *, now: datetime | None = None) -> str:
@@ -622,14 +638,10 @@ def signed_read_url(object_name: str, *, now: datetime | None = None) -> str:
     window = int(MEDIA_TOKEN_WINDOW.total_seconds())
     window_index = int(current.timestamp()) // window
     key = (object_name, window_index)
-    cached = _signed_read_cache.get(key)
+    with _signed_read_cache_lock:
+        cached = _signed_read_cache.get(key)
     if cached is not None:
         return cached
-
-    # Drop other windows' entries rather than letting the dict grow forever. Same-window
-    # entries for OTHER objects must survive - they are the cache doing its job.
-    for stale in [k for k in _signed_read_cache if k[1] != window_index]:
-        del _signed_read_cache[stale]
 
     bucket_name = _bucket_name()
     blob = _storage_client().bucket(bucket_name).blob(object_name)
@@ -647,5 +659,11 @@ def signed_read_url(object_name: str, *, now: datetime | None = None) -> str:
         service_account_email=credentials.service_account_email,
         access_token=credentials.token,
     )
-    _signed_read_cache[key] = url
+    with _signed_read_cache_lock:
+        # Drop other windows' entries rather than letting the dict grow forever. Same-
+        # window entries for OTHER objects must survive - they are the cache doing its
+        # job.
+        for stale in [k for k in _signed_read_cache if k[1] != window_index]:
+            del _signed_read_cache[stale]
+        _signed_read_cache[key] = url
     return url

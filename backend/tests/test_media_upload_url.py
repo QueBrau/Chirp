@@ -16,11 +16,15 @@ already scoped for after the infra step lands.
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
 
+import app.routers.media as media_router
 from app.services import storage_service
 from tests.conftest import MakeUser
 
@@ -200,3 +204,102 @@ async def test_two_uploads_from_the_same_user_get_different_object_names(
         names.append(response.json()["object_name"])
 
     assert names[0] != names[1]
+
+
+# ---------------------------------------------------------------------------
+# c211: generate_upload_url() is synchronous and hits the network (google.auth
+# credentials.refresh + IAM signBlob). The route now runs it via asyncio.to_thread()
+# so a slow signing call cannot stall the one event loop this process serves every
+# other in-flight request on (Dockerfile runs uvicorn with no --workers, concurrency
+# 80). The tests below prove that off-loop, not just that to_thread appears in a diff.
+# ---------------------------------------------------------------------------
+
+
+async def test_upload_url_route_runs_the_signer_off_the_event_loop_thread(
+    client: AsyncClient, make_user: MakeUser, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direct proof of the to_thread wiring: the function the route calls must
+    actually execute on a thread other than the one driving this test's event loop."""
+    user = await make_user()
+    test_thread = threading.current_thread()
+    calling_threads: list[threading.Thread] = []
+
+    def _fake_generate_upload_url(user_id: str, content_type: str, byte_size: int):
+        calling_threads.append(threading.current_thread())
+        return storage_service.SignedUpload(
+            upload_url="https://storage.googleapis.com/fake-bucket/signed?sig=abc",
+            preview_url="https://storage.googleapis.com/fake-bucket/tmp/x/y.jpg",
+            object_name="tmp/x/y.jpg",
+            expires_in_seconds=900,
+        )
+
+    monkeypatch.setattr(media_router, "generate_upload_url", _fake_generate_upload_url)
+
+    response = await client.post(
+        "/media/upload-url",
+        json={"content_type": "image/jpeg", "byte_size": 1000},
+        headers=user.headers,
+    )
+    assert response.status_code == 201, response.text
+    assert len(calling_threads) == 1
+    assert calling_threads[0] is not test_thread
+
+
+async def test_two_upload_url_requests_overlap_instead_of_serializing(
+    client: AsyncClient, make_user: MakeUser, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The behavioral proof c211 actually cares about: a slow signer must not make one
+    request's latency stack onto another's. Two concurrent requests hitting a signer
+    that sleeps 0.3s must run their sleeps in OVERLAPPING time windows (separate
+    worker threads), not back-to-back (which is what a direct, un-threaded sync call
+    inside the one event loop would produce - every other in-flight request stalled
+    for the same 0.3s on top of its own work).
+
+    Asserts on the signer calls' own recorded start/end timestamps rather than total
+    request wall-clock time: each test spins up a fresh app + truncates the DB, and
+    that per-test cold-start cost (confirmed by hand: the first request in a fresh
+    app can itself take several hundred ms before ever reaching the signer) dwarfs
+    the 0.3s sleep and would make a total-elapsed-under-threshold assertion flaky for
+    reasons that have nothing to do with to_thread. Comparing the two calls' windows
+    to each other is immune to that ambient overhead either way.
+    """
+    user_a = await make_user()
+    user_b = await make_user()
+
+    lock = threading.Lock()
+    intervals: list[tuple[float, float]] = []
+
+    def _slow_generate_upload_url(user_id: str, content_type: str, byte_size: int):
+        call_start = time.monotonic()
+        time.sleep(0.3)
+        call_end = time.monotonic()
+        with lock:
+            intervals.append((call_start, call_end))
+        return storage_service.SignedUpload(
+            upload_url="https://storage.googleapis.com/fake-bucket/signed?sig=abc",
+            preview_url="https://storage.googleapis.com/fake-bucket/tmp/x/y.jpg",
+            object_name="tmp/x/y.jpg",
+            expires_in_seconds=900,
+        )
+
+    monkeypatch.setattr(media_router, "generate_upload_url", _slow_generate_upload_url)
+
+    async def _request(user) -> object:
+        return await client.post(
+            "/media/upload-url",
+            json={"content_type": "image/jpeg", "byte_size": 1000},
+            headers=user.headers,
+        )
+
+    responses = await asyncio.gather(_request(user_a), _request(user_b))
+
+    for response in responses:
+        assert response.status_code == 201, response.text
+
+    assert len(intervals) == 2
+    (start_1, end_1), (start_2, end_2) = intervals
+    assert start_1 < end_2 and start_2 < end_1, (
+        f"signer calls did not overlap: {(start_1, end_1)} vs {(start_2, end_2)} - "
+        "looks like the route ran the signer directly on the event loop instead of "
+        "via to_thread"
+    )
