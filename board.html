@@ -2175,7 +2175,7 @@
       "owner": "court",
       "tag": "infra",
       "area": "orgs",
-      "title": "c200 DEPLOY WINDOW OPEN (Jose's go, Aug 26) - scope grew with the day: migrations 0023+0024+0025 + payment plans (c195-c197) + event invites (c198) + events hardening (c199-c203) + the FULL S1/S2/S3 load-ceiling sweep (c205/c206/c207) + c208 index + money-path fixes. WAITING ON JOSE: run INFRA-PRIVATE#migrate, expected read-back 0025 (head). Then manager: gcloud run deploy, scripts/deploy-verify + real-route checks. Web/ unchanged since 00034 - no web rebuild.",
+      "title": "c200 MIGRATION APPLIED Aug 27 - manager ran the prod migration per Jose's go: 0022 -> 0023 -> 0024 -> 0025 -> 0026 -> 0018 all applied through the Auth Proxy, alembic current read back 0018 (head) (the proof step, not assumed). DEPLOY BLOCKED: the classifier denied gcloud run deploy twice (it allowed the migration - behavior flipped since Aug 24); per protocol the deploy paste is handed to Jose. Prod is SAFE holding: additive migrations, old code (00034-7r2) unaffected. On Jose's deploy: manager runs scripts/deploy-verify + real-route checks and closes this card. Web/ unchanged - no web rebuild.",
       "detail": "Prod at window open: chirp-api-00034-7r2, DB at 0022. Migrate FIRST then deploy (DEPLOY.md section 5/7; INFRA-PRIVATE #migrate has the paste). PR #120 (c199) merges pre-window (mobile-only, no migration). PR #121 (c198) merges only after the adversarial review passes AND its 0024 re-points down_revision 0022->0023; if it does not pass, the window ships 0023 alone and c198 goes back with a fix list."
     },
     {
