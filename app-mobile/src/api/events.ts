@@ -135,6 +135,30 @@ export async function listMyInvites(): Promise<EventOut[]> {
   return request<EventOut[]>("/me/event-invites");
 }
 
+/**
+ * One row of listMyInvitesWithRsvps() - mirrors backend EventInviteWithRsvpOut (c204).
+ *
+ * my_rsvp_status is the CALLER'S OWN rsvp (null if they haven't answered) - never
+ * another invitee's. hosted_by is the hosting chapter's display name, resolved
+ * server-side and safe to show even though the caller may not be a member of that
+ * chapter - an invite already admits them to the event, which shows who hosts it.
+ */
+export interface EventInviteWithRsvpOut {
+  event: EventOut;
+  my_rsvp_status: RsvpStatus | null;
+  hosted_by: string;
+}
+
+/**
+ * Bulk sibling of listMyInvites() (c204): the same invited events, plus each one's
+ * own-rsvp status and chapter label in a single round trip. Replaces the Home screen's
+ * per-invite listGuests() + getChapter() N+1 (see feed/index.tsx's old
+ * loadVisibleInvites for the shape this collapses).
+ */
+export async function listMyInvitesWithRsvps(): Promise<EventInviteWithRsvpOut[]> {
+  return request<EventInviteWithRsvpOut[]>("/me/event-invites-with-rsvps");
+}
+
 export async function listRsvps(eventId: string): Promise<EventRsvpOut[]> {
   return request<EventRsvpOut[]>(`/events/${eventId}/rsvps`);
 }
