@@ -64,16 +64,31 @@ async def test_pool_exhaustion_maps_to_503_with_retry_after() -> None:
     """Checkout timeout is a capacity signal: 503 + Retry-After, never a generic 500.
 
     A 500 reads as a crash and invites an immediate retry into the saturated pool;
-    503 tells the client to back off. The handler is registered per-class, so it runs
-    in Starlette's ExceptionMiddleware before ServerErrorMiddleware ever sees it.
+    503 tells the client to back off. This goes through a REAL request against the
+    real app: get_session is overridden to raise the exact exception the pool raises
+    on checkout timeout, deep inside dependency resolution (get_current_user depends
+    on it), so the assertion proves interception through the full middleware stack -
+    not just the handler's own return value.
     """
+    from httpx import ASGITransport, AsyncClient
     from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
+    from app.db import get_session
     from app.main import create_app
 
+    async def exhausted_pool():
+        raise SQLAlchemyTimeoutError("QueuePool limit reached, connection timed out")
+        yield  # pragma: no cover - never reached; keeps the generator shape
+
     app = create_app()
-    handler = app.exception_handlers[SQLAlchemyTimeoutError]
-    response = await handler(None, SQLAlchemyTimeoutError())
+    app.dependency_overrides[get_session] = exhausted_pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.put(
+            "/posts/00000000-0000-0000-0000-000000000000/likes",
+            headers={"X-Debug-Firebase-Uid": "test-uid"},
+        )
+
     assert response.status_code == 503
     assert response.headers["retry-after"] == "5"
-    assert b"over_capacity" in response.body
+    assert response.json() == {"detail": "over_capacity"}
