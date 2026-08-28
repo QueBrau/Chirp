@@ -41,6 +41,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.analytics import emit
 from app.core.campus_access import is_campus_verified
 from app.core.errors import forbidden, not_found
 from app.core.permissions import EBOARD
@@ -262,6 +263,13 @@ async def create_event(
     session.add(event)
     await session.commit()
     await session.refresh(event)
+    emit(
+        "event_created",
+        user_id=membership.user_id,
+        chapter_id=chapter_id,
+        event_id=event.id,
+        visibility=event.visibility,
+    )
     return EventOut.model_validate(event)
 
 
@@ -582,6 +590,13 @@ async def upsert_rsvp(
     else:
         rsvp.status = body.status
         await session.commit()
+    emit(
+        "event_rsvp",
+        user_id=user.id,
+        chapter_id=event.chapter_id,
+        event_id=event_id,
+        status=rsvp.status,
+    )
     return EventRsvpOut.model_validate(rsvp)
 
 

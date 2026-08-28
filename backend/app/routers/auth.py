@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import get_settings
+from app.core.analytics import emit
 from app.core.errors import conflict, not_found
 from app.db import get_session
 from app.middleware.auth import get_current_user, get_user_by_uid, get_verified_identity
@@ -81,6 +82,7 @@ async def bootstrap_account(
         raise conflict("email_already_registered") from None
     await session.refresh(user)
     await session.commit()
+    emit("user_signed_up", user_id=user.id, account_type=user.account_type)
     return UserOut.model_validate(user)
 
 

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import get_settings
+from app.core.analytics import emit
 from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
 from app.core.permissions import Role, require_role
@@ -350,6 +351,13 @@ async def create_dues_payment_intent(
     customer_session_secret = await stripe_service.create_customer_session(
         account_id, customer_id
     )
+    emit(
+        "payment_intent_created",
+        chapter_id=chapter.id,
+        cycle_id=cycle.id,
+        user_id=user.id,
+        rail=body.rail,
+    )
     return DuesIntentOut(
         payment_intent_client_secret=intent.client_secret,
         customer_session_client_secret=customer_session_secret,
@@ -457,6 +465,35 @@ async def _log_if_second_capture_unrecordable(session: AsyncSession, intent: dic
         )
 
 
+def _emit_stripe_webhook_event(event: dict) -> None:
+    """Board c227: payment_succeeded / payment_failed telemetry for a verified Stripe
+    webhook event - event type, rail, cycle_id, member user_id, all read back off the
+    SAME chirp_* metadata _record_dues_payment already trusts as the link to our own
+    rows (never the raw event payload otherwise, which carries Stripe customer PII -
+    see the docstring on stripe_webhook below). Dues are NOT anonymous, so pairing a
+    payment event with a member's user_id here is unrelated to app.core.analytics's
+    chirp-authorship rule, which is scoped to chirps only.
+
+    Only called from the `else:` of the outer try/except around session.commit() -
+    i.e. only on that specific commit's success. That gate matters: Stripe redelivers
+    the same event for days until it gets a 2xx, and a replay lands in the `except
+    IntegrityError` branch instead (the row already exists), so gating on the success
+    path is what keeps a replayed delivery from emitting payment_succeeded twice for
+    one real payment.
+    """
+    event_type = event["type"]
+    if event_type not in ("payment_intent.succeeded", "payment_intent.payment_failed"):
+        return
+    metadata = event["data"]["object"].get("metadata") or {}
+    emit(
+        "payment_succeeded" if event_type == "payment_intent.succeeded" else "payment_failed",
+        event_type=event_type,
+        rail=metadata.get("chirp_rail"),
+        cycle_id=metadata.get("chirp_dues_cycle_id"),
+        user_id=metadata.get("chirp_user_id"),
+    )
+
+
 @router.post("/webhooks/stripe")
 async def stripe_webhook(
     request: Request,
@@ -503,4 +540,6 @@ async def stripe_webhook(
         await session.rollback()
         if event["type"] == "payment_intent.succeeded":
             await _log_if_second_capture_unrecordable(session, event["data"]["object"])
+    else:
+        _emit_stripe_webhook_event(event)
     return {"received": True}

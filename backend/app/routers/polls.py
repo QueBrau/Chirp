@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import models
+from app.core.analytics import emit
 from app.core.errors import conflict, not_found
 from app.core.permissions import POLLS_ADMIN, require_role
 from app.db import get_session
@@ -289,6 +290,13 @@ async def cast_vote(
         )
     )
     await session.commit()
+    # Board c227: SECRET BALLOT, same rule this file's module docstring already
+    # states for every other response here - poll_id + a scope id, deliberately NO
+    # user_id/voter id anywhere in this call. The card asked for "poll_id +
+    # campus_id"; Poll has no campus_id column (chapter_id is what scopes it, see
+    # app/models/polls.py), so chapter_id is what is actually emitted - already in
+    # hand from the path, no extra query added purely for telemetry on every vote.
+    emit("poll_voted", poll_id=poll.id, chapter_id=chapter_id)
     counts = await _tally(session, poll.id)
     await _broadcast(session, poll, "updated", counts)
     my_option_id = await session.scalar(
