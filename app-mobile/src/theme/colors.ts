@@ -35,6 +35,12 @@ export interface Palette {
   successSoft: string;
   danger: string;
   dangerSoft: string;
+  /** The liked-heart red (board c222). Deliberately its OWN token rather than
+   *  reusing `danger`: that one means "money out, destructive, downvote active" per
+   *  DESIGN.md section 2, and a like is the opposite of all three. Same family of red so
+   *  the heart reads as the universal like, but the semantics stay separable - a later
+   *  change to destructive red must not silently repaint every liked post. */
+  like: string;
   warning: string;
   warningSoft: string;
 
@@ -110,6 +116,7 @@ export const light: Palette = {
   successSoft: "#E3F6EE",
   danger: "#E5484D",
   dangerSoft: "#FDECEC",
+  like: "#E5484D",
   warning: "#F5A623",
   warningSoft: "#FDF3E1",
 
@@ -153,6 +160,7 @@ export const dark: Palette = {
   successSoft: "rgba(43,213,151,0.16)",
   danger: "#FF6369",
   dangerSoft: "rgba(255,99,105,0.16)",
+  like: "#FF6369",
   warning: "#FFB84D",
   warningSoft: "rgba(255,184,77,0.16)",
 

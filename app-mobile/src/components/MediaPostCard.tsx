@@ -153,7 +153,21 @@ function ActionChip({
           justifyContent: "center",
         }}
       >
-        <Feather name={icon} size={18} color={active ? palette.accent : palette.inkSecondary} />
+        {/* c222: keyed on the ICON, not on `active` alone. This chip is shared by
+            heart, message-circle and send, and only the heart ever passes active
+            today - keying on active alone would work now and quietly turn a future
+            active comment or send chip red. */}
+        <Feather
+          name={icon}
+          size={18}
+          color={
+            active
+              ? icon === "heart"
+                ? palette.like
+                : palette.accent
+              : palette.inkSecondary
+          }
+        />
       </View>
       <Badge label={String(count)} tone={active ? "accent" : "neutral"} />
     </Pressable>
@@ -233,7 +247,14 @@ function InlineAction({
         opacity: pressed ? 0.7 : 1,
       })}
     >
-      <Feather name={icon} size={15} color={active ? palette.accent : palette.inkFaint} />
+      {/* c222: same icon-keyed rule as ActionChip above. */}
+      <Feather
+        name={icon}
+        size={15}
+        color={
+          active ? (icon === "heart" ? palette.like : palette.accent) : palette.inkFaint
+        }
+      />
       <AppText
         variant="caption"
         tone={active ? "accent" : "tertiary"}

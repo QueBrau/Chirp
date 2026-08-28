@@ -30,6 +30,7 @@ never cluttered. Anonymous (Chirps) content gets playful pastel treatment.
 | success | #17A673 | money in, confirmations |
 | successSoft | #E3F6EE | success chip bg |
 | danger | #E5484D | money out, destructive, downvote active |
+| like | #E5484D | a liked post's heart. Its OWN token, not `danger` (board c222) |
 | dangerSoft | #FDECEC | danger chip bg |
 | warning | #F5A623 | pending states |
 | chirpTints | #FFF3E9 / #EDF6FF / #F3EDFF / #EAF8F1 | rotating card tints on Chirps (by index % 4) |
