@@ -34,7 +34,7 @@ its own card.
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -585,9 +585,21 @@ async def upsert_rsvp(
     return EventRsvpOut.model_validate(rsvp)
 
 
+# How long a LIVE public event may be served from a cache. Short, and the number is a
+# SAFETY decision rather than a performance one (board c218): the dangerous staleness is
+# serving "the party is on" after it was called off, which sends people to an address.
+# Sixty seconds bounds that. A going_count sixty seconds behind is harmless by
+# comparison, which is why the count does not get a say in this number.
+PUBLIC_EVENT_MAX_AGE_SECONDS = 60
+# A CANCELED event may be cached far longer, because cancellation is terminal - there is
+# no transition back to "on", so the direction that could hurt someone does not exist.
+PUBLIC_EVENT_CANCELED_MAX_AGE_SECONDS = 3600
+
+
 @router.get("/public/events/{event_id}")
 async def get_public_event(
     event_id: uuid.UUID,
+    response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> PublicEventOut:
     """One event, to anyone at all. NO AUTHENTICATION.
@@ -625,6 +637,24 @@ async def get_public_event(
             models.EventRsvp.status == "going",
         )
     )
+
+    # `public`, not `private`: letting SHARED caches serve this is the entire point.
+    # This route exists to be pasted into a group chat, so one popular party is
+    # thousands of requests for one id, and every one of them currently costs three
+    # Postgres round trips (event, chapter, going count) on the scarcest resource in the
+    # system. Nothing here varies by caller - the route is unauthenticated and
+    # PublicEventOut carries no viewer-specific field - so a shared cache is safe in a
+    # way it is not for any other read in this app.
+    #
+    # THIS HEADER IS THE PRECONDITION FOR A CDN, not a replacement for one. A CDN put in
+    # front of Cloud Run today would cache nothing, because nothing in the response
+    # tells it that it may.
+    max_age = (
+        PUBLIC_EVENT_CANCELED_MAX_AGE_SECONDS
+        if event.canceled_at is not None
+        else PUBLIC_EVENT_MAX_AGE_SECONDS
+    )
+    response.headers["Cache-Control"] = f"public, max-age={max_age}"
 
     return PublicEventOut(
         id=event.id,
