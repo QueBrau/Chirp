@@ -147,7 +147,7 @@ export default function ModerationScreen() {
   const doDismiss = async (report: ContentReportOut) => {
     setWorkingReportId(report.id);
     try {
-      await resolveReport(report.id, "dismissed", "Reviewed — no action needed");
+      await resolveReport(report.id, "dismissed", "Reviewed, no action needed");
       closeReport(report.id);
     } catch (error) {
       showApiError(error, "Couldn't dismiss that report");
@@ -220,7 +220,7 @@ export default function ModerationScreen() {
                   {chirpId === null ? (
                     <AppText variant="caption" tone="tertiary">
                       Removal isn't available for {TARGET_LABELS[report.target_type].toLowerCase()}{" "}
-                      reports yet — dismiss it once you've reviewed it.
+                      reports yet. Dismiss it once you've reviewed it.
                     </AppText>
                   ) : null}
 

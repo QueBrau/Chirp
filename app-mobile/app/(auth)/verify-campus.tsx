@@ -246,7 +246,7 @@ function sendError(err: unknown): string {
     // situation is identical either way: codes cannot be sent, it is our fault, and
     // there is nothing for them to fix. Two branches would mean two copies of the same
     // sentence to keep in sync.
-    return "We can't send verification codes just yet — that's on us, not you. Hang tight; your org tools all still work in the meantime.";
+    return "We can't send verification codes just yet, and that's on us, not you. Hang tight; your org tools all still work in the meantime.";
   }
   return "Something went wrong. Try again.";
 }

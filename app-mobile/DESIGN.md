@@ -282,10 +282,20 @@ Generic-clean is not enough. Every screen must pass these:
 
 **No emojis. Anywhere.** Not in UI, not in copy, not in placeholder content, not
 in icons — vector icons (Feather) or geometric Views only. Emoji reads as AI slop
-(product decision, Aug 11). Also: no pure black #000 in light mode. No borders +
-heavy shadow together at full strength. No more than one HeroCard per screen. No
-accent-colored body text. No dense screens — if it feels full, split into cards.
-No new colors outside §2.
+(product decision, Aug 11).
+
+**No em dashes in UI copy.** Not in labels, captions, empty states, alerts, or mock
+content. An em dash reads as AI-written for the same reason emoji does (product
+decision, braul, Aug 27, board c220). Use a full stop when the two halves are
+independent clauses, a comma when the second half explains the first, and a colon
+when it introduces a list. Do NOT reach for a semicolon as a substitute; it reads
+the same way. This is about the DASH, not the hyphen: `e-board`, `campus-wide`,
+`append-only` and `as-is` are ordinary compound words and stay. Code comments are
+not UI and are out of scope.
+
+Also: no pure black #000 in light mode. No borders + heavy shadow together at full
+strength. No more than one HeroCard per screen. No accent-colored body text. No
+dense screens — if it feels full, split into cards. No new colors outside §2.
 
 ## 11. Data visualisation (Aug 18) — charts are computed, not styled
 

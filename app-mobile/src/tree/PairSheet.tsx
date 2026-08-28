@@ -229,7 +229,7 @@ export function PairSheet({
         setConflictFromServer(true);
         setError(null);
       } else if (err instanceof ApiError && err.detail === "lineage_cycle") {
-        setError("That pairing would loop the tree — a big can't also be their little's descendant.");
+        setError("That pairing would loop the tree. A big can't also be their little's descendant.");
       } else {
         setError(err instanceof ApiError ? err.detail : "Something went wrong. Try again.");
       }
@@ -438,7 +438,7 @@ export function PairSheet({
                   </View>
                   <AppText variant="caption" tone="secondary">
                     {currentBigName
-                      ? `${little.name} already has a big on record — ${currentBigName}. `
+                      ? `${little.name} already has a big on record: ${currentBigName}. `
                       : `${little.name} already has a big on record. `}
                     Saving replaces that pairing
                     {big ? `, and ${little.name} will be asked to confirm ${big.name} instead` : ""}.

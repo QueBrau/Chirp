@@ -408,7 +408,7 @@ export function CreateSheet({
                 />
                 <ListRow
                   title="Video"
-                  subtitle="Coming soon — media posting isn't wired up yet"
+                  subtitle="Coming soon. Media posting isn't wired up yet"
                   divider
                   left={<OptionIcon icon="video" muted />}
                   right={<Badge label="Soon" />}
@@ -521,7 +521,7 @@ export function CreateSheet({
                 {canChooseAudience ? (
                   <AudienceChoice
                     title="My chapter only"
-                    description="Private — only your chapter's members can see it."
+                    description="Private. Only your chapter's members can see it."
                     selected={audience === "org"}
                     onPress={() => setAudience("org")}
                   />
@@ -529,7 +529,7 @@ export function CreateSheet({
                 {canChooseAudience ? (
                   <AudienceChoice
                     title={`Everyone at ${campusLabel}`}
-                    description="Public to your whole campus — people outside your chapter can see it too."
+                    description="Public to your whole campus, so people outside your chapter can see it too."
                     selected={audience === "campus"}
                     onPress={() => setAudience("campus")}
                   />
@@ -542,7 +542,7 @@ export function CreateSheet({
                 {canChooseAudience && isActiveMember ? (
                   <AudienceChoice
                     title="Actives only"
-                    description="Private — only active members of your chapter can see it."
+                    description="Private. Only active members of your chapter can see it."
                     selected={audience === "org_actives"}
                     onPress={() => setAudience("org_actives")}
                   />

@@ -177,7 +177,7 @@ export default function HistorianScreen() {
             {tree === null || tree.families.length === 0 ? (
               <EmptyState
                 title="No families yet"
-                message="Start one — every big/little pairing can live in a family, and the tree colors itself by them."
+                message="Start one. Every big/little pairing can live in a family, and the tree colors itself by them."
                 actionLabel="New family"
                 onAction={() => setFamilySheetOpen(true)}
               />
@@ -261,7 +261,7 @@ export default function HistorianScreen() {
             <View>
               <SectionHeader
                 title="Waiting on a confirm"
-                caption="Each little confirms their own big — nothing to do here but nudge"
+                caption="Each little confirms their own big, so there is nothing to do here but nudge"
               />
               <Card>
                 <View style={{ gap: spacing.sm }}>

@@ -502,7 +502,7 @@ export default function SecretaryScreen() {
       return;
     }
     if (new Set(options.map((o) => o.toLowerCase())).size !== options.length) {
-      setPollError("Two options read the same — the vote would split between them.");
+      setPollError("Two options read the same, so the vote would split between them.");
       return;
     }
 
@@ -553,7 +553,7 @@ export default function SecretaryScreen() {
     <Screen title="Secretary" subtitle="Minutes, polls, and attendance">
       <View style={{ gap: spacing.xl }}>
         <View>
-          <SectionHeader title="New meeting" caption="Title and date — take minutes and attendance after" />
+          <SectionHeader title="New meeting" caption="Title and date. Take minutes and attendance after" />
           <Card>
             <View style={{ gap: spacing.lg }}>
               <View>
@@ -593,7 +593,7 @@ export default function SecretaryScreen() {
         <View>
           <SectionHeader
             title="Polls"
-            caption="Open a vote — results update as members tap"
+            caption="Open a vote. Results update as members tap"
           />
           <Card style={{ marginBottom: spacing.md }}>
             <View style={{ gap: spacing.lg }}>

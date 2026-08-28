@@ -349,7 +349,11 @@ export default function ProfileScreen() {
                     subtitle={alumniProfile?.title ?? undefined}
                   />
                   <ListRow
-                    title={`Class of ${alumniProfile?.grad_year ?? "—"}`}
+                    title={
+                      alumniProfile?.grad_year
+                        ? `Class of ${alumniProfile.grad_year}`
+                        : "Add your class year"
+                    }
                     subtitle={alumniProfile?.industry ?? undefined}
                   />
                   <ListRow
@@ -364,7 +368,7 @@ export default function ProfileScreen() {
                 <View>
                   <ListRow
                     title="Notifications"
-                    subtitle="Content-free push — TODO(milestone-4)"
+                    subtitle="Content-free push. Not wired up yet."
                     left={<SettingsIconWell name="bell" />}
                   />
                   <ListRow

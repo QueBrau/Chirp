@@ -79,7 +79,7 @@ function StandInNotice() {
       <View style={{ flex: 1, gap: 2 }}>
         <AppText variant="bodyBold">Standing in for the president</AppText>
         <AppText variant="caption" tone="secondary">
-          This is what the president sees — roster, open invites, and dues status — so
+          This is what the president sees: roster, open invites, and dues status, so
           you can cover for them. Nothing on this screen can be changed; edits still
           happen on the president's own dashboard.
         </AppText>

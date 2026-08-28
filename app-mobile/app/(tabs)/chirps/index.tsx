@@ -259,7 +259,7 @@ export default function ChirpScreen() {
           </AppText>
         </View>
         <AppText variant="caption" tone={headerTone} style={{ marginTop: spacing.xs }}>
-          Anonymous and campus-wide — no names, ever.
+          Anonymous and campus-wide. No names, ever.
         </AppText>
       </View>
 

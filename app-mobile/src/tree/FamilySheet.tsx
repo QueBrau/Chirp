@@ -173,7 +173,7 @@ export function FamilySheet({ visible, onClose, chapterId, existing, onSaved }: 
             </View>
             {takenName !== null ? (
               <AppText variant="caption" tone="tertiary">
-                {takenName} already wears this color — two families sharing it will be hard to
+                {takenName} already wears this color, and two families sharing it will be hard to
                 tell apart on the tree.
               </AppText>
             ) : (

@@ -295,7 +295,7 @@ export default function TreeScreen() {
               <AppText variant="caption" tone="accent" style={muliMedium}>
                 {[
                   pending > 0 ? `${pending} unconfirmed` : null,
-                  `${unplaced} unplaced — pair them`,
+                  `${unplaced} unplaced, pair them`,
                 ]
                   .filter(Boolean)
                   .join(" · ")}

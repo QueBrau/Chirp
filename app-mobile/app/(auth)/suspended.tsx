@@ -88,7 +88,7 @@ export default function SuspendedScreen() {
           ) : null}
           <AppText variant="body" tone="secondary">
             You won't be able to use Chirp while your account is suspended.
-            This isn't automatic — a moderator made this decision.
+            This isn't automatic. A moderator made this decision.
           </AppText>
         </View>
 

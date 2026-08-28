@@ -267,7 +267,7 @@ export default function TreasurerScreen() {
       // A decision is one-way; 409 `already_decided` means someone else beat us
       // to it. That's a stale UI, not a real error — refetch instead of alarming.
       if (error instanceof ApiError && error.status === 409) {
-        showAlert("Already decided", "Someone else already decided this request — refreshing.");
+        showAlert("Already decided", "Someone else already decided this request. Refreshing.");
         try {
           setApprovals(await listSpendApprovals(chapterId));
         } catch (refetchError) {
@@ -361,7 +361,7 @@ export default function TreasurerScreen() {
       message:
         `${signedCents >= 0 ? "+" : ""}${dollars(signedCents)} · ${typeLabel}` +
         (description.trim().length > 0 ? `\n${description.trim()}` : "") +
-        "\n\nThis entry is permanent — the ledger is append-only. It can't be edited or " +
+        "\n\nThis entry is permanent. The ledger is append-only. It can't be edited or " +
         "deleted, only offset later by a separate correction entry.",
       confirmLabel: "Add entry",
       onConfirm: () => void submitEntry(signedCents),
@@ -456,7 +456,7 @@ export default function TreasurerScreen() {
           <View>
             <SectionHeader
               title="Open a cycle"
-              caption={cycle !== undefined ? "Starts a new cycle — the old one stays as-is" : "No cycle yet — members can't be billed until one exists"}
+              caption={cycle !== undefined ? "Starts a new cycle. The old one stays as-is" : "No cycle yet. Members can't be billed until one exists"}
             />
             <Card>
               <View style={{ gap: spacing.lg }}>
@@ -592,7 +592,7 @@ export default function TreasurerScreen() {
                   </View>
                   {dues.overCollected ? (
                     <AppText variant="caption" tone="secondary" style={{ marginTop: spacing.xs }}>
-                      {`More came in than this cycle bills — the bar is capped at full, the figure is not.`}
+                      {`More came in than this cycle bills, so the bar is capped at full and the figure is not.`}
                     </AppText>
                   ) : null}
                 </View>
@@ -636,7 +636,7 @@ export default function TreasurerScreen() {
                   </View>
                   <AppText variant="caption" tone="tertiary">
                     Chirp takes 1% on card and 2% on bank transfers. Chargebacks are the
-                    chapter&apos;s — Chirp never holds your money.
+                    chapter&apos;s. Chirp never holds your money.
                   </AppText>
                 </>
               ) : (
@@ -736,7 +736,7 @@ export default function TreasurerScreen() {
         </View>
 
         <View>
-          <SectionHeader title="Add entry" caption="Permanent — corrections offset, never edit" />
+          <SectionHeader title="Add entry" caption="Permanent. Corrections offset, never edit" />
           <Card>
             <View style={{ gap: spacing.lg }}>
               <View>
@@ -850,7 +850,7 @@ export default function TreasurerScreen() {
         <View>
           <SectionHeader
             title="Ledger"
-            caption="Append-only — corrections are new offsetting entries"
+            caption="Append-only. Corrections are new offsetting entries"
             right={
               <Pressable
                 accessibilityRole="button"
