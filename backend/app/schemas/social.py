@@ -97,6 +97,18 @@ class FeedPostOut(_Schema):
     liked_by_me: bool
 
 
+class MyPostCountOut(_Schema):
+    """Response for GET /chapters/{chapter_id}/posts/count (board c217).
+
+    Deliberately carries no user_id: the number is the CALLER'S own, taken from
+    the auth dependency, and echoing whose it is would invite a client to start
+    passing one. See the route's docstring for the whole argument.
+    """
+
+    chapter_id: uuid.UUID
+    count: int
+
+
 # ---- likes ----
 
 

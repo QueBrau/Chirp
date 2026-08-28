@@ -141,6 +141,27 @@ export async function createPost(chapterId: string, body: PostCreate): Promise<P
   return request<PostOut>(`/chapters/${chapterId}/posts`, { method: "POST", body });
 }
 
+/** Response of GET /chapters/{chapter_id}/posts/count (board c217). No user id in
+ * it, because there is none in the request: the server counts the CALLER'S posts. */
+export interface MyPostCountOut {
+  chapter_id: string;
+  count: number;
+}
+
+/**
+ * How many posts the caller has written in this chapter, as one server-side
+ * aggregate (board c217).
+ *
+ * Do NOT go back to listPosts().then(filter by author_id) for this. That is what
+ * the profile screen used to do, and c210 capped the list route at 50 with a
+ * cursor, so past 50 posts the filter silently returned a number that was too
+ * small. The server applies the same visibility rules the listing does, so this
+ * count and the feed always agree.
+ */
+export async function countMyPosts(chapterId: string): Promise<MyPostCountOut> {
+  return request<MyPostCountOut>(`/chapters/${chapterId}/posts/count`);
+}
+
 /**
  * Post straight to the campus feed, with no chapter involved (c71). This is the
  * only create route available to a student who belongs to no org, and it always
