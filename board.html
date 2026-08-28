@@ -2288,11 +2288,11 @@
     },
     {
       "id": "c213",
-      "col": "backlog",
+      "col": "progress",
       "owner": "court",
       "tag": "infra",
       "area": "orgs",
-      "title": "c213 [critical/L, c209 finding] WebSockets share Cloud Run's HTTP concurrency budget: every open socket holds one of 80 slots per instance for the whole app session, so ~320 concurrently-online users starve REST - and raising maxScale breaks the S2 pool arithmetic (the two levers fight). DESIGN NEEDED before code: split /ws to its own Cloud Run service (own scaling, own pool budget) vs dedicated always-on realtime instance. Court scopes options + costs for Jose.",
+      "title": "c213 GO Aug 27 (Jose: launch NEXT WEEK) - BUILDING the WS split: second Cloud Run service chirp-ws (same image, /ws only), own scaling + tiny pool. Free-arithmetic fallback if the tier decision waits: api maxScale 4->3 (15) + ws maxScale 2 x pool 1+1 (4) + reserved 4 = 23 <= 25. Worker on client WS-URL configurability; manager on service infra. - and raising maxScale breaks the S2 pool arithmetic (the two levers fight). DESIGN NEEDED before code: split /ws to its own Cloud Run service (own scaling, own pool budget) vs dedicated always-on realtime instance. Court scopes options + costs for Jose.",
       "detail": "This is the honest ceiling for 100s-1000s concurrent. L effort; sequenced after the S fixes land."
     },
     {
@@ -2384,6 +2384,42 @@
       "area": "orgs",
       "title": "c217 Profile 'posts by me' stat will undercount once a chapter passes c210's 50-post first page - app/(tabs)/profile/index.tsx (~201) client-filters the FULL listPosts() response by author_id; after the cap it only sees page one. Found by c210's worker during the mobile-caller sweep (flagged in PR #136's body, not silently shipped). Fix: dedicated count endpoint (or fold into an existing summary route) + swap the screen off the full-history filter. Theoretical today (no prod chapter near 50 posts) - fix before alpha volume.",
       "detail": "Do NOT un-cap the route to fix a stat. Backend: a count is one cheap aggregate. Mobile: profile screen swaps one call. Cursor adoption for the org feed screen itself is a separate, larger follow-up if infinite scroll is wanted - the segment currently renders page one fine."
+    },
+    {
+      "id": "c224",
+      "col": "progress",
+      "owner": "court",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c224 PRE-LAUNCH MONEY-PATH RE-SWEEP Aug 27 (launch next week, real payments) - no dedicated adversarial sweep since payment plans went LIVE. Targets the deployed state: plans/installments vs one-shot dues interplay, concurrent attempts at volume, webhook retries/ordering, refund/correction chains, reservation lifecycle. Two find lenses -> refute-by-default verify -> findings to cards. Read-only.",
+      "detail": "Invariants under test (never weaken): uq_ledger_dues_payment_once; dues_contributions_subquery nets installments+corrections; overview and pay-guard agree; retrieve-not-create on same-rail open reservation; cancel-on-exception only in create branch; active-plan member -> on_payment_plan."
+    },
+    {
+      "id": "c225",
+      "col": "backlog",
+      "owner": "J",
+      "tag": "infra",
+      "area": "orgs",
+      "title": "c225 LAUNCH DECISION (Jose, money, ONE CONFIRM NEEDED): DB tier - f1-micro's ~25 connections cannot fund chirp-api + chirp-ws + jobs, shared-core throttles under real payment volume, HA structurally unavailable. Recommended for launch: db-g1-small ~$25-35/mo (~50 conns) minimum; db-custom-1-3840 ~$50/mo if HA comes too (c215b) - reply 'tier go' (+ which) and manager runs it (sql instances patch allow-listed, ~5min restart at a quiet moment).",
+      "detail": "Jose's 'continue the resilience bundle' message quoted the old post-alpha framing, so this spend gets one explicit confirm rather than silent execution. Free fallback (api maxScale 3) ships c213 either way."
+    },
+    {
+      "id": "c226",
+      "col": "backlog",
+      "owner": "court",
+      "tag": "infra",
+      "area": "orgs",
+      "title": "c226 PRE-LAUNCH LOAD TEST - the S1/S2/S3 ceilings are computed, never measured. Bounded scripted test (auth'd HTTP mix + WS connect storm) against prod at a quiet hour AFTER c213 lands; abort criteria + rate caps written before it runs; stays clear of Stripe and email. NEEDS JOSE'S GO before synthetic load touches prod.",
+      "detail": "Measures: p95 at 200 concurrent, pool-checkout 503 rate, WS capacity per ws instance, cold starts."
+    },
+    {
+      "id": "c227",
+      "col": "progress",
+      "owner": "court",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c227 TELEMETRY BUILD Aug 27 (Jose GO on c216) - logs->BigQuery first pass: structured app.analytics JSON events at key actions (signup, session, post, message send, rsvp, payment attempt/outcome), Cloud Logging sink to a BigQuery dataset. PRIVACY RULE (the c216 sign-off, enforced in code): NO event may carry or link chirp authorship - the pipeline must be unable to deanonymize what the API withholds. Worker on the emitter; manager on the sink infra.",
+      "detail": "c216 stays as the epic; this card is the first pass. No schema migration, no client SDK. Event volume rides Cloud Logging free tier at launch scale."
     }
   ],
   "decisions": [
@@ -2527,7 +2563,8 @@
     "Aug 27 - APPLE DEVELOPER: Jose + Q are BOTH enrolling in Apple Developer accounts tomorrow (Aug 28). Un-parks the 'enrollment parked until launch prep' stance. Touches: c10 (TestFlight becomes reachable), c169 (Apple sign-in chain per SETUP-FIREBASE section 5; guideline 4.8 makes it mandatory once Google ships), c39 (real-device distribution). No pool work spawned until the accounts exist. Also Aug 27: Jose asked the manager to run the prod migration himself - one clean attempt after PR #90 lands (single window, expect 0018 head); if the machine-side classifier blocks prod-DB access again (as it did Aug 24 even with Jose's explicit go), the paste goes back to Jose immediately.",
     "Aug 27 - deploy window closed: prod chirp-api-00035-6zk at DB head 0018. Classifier behavior flipped: migration (previously blocked) went through for the manager, gcloud run deploy (previously allowed) blocked twice - Jose ran the deploy paste. If manager should deploy in future windows, Jose adds a Bash allow rule for gcloud run deploy.",
     "Aug 27 - c209 DDIA batch COMPLETE: all four pool fixes merged same-day (c210 feed cap 29f76fe, c211 event-loop 1a26c9a, c212 inbox index cbc34ca, c214 email compensation a512618). Next deploy needs migrate FIRST, expect 0027 (head). Remaining from the sweep: c213 (WS/HTTP split - court designs), c215 (DB resilience - Jose), c216 (telemetry - Jose), c217 (profile stat count endpoint - pool).",
-    "Aug 27 - Jose: gcloud run deploy allow rule added to settings.local.json - manager is standing deployer again (proven same hour: 00036-f4h deployed by manager, DDIA batch live on DB 0027). c215a restore rehearsal approved and running; c215b HA tier deferred past alpha."
+    "Aug 27 - Jose: gcloud run deploy allow rule added to settings.local.json - manager is standing deployer again (proven same hour: 00036-f4h deployed by manager, DDIA batch live on DB 0027). c215a restore rehearsal approved and running; c215b HA tier deferred past alpha.",
+    "Aug 27 - LAUNCH TARGET NEXT WEEK (Jose). c213 GO and building; c224 money re-sweep running; c227 telemetry GO and building (privacy rule: nothing may link chirp authorship); c225 DB tier = one priced confirm to Jose; c226 load test pending Jose go. RED FLAG restated: c11 - not one test-mode payment (card OR ACH) has ever cleared end to end; it MUST pass in the device/Apple window before launch. c71 fast path: Q (real student) confirms receipt at his own .edu mailbox - no school mailbox for Jose needed."
   ]
 }</script>
 <script>
