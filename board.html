@@ -2441,11 +2441,11 @@
     },
     {
       "id": "c230",
-      "col": "backlog",
+      "col": "progress",
       "owner": "court",
       "tag": "backend",
       "area": "orgs",
-      "title": "c230 [HIGH, c224 F-race, BOTH lenses] Cross-table TOCTOU: member self-serve pay racing treasurer plan-create leaves a live reservation AND an active plan (no constraint spans dues_payment_intents x dues_payment_plans; READ COMMITTED; wide network-I/O window). Webhook then appends full dues_payment while installments also land = real double collection. FIX (wave 2, after c231-c234 merge): DB-level cross-table guard - migration 0028 CLAIMED HERE (parents on 0027) - plus honest 409s at both insert sites; concurrency test with two sessions interleaved.",
+      "title": "c230 PR #147 OPEN Aug 28 - migration 0028 + BEFORE ROW triggers on both tables, advisory-lock-serialized, marker-mapped to the same 409s. Worker stalled 37min from done; manager verified line-level and committed. 10 guard tests + 93 money-path tests green. Bonus find: create_dues_payment_plan's flush() sat outside its try, so even the EXISTING unique-index race would have 500'd. Skeptic attacking the lock semantics + except-clause ordering; merge on PASS + CI. - migration 0028 CLAIMED HERE (parents on 0027) - plus honest 409s at both insert sites; concurrency test with two sessions interleaved.",
       "detail": "Refuter-verified evidence on the c224 outputs. Repo convention holds: the read picks the honest 409 reason, the constraint is the real guard."
     },
     {
