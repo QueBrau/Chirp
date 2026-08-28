@@ -167,6 +167,12 @@ class DuesPaymentIntent(Base):
     Only 'open' and 'succeeded' hold the reservation: a genuinely failed or
     canceled payment must stay retryable, which is why payment_failed and
     payment_intent.canceled move the row out of those states.
+
+    uq_dues_intent_live only guards THIS table. The cross_table_dues_guard_intents
+    trigger (migration 0028, board c230) is where the OTHER half of this row's
+    invariant lives: a row entering 'open' or 'succeeded' here is refused if the
+    same (dues_cycle_id, user_id) already has an ACTIVE DuesPaymentPlan, closing
+    the TOCTOU a plain read-then-insert left between this table and that one.
     """
 
     __tablename__ = "dues_payment_intents"
@@ -218,6 +224,12 @@ class DuesPaymentPlan(Base):
     active plan per (dues_cycle_id, user_id) at the database, the same shape as
     uq_dues_intent_live (c51) and uq_role_terms_open_per_membership (c83) — a second
     create-plan call for the same cycle/member loses the race here, not in the route.
+
+    That index only guards THIS table. The cross_table_dues_guard_plans trigger
+    (migration 0028, board c230) is where the OTHER half of this row's invariant
+    lives: a row entering 'active' here is refused if the same
+    (dues_cycle_id, user_id) already has a LIVE DuesPaymentIntent reservation,
+    closing the TOCTOU a plain read-then-insert left between this table and that one.
     """
 
     __tablename__ = "dues_payment_plans"
