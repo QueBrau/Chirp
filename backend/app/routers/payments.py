@@ -332,6 +332,11 @@ async def create_dues_payment_intent(
                 cycle_id=cycle.id,
                 user_id=user.id,
                 chapter_id=chapter.id,
+                # c231: nonced per reservation row, not just (cycle, member, rail) —
+                # see create_dues_payment_intent's docstring for why a bare
+                # (cycle, member, rail) key let a declined-card retry's FRESH
+                # reservation collide with the dead one it superseded.
+                reservation_id=reservation.id,
             )
         except Exception:
             # Stripe never created an intent, so the reservation must not keep
@@ -344,8 +349,29 @@ async def create_dues_payment_intent(
             await session.commit()
             raise
 
-        reservation.stripe_payment_intent_id = intent.id
-        await session.commit()
+        reservation_id = reservation.id
+        try:
+            reservation.stripe_payment_intent_id = intent.id
+            await session.commit()
+        except IntegrityError:
+            # Belt, not the primary fix (c231): uq_dues_intent_stripe_id spans every
+            # status, so if the id Stripe just handed back is already claimed by a
+            # DIFFERENT reservation row, this commit loses the race instead of
+            # silently stealing it. Expected to be unreachable once c231's per-
+            # reservation nonce above is fully rolled out; kept as a belt for the
+            # deploy window where an old-format (cycle, member, rail) key can still
+            # be live in Stripe's 24h idempotency cache and get replayed by an
+            # instance still running the old code. This reservation was never live
+            # at Stripe under that id — still the create branch, so canceling it is
+            # safe per the invariant above — and the client's next retry reserves a
+            # fresh row with a fresh idempotency key rather than hitting a 500.
+            await session.rollback()
+            stale = await session.get(models.DuesPaymentIntent, reservation_id)
+            if stale is not None:
+                stale.status = "canceled"
+                stale.updated_at = datetime.now(timezone.utc)
+                await session.commit()
+            raise conflict("payment_intent_conflict") from None
 
     customer_session_secret = await stripe_service.create_customer_session(
         account_id, customer_id
