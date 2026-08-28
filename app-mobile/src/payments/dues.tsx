@@ -123,9 +123,19 @@ export interface PlanProgressCardProps {
 export function PlanProgressCard({ cycleName, plan }: PlanProgressCardProps): ReactElement {
   const palette = useTheme();
   const installments = plan.installments; // seq order, per _load_installments
-  const paid = installments.filter((installment) => installment.paid_at !== null);
+  // c235: paid state comes from effective_paid, never paid_at. paid_at is
+  // write-once history, so a refunded installment keeps it forever and this card
+  // used to keep counting that money as collected while the ledger said it was
+  // gone. effective_paid nets corrections against the installment's ledger entry,
+  // so a refund drops out of the count, the meter and the money total together.
+  const paid = installments.filter((installment) => installment.effective_paid);
   const paidCents = paid.reduce((sum, installment) => sum + installment.amount_cents, 0);
-  const next = installments.find((installment) => installment.paid_at === null) ?? null;
+  const next = installments.find((installment) => !installment.effective_paid) ?? null;
+  // Recorded once, then refunded back out. Worth calling out on its own: the row
+  // silently reverting to unpaid is exactly the disagreement c235 is here to end.
+  const refunded = installments.filter(
+    (installment) => installment.paid_at !== null && !installment.effective_paid,
+  );
 
   return (
     <Card>
@@ -153,7 +163,18 @@ export function PlanProgressCard({ cycleName, plan }: PlanProgressCardProps): Re
 
         <View style={{ gap: spacing.sm }}>
           {installments.map((installment) => {
-            const isPaid = installment.paid_at !== null;
+            const isPaid = installment.effective_paid; // c235: status, not history
+            // paid_at set but no longer effective_paid: recorded, then refunded.
+            // Rendering it as plain "unpaid" would be honest about the balance but
+            // would erase the fact that the member did pay once, so it gets its own
+            // row treatment instead of falling in with the never-paid ones.
+            const wasRefunded = !isPaid && installment.paid_at !== null;
+            // effective_paid is only ever True when paid_at is set (backend
+            // _installment_out starts from `paid_at is not None`), but that is the
+            // server's invariant, not something this type can promise — so the
+            // date is narrowed here rather than asserted at the call.
+            const paidOn =
+              installment.paid_at !== null ? installmentPaidDate(installment.paid_at) : null;
             return (
               <View
                 key={installment.id}
@@ -166,23 +187,48 @@ export function PlanProgressCard({ cycleName, plan }: PlanProgressCardProps): Re
               >
                 <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
                   <Feather
-                    name={isPaid ? "check-circle" : "circle"}
+                    name={isPaid ? "check-circle" : wasRefunded ? "rotate-ccw" : "circle"}
                     size={16}
-                    color={isPaid ? palette.success : palette.inkFaint}
+                    color={
+                      isPaid ? palette.success : wasRefunded ? palette.warning : palette.inkFaint
+                    }
                   />
-                  <AppText variant="body" tone={isPaid ? "primary" : "secondary"}>
+                  <AppText variant="body" tone={isPaid || wasRefunded ? "primary" : "secondary"}>
                     {`Installment ${installment.seq}`}
                   </AppText>
                 </View>
-                <AppText variant="caption" tone={isPaid ? "success" : "tertiary"}>
-                  {installment.paid_at !== null
-                    ? `${dollars(installment.amount_cents)} · paid ${installmentPaidDate(installment.paid_at)}`
-                    : `${dollars(installment.amount_cents)} · due ${installmentDueDate(installment.due_date)}`}
+                <AppText
+                  variant="caption"
+                  tone={isPaid ? "success" : wasRefunded ? "warning" : "tertiary"}
+                >
+                  {isPaid && paidOn !== null
+                    ? // paid_at is still the right source for WHEN: it is the instant
+                      // the treasurer recorded this, and effective_paid above already
+                      // vouched that the money is genuinely still in hand.
+                      `${dollars(installment.amount_cents)} · paid ${paidOn}`
+                    : wasRefunded
+                      ? // Deliberately not dated: paid_at is the RECORDED date, and the
+                        // response carries no refund date, so "refunded March 3" would
+                        // be a made-up fact. The note below the list explains it.
+                        `${dollars(installment.amount_cents)} · refunded`
+                      : `${dollars(installment.amount_cents)} · due ${installmentDueDate(installment.due_date)}`}
                 </AppText>
               </View>
             );
           })}
         </View>
+
+        {refunded.length > 0 ? (
+          // c235: without this, an installment that quietly flips back to unpaid
+          // after a refund looks like the app losing track of a payment. Say what
+          // happened and who can explain it, rather than leaving the member to
+          // guess whether their money is gone.
+          <AppText variant="caption" tone="warning">
+            {refunded.length === 1
+              ? "One installment was refunded after it was recorded, so it counts as unpaid again. Your treasurer can tell you why."
+              : `${refunded.length} installments were refunded after they were recorded, so they count as unpaid again. Your treasurer can tell you why.`}
+          </AppText>
+        ) : null}
 
         <AppText variant="caption" tone="tertiary">
           Your treasurer records each installment as it comes in, so no action is needed here.

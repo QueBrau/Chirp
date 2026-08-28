@@ -33,7 +33,20 @@ export interface DuesCycleOut {
 /** Status of a member's installment plan for one dues cycle (c197). */
 export type DuesPaymentPlanStatus = "active" | "completed" | "canceled";
 
-/** One scheduled slice of a DuesPaymentPlanOut — routers/finance.py's DuesPlanInstallmentOut. */
+/**
+ * One scheduled slice of a DuesPaymentPlanOut — routers/finance.py's DuesPlanInstallmentOut.
+ *
+ * paid_at and effective_paid answer DIFFERENT questions, and c235 exists because
+ * this client was reading the first one for both. Per the backend schema's
+ * docstring: paid_at is HISTORY (write-once, set the moment a treasurer records
+ * the payment, never cleared even after the money moves back out), effective_paid
+ * is STATUS (derived per request, nets any corrections against this installment's
+ * ledger entry, and goes False once a refund takes the money back out).
+ *
+ * Rule for renderers: "is this still paid" reads effective_paid. paid_at is only
+ * for showing WHEN it was originally recorded, and for gating the record-payment
+ * action, which the backend claims on `paid_at IS NULL` (see dues-plans.tsx).
+ */
 export interface DuesPlanInstallmentOut {
   id: string;
   plan_id: string;
@@ -42,6 +55,7 @@ export interface DuesPlanInstallmentOut {
   due_date: string; // ISO date (YYYY-MM-DD) — a real scheduled date, honest to render
   paid_at: string | null; // real timestamp once a treasurer records the payment
   ledger_entry_id: string | null;
+  effective_paid: boolean; // c233/c235: current truth, False once refunded back out
 }
 
 /** Response of GET /chapters/{chapterId}/dues-cycles/{cycleId}/plans/mine — routers/finance.py. */

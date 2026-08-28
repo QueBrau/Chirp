@@ -196,33 +196,58 @@ export default function DuesScreen() {
             <SectionHeader title="Settled" />
             <Card>
               <View style={{ gap: spacing.md }}>
-                {settled.map((cycle) => (
-                  <View
-                    key={cycle.id}
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: spacing.sm,
-                    }}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <AppText variant="bodyBold">{cycle.name}</AppText>
-                      <AppText variant="caption" tone="secondary">
-                        {dollars(cycle.amount_cents)}
-                      </AppText>
+                {settled.map((cycle) => {
+                  // c235: a plan reaches "completed" on the backend's paid_at count
+                  // (record_dues_installment_payment's remaining_unpaid), which a
+                  // refund never reverses — so a cycle can sit in Settled with an
+                  // installment whose money has gone back out. The section placement
+                  // follows the server's status, but the badge must not say
+                  // "complete" when the plan's own installments no longer agree.
+                  const settledPlan = planByCycle.get(cycle.id) ?? null;
+                  const planRefunded =
+                    !paidCycleIds.has(cycle.id) &&
+                    settledPlan !== null &&
+                    settledPlan.installments.some((i) => i.paid_at !== null && !i.effective_paid);
+                  return (
+                    <View
+                      key={cycle.id}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: spacing.sm,
+                      }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <AppText variant="bodyBold">{cycle.name}</AppText>
+                        <AppText variant="caption" tone="secondary">
+                          {dollars(cycle.amount_cents)}
+                        </AppText>
+                        {planRefunded ? (
+                          <AppText variant="caption" tone="warning">
+                            An installment on this plan was refunded. Check with your treasurer
+                            before counting this cycle as done.
+                          </AppText>
+                        ) : null}
+                      </View>
+                      <Chip
+                        // paidCycleIds takes precedence per the backend's own guard
+                        // (create_dues_payment_intent / create_dues_payment_plan
+                        // enforce a member never has both a ledger dues_payment AND
+                        // a plan for the same cycle) — this is a label choice for
+                        // the rare edge case, not a claim that both are expected.
+                        label={
+                          paidCycleIds.has(cycle.id)
+                            ? "Paid"
+                            : planRefunded
+                              ? "Refunded"
+                              : "Plan complete"
+                        }
+                        variant={planRefunded ? "warning" : "success"}
+                      />
                     </View>
-                    <Chip
-                      // paidCycleIds takes precedence per the backend's own guard
-                      // (create_dues_payment_intent / create_dues_payment_plan
-                      // enforce a member never has both a ledger dues_payment AND
-                      // a plan for the same cycle) — this is a label choice for
-                      // the rare edge case, not a claim that both are expected.
-                      label={paidCycleIds.has(cycle.id) ? "Paid" : "Plan complete"}
-                      variant="success"
-                    />
-                  </View>
-                ))}
+                  );
+                })}
               </View>
             </Card>
           </View>
