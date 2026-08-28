@@ -172,6 +172,20 @@ async def retrieve_payment_intent(account_id: str, intent_id: str) -> stripe.Pay
     )
 
 
+async def cancel_payment_intent(account_id: str, intent_id: str) -> stripe.PaymentIntent:
+    """Best-effort cancel of an intent behind an abandoned reservation (board c234).
+
+    Callers must treat failure here as non-fatal: Stripe rejects cancellation once
+    an intent is already 'processing' or 'succeeded' (exactly the states where
+    abandoning our side is safe regardless — the money is already moving), and a
+    network error must not be allowed to block expiring the reservation, which is
+    what actually reopens the rail for the member.
+    """
+    return await stripe.PaymentIntent.cancel_async(
+        intent_id, api_key=_secret_key(), stripe_account=account_id
+    )
+
+
 def verify_webhook_event(payload: bytes, signature: str) -> stripe.Event:
     """Verify a webhook signature against the RAW body and return the parsed event.
 

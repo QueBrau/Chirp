@@ -1,7 +1,7 @@
 """Payments: Stripe Connect onboarding, dues PaymentIntents, and the webhook sink."""
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import func, select
@@ -27,6 +27,25 @@ from app.services import stripe_service
 
 router = APIRouter(tags=["payments"])
 logger = logging.getLogger(__name__)
+
+# c234: how long an 'open' reservation can sit unresolved before it is treated as
+# abandoned rather than a live rail-lock. This is a PRODUCT choice, not a Stripe
+# constraint — c231's per-reservation idempotency nonce means a superseded
+# reservation can no longer resurrect a cached Stripe intent, so there is no cache
+# window to protect here. 24h is chosen because it covers a member who steps away
+# mid-checkout (spotty connection, distracted, waiting on a bank prompt) and comes
+# back later the same day or the next morning to finish on the SAME rail, while
+# still being short enough that a genuinely abandoned attempt does not lock a
+# member out of switching rails, or retrying at all, for days. It intentionally
+# matches the number Stripe's own idempotency window used to use — not because the
+# two interact anymore, but because a second, unrelated meaning for "24h" here
+# would be a needless surprise to whoever reads this next.
+RESERVATION_TTL = timedelta(hours=24)
+
+# c234: PaymentIntent statuses that mean Stripe has moved past "waiting on the
+# member" — a same-rail retrieve landing on one of these must not hand the client
+# a client_secret that LOOKS like a fresh checkout.
+_INTENT_NOT_AWAITING_PAYMENT = {"processing", "succeeded"}
 
 
 def _onboarding_urls() -> tuple[str, str]:
@@ -276,6 +295,36 @@ async def create_dues_payment_intent(
         )
     )
     reservation = live.scalar_one_or_none()
+    if (
+        reservation is not None
+        and reservation.status == "open"
+        and reservation.created_at < datetime.now(timezone.utc) - RESERVATION_TTL
+    ):
+        # Abandoned (c234): never resolved by a webhook and long past any
+        # reasonable window for the member to still be mid-checkout. Best-effort
+        # cancel at Stripe so the stale intent cannot be confirmed out from under
+        # the rail switch below, but a failure here must NOT block the member —
+        # the DB row, not the Stripe side, is what actually gates uq_dues_intent_live.
+        if reservation.stripe_payment_intent_id is not None:
+            try:
+                await stripe_service.cancel_payment_intent(
+                    account_id, reservation.stripe_payment_intent_id
+                )
+            except Exception:
+                logger.warning(
+                    "c234: best-effort cancel failed for abandoned intent %s "
+                    "(reservation %s); expiring the reservation regardless",
+                    reservation.stripe_payment_intent_id,
+                    reservation.id,
+                )
+        # 'expired' is not a value the status CHECK constraint allows (migration
+        # 0010), so this reuses 'canceled' — the same retryable bucket
+        # _resolve_reservation already puts a genuinely failed/canceled payment in.
+        reservation.status = "canceled"
+        reservation.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+        reservation = None
+
     if reservation is not None:
         if reservation.status == "succeeded":
             # Effectively unreachable in normal operation (board c172): a reservation
@@ -307,6 +356,7 @@ async def create_dues_payment_intent(
             await session.rollback()
             raise conflict("payment_already_in_progress") from None
 
+    payment_intent_status = "awaiting_payment"
     if reservation.stripe_payment_intent_id is not None:
         # A same-rail retry against an intent we already created (board c193). Stripe
         # only retains an idempotency key for 24h, while ACH can sit in 'processing'
@@ -317,6 +367,14 @@ async def create_dues_payment_intent(
         intent = await stripe_service.retrieve_payment_intent(
             account_id, reservation.stripe_payment_intent_id
         )
+        if intent.status in _INTENT_NOT_AWAITING_PAYMENT:
+            # c234: Stripe moved past "waiting on the member" while the client was
+            # away (settled, or an ACH debit mid-flight) and no webhook has resolved
+            # this reservation yet. payment_intent_client_secret below is still the
+            # real one Stripe issued — harmless to hand back — but it must not be
+            # presented as a fresh checkout; the client is expected to read this
+            # field instead of blindly reopening PaymentSheet.
+            payment_intent_status = intent.status
     else:
         # Either a freshly-inserted reservation (the else branch above), or one that
         # exists but has not gotten a Stripe answer yet — either way there is no
@@ -387,6 +445,7 @@ async def create_dues_payment_intent(
             cycle.amount_cents, body.rail
         ),
         rail=body.rail,
+        payment_intent_status=payment_intent_status,
     )
 
 
