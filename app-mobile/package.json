@@ -13,7 +13,8 @@
     "verify:invites": "node scripts/verify-invites.mjs",
     "verify:charts": "tsc -p tsconfig.chart-verify.json && node scripts/verify-charts.mjs",
     "verify:contract": "node scripts/verify-contract.mjs",
-    "verify:dates": "node scripts/verify-dates.mjs"
+    "verify:dates": "node scripts/verify-dates.mjs",
+    "verify:ws-url": "node scripts/verify-ws-url.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/muli": "^0.1.0",

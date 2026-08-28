@@ -55,3 +55,13 @@ class DuesIntentOut(BaseModel):
     amount_cents: int
     application_fee_cents: int
     rail: PaymentRail
+    # Additive (board c234): a same-rail retry retrieves whatever intent the
+    # reservation already points at, which can have moved past "awaiting payment"
+    # while the client was away (Stripe settled it, or an ACH debit is mid-flight).
+    # 'awaiting_payment' — the default, and always what a freshly created intent
+    # reports — means payment_intent_client_secret above is safe to open in
+    # PaymentSheet. 'processing'/'succeeded' mean it is NOT: the client must show
+    # an honest "already completed/processing" message instead.
+    payment_intent_status: Literal["awaiting_payment", "processing", "succeeded"] = (
+        "awaiting_payment"
+    )

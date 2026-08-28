@@ -129,6 +129,24 @@ class DuesPaymentPlanCreate(_Schema):
 
 
 class DuesPlanInstallmentOut(_Schema):
+    """paid_at/ledger_entry_id are write-once on the model (app/models/finance.py's
+    DuesPlanInstallment docstring) — set together the moment record_dues_installment_
+    payment records the payment, never touched again, so paid_at still shows WHEN an
+    installment was originally recorded even after the money moves back out.
+
+    effective_paid (c233) is the derived, current truth: it nets any correction rows
+    pointing at ledger_entry_id (same corrects_entry_id chain dues_status.py's
+    dues_contributions_subquery reads) against that entry's own amount_cents, and is
+    True only when paid_at is set AND that net is still positive — i.e. the money is
+    genuinely still in hand, same net>0 threshold the rest of the codebase uses for
+    "paid". A fully (or over-) refunded installment reads effective_paid=False while
+    paid_at stays exactly as it was. paid_at is history; effective_paid is status —
+    prefer effective_paid for anything that decides whether an installment still
+    needs collecting. app-mobile/src/payments/dues.tsx currently reads paid_at
+    directly to render "paid" state; switching it to effective_paid is a follow-up,
+    not done here (this wave is backend-only, finance.py + schemas/finance.py).
+    """
+
     id: uuid.UUID
     plan_id: uuid.UUID
     seq: int
@@ -136,6 +154,7 @@ class DuesPlanInstallmentOut(_Schema):
     due_date: date
     paid_at: datetime | None = None
     ledger_entry_id: uuid.UUID | None = None
+    effective_paid: bool
 
 
 class DuesPaymentPlanOut(_Schema):

@@ -2292,7 +2292,7 @@
       "owner": "court",
       "tag": "infra",
       "area": "orgs",
-      "title": "c213 GO Aug 27 (Jose: launch NEXT WEEK) - BUILDING the WS split: second Cloud Run service chirp-ws (same image, /ws only), own scaling + tiny pool. Free-arithmetic fallback if the tier decision waits: api maxScale 4->3 (15) + ws maxScale 2 x pool 1+1 (4) + reserved 4 = 23 <= 25. Worker on client WS-URL configurability; manager on service infra. - and raising maxScale breaks the S2 pool arithmetic (the two levers fight). DESIGN NEEDED before code: split /ws to its own Cloud Run service (own scaling, own pool budget) vs dedicated always-on realtime instance. Court scopes options + costs for Jose.",
+      "title": "c213 BOTH HALVES LANDED Aug 27/28 - chirp-ws service LIVE (chirp-ws-00002-j6b, chirp-api-run SA after the c182 hardening correctly refused the default SA; probes match chirp-api exactly) + client EXPO_PUBLIC_WS_URL override MERGED (PR #143, verbatim-source unit test, CI 4/4). REMAINING before done: set EXPO_PUBLIC_WS_URL in the mobile build config at the device window + one real authenticated WS round-trip against chirp-ws. - BUILDING the WS split: second Cloud Run service chirp-ws (same image, /ws only), own scaling + tiny pool. Free-arithmetic fallback if the tier decision waits: api maxScale 4->3 (15) + ws maxScale 2 x pool 1+1 (4) + reserved 4 = 23 <= 25. Worker on client WS-URL configurability; manager on service infra. - and raising maxScale breaks the S2 pool arithmetic (the two levers fight). DESIGN NEEDED before code: split /ws to its own Cloud Run service (own scaling, own pool budget) vs dedicated always-on realtime instance. Court scopes options + costs for Jose.",
       "detail": "This is the honest ceiling for 100s-1000s concurrent. L effort; sequenced after the S fixes land."
     },
     {
@@ -2391,16 +2391,16 @@
       "owner": "court",
       "tag": "backend",
       "area": "orgs",
-      "title": "c224 PRE-LAUNCH MONEY-PATH RE-SWEEP Aug 27 (launch next week, real payments) - no dedicated adversarial sweep since payment plans went LIVE. Targets the deployed state: plans/installments vs one-shot dues interplay, concurrent attempts at volume, webhook retries/ordering, refund/correction chains, reservation lifecycle. Two find lenses -> refute-by-default verify -> findings to cards. Read-only.",
+      "title": "c224 SWEEP COMPLETE Aug 28 - 7 unique findings, ALL CONFIRMED by refute-by-default verification (0 refuted; both lenses independently found the cross-table race). Fixes: c230 (race guard, wave 2, migration 0028 CLAIMED), c231+c234 (payments.py wave 1), c232+c233 (finance.py wave 1). Root cause across the batch: c195 taught only two money surfaces about plans; everything else assumed the pre-plans world. - no dedicated adversarial sweep since payment plans went LIVE. Targets the deployed state: plans/installments vs one-shot dues interplay, concurrent attempts at volume, webhook retries/ordering, refund/correction chains, reservation lifecycle. Two find lenses -> refute-by-default verify -> findings to cards. Read-only.",
       "detail": "Invariants under test (never weaken): uq_ledger_dues_payment_once; dues_contributions_subquery nets installments+corrections; overview and pay-guard agree; retrieve-not-create on same-rail open reservation; cancel-on-exception only in create branch; active-plan member -> on_payment_plan."
     },
     {
       "id": "c225",
-      "col": "backlog",
+      "col": "done",
       "owner": "J",
       "tag": "infra",
       "area": "orgs",
-      "title": "c225 LAUNCH DECISION (Jose, money, ONE CONFIRM NEEDED): DB tier - f1-micro's ~25 connections cannot fund chirp-api + chirp-ws + jobs, shared-core throttles under real payment volume, HA structurally unavailable. Recommended for launch: db-g1-small ~$25-35/mo (~50 conns) minimum; db-custom-1-3840 ~$50/mo if HA comes too (c215b) - reply 'tier go' (+ which) and manager runs it (sql instances patch allow-listed, ~5min restart at a quiet moment).",
+      "title": "c225 DONE Aug 28 - Jose said GO on all three calls: chirp-db upgraded to db-custom-1-3840 (~$50/mo class, dedicated core, HA-capable, ~100 max_connections vs 25) - patched by manager (allow-listed), RUNNABLE, prod probed healthy through the restart. availabilityType stays ZONAL: flipping to REGIONAL HA roughly doubles the instance cost and is a separate priced call. Pool arithmetic now has real headroom; config defaults stay conservative on purpose.",
       "detail": "Jose's 'continue the resilience bundle' message quoted the old post-alpha framing, so this spend gets one explicit confirm rather than silent execution. Free fallback (api maxScale 3) ships c213 either way."
     },
     {
@@ -2418,7 +2418,7 @@
       "owner": "court",
       "tag": "backend",
       "area": "orgs",
-      "title": "c227 TELEMETRY BUILD Aug 27 (Jose GO on c216) - logs->BigQuery first pass: structured app.analytics JSON events at key actions (signup, session, post, message send, rsvp, payment attempt/outcome), Cloud Logging sink to a BigQuery dataset. PRIVACY RULE (the c216 sign-off, enforced in code): NO event may carry or link chirp authorship - the pipeline must be unable to deanonymize what the API withholds. Worker on the emitter; manager on the sink infra.",
+      "title": "c227 PR #144 OPEN, SKEPTIC FAILED IT (working as intended) - two confirmed catches in the payments.py hunk: payment_intent_created double-emits on the retrieve path (every same-rail retry/poll overcounts; ACH spans days), and _emit_stripe_webhook_event lacks the no-chirp-metadata guard its siblings have (junk None rows). HELD until the c231/c234 payments worker lands (same lines); manager applies the two 5-line fixes on the rebased branch, skeptic re-verifies, then merge. Everything else in #144 passed: emit exception-safety proven, replay-gating correct, PII clean. - logs->BigQuery first pass: structured app.analytics JSON events at key actions (signup, session, post, message send, rsvp, payment attempt/outcome), Cloud Logging sink to a BigQuery dataset. PRIVACY RULE (the c216 sign-off, enforced in code): NO event may carry or link chirp authorship - the pipeline must be unable to deanonymize what the API withholds. Worker on the emitter; manager on the sink infra.",
       "detail": "c216 stays as the epic; this card is the first pass. No schema migration, no client SDK. Event volume rides Cloud Logging free tier at launch scale."
     },
     {
@@ -2438,6 +2438,69 @@
       "area": "fyp",
       "title": "c229 CLAIMED Aug 28 (braul) - a liked heart is red on the OUTLINE ONLY; braul wants the WHOLE heart filled. This is a root cause, not a styling miss: c222 correctly painted palette.like onto a Feather heart, and @expo/vector-icons Feather is a STROKE-ONLY icon set with no filled heart glyph, so a colour prop can only ever reach the outline. c222 was not wrong, it was as red as Feather can be. DESIGN.md 153 says 'Feather set only, never mixed icon families', so swapping in Ionicons heart / MaterialCommunityIcons is OUT. FIX: render Feather's OWN heart path as an inline react-native-svg Path with a fill - identical geometry and stroke weight, no new icon family, no DESIGN.md amendment needed. react-native-svg 15.12.1 is ALREADY a dependency and already used by three components (TreeCanvas, CategoryDonut, BalanceTrend), so this adds no package. THREE call sites, the same three c222 had: ActionChip, InlineAction, and appearance.tsx's PreviewActionChip. Lands on ONE branch and ONE PR with c228.",
       "detail": "WHY THE OBVIOUS FIX IS THE WRONG ONE. The one-line version of this is 'use Ionicons heart instead of heart-outline', and it would look right in a screenshot. It also breaks the single most explicit rule in DESIGN.md's icon section - Feather only, never mixed families - and it does so on the most-looked-at control in the app, sitting inches from a message-circle and a send that are still Feather. Two icon families in one row is exactly the 'default-looking UI' DESIGN.md exists to prevent, and the mismatch is in optical weight, not just provenance: Ionicons' solid heart is visually heavier than Feather's 2px stroke geometry beside it.\n\nWHY THE SVG PATH IS NOT A LOOPHOLE. Feather ships its icons as open SVG paths, and the vector-icons font is a rendering of those same paths. Drawing Feather's heart path directly with react-native-svg and setting fill is the SAME ARTWORK, rendered with a fill instead of only a stroke - the shape, proportions and stroke width stay Feather's. No second family enters the app, and the inactive state can keep using the plain Feather font glyph so nothing changes when a post is not liked.\n\nTHE ACTIVE-STATE RULE FROM c222 CARRIES OVER UNCHANGED and must not be quietly widened: the treatment is keyed on the ICON being a heart, not on `active` alone, because ActionChip and InlineAction are shared by heart, message-circle and send. Keying on active alone would work today and quietly fill a future active comment or send chip.\n\nCHIRPS ARE STILL NOT AFFECTED, same as c222: they have no heart, they have a VotePill, and filling its active up-vote would collide with the danger-red down-vote. Nothing here touches that.\n\nTHREE CALL SITES, not one - the third is the trap c222 already documented: profile/appearance.tsx renders a PreviewActionChip heart in the appearance settings preview. Missing it leaves the settings preview showing an outlined heart while the real feed shows a filled one."
+    },
+    {
+      "id": "c230",
+      "col": "backlog",
+      "owner": "court",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c230 [HIGH, c224 F-race, BOTH lenses] Cross-table TOCTOU: member self-serve pay racing treasurer plan-create leaves a live reservation AND an active plan (no constraint spans dues_payment_intents x dues_payment_plans; READ COMMITTED; wide network-I/O window). Webhook then appends full dues_payment while installments also land = real double collection. FIX (wave 2, after c231-c234 merge): DB-level cross-table guard - migration 0028 CLAIMED HERE (parents on 0027) - plus honest 409s at both insert sites; concurrency test with two sessions interleaved.",
+      "detail": "Refuter-verified evidence on the c224 outputs. Repo convention holds: the read picks the honest 409 reason, the constraint is the real guard."
+    },
+    {
+      "id": "c231",
+      "col": "done",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c231 DONE Aug 28 - MERGED dfa0973 (PR #146) Idempotency nonce per reservation + IntegrityError belt (belt proven load-bearing by falsification). Suite 664p + 43 payments tests + CI 4/4. Mobile payment_intent_status wiring carded c236. - c231 IN BUILD [HIGH, c224 F2] Declined-card retry can 500 for 24h: deterministic Stripe idempotency key (no nonce) + uq_dues_intent_stripe_id spanning ALL statuses + unguarded commit at payments.py:347-348 = cached pi collides with the failed row's id, IntegrityError, 500. Fix: per-reservation nonce in the key + IntegrityError handled to a clean retryable response. Bundled with c234 (same file).",
+      "detail": "Wave 1 worker owns payments.py + stripe_service.py exclusively."
+    },
+    {
+      "id": "c232",
+      "col": "done",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c232 DONE Aug 28 - MERGED 8c741cc (PR #145) - worker-built, manager-committed after repeated machine-sleep interruptions, full line-level review + finder/refuter layers upstream. Suite 664p in worktree + CI 4/4. Mobile paid_at->effective_paid swap carded as follow-up c235. - treasurer data-entry double-collects; overview flips to paid; plan stays active. Fix: active-plan guard in create_ledger_entry mirroring payments.py:190-198. Bundled with c233 (same file).",
+      "detail": "Wave 1 worker owns finance.py + schemas/finance.py exclusively."
+    },
+    {
+      "id": "c233",
+      "col": "done",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c233 DONE Aug 28 - MERGED 8c741cc (PR #145) - worker-built, manager-committed after repeated machine-sleep interruptions, full line-level review + finder/refuter layers upstream. Suite 664p in worktree + CI 4/4. Mobile paid_at->effective_paid swap carded as follow-up c235. - net each installment against corrections in the read path. The two-screens-disagree class, relocated.",
+      "detail": "Same wave-1 finance.py worker as c232."
+    },
+    {
+      "id": "c234",
+      "col": "done",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c234 DONE Aug 28 - MERGED dfa0973 (PR #146) TTL amended after the skeptic's decisive catch: expiring on age alone would double-charge ordinary in-flight ACH - Stripe's cancel refusal is now the money-in-motion test; skeptic re-audited every branch and re-ran the suite itself before PASS. Suite 664p + 43 payments tests + CI 4/4. Mobile payment_intent_status wiring carded c236. - treat old-enough open rows as expired at the guard using created_at, NO new column; (b) same-rail retry during a delayed webhook returns a client_secret for an already-succeeded intent with no status branch - branch on intent.status and answer honestly.",
+      "detail": "Same wave-1 payments.py worker as c231."
+    },
+    {
+      "id": "c235",
+      "col": "backlog",
+      "owner": "pool",
+      "tag": "frontend",
+      "area": "orgs",
+      "title": "c235 Mobile renders installment paid state from write-once paid_at; backend now exposes derived effective_paid (c233, PR #145) which nets corrections - swap app-mobile/src/payments/dues.tsx (and any other installment renderer) to effective_paid so a refunded installment stops showing as paid. Small.",
+      "detail": "Backend schema docstring (schemas/finance.py DuesPlanInstallmentOut) documents the contract: paid_at is history, effective_paid is status."
+    },
+    {
+      "id": "c236",
+      "col": "backlog",
+      "owner": "pool",
+      "tag": "frontend",
+      "area": "orgs",
+      "title": "c236 Mobile: presentDuesPaymentSheet ignores the new payment_intent_status field (c234, PR #146) and unconditionally reopens PaymentSheet - when the field says processing/succeeded, show the honest already-in-progress/already-paid message instead. Wire alongside c235's effective_paid swap (same screen family). Small.",
+      "detail": "Backend contract: payments schema DuesIntentOut.payment_intent_status, default awaiting_payment."
     }
   ],
   "decisions": [
@@ -2582,7 +2645,9 @@
     "Aug 27 - deploy window closed: prod chirp-api-00035-6zk at DB head 0018. Classifier behavior flipped: migration (previously blocked) went through for the manager, gcloud run deploy (previously allowed) blocked twice - Jose ran the deploy paste. If manager should deploy in future windows, Jose adds a Bash allow rule for gcloud run deploy.",
     "Aug 27 - c209 DDIA batch COMPLETE: all four pool fixes merged same-day (c210 feed cap 29f76fe, c211 event-loop 1a26c9a, c212 inbox index cbc34ca, c214 email compensation a512618). Next deploy needs migrate FIRST, expect 0027 (head). Remaining from the sweep: c213 (WS/HTTP split - court designs), c215 (DB resilience - Jose), c216 (telemetry - Jose), c217 (profile stat count endpoint - pool).",
     "Aug 27 - Jose: gcloud run deploy allow rule added to settings.local.json - manager is standing deployer again (proven same hour: 00036-f4h deployed by manager, DDIA batch live on DB 0027). c215a restore rehearsal approved and running; c215b HA tier deferred past alpha.",
-    "Aug 27 - LAUNCH TARGET NEXT WEEK (Jose). c213 GO and building; c224 money re-sweep running; c227 telemetry GO and building (privacy rule: nothing may link chirp authorship); c225 DB tier = one priced confirm to Jose; c226 load test pending Jose go. RED FLAG restated: c11 - not one test-mode payment (card OR ACH) has ever cleared end to end; it MUST pass in the device/Apple window before launch. c71 fast path: Q (real student) confirms receipt at his own .edu mailbox - no school mailbox for Jose needed."
+    "Aug 27 - LAUNCH TARGET NEXT WEEK (Jose). c213 GO and building; c224 money re-sweep running; c227 telemetry GO and building (privacy rule: nothing may link chirp authorship); c225 DB tier = one priced confirm to Jose; c226 load test pending Jose go. RED FLAG restated: c11 - not one test-mode payment (card OR ACH) has ever cleared end to end; it MUST pass in the device/Apple window before launch. c71 fast path: Q (real student) confirms receipt at his own .edu mailbox - no school mailbox for Jose needed.",
+    "Aug 28 - Jose's triple GO executed: (1) ws rule added + chirp-ws service created and live; (2) DB tier db-custom-1-3840 applied, prod healthy through restart, REGIONAL HA remains a separate priced call; (3) c11 test-payment gate re-flagged for the device window - it is the launch gate. c224 sweep: both lenses returned 7 unique findings incl. a convergent cross-table reservation-x-plan race; refute-by-default verification running before any fix work starts.",
+    "Aug 28 - WAVE 1 MONEY FIXES ALL MERGED: #145 (plan coherence) + #146 (retry nonce/belt + money-in-motion TTL). The adversarial ritual caught a would-be launch-week double-charge in the FIX itself (TTL on in-flight ACH) - fourth real pre-merge catch this week. Next: #144 telemetry rebase+fixes, then wave 2 c230 race guard (migration 0028), then migrate+deploy both services."
   ]
 }</script>
 <script>
