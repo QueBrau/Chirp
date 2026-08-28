@@ -2378,11 +2378,11 @@
     },
     {
       "id": "c217",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "frontend",
       "area": "orgs",
-      "title": "c217 IN BUILD Aug 28 - OPUS worker in chirp-sub-c217 on court/c217-post-count. Count endpoint + profile swap; warned that c228's worker owns list_comments in the same file this wave. - app/(tabs)/profile/index.tsx (~201) client-filters the FULL listPosts() response by author_id; after the cap it only sees page one. Found by c210's worker during the mobile-caller sweep (flagged in PR #136's body, not silently shipped). Fix: dedicated count endpoint (or fold into an existing summary route) + swap the screen off the full-history filter. Theoretical today (no prod chapter near 50 posts) - fix before alpha volume.",
+      "title": "c217 DONE Aug 28 - MERGED a2347f7 (PR #149). GET /chapters/{id}/posts/count beside list_posts, sharing one extracted _visible_audiences() so the count and the listing can never drift on the c102 tier rule (manager verified the extraction is behavior-identical; 36 feed regression tests back it). Self-scoped by construction - author filter comes from the auth membership, no user id accepted anywhere. Suite 705p, CI 4/4. - OPUS worker in chirp-sub-c217 on court/c217-post-count. Count endpoint + profile swap; warned that c228's worker owns list_comments in the same file this wave. - app/(tabs)/profile/index.tsx (~201) client-filters the FULL listPosts() response by author_id; after the cap it only sees page one. Found by c210's worker during the mobile-caller sweep (flagged in PR #136's body, not silently shipped). Fix: dedicated count endpoint (or fold into an existing summary route) + swap the screen off the full-history filter. Theoretical today (no prod chapter near 50 posts) - fix before alpha volume.",
       "detail": "Do NOT un-cap the route to fix a stat. Backend: a count is one cheap aggregate. Mobile: profile screen swaps one call. Cursor adoption for the org feed screen itself is a separate, larger follow-up if infinite scroll is wanted - the segment currently renders page one fine."
     },
     {
@@ -2501,6 +2501,15 @@
       "area": "orgs",
       "title": "c236 DONE Aug 28 - MERGED 603c868 (PR #148). presentDuesPaymentSheet now reads payment_intent_status BEFORE initStripe and never presents the sheet unless awaiting_payment; the caller swaps the rail picker AND Pay button for honest copy, still calling onPaid() so the cycle self-settles when the webhook lands. Hiding the rail picker was deliberate: leaving it selectable invites a second payment on a cycle Stripe is already collecting. Mobile-only, CI 4/4. Render QA rides the device window. - OPUS worker, SAME branch as c235. - when the field says processing/succeeded, show the honest already-in-progress/already-paid message instead. Wire alongside c235's effective_paid swap (same screen family). Small.",
       "detail": "Backend contract: payments schema DuesIntentOut.payment_intent_status, default awaiting_payment."
+    },
+    {
+      "id": "c237",
+      "col": "backlog",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c237 A USER CAN BLOCK THEMSELVES - POST /moderation/blocks accepts any blocked_id with no cannot_block_self guard (only block_chirp_author has one) and user_blocks has no CHECK constraint. Effect today: a self-blocked member's own posts vanish from their chapter feed (the c35 anti-join hides them), which reads as data loss. Found by c217's worker while making the count agree with the listing - it correctly made the count MATCH this behavior rather than paper over it, so fixing the root cause is a clean follow-up. Small: guard + constraint + test.",
+      "detail": "c217's count deliberately carries the same anti-join so the number and the list agree in the self-blocked state. When this is fixed, that reasoning stays valid - the count follows the listing either way."
     }
   ],
   "decisions": [
