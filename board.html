@@ -2450,11 +2450,11 @@
     },
     {
       "id": "c231",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c231 IN BUILD [HIGH, c224 F2] Declined-card retry can 500 for 24h: deterministic Stripe idempotency key (no nonce) + uq_dues_intent_stripe_id spanning ALL statuses + unguarded commit at payments.py:347-348 = cached pi collides with the failed row's id, IntegrityError, 500. Fix: per-reservation nonce in the key + IntegrityError handled to a clean retryable response. Bundled with c234 (same file).",
+      "title": "c231 DONE Aug 28 - MERGED dfa0973 (PR #146) Idempotency nonce per reservation + IntegrityError belt (belt proven load-bearing by falsification). Suite 664p + 43 payments tests + CI 4/4. Mobile payment_intent_status wiring carded c236. - c231 IN BUILD [HIGH, c224 F2] Declined-card retry can 500 for 24h: deterministic Stripe idempotency key (no nonce) + uq_dues_intent_stripe_id spanning ALL statuses + unguarded commit at payments.py:347-348 = cached pi collides with the failed row's id, IntegrityError, 500. Fix: per-reservation nonce in the key + IntegrityError handled to a clean retryable response. Bundled with c234 (same file).",
       "detail": "Wave 1 worker owns payments.py + stripe_service.py exclusively."
     },
     {
@@ -2477,11 +2477,11 @@
     },
     {
       "id": "c234",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c234 IN BUILD [MED, c224 F3/F4] Reservation lifecycle: (a) abandoned open reservations never expire and block rail-switch forever (no TTL, no cancel route, no job) - treat old-enough open rows as expired at the guard using created_at, NO new column; (b) same-rail retry during a delayed webhook returns a client_secret for an already-succeeded intent with no status branch - branch on intent.status and answer honestly.",
+      "title": "c234 DONE Aug 28 - MERGED dfa0973 (PR #146) TTL amended after the skeptic's decisive catch: expiring on age alone would double-charge ordinary in-flight ACH - Stripe's cancel refusal is now the money-in-motion test; skeptic re-audited every branch and re-ran the suite itself before PASS. Suite 664p + 43 payments tests + CI 4/4. Mobile payment_intent_status wiring carded c236. - treat old-enough open rows as expired at the guard using created_at, NO new column; (b) same-rail retry during a delayed webhook returns a client_secret for an already-succeeded intent with no status branch - branch on intent.status and answer honestly.",
       "detail": "Same wave-1 payments.py worker as c231."
     },
     {
@@ -2492,6 +2492,15 @@
       "area": "orgs",
       "title": "c235 Mobile renders installment paid state from write-once paid_at; backend now exposes derived effective_paid (c233, PR #145) which nets corrections - swap app-mobile/src/payments/dues.tsx (and any other installment renderer) to effective_paid so a refunded installment stops showing as paid. Small.",
       "detail": "Backend schema docstring (schemas/finance.py DuesPlanInstallmentOut) documents the contract: paid_at is history, effective_paid is status."
+    },
+    {
+      "id": "c236",
+      "col": "backlog",
+      "owner": "pool",
+      "tag": "frontend",
+      "area": "orgs",
+      "title": "c236 Mobile: presentDuesPaymentSheet ignores the new payment_intent_status field (c234, PR #146) and unconditionally reopens PaymentSheet - when the field says processing/succeeded, show the honest already-in-progress/already-paid message instead. Wire alongside c235's effective_paid swap (same screen family). Small.",
+      "detail": "Backend contract: payments schema DuesIntentOut.payment_intent_status, default awaiting_payment."
     }
   ],
   "decisions": [
@@ -2637,7 +2646,8 @@
     "Aug 27 - c209 DDIA batch COMPLETE: all four pool fixes merged same-day (c210 feed cap 29f76fe, c211 event-loop 1a26c9a, c212 inbox index cbc34ca, c214 email compensation a512618). Next deploy needs migrate FIRST, expect 0027 (head). Remaining from the sweep: c213 (WS/HTTP split - court designs), c215 (DB resilience - Jose), c216 (telemetry - Jose), c217 (profile stat count endpoint - pool).",
     "Aug 27 - Jose: gcloud run deploy allow rule added to settings.local.json - manager is standing deployer again (proven same hour: 00036-f4h deployed by manager, DDIA batch live on DB 0027). c215a restore rehearsal approved and running; c215b HA tier deferred past alpha.",
     "Aug 27 - LAUNCH TARGET NEXT WEEK (Jose). c213 GO and building; c224 money re-sweep running; c227 telemetry GO and building (privacy rule: nothing may link chirp authorship); c225 DB tier = one priced confirm to Jose; c226 load test pending Jose go. RED FLAG restated: c11 - not one test-mode payment (card OR ACH) has ever cleared end to end; it MUST pass in the device/Apple window before launch. c71 fast path: Q (real student) confirms receipt at his own .edu mailbox - no school mailbox for Jose needed.",
-    "Aug 28 - Jose's triple GO executed: (1) ws rule added + chirp-ws service created and live; (2) DB tier db-custom-1-3840 applied, prod healthy through restart, REGIONAL HA remains a separate priced call; (3) c11 test-payment gate re-flagged for the device window - it is the launch gate. c224 sweep: both lenses returned 7 unique findings incl. a convergent cross-table reservation-x-plan race; refute-by-default verification running before any fix work starts."
+    "Aug 28 - Jose's triple GO executed: (1) ws rule added + chirp-ws service created and live; (2) DB tier db-custom-1-3840 applied, prod healthy through restart, REGIONAL HA remains a separate priced call; (3) c11 test-payment gate re-flagged for the device window - it is the launch gate. c224 sweep: both lenses returned 7 unique findings incl. a convergent cross-table reservation-x-plan race; refute-by-default verification running before any fix work starts.",
+    "Aug 28 - WAVE 1 MONEY FIXES ALL MERGED: #145 (plan coherence) + #146 (retry nonce/belt + money-in-motion TTL). The adversarial ritual caught a would-be launch-week double-charge in the FIX itself (TTL on in-flight ACH) - fourth real pre-merge catch this week. Next: #144 telemetry rebase+fixes, then wave 2 c230 race guard (migration 0028), then migrate+deploy both services."
   ]
 }</script>
 <script>
