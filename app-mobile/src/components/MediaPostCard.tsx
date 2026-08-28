@@ -11,7 +11,9 @@
  *   a static duration Chip top-right. Mock: thumbnail only, no playback.
  * Action row (photo/video only): 36 circular surfaceAlt chips (Feather heart /
  * message-circle / send) with a count Badge attached; active state =
- * accentSoft chip + accent icon.
+ * accentSoft chip + accent icon, except the liked heart, which is palette.like
+ * and FILLED (c229 — see FilledHeart.tsx for why that needs an SVG path and not
+ * a colour prop).
  *
  * Comments (board c228): the message-circle in both densities opens CommentsSheet
  * on this card. It had carried a real count, a button role and a "Comment" label
@@ -44,6 +46,7 @@ import { AppText } from "./AppText";
 import { Badge } from "./Badge";
 import { Chip } from "./Chip";
 import { CommentsSheet } from "./CommentsSheet";
+import { FilledHeart } from "./FilledHeart";
 import { GradientAvatar } from "./GradientAvatar";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -163,18 +166,22 @@ function ActionChip({
         {/* c222: keyed on the ICON, not on `active` alone. This chip is shared by
             heart, message-circle and send, and only the heart ever passes active
             today - keying on active alone would work now and quietly turn a future
-            active comment or send chip red. */}
-        <Feather
-          name={icon}
-          size={18}
-          color={
-            active
-              ? icon === "heart"
-                ? palette.like
-                : palette.accent
-              : palette.inkSecondary
-          }
-        />
+            active comment or send chip red.
+
+            c229 carries that rule over UNCHANGED rather than widening it: the swap to
+            a filled shape is still gated on `icon === "heart"`, so an active
+            message-circle or send keeps its Feather glyph and its accent tint. The
+            INACTIVE heart also stays on the font glyph, which is the whole point - an
+            unliked post must look exactly as it always did. */}
+        {active && icon === "heart" ? (
+          <FilledHeart size={18} color={palette.like} />
+        ) : (
+          <Feather
+            name={icon}
+            size={18}
+            color={active ? palette.accent : palette.inkSecondary}
+          />
+        )}
       </View>
       <Badge label={String(count)} tone={active ? "accent" : "neutral"} />
     </Pressable>
@@ -254,14 +261,13 @@ function InlineAction({
         opacity: pressed ? 0.7 : 1,
       })}
     >
-      {/* c222: same icon-keyed rule as ActionChip above. */}
-      <Feather
-        name={icon}
-        size={15}
-        color={
-          active ? (icon === "heart" ? palette.like : palette.accent) : palette.inkFaint
-        }
-      />
+      {/* c222/c229: same icon-keyed rule as ActionChip above, and the same narrow
+          gate - only an ACTIVE HEART becomes the filled shape. */}
+      {active && icon === "heart" ? (
+        <FilledHeart size={15} color={palette.like} />
+      ) : (
+        <Feather name={icon} size={15} color={active ? palette.accent : palette.inkFaint} />
+      )}
       <AppText
         variant="caption"
         tone={active ? "accent" : "tertiary"}

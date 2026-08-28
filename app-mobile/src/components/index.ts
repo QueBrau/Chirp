@@ -20,6 +20,7 @@ export { CreateEventSheet, type CreateEventInput, type CreateEventSheetProps } f
 export { CreateSheet, type CreateSheetProps } from "./CreateSheet";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Fab, type FabProps } from "./Fab";
+export { FilledHeart, type FilledHeartProps } from "./FilledHeart";
 export { GradientAvatar, type GradientAvatarProps } from "./GradientAvatar";
 export { HeroCard, type HeroCardProps } from "./HeroCard";
 export { ListRow, type ListRowProps } from "./ListRow";
