@@ -265,9 +265,16 @@ Generic-clean is not enough. Every screen must pass these:
    bar, an active vote, the balance figure, an unread ring. Never gold-wash
    whole surfaces; never zero gold either.
 5. **Chirps is a PLACE, not a list.** The Chirps board renders on a deep-navy campus
-   canvas (campus primary dark wash over bg in BOTH light and dark modes) with
-   light tinted cards floating on it and gold vote states. It should feel like
-   the campus at night — instantly distinct from Home.
+   canvas (campus primary dark wash over bg) **in dark mode**, with light tinted
+   cards floating on it and gold vote states. It should feel like the campus at
+   night — instantly distinct from Home. In **light mode** it uses the normal app
+   canvas: the wash applied in both schemes until Aug 27 (braul, board c219), which
+   made Chirps the one screen ignoring the system setting and reading as an island.
+   The cards stay light-tinted in both — correct under either canvas, since they
+   float on the navy at night and simply are the standard surfaces in light mode.
+   Whatever the canvas, the header tone must move with it: the board's header is
+   hand-rolled and white-on-navy, so a canvas change without a tone change ships
+   invisible text.
 6. **Numbers have personality.** All counts/scores/money in the stat type,
    tabular; notable numbers (top chirp score, balance) get gold.
 7. **Copy is specific.** Mock content and microcopy name real things (UNCG,
