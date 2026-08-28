@@ -2306,11 +2306,11 @@
     },
     {
       "id": "c215",
-      "col": "backlog",
-      "owner": "J",
+      "col": "progress",
+      "owner": "court",
       "tag": "infra",
       "area": "orgs",
-      "title": "c215 [high/M, c209 finding - JOSE DECISION, money] DB resilience: chirp-db is ZONAL and db-f1-micro cannot do HA at all (structural, not a toggle). Backups verified healthy Aug 27 (daily/14 retained/PITR 7d/deletion protection). Decisions: (a) rehearse + script a restore once (free, court can draft the runbook), (b) tier upgrade for HA-capable dedicated core (~$50+/mo class) - defensible to defer past alpha with (a) done.",
+      "title": "c215 IN PROGRESS Aug 27 - Jose approved (a): manager drafting + REHEARSING the restore runbook now (PITR clone of chirp-db into a throwaway drill instance, verify schema head + row data, delete the drill - pennies, chirp-db itself untouched). (b) HA tier deferred past alpha per recommendation. Also this window: DDIA batch DEPLOYED - manager ran the deploy himself (allow rule added per Jose), revision chirp-api-00036-f4h at 100%, deploy-verify 4/4. - JOSE DECISION, money] DB resilience: chirp-db is ZONAL and db-f1-micro cannot do HA at all (structural, not a toggle). Backups verified healthy Aug 27 (daily/14 retained/PITR 7d/deletion protection). Decisions: (a) rehearse + script a restore once (free, court can draft the runbook), (b) tier upgrade for HA-capable dedicated core (~$50+/mo class) - defensible to defer past alpha with (a) done.",
       "detail": "Zone outage today = down until the zone recovers or a manual restore. (a) turns that from unknown-hours to known-minutes."
     },
     {
@@ -2499,7 +2499,8 @@
     "Aug 24 - full branch/worktree cleanup (Jose's order): 6 subagent branches (local+origin), 3 security-fix duplicates, 3 stale detached worktrees, and ~20 merged board-* branches deleted - every deletion proven merged or patch-equivalent to main first (git cherry / targeted diff). PRESERVED: chirp-deps worktree (jose/c114-decide-races, DIRTY - two uncommitted mobile files), origin/q/c162-live-polls (unmerged, awaiting Q's policy fixes), origin/q/c39-eas-dev-build. Repo is now: main + one dirty worktree + Q's two branches.",
     "Aug 27 - APPLE DEVELOPER: Jose + Q are BOTH enrolling in Apple Developer accounts tomorrow (Aug 28). Un-parks the 'enrollment parked until launch prep' stance. Touches: c10 (TestFlight becomes reachable), c169 (Apple sign-in chain per SETUP-FIREBASE section 5; guideline 4.8 makes it mandatory once Google ships), c39 (real-device distribution). No pool work spawned until the accounts exist. Also Aug 27: Jose asked the manager to run the prod migration himself - one clean attempt after PR #90 lands (single window, expect 0018 head); if the machine-side classifier blocks prod-DB access again (as it did Aug 24 even with Jose's explicit go), the paste goes back to Jose immediately.",
     "Aug 27 - deploy window closed: prod chirp-api-00035-6zk at DB head 0018. Classifier behavior flipped: migration (previously blocked) went through for the manager, gcloud run deploy (previously allowed) blocked twice - Jose ran the deploy paste. If manager should deploy in future windows, Jose adds a Bash allow rule for gcloud run deploy.",
-    "Aug 27 - c209 DDIA batch COMPLETE: all four pool fixes merged same-day (c210 feed cap 29f76fe, c211 event-loop 1a26c9a, c212 inbox index cbc34ca, c214 email compensation a512618). Next deploy needs migrate FIRST, expect 0027 (head). Remaining from the sweep: c213 (WS/HTTP split - court designs), c215 (DB resilience - Jose), c216 (telemetry - Jose), c217 (profile stat count endpoint - pool)."
+    "Aug 27 - c209 DDIA batch COMPLETE: all four pool fixes merged same-day (c210 feed cap 29f76fe, c211 event-loop 1a26c9a, c212 inbox index cbc34ca, c214 email compensation a512618). Next deploy needs migrate FIRST, expect 0027 (head). Remaining from the sweep: c213 (WS/HTTP split - court designs), c215 (DB resilience - Jose), c216 (telemetry - Jose), c217 (profile stat count endpoint - pool).",
+    "Aug 27 - Jose: gcloud run deploy allow rule added to settings.local.json - manager is standing deployer again (proven same hour: 00036-f4h deployed by manager, DDIA batch live on DB 0027). c215a restore rehearsal approved and running; c215b HA tier deferred past alpha."
   ]
 }</script>
 <script>
