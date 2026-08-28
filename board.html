@@ -2323,6 +2323,15 @@
       "detail": "Recommend logs->BigQuery first pass. Needs Jose's scope + privacy sign-off before any build."
     },
     {
+      "id": "c222",
+      "col": "progress",
+      "owner": "court",
+      "tag": "design",
+      "area": "fyp",
+      "title": "c222 IN BUILD Aug 28 - PRODUCT DECISION (braul): a liked post's heart turns RED instead of the campus accent. Adds a dedicated `like` palette token rather than reusing `danger`. CHIRPS ARE NOT AFFECTED AND CANNOT BE - they have no heart, they have a VotePill, and painting its active up-vote red would make up and down indistinguishable",
+      "detail": "braul asked for 'when you like a post or a chirp the heart turns red'. Posts have a heart; chirps do not. Chirps use VotePill, whose active up fill is accent (campus gold on Chirps, DESIGN 10.6) and whose active down fill is palette.danger. Painting the up-vote red would give both directions the SAME colour, so a voter could not tell which way they had voted - a functional collision, not a taste objection. Flagged to braul rather than silently half-doing it.\\n\\nWHY A NEW TOKEN INSTEAD OF palette.danger, which is already the right red. DESIGN.md section 2 defines danger as 'money out, destructive, downvote active'. A like is the opposite of all three. Reusing it would make the token mean four unrelated things, and - the part that actually bites - a future tweak to destructive red would silently repaint every liked post in the app. `like` starts at the same hex in both schemes (#E5484D light, #FF6369 dark, matching danger's existing dark lightening), so this ships zero visual change to anything except the heart, while keeping the two meanings separable.\\n\\nACTIVE IS HEART-ONLY TODAY but the colour is keyed on the ICON, not on `active` alone: ActionChip and InlineAction are shared by heart, message-circle and send, and only the heart ever passes active. Keying on active alone would work now and quietly turn a future active comment or send chip red.\\n\\nThree call sites, not one: MediaPostCard's ActionChip (media posts) AND InlineAction (text posts) both render the heart, and appearance.tsx renders a PreviewActionChip heart in the appearance settings preview. Missing the third would leave the settings preview showing an accent heart while the real feed shows red."
+    },
+    {
       "id": "c221",
       "col": "progress",
       "owner": "court",
