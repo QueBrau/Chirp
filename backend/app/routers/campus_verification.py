@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.analytics import emit
 from app.core.campus_access import is_campus_verified
 from app.db import get_session
 from app.middleware.auth import get_current_user
@@ -60,6 +61,11 @@ async def start_verification(
     is never taken from the body — see the service module for why that matters.
     """
     verification = await campus_verification.start_verification(session, user, body.edu_email)
+    emit(
+        "campus_verification_started",
+        user_id=user.id,
+        campus_id=verification.campus_id,
+    )
     return PendingVerificationOut(
         edu_email=verification.edu_email,
         campus_id=verification.campus_id,
@@ -75,6 +81,7 @@ async def redeem_verification(
 ) -> CampusVerificationStatus:
     """Redeem a code and record the proof; opens the campus feed and Chirp."""
     await campus_verification.redeem(session, user, body.code)
+    emit("campus_verification_redeemed", user_id=user.id, campus_id=user.campus_id)
     return CampusVerificationStatus(
         verified=is_campus_verified(user),
         verified_at=user.campus_verified_at,

@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.analytics import emit
 from app.core.errors import forbidden, not_found
 from app.db import get_session
 from app.middleware.auth import get_current_user
@@ -192,6 +193,13 @@ async def send_message(
     )
     recipient_ids = list(recipients_result.scalars().all())
     await session.commit()
+    emit(
+        "message_sent",
+        user_id=user.id,
+        conversation_id=conversation_id,
+        message_type=body.message_type,
+        recipient_count=len(recipient_ids),
+    )
 
     event = {
         "type": "message",

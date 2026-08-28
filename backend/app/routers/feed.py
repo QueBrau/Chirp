@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.analytics import emit
 from app.core.campus_access import (
     is_campus_verified,
     require_campus_member,
@@ -508,6 +509,14 @@ async def create_post(
     session.add(post)
     await _commit_or_log_orphaned_media(session, media_urls)
     await session.refresh(post)
+    emit(
+        "post_created",
+        user_id=membership.user_id,
+        chapter_id=chapter_id,
+        campus_id=chapter.campus_id,
+        audience=body.audience,
+        post_type=body.post_type,
+    )
     return _post_out(post, membership.user_id)
 
 
@@ -553,6 +562,14 @@ async def create_campus_post(
     session.add(post)
     await _commit_or_log_orphaned_media(session, media_urls)
     await session.refresh(post)
+    emit(
+        "post_created",
+        user_id=user.id,
+        chapter_id=None,
+        campus_id=campus_id,
+        audience="campus",
+        post_type=body.post_type,
+    )
     return _post_out(post, user.id)
 
 
