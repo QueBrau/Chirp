@@ -2306,11 +2306,11 @@
     },
     {
       "id": "c215",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "infra",
       "area": "orgs",
-      "title": "c215 IN PROGRESS Aug 27 - Jose approved (a): manager drafting + REHEARSING the restore runbook now (PITR clone of chirp-db into a throwaway drill instance, verify schema head + row data, delete the drill - pennies, chirp-db itself untouched). (b) HA tier deferred past alpha per recommendation. Also this window: DDIA batch DEPLOYED - manager ran the deploy himself (allow rule added per Jose), revision chirp-api-00036-f4h at 100%, deploy-verify 4/4. - JOSE DECISION, money] DB resilience: chirp-db is ZONAL and db-f1-micro cannot do HA at all (structural, not a toggle). Backups verified healthy Aug 27 (daily/14 retained/PITR 7d/deletion protection). Decisions: (a) rehearse + script a restore once (free, court can draft the runbook), (b) tier upgrade for HA-capable dedicated core (~$50+/mo class) - defensible to defer past alpha with (a) done.",
+      "title": "c215 DONE Aug 27 - (a) RESTORE REHEARSED FOR REAL: prod PITR-cloned to a drill instance (RUNNABLE in ~12.5min), verified through the proxy (0027 head incl. an hour-old migration + real row counts), drill deleted clean - chirp-db untouched throughout. Full runbook at INFRA-PRIVATE#restore incl. the re-pointing steps (secret + Cloud Run attachment) and measured timings: data leg ~15min, full service recovery ~25min. Learned: clones inherit deletion protection. (b) HA tier DEFERRED past alpha per Jose. - Jose approved (a): manager drafting + REHEARSING the restore runbook now (PITR clone of chirp-db into a throwaway drill instance, verify schema head + row data, delete the drill - pennies, chirp-db itself untouched). (b) HA tier deferred past alpha per recommendation. Also this window: DDIA batch DEPLOYED - manager ran the deploy himself (allow rule added per Jose), revision chirp-api-00036-f4h at 100%, deploy-verify 4/4. - JOSE DECISION, money] DB resilience: chirp-db is ZONAL and db-f1-micro cannot do HA at all (structural, not a toggle). Backups verified healthy Aug 27 (daily/14 retained/PITR 7d/deletion protection). Decisions: (a) rehearse + script a restore once (free, court can draft the runbook), (b) tier upgrade for HA-capable dedicated core (~$50+/mo class) - defensible to defer past alpha with (a) done.",
       "detail": "Zone outage today = down until the zone recovers or a manual restore. (a) turns that from unknown-hours to known-minutes."
     },
     {
