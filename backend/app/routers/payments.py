@@ -5,14 +5,14 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import get_settings
 from app.core.analytics import emit
 from app.core.dues_status import dues_contributions_subquery
-from app.core.errors import conflict, forbidden, not_found
+from app.core.errors import conflict, forbidden, is_cross_table_dues_guard_conflict, not_found
 from app.core.permissions import Role, require_role
 from app.db import get_session
 from app.middleware.auth import get_current_user
@@ -379,6 +379,19 @@ async def create_dues_payment_intent(
             # check above, is what actually makes this safe under concurrency.
             await session.rollback()
             raise conflict("payment_already_in_progress") from None
+        except DBAPIError as exc:
+            # c230: cross_table_dues_guard_intents (migration 0028) — a treasurer
+            # committed an ACTIVE payment plan for this (cycle, member) between
+            # the active_plan read-guard above and this INSERT actually landing.
+            # Same cross-table TOCTOU that read-guard exists to close, now
+            # backstopped at the database; raise the identical 409 the read-guard
+            # would have given had it run a moment later. Any OTHER DBAPIError
+            # (not this trigger) re-raises untouched — this is a backstop for one
+            # specific conflict, not a blanket swallow.
+            await session.rollback()
+            if not is_cross_table_dues_guard_conflict(exc):
+                raise
+            raise conflict("on_payment_plan") from None
 
     payment_intent_status = "awaiting_payment"
     if reservation.stripe_payment_intent_id is not None:

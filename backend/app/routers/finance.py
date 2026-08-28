@@ -6,14 +6,14 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app import models
 from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.dues_status import dues_contributions_subquery
-from app.core.errors import conflict, not_found
+from app.core.errors import conflict, is_cross_table_dues_guard_conflict, not_found
 from app.core.permissions import DUES_ADMIN, Role, require_role
 from app.db import get_session
 from app.middleware.org_scope import get_current_membership
@@ -582,19 +582,33 @@ async def create_dues_payment_plan(
         created_by=membership.user_id,
     )
     session.add(plan)
-    await session.flush()  # assign plan.id for the installment rows below
-
-    for seq, item in enumerate(body.installments, start=1):
-        session.add(
-            models.DuesPlanInstallment(
-                plan_id=plan.id,
-                seq=seq,
-                amount_cents=item.amount_cents,
-                due_date=item.due_date,
-            )
-        )
-
     try:
+        # c230 finding: a concurrent race on THIS insert raises HERE, at flush()
+        # — not at the final commit() below. Postgres checks a unique index
+        # (and fires a BEFORE trigger) the moment a conflicting row is
+        # INSERTed, not deferred to COMMIT: a second transaction inserting the
+        # same (cycle, member) key blocks on this one's still-open write and
+        # then raises the instant this transaction actually commits (verified
+        # against this exact asyncpg dialect while writing migration 0028).
+        # flush() used to run OUTSIDE any try/except here — meaning neither
+        # uq_dues_payment_plans_active_per_member's own race (migration 0023)
+        # nor this trigger's were ever reachable by the except clauses below,
+        # and a genuine concurrent conflict on this insert would have 500'd
+        # instead of 409ing. Both are now inside the same try as the
+        # installment inserts and the final commit, so nothing that was caught
+        # before stops being caught.
+        await session.flush()  # assigns plan.id for the installment rows below
+
+        for seq, item in enumerate(body.installments, start=1):
+            session.add(
+                models.DuesPlanInstallment(
+                    plan_id=plan.id,
+                    seq=seq,
+                    amount_cents=item.amount_cents,
+                    due_date=item.due_date,
+                )
+            )
+
         await session.commit()
     except IntegrityError:
         # The read above narrows the race but is not the guard — two concurrent
@@ -603,6 +617,19 @@ async def create_dues_payment_plan(
         # as c51's uq_dues_intent_live.
         await session.rollback()
         raise conflict("on_payment_plan") from None
+    except DBAPIError as exc:
+        # c230: cross_table_dues_guard_plans (migration 0028) — a member's
+        # self-serve reservation went live (an open/succeeded DuesPaymentIntent)
+        # for this (cycle, member) between the live_reservation read-guard above
+        # and this plan's INSERT actually landing. Same cross-table TOCTOU that
+        # read-guard exists to close, now backstopped at the database; raise the
+        # identical 409 the read-guard would have given had it run a moment
+        # later. Any OTHER DBAPIError re-raises untouched — this is a backstop
+        # for one specific conflict, not a blanket swallow.
+        await session.rollback()
+        if not is_cross_table_dues_guard_conflict(exc):
+            raise
+        raise conflict("payment_in_progress") from None
 
     await session.refresh(plan)
     # Freshly created installments have no ledger_entry_id yet (none has been paid),
