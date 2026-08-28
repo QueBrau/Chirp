@@ -126,9 +126,27 @@ class PostCommentCreate(_Schema):
 
 
 class PostCommentOut(_Schema):
+    """A comment plus the author's display identity (c228).
+
+    The identity fields are not decoration. Before them this shape carried an
+    author_id and nothing else, and there is no route anywhere in the API that turns
+    a user id into a person — no GET /users/{id}, and the chapter roster only covers
+    members of a chapter the caller belongs to. So a client rendering a comment
+    thread from the old shape had exactly one thing it could print: the raw UUID.
+
+    Joined server-side for the same reason FeedPostOut carries them (c43): one query
+    for the thread, not one request per comment author.
+
+    display_name is non-null, matching FeedPostOut/MemberOut. Both producers can
+    promise that — list_comments INNER JOINs users on author_id, and create_comment
+    already holds the authenticated author it is writing.
+    """
+
     id: uuid.UUID
     post_id: uuid.UUID
     author_id: uuid.UUID
     body: str
     created_at: datetime
     deleted_at: datetime | None = None
+    display_name: str
+    avatar_url: str | None = None

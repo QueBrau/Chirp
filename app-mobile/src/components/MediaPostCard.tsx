@@ -11,7 +11,15 @@
  *   a static duration Chip top-right. Mock: thumbnail only, no playback.
  * Action row (photo/video only): 36 circular surfaceAlt chips (Feather heart /
  * message-circle / send) with a count Badge attached; active state =
- * accentSoft chip + accent icon.
+ * accentSoft chip + accent icon, except the liked heart, which is palette.like
+ * and FILLED (c229 — see FilledHeart.tsx for why that needs an SVG path and not
+ * a colour prop).
+ *
+ * Comments (board c228): the message-circle in both densities opens CommentsSheet
+ * on this card. It had carried a real count, a button role and a "Comment" label
+ * with no onPress since the FYP landed, which is worse than no control at all.
+ * A sheet rather than a post-detail route, because this component renders from two
+ * screens with separate navigation and a sheet needs neither of them to change.
  *
  * Overflow control (board c35, App Store Guideline 1.2): a discreet
  * more-horizontal icon in the header row of every variant, offering Report
@@ -37,6 +45,8 @@ import { cardShadow, light, radii, spacing, useTheme, withAlpha } from "@/theme"
 import { AppText } from "./AppText";
 import { Badge } from "./Badge";
 import { Chip } from "./Chip";
+import { CommentsSheet } from "./CommentsSheet";
+import { FilledHeart } from "./FilledHeart";
 import { GradientAvatar } from "./GradientAvatar";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -156,18 +166,22 @@ function ActionChip({
         {/* c222: keyed on the ICON, not on `active` alone. This chip is shared by
             heart, message-circle and send, and only the heart ever passes active
             today - keying on active alone would work now and quietly turn a future
-            active comment or send chip red. */}
-        <Feather
-          name={icon}
-          size={18}
-          color={
-            active
-              ? icon === "heart"
-                ? palette.like
-                : palette.accent
-              : palette.inkSecondary
-          }
-        />
+            active comment or send chip red.
+
+            c229 carries that rule over UNCHANGED rather than widening it: the swap to
+            a filled shape is still gated on `icon === "heart"`, so an active
+            message-circle or send keeps its Feather glyph and its accent tint. The
+            INACTIVE heart also stays on the font glyph, which is the whole point - an
+            unliked post must look exactly as it always did. */}
+        {active && icon === "heart" ? (
+          <FilledHeart size={18} color={palette.like} />
+        ) : (
+          <Feather
+            name={icon}
+            size={18}
+            color={active ? palette.accent : palette.inkSecondary}
+          />
+        )}
       </View>
       <Badge label={String(count)} tone={active ? "accent" : "neutral"} />
     </Pressable>
@@ -247,14 +261,13 @@ function InlineAction({
         opacity: pressed ? 0.7 : 1,
       })}
     >
-      {/* c222: same icon-keyed rule as ActionChip above. */}
-      <Feather
-        name={icon}
-        size={15}
-        color={
-          active ? (icon === "heart" ? palette.like : palette.accent) : palette.inkFaint
-        }
-      />
+      {/* c222/c229: same icon-keyed rule as ActionChip above, and the same narrow
+          gate - only an ACTIVE HEART becomes the filled shape. */}
+      {active && icon === "heart" ? (
+        <FilledHeart size={15} color={palette.like} />
+      ) : (
+        <Feather name={icon} size={15} color={active ? palette.accent : palette.inkFaint} />
+      )}
       <AppText
         variant="caption"
         tone={active ? "accent" : "tertiary"}
@@ -295,6 +308,23 @@ export function MediaPostCard({
   // capability url legitimately changes when its signing window rolls over — a stale
   // `true` would keep showing the fallback over a url that now works perfectly.
   useEffect(() => setMediaFailed(false), [mediaUrl]);
+
+  // c228: the comments sheet, mounted only while THIS card's thread is open, for the
+  // same reason the report/block Modal above is - a long feed must not carry N idle
+  // Modals.
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  // The thread's real length once the sheet has loaded it, else null. Preferred over
+  // the `commentCount` prop because both numbers are produced by the same server-side
+  // rule (c109: comment_count and list_comments apply the identical blocked-author
+  // filter), so the loaded rows ARE the count - and the chip can then never read "3"
+  // over a sheet showing two.
+  const [loadedCommentCount, setLoadedCommentCount] = useState<number | null>(null);
+  // Drop the local number whenever the screen hands down a fresh one, same
+  // reset-on-input-change shape as mediaFailed above. Server truth is never older than
+  // what we cached from it, so a refetch (after a block, or anyone else's comment) must
+  // not lose to a stale local count.
+  useEffect(() => setLoadedCommentCount(null), [commentCount]);
+  const shownCommentCount = loadedCommentCount ?? commentCount;
 
   const openReportReasons = () => {
     setSheet({
@@ -345,7 +375,12 @@ export function MediaPostCard({
         label={likedByMe ? "Unlike" : "Like"}
         onPress={onToggleLike}
       />
-      <ActionChip icon="message-circle" count={commentCount} label="Comment" />
+      <ActionChip
+        icon="message-circle"
+        count={shownCommentCount}
+        label="Comment"
+        onPress={() => setCommentsOpen(true)}
+      />
       <ActionChip icon="send" count={mockShareCount(post.id)} label="Send" />
     </View>
   );
@@ -412,6 +447,17 @@ export function MediaPostCard({
       </Modal>
     ) : null;
 
+  // c228: the other sheet this card owns. Rendered next to sheetModal in BOTH density
+  // branches below, which is what makes the comment chip work identically from the
+  // Home feed and the org Feed segment without either screen learning a new route.
+  const commentsModal = commentsOpen ? (
+    <CommentsSheet
+      postId={post.id}
+      onClose={() => setCommentsOpen(false)}
+      onCountChange={setLoadedCommentCount}
+    />
+  ) : null;
+
   if (type === "text") {
     // Compact/Twitter density (§10 rule 3): tight single-line header, body, inline counts —
     // deliberately less breathing room than the photo/video cards below.
@@ -438,10 +484,16 @@ export function MediaPostCard({
             label={likedByMe ? "Unlike" : "Like"}
             onPress={onToggleLike}
           />
-          <InlineAction icon="message-circle" count={commentCount} label="Comment" />
+          <InlineAction
+            icon="message-circle"
+            count={shownCommentCount}
+            label="Comment"
+            onPress={() => setCommentsOpen(true)}
+          />
           <InlineAction icon="send" count={mockShareCount(post.id)} label="Send" />
         </View>
         {sheetModal}
+        {commentsModal}
       </View>
     );
   }
@@ -569,6 +621,7 @@ export function MediaPostCard({
         {actions}
       </View>
       {sheetModal}
+      {commentsModal}
     </View>
   );
 }

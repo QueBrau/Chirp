@@ -12,7 +12,7 @@ import { Pressable, useColorScheme, View } from "react-native";
 
 import { getCampus, type CampusOut } from "@/api/auth";
 import { useSession } from "@/auth";
-import { AppText, Button, Card, GradientAvatar, ListRow, Screen } from "@/components";
+import { AppText, Button, Card, FilledHeart, GradientAvatar, ListRow, Screen } from "@/components";
 import {
   radii,
   resolvePalette,
@@ -149,14 +149,14 @@ function PreviewActionChip({
         justifyContent: "center",
       }}
     >
-      {/* c222: same icon-keyed rule as MediaPostCard - this preview has to agree with
-          the real feed, or Appearance settings show an accent heart while the feed
-          shows red. */}
-      <Feather
-        name={name}
-        size={16}
-        color={active ? (name === "heart" ? palette.like : palette.accent) : palette.inkFaint}
-      />
+      {/* c222/c229: same icon-keyed rule as MediaPostCard, and the same filled shape -
+          this preview has to agree with the real feed, or Appearance settings show an
+          outlined accent heart while the feed shows a filled red one. */}
+      {active && name === "heart" ? (
+        <FilledHeart size={16} color={palette.like} />
+      ) : (
+        <Feather name={name} size={16} color={active ? palette.accent : palette.inkFaint} />
+      )}
     </View>
   );
 }
