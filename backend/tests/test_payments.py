@@ -50,6 +50,7 @@ def stripe_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, An
         "customer_session": [],
         "payment_intent": [],
         "payment_intent_retrieve": [],
+        "payment_intent_cancel": [],
     }
     # intent id -> client_secret, so the retrieve fake can hand back the SAME
     # secret a prior create returned (real Stripe would); keyed rather than a
@@ -86,13 +87,22 @@ def stripe_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, An
         created_intents[intent_id] = client_secret
         return FakeStripeObject(id=intent_id, client_secret=client_secret)
 
+    async def fake_payment_intent_cancel(intent_id: str, **params: Any) -> FakeStripeObject:
+        calls["payment_intent_cancel"].append({"id": intent_id, **params})
+        return FakeStripeObject(id=intent_id, status="canceled")
+
     async def fake_payment_intent_retrieve(intent_id: str, **params: Any) -> FakeStripeObject:
         """Default: behaves like real Stripe GET — same id, same client_secret as
-        whatever create_async originally returned for it. Individual tests
-        override this via monkeypatch to simulate a retrieve failure."""
+        whatever create_async originally returned for it, still awaiting payment
+        (status="requires_payment_method", same as a fresh create — c234 reads this
+        field on the retrieve path). Individual tests override this via monkeypatch
+        to simulate a retrieve failure, or a status that has moved past "awaiting
+        payment" (see the c234 retrieve-path tests below)."""
         calls["payment_intent_retrieve"].append({"id": intent_id, **params})
         return FakeStripeObject(
-            id=intent_id, client_secret=created_intents.get(intent_id, "pi_secret")
+            id=intent_id,
+            client_secret=created_intents.get(intent_id, "pi_secret"),
+            status="requires_payment_method",
         )
 
     monkeypatch.setattr(stripe.Account, "create_async", fake_account_create)
@@ -104,6 +114,7 @@ def stripe_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, An
     )
     monkeypatch.setattr(stripe.PaymentIntent, "create_async", fake_payment_intent_create)
     monkeypatch.setattr(stripe.PaymentIntent, "retrieve_async", fake_payment_intent_retrieve)
+    monkeypatch.setattr(stripe.PaymentIntent, "cancel_async", fake_payment_intent_cancel)
     return calls
 
 
@@ -1227,3 +1238,389 @@ async def test_a_replayed_event_for_the_same_intent_does_not_log_a_reconciliatio
         if r.name == "app.routers.payments" and r.levelno >= logging.ERROR
     ]
     assert reconciliation_errors == []
+
+
+# ---------------------------------------------------------------------------
+# c231: a declined-card same-rail retry must not replay a dead reservation's
+# cached Stripe intent id.
+#
+# The bug: _resolve_reservation marks a failed reservation 'failed' but leaves its
+# stripe_payment_intent_id on the row (by design — see its docstring). A same-rail
+# retry never reuses that dead row (the 'live' query only sees 'open'/'succeeded');
+# it inserts a genuinely NEW reservation. Pre-fix, create_dues_payment_intent's
+# idempotency key was derived only from (cycle, member, rail) — identical for both
+# rows — so within Stripe's 24h idempotency window the new row's create() call
+# replayed Stripe's cache and got back the DEAD row's old intent id. Writing that
+# id onto the new row collides with uq_dues_intent_stripe_id, which is not scoped
+# by status at all, and the commit at that collision sat outside any try/except:
+# an unhandled 500, repeatable for up to 24h.
+# ---------------------------------------------------------------------------
+
+
+async def _seed_reservation(
+    chapter_id: str,
+    cycle_id: str,
+    user_id: str,
+    rail: str,
+    status: str,
+    *,
+    stripe_payment_intent_id: str | None = None,
+    age_hours: float = 0,
+) -> str:
+    """Insert a dues_payment_intents row directly with a specific status/age — the
+    only way to put the table in states the endpoint itself cannot produce on
+    demand (a 'failed' row with an intent id still attached, an 'open' row that is
+    hours old). Returns the new row's id."""
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            text(
+                "INSERT INTO dues_payment_intents "
+                "(chapter_id, dues_cycle_id, user_id, rail, status, "
+                "stripe_payment_intent_id, created_at, updated_at) "
+                "VALUES (:chapter_id, :cycle_id, :user_id, :rail, :status, :pi_id, "
+                "now() - (:age_hours * interval '1 hour'), now()) "
+                "RETURNING id"
+            ),
+            {
+                "chapter_id": chapter_id,
+                "cycle_id": cycle_id,
+                "user_id": user_id,
+                "rail": rail,
+                "status": status,
+                "pi_id": stripe_payment_intent_id,
+                "age_hours": age_hours,
+            },
+        )
+        await session.commit()
+        return str(result.scalar_one())
+
+
+async def _open_reservation_count(cycle_id: str, user_id: str) -> int:
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            text(
+                "SELECT count(*) FROM dues_payment_intents "
+                "WHERE dues_cycle_id = :c AND user_id = :u AND status = 'open'"
+            ),
+            {"c": cycle_id, "u": user_id},
+        )
+        return int(result.scalar_one())
+
+
+def _install_caching_payment_intent_create(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: dict[str, list[dict[str, Any]]],
+    *,
+    force_id: str | None = None,
+    seed: dict[str, str] | None = None,
+) -> None:
+    """Replace create_async with one that behaves like REAL Stripe idempotency: the
+    same idempotency_key always gets back the same intent id. The shared
+    stripe_calls fixture's default fake mints a fresh uuid on every call and
+    ignores the key entirely — realistic for most tests, but it hides exactly the
+    same-key collision c231 fixes.
+
+    seed pre-populates the key->id cache (e.g. with what the OLD, pre-c231 key
+    format would have resolved to) so a test can assert the CURRENT code no longer
+    computes that key. force_id makes every call return that id regardless of key,
+    emulating an old-format cached key still live in Stripe's window (or two
+    requests racing on one key) to exercise the IntegrityError belt directly.
+    """
+    key_to_id: dict[str, str] = dict(seed or {})
+
+    async def fake_create(**params: Any) -> FakeStripeObject:
+        calls["payment_intent"].append(params)
+        key = params["idempotency_key"]
+        if force_id is not None:
+            intent_id = force_id
+        else:
+            intent_id = key_to_id.setdefault(key, f"pi_{uuid.uuid4().hex[:12]}")
+        return FakeStripeObject(id=intent_id, client_secret=f"{intent_id}_secret")
+
+    monkeypatch.setattr(stripe.PaymentIntent, "create_async", fake_create)
+
+
+async def test_a_declined_card_retry_gets_a_genuinely_fresh_intent(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """The primary c231 fix: seed a FAILED reservation (R1) that still carries
+    pi_123 (exactly what _resolve_reservation leaves behind), then retry. The old
+    (cycle, member, rail) key is pre-seeded to resolve to pi_123 in the fake — if
+    the retry's create() call still computed that key, it would get pi_123 back
+    and collide with R1's row. It must not: the new reservation's key includes its
+    OWN row id, so the retry gets a genuinely different intent and succeeds.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+    old_format_key = f"dues:{cycle_id}:{setup.member.id}:card"
+    _install_caching_payment_intent_create(
+        monkeypatch, stripe_calls, seed={old_format_key: "pi_123"}
+    )
+
+    await _seed_reservation(
+        setup.chapter_id, cycle_id, setup.member.id, "card", "failed",
+        stripe_payment_intent_id="pi_123",
+    )
+
+    retry = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert retry.status_code == 200, retry.text
+    new_intent_id = await _reserved_intent_id(cycle_id, setup.member.id)
+    assert new_intent_id is not None
+    assert new_intent_id != "pi_123"
+    assert stripe_calls["payment_intent"][0]["idempotency_key"] != old_format_key
+
+
+async def test_a_stale_cached_key_collision_is_a_409_not_a_500(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """The c231 belt: even with the per-reservation nonce, force Stripe to hand
+    back an id (pi_123) that's already claimed by a DIFFERENT row (R1, 'failed').
+    uq_dues_intent_stripe_id then loses the assignment commit — this must resolve
+    as an honest 409 the client can retry, not the unhandled 500 the bug report
+    describes, and it must not leave the member stuck: the new reservation this
+    attempt created is canceled, releasing uq_dues_intent_live.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+    _install_caching_payment_intent_create(monkeypatch, stripe_calls, force_id="pi_123")
+
+    await _seed_reservation(
+        setup.chapter_id, cycle_id, setup.member.id, "card", "failed",
+        stripe_payment_intent_id="pi_123",
+    )
+
+    retry = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert retry.status_code == 409, retry.text
+    assert retry.json()["detail"] == "payment_intent_conflict"
+    # Not stuck: no 'open' row is left behind holding uq_dues_intent_live.
+    assert await _open_reservation_count(cycle_id, setup.member.id) == 0
+
+
+# ---------------------------------------------------------------------------
+# c234: abandoned reservation lifecycle.
+# ---------------------------------------------------------------------------
+
+
+async def test_an_abandoned_open_reservation_past_the_ttl_lets_the_member_switch_rails(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """An 'open' reservation nobody ever resolved, well past the 24h TTL, must not
+    permanently lock a member out of paying on ANY rail. The stale row is resolved
+    (best-effort Stripe cancel, then marked 'canceled') and a fresh reservation on
+    the NEW rail proceeds — the double-charge guard this would otherwise trip
+    (payment_already_in_progress) must not fire for a genuinely dead attempt.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    await _seed_reservation(
+        setup.chapter_id, cycle_id, setup.member.id, "ach", "open",
+        stripe_payment_intent_id="pi_abandoned", age_hours=25,
+    )
+
+    response = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["rail"] == "card"
+    # Best-effort cancel was attempted against the abandoned intent.
+    assert stripe_calls["payment_intent_cancel"][0]["id"] == "pi_abandoned"
+    # A fresh reservation was created (a genuine create call reached Stripe) rather
+    # than reusing or erroring on the stale row.
+    assert len(stripe_calls["payment_intent"]) == 1
+    new_intent_id = await _reserved_intent_id(cycle_id, setup.member.id)
+    assert new_intent_id is not None
+    assert new_intent_id != "pi_abandoned"
+
+
+async def test_an_open_reservation_within_the_ttl_still_blocks_a_rail_switch(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Boundary regression: an 'open' reservation that is old but still WITHIN the
+    24h TTL must keep blocking a cross-rail switch exactly as before c234 — the TTL
+    must not have loosened the live double-charge guard itself."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    await _seed_reservation(
+        setup.chapter_id, cycle_id, setup.member.id, "ach", "open",
+        stripe_payment_intent_id="pi_in_flight", age_hours=1,
+    )
+
+    response = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "payment_already_in_progress"
+    assert stripe_calls["payment_intent"] == []
+
+
+async def test_an_aged_reservation_with_money_in_motion_is_never_expired(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """c234 amendment (adversarial-review catch): age alone is not abandonment.
+
+    An ACH intent ordinarily sits in 'processing' for 1-3 business days - longer
+    than the TTL - and Stripe refuses to cancel an intent whose money is moving.
+    That refusal is the signal: the reservation must SURVIVE and the rail switch
+    must 409, because expiring it and minting a fresh intent would charge the
+    member twice at Stripe with only an ERROR log to show for the second capture.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    await _seed_reservation(
+        setup.chapter_id, cycle_id, setup.member.id, "ach", "open",
+        stripe_payment_intent_id="pi_processing", age_hours=25,
+    )
+
+    async def uncancelable(intent_id: str, **params: Any) -> FakeStripeObject:
+        raise stripe.InvalidRequestError(
+            "You cannot cancel this PaymentIntent because it has a status of "
+            "processing.", param=None
+        )
+
+    async def fake_retrieve_processing(intent_id: str, **params: Any) -> FakeStripeObject:
+        return FakeStripeObject(
+            id=intent_id, client_secret="cs_processing", status="processing"
+        )
+
+    monkeypatch.setattr(stripe.PaymentIntent, "cancel_async", uncancelable)
+    monkeypatch.setattr(stripe.PaymentIntent, "retrieve_async", fake_retrieve_processing)
+
+    response = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "payment_already_in_progress"
+    # No fresh intent was minted - the double charge never happened.
+    assert stripe_calls["payment_intent"] == []
+    # The reservation is still the live one, holding its in-flight intent.
+    assert await _reserved_intent_id(cycle_id, setup.member.id) == "pi_processing"
+
+
+async def test_the_exact_ttl_boundary_still_blocks(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """A row just inside the TTL is NOT expired: the ordinary within-TTL path runs
+    - 409, and no cancel is even attempted.
+
+    Seeded at 23.9h, not 24h exactly: created_at is set relative to now() at SEED
+    time, so an exactly-24h row is already microseconds past the strict '<'
+    boundary when the request evaluates it - the precise boundary instant is not
+    testable without clock injection. 23.9h leaves ~6 minutes of margin against
+    slow CI while still pinning the edge far tighter than the 1h case above."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    await _seed_reservation(
+        setup.chapter_id, cycle_id, setup.member.id, "ach", "open",
+        stripe_payment_intent_id="pi_boundary", age_hours=23.9,
+    )
+
+    response = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "payment_already_in_progress"
+    assert stripe_calls["payment_intent"] == []
+    assert stripe_calls["payment_intent_cancel"] == []
+
+
+async def test_same_rail_retrieve_of_a_settled_intent_returns_an_honest_status(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """c234: a same-rail retry can retrieve an intent Stripe already settled (or is
+    settling) while the webhook that would have moved the reservation out of 'open'
+    has not arrived yet. The endpoint must not hand back what looks like a fresh
+    checkout — payment_intent_status must say so instead of the default
+    'awaiting_payment' a genuinely open intent reports.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    first = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["payment_intent_status"] == "awaiting_payment"
+
+    async def fake_retrieve_succeeded(intent_id: str, **params: Any) -> FakeStripeObject:
+        calls_seen["id"] = intent_id
+        return FakeStripeObject(
+            id=intent_id, client_secret="stale_looking_secret", status="succeeded"
+        )
+
+    calls_seen: dict[str, str] = {}
+    monkeypatch.setattr(stripe.PaymentIntent, "retrieve_async", fake_retrieve_succeeded)
+
+    retry = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["payment_intent_status"] == "succeeded"
+    # No second create call — this is still the retrieve path, not a new charge.
+    assert len(stripe_calls["payment_intent"]) == 1

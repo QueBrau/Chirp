@@ -119,16 +119,27 @@ async def create_dues_payment_intent(
     cycle_id: uuid.UUID,
     user_id: uuid.UUID,
     chapter_id: uuid.UUID,
+    reservation_id: uuid.UUID,
 ) -> stripe.PaymentIntent:
     """Create a dues PaymentIntent on the chapter's account with the platform fee.
 
-    The idempotency key is derived from (cycle, member, rail) so a client retry
-    resolves to the same intent instead of creating a second one.
+    The idempotency key includes the CALLER'S reservation row id (board c231), not
+    just (cycle, member, rail): a declined-card retry supersedes a 'failed'
+    reservation with a fresh DB row (payments.py never reuses a dead one), and that
+    fresh row must get a genuinely fresh Stripe intent. Keying only on (cycle,
+    member, rail) — the pre-c231 behavior — replayed Stripe's own idempotency cache
+    across that reservation boundary and handed the new row back the dead
+    reservation's OLD intent id, which collides with uq_dues_intent_stripe_id
+    (that index spans every status, including 'failed') and 500s. A retry against
+    the SAME reservation — the retrieve path in payments.py, taken whenever a
+    stripe_payment_intent_id is already on file — never calls this function again,
+    so it does not need this key to be stable across calls; it only needs to be
+    unique per reservation, which including the row's own id guarantees.
     """
     return await stripe.PaymentIntent.create_async(
         api_key=_secret_key(),
         stripe_account=account_id,
-        idempotency_key=f"dues:{cycle_id}:{user_id}:{rail}",
+        idempotency_key=f"dues:{cycle_id}:{user_id}:{rail}:{reservation_id}",
         amount=amount_cents,
         currency=CURRENCY,
         customer=customer_id,
@@ -157,6 +168,20 @@ async def retrieve_payment_intent(account_id: str, intent_id: str) -> stripe.Pay
     client_secret again.
     """
     return await stripe.PaymentIntent.retrieve_async(
+        intent_id, api_key=_secret_key(), stripe_account=account_id
+    )
+
+
+async def cancel_payment_intent(account_id: str, intent_id: str) -> stripe.PaymentIntent:
+    """Best-effort cancel of an intent behind an abandoned reservation (board c234).
+
+    Callers must treat failure here as non-fatal: Stripe rejects cancellation once
+    an intent is already 'processing' or 'succeeded' (exactly the states where
+    abandoning our side is safe regardless — the money is already moving), and a
+    network error must not be allowed to block expiring the reservation, which is
+    what actually reopens the rail for the member.
+    """
+    return await stripe.PaymentIntent.cancel_async(
         intent_id, api_key=_secret_key(), stripe_account=account_id
     )
 
