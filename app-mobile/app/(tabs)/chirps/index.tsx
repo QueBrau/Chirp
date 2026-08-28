@@ -1,12 +1,15 @@
 /**
  * Chirps: the anonymous campus board (DESIGN §6/§7, §10 rules 5/6) — the board is a
- * PLACE, not a list: it renders on a deep-navy wash of the campus primary
- * color (campusNightWash), the SAME value in both light and dark system mode,
- * so it always feels like the campus at night — instantly distinct from
- * Home's neutral canvas. Cards stay light-tinted (chirpTints) floating on that
- * canvas regardless of system scheme, so all card content is pinned to the
- * LIGHT palette's ink tones on purpose (not `useTheme()`'s system-following
- * ones) — otherwise text would vanish in system dark mode. Active up-votes
+ * PLACE, not a list: in DARK mode it renders on a deep-navy wash of the campus
+ * primary color (campusNightWash), so at night it still feels like the campus
+ * rather than another list. In LIGHT mode it uses the app's normal canvas
+ * (c219, braul Aug 27) — forcing navy in both schemes made this the one screen
+ * that ignored the system setting, and it read as an island rather than as part
+ * of the app. Cards stay light-tinted (chirpTints) in both, so all card content
+ * is pinned to the LIGHT palette's ink tones on purpose (not `useTheme()`'s
+ * system-following ones) — otherwise text would vanish on the navy. That pinning
+ * is correct under both canvases: light cards float on the navy at night, and in
+ * light mode they simply ARE the standard app surfaces. Active up-votes
  * and the single top-scoring chirp's number use campus gold (§10 rule 6);
  * down-votes stay danger red. NO mask/avatar of any kind (a small tinted dot
  * is the only marker, DESIGN §6).
@@ -18,7 +21,7 @@
 
 import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
-import { Modal, Pressable, TextInput, View } from "react-native";
+import { Modal, Pressable, TextInput, useColorScheme, View } from "react-native";
 import { useRouter } from "expo-router";
 
 import { createReport, blockChirpAuthor } from "@/api/moderation";
@@ -35,6 +38,7 @@ import {
   spacing,
   typography,
   useAppearance,
+  useTheme,
 } from "@/theme";
 
 /** Anonymity marker per DESIGN §6: 8px tinted dot, no mask/avatar of any kind. */
@@ -63,7 +67,23 @@ interface SheetOption {
 export default function ChirpScreen() {
   const router = useRouter();
   const { campusColors } = useAppearance();
-  const navyWash = campusNightWash(campusColors);
+  const palette = useTheme();
+  // c219 (braul, Aug 27): the navy wash is a DARK-MODE canvas now, not a forced one.
+  // It used to be applied in both schemes so the board always felt like "the campus at
+  // night"; in light mode that made Chirps the one screen ignoring the system scheme,
+  // and it read as an island rather than as part of the app.
+  //
+  // CANVAS AND HEADER TONE MOVE TOGETHER, always. The header below is hand-rolled with
+  // tone="onAccent" (white) precisely BECAUSE the canvas was guaranteed dark. Changing
+  // one without the other ships white text on a light canvas — invisible. That coupling
+  // is the whole reason this is not a one-line background swap.
+  const onNavy = useColorScheme() === "dark";
+  const canvas = onNavy ? campusNightWash(campusColors) : palette.bg;
+  // Matches Screen's own header exactly in light mode (micro/secondary, display/primary,
+  // caption/secondary) so the two headers still cannot drift — the reason this one was
+  // hand-rolled in the first place.
+  const headerTone = onNavy ? "onAccent" : "secondary";
+  const titleTone = onNavy ? "onAccent" : "primary";
 
   // The (tabs) layout gates on useSession().status === "ready" before this screen
   // can ever mount, so `user` is guaranteed populated here — no separate /auth/me
@@ -205,10 +225,11 @@ export default function ChirpScreen() {
   const canCompose = composerText.trim().length > 0 && !posting;
 
   return (
-    <Screen backgroundColor={navyWash} scroll>
-      {/* Custom header (§10.1), not Screen's `title` prop — the canvas is forced navy
-          regardless of system scheme, so header text is pinned to onAccent (white)
-          rather than the system-following ink/inkSecondary tones. */}
+    <Screen backgroundColor={canvas} scroll>
+      {/* Custom header (§10.1), not Screen's `title` prop — the canvas is navy in DARK
+          mode, where header text has to be onAccent (white) rather than the
+          system-following ink tones. In light mode the canvas is the normal background
+          and the tones match Screen's own exactly (c219). */}
       <View style={{ marginBottom: spacing.xl, gap: spacing.xs }}>
         {/* Real campus name via GET /campuses/{id} (c46). Rendered only once it
             resolves — an absent eyebrow beats a wrong one. The old value was
@@ -216,7 +237,7 @@ export default function ChirpScreen() {
             wrong for every other campus, and CampusOut has no mascot field to
             replace it with. */}
         {campus !== null ? (
-          <AppText variant="micro" tone="onAccent">
+          <AppText variant="micro" tone={headerTone}>
             {campus.name.toUpperCase()}
           </AppText>
         ) : null}
@@ -233,11 +254,11 @@ export default function ChirpScreen() {
               backgroundColor: campusColors.secondary,
             }}
           />
-          <AppText variant="display" tone="onAccent">
+          <AppText variant="display" tone={titleTone}>
             Chirps
           </AppText>
         </View>
-        <AppText variant="caption" tone="onAccent" style={{ marginTop: spacing.xs }}>
+        <AppText variant="caption" tone={headerTone} style={{ marginTop: spacing.xs }}>
           Anonymous and campus-wide — no names, ever.
         </AppText>
       </View>
@@ -256,20 +277,22 @@ export default function ChirpScreen() {
             paddingVertical: spacing.md,
             paddingHorizontal: spacing.lg,
             borderRadius: radii.card,
-            // The canvas here is forced navy in BOTH schemes, so this cannot use a
-            // system-following surface token - it would go near-black in dark mode on an
-            // already-dark wash. A translucent white sits on the navy in either scheme.
-            backgroundColor: "rgba(255,255,255,0.10)",
+            // On navy (dark mode) a translucent white lifts the row off the wash; a
+            // system-following surface token would go near-black there, on an already
+            // dark canvas. In light mode the canvas is the ordinary app background, so
+            // the ordinary raised-surface token is exactly right and the translucent
+            // white would be all but invisible. c219.
+            backgroundColor: onNavy ? "rgba(255,255,255,0.10)" : palette.surfaceAlt,
             flexDirection: "row",
             alignItems: "center",
             justifyContent: "space-between",
           })}
         >
           <View style={{ gap: 2 }}>
-            <AppText variant="headline" tone="onAccent">
+            <AppText variant="headline" tone={titleTone}>
               Touse of the week
             </AppText>
-            <AppText variant="caption" tone="onAccent">
+            <AppText variant="caption" tone={headerTone}>
               One vote a week. The whole school decides.
             </AppText>
           </View>
