@@ -2486,20 +2486,20 @@
     },
     {
       "id": "c235",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "frontend",
       "area": "orgs",
-      "title": "c235 IN BUILD Aug 28 - OPUS worker in chirp-sub-c235 on court/c235-dues-client-truth, bundled with c236 (same dues screens). - swap app-mobile/src/payments/dues.tsx (and any other installment renderer) to effective_paid so a refunded installment stops showing as paid. Small.",
+      "title": "c235 DONE Aug 28 - MERGED 603c868 (PR #148). Swept SEVEN decision sites across three renderers, not just the first hit; five moved to effective_paid, TWO deliberately kept on paid_at with the reasoning: the record-payment gate would otherwise offer a request the backend guarantees to 409 (claims WHERE paid_at IS NULL). Refunded installments now read Refunded with a caption pointing at the ledger instead of dead-ending. Mobile-only, CI 4/4. Render QA rides the device window. - OPUS worker in chirp-sub-c235 on court/c235-dues-client-truth, bundled with c236 (same dues screens). - swap app-mobile/src/payments/dues.tsx (and any other installment renderer) to effective_paid so a refunded installment stops showing as paid. Small.",
       "detail": "Backend schema docstring (schemas/finance.py DuesPlanInstallmentOut) documents the contract: paid_at is history, effective_paid is status."
     },
     {
       "id": "c236",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "frontend",
       "area": "orgs",
-      "title": "c236 IN BUILD Aug 28 - OPUS worker, SAME branch as c235. - when the field says processing/succeeded, show the honest already-in-progress/already-paid message instead. Wire alongside c235's effective_paid swap (same screen family). Small.",
+      "title": "c236 DONE Aug 28 - MERGED 603c868 (PR #148). presentDuesPaymentSheet now reads payment_intent_status BEFORE initStripe and never presents the sheet unless awaiting_payment; the caller swaps the rail picker AND Pay button for honest copy, still calling onPaid() so the cycle self-settles when the webhook lands. Hiding the rail picker was deliberate: leaving it selectable invites a second payment on a cycle Stripe is already collecting. Mobile-only, CI 4/4. Render QA rides the device window. - OPUS worker, SAME branch as c235. - when the field says processing/succeeded, show the honest already-in-progress/already-paid message instead. Wire alongside c235's effective_paid swap (same screen family). Small.",
       "detail": "Backend contract: payments schema DuesIntentOut.payment_intent_status, default awaiting_payment."
     }
   ],
