@@ -2391,7 +2391,7 @@
       "owner": "court",
       "tag": "backend",
       "area": "orgs",
-      "title": "c224 PRE-LAUNCH MONEY-PATH RE-SWEEP Aug 27 (launch next week, real payments) - no dedicated adversarial sweep since payment plans went LIVE. Targets the deployed state: plans/installments vs one-shot dues interplay, concurrent attempts at volume, webhook retries/ordering, refund/correction chains, reservation lifecycle. Two find lenses -> refute-by-default verify -> findings to cards. Read-only.",
+      "title": "c224 SWEEP COMPLETE Aug 28 - 7 unique findings, ALL CONFIRMED by refute-by-default verification (0 refuted; both lenses independently found the cross-table race). Fixes: c230 (race guard, wave 2, migration 0028 CLAIMED), c231+c234 (payments.py wave 1), c232+c233 (finance.py wave 1). Root cause across the batch: c195 taught only two money surfaces about plans; everything else assumed the pre-plans world. - no dedicated adversarial sweep since payment plans went LIVE. Targets the deployed state: plans/installments vs one-shot dues interplay, concurrent attempts at volume, webhook retries/ordering, refund/correction chains, reservation lifecycle. Two find lenses -> refute-by-default verify -> findings to cards. Read-only.",
       "detail": "Invariants under test (never weaken): uq_ledger_dues_payment_once; dues_contributions_subquery nets installments+corrections; overview and pay-guard agree; retrieve-not-create on same-rail open reservation; cancel-on-exception only in create branch; active-plan member -> on_payment_plan."
     },
     {
@@ -2438,6 +2438,51 @@
       "area": "fyp",
       "title": "c229 CLAIMED Aug 28 (braul) - a liked heart is red on the OUTLINE ONLY; braul wants the WHOLE heart filled. This is a root cause, not a styling miss: c222 correctly painted palette.like onto a Feather heart, and @expo/vector-icons Feather is a STROKE-ONLY icon set with no filled heart glyph, so a colour prop can only ever reach the outline. c222 was not wrong, it was as red as Feather can be. DESIGN.md 153 says 'Feather set only, never mixed icon families', so swapping in Ionicons heart / MaterialCommunityIcons is OUT. FIX: render Feather's OWN heart path as an inline react-native-svg Path with a fill - identical geometry and stroke weight, no new icon family, no DESIGN.md amendment needed. react-native-svg 15.12.1 is ALREADY a dependency and already used by three components (TreeCanvas, CategoryDonut, BalanceTrend), so this adds no package. THREE call sites, the same three c222 had: ActionChip, InlineAction, and appearance.tsx's PreviewActionChip. Lands on ONE branch and ONE PR with c228.",
       "detail": "WHY THE OBVIOUS FIX IS THE WRONG ONE. The one-line version of this is 'use Ionicons heart instead of heart-outline', and it would look right in a screenshot. It also breaks the single most explicit rule in DESIGN.md's icon section - Feather only, never mixed families - and it does so on the most-looked-at control in the app, sitting inches from a message-circle and a send that are still Feather. Two icon families in one row is exactly the 'default-looking UI' DESIGN.md exists to prevent, and the mismatch is in optical weight, not just provenance: Ionicons' solid heart is visually heavier than Feather's 2px stroke geometry beside it.\n\nWHY THE SVG PATH IS NOT A LOOPHOLE. Feather ships its icons as open SVG paths, and the vector-icons font is a rendering of those same paths. Drawing Feather's heart path directly with react-native-svg and setting fill is the SAME ARTWORK, rendered with a fill instead of only a stroke - the shape, proportions and stroke width stay Feather's. No second family enters the app, and the inactive state can keep using the plain Feather font glyph so nothing changes when a post is not liked.\n\nTHE ACTIVE-STATE RULE FROM c222 CARRIES OVER UNCHANGED and must not be quietly widened: the treatment is keyed on the ICON being a heart, not on `active` alone, because ActionChip and InlineAction are shared by heart, message-circle and send. Keying on active alone would work today and quietly fill a future active comment or send chip.\n\nCHIRPS ARE STILL NOT AFFECTED, same as c222: they have no heart, they have a VotePill, and filling its active up-vote would collide with the danger-red down-vote. Nothing here touches that.\n\nTHREE CALL SITES, not one - the third is the trap c222 already documented: profile/appearance.tsx renders a PreviewActionChip heart in the appearance settings preview. Missing it leaves the settings preview showing an outlined heart while the real feed shows a filled one."
+    },
+    {
+      "id": "c230",
+      "col": "backlog",
+      "owner": "court",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c230 [HIGH, c224 F-race, BOTH lenses] Cross-table TOCTOU: member self-serve pay racing treasurer plan-create leaves a live reservation AND an active plan (no constraint spans dues_payment_intents x dues_payment_plans; READ COMMITTED; wide network-I/O window). Webhook then appends full dues_payment while installments also land = real double collection. FIX (wave 2, after c231-c234 merge): DB-level cross-table guard - migration 0028 CLAIMED HERE (parents on 0027) - plus honest 409s at both insert sites; concurrency test with two sessions interleaved.",
+      "detail": "Refuter-verified evidence on the c224 outputs. Repo convention holds: the read picks the honest 409 reason, the constraint is the real guard."
+    },
+    {
+      "id": "c231",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c231 IN BUILD [HIGH, c224 F2] Declined-card retry can 500 for 24h: deterministic Stripe idempotency key (no nonce) + uq_dues_intent_stripe_id spanning ALL statuses + unguarded commit at payments.py:347-348 = cached pi collides with the failed row's id, IntegrityError, 500. Fix: per-reservation nonce in the key + IntegrityError handled to a clean retryable response. Bundled with c234 (same file).",
+      "detail": "Wave 1 worker owns payments.py + stripe_service.py exclusively."
+    },
+    {
+      "id": "c232",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c232 IN BUILD [HIGH, c224 plans-F1] Plan-blind generic ledger writer: POST /chapters/{id}/ledger accepts dues_payment/dues_installment for an active-plan member with no plan check (schema explicitly allows both types) - treasurer data-entry double-collects; overview flips to paid; plan stays active. Fix: active-plan guard in create_ledger_entry mirroring payments.py:190-198. Bundled with c233 (same file).",
+      "detail": "Wave 1 worker owns finance.py + schemas/finance.py exclusively."
+    },
+    {
+      "id": "c233",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c233 IN BUILD [HIGH+MED-HIGH, c224 plans-F2/F3] Netting-blind plan surfaces: (a) create_dues_payment_plan's existence-only pre-check permanently 409s a fully-refunded member who needs a NEW plan (net corrections like payments.py does); (b) installment views (plans/mine + treasurer list) show paid_at forever after corrections reverse the money - net each installment against corrections in the read path. The two-screens-disagree class, relocated.",
+      "detail": "Same wave-1 finance.py worker as c232."
+    },
+    {
+      "id": "c234",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c234 IN BUILD [MED, c224 F3/F4] Reservation lifecycle: (a) abandoned open reservations never expire and block rail-switch forever (no TTL, no cancel route, no job) - treat old-enough open rows as expired at the guard using created_at, NO new column; (b) same-rail retry during a delayed webhook returns a client_secret for an already-succeeded intent with no status branch - branch on intent.status and answer honestly.",
+      "detail": "Same wave-1 payments.py worker as c231."
     }
   ],
   "decisions": [
