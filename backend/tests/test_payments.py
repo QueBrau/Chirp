@@ -1493,6 +1493,93 @@ async def test_an_open_reservation_within_the_ttl_still_blocks_a_rail_switch(
     assert stripe_calls["payment_intent"] == []
 
 
+async def test_an_aged_reservation_with_money_in_motion_is_never_expired(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """c234 amendment (adversarial-review catch): age alone is not abandonment.
+
+    An ACH intent ordinarily sits in 'processing' for 1-3 business days - longer
+    than the TTL - and Stripe refuses to cancel an intent whose money is moving.
+    That refusal is the signal: the reservation must SURVIVE and the rail switch
+    must 409, because expiring it and minting a fresh intent would charge the
+    member twice at Stripe with only an ERROR log to show for the second capture.
+    """
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    await _seed_reservation(
+        setup.chapter_id, cycle_id, setup.member.id, "ach", "open",
+        stripe_payment_intent_id="pi_processing", age_hours=25,
+    )
+
+    async def uncancelable(intent_id: str, **params: Any) -> FakeStripeObject:
+        raise stripe.InvalidRequestError(
+            "You cannot cancel this PaymentIntent because it has a status of "
+            "processing.", param=None
+        )
+
+    async def fake_retrieve_processing(intent_id: str, **params: Any) -> FakeStripeObject:
+        return FakeStripeObject(
+            id=intent_id, client_secret="cs_processing", status="processing"
+        )
+
+    monkeypatch.setattr(stripe.PaymentIntent, "cancel_async", uncancelable)
+    monkeypatch.setattr(stripe.PaymentIntent, "retrieve_async", fake_retrieve_processing)
+
+    response = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "payment_already_in_progress"
+    # No fresh intent was minted - the double charge never happened.
+    assert stripe_calls["payment_intent"] == []
+    # The reservation is still the live one, holding its in-flight intent.
+    assert await _reserved_intent_id(cycle_id, setup.member.id) == "pi_processing"
+
+
+async def test_the_exact_ttl_boundary_still_blocks(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]],
+) -> None:
+    """A row just inside the TTL is NOT expired: the ordinary within-TTL path runs
+    - 409, and no cancel is even attempted.
+
+    Seeded at 23.9h, not 24h exactly: created_at is set relative to now() at SEED
+    time, so an exactly-24h row is already microseconds past the strict '<'
+    boundary when the request evaluates it - the precise boundary instant is not
+    testable without clock injection. 23.9h leaves ~6 minutes of margin against
+    slow CI while still pinning the edge far tighter than the 1h case above."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+
+    await _seed_reservation(
+        setup.chapter_id, cycle_id, setup.member.id, "ach", "open",
+        stripe_payment_intent_id="pi_boundary", age_hours=23.9,
+    )
+
+    response = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "card"},
+        headers=setup.member.headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "payment_already_in_progress"
+    assert stripe_calls["payment_intent"] == []
+    assert stripe_calls["payment_intent_cancel"] == []
+
+
 async def test_same_rail_retrieve_of_a_settled_intent_returns_an_honest_status(
     client: AsyncClient,
     make_chapter_with: MakeChapterWith,

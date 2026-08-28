@@ -300,30 +300,53 @@ async def create_dues_payment_intent(
         and reservation.status == "open"
         and reservation.created_at < datetime.now(timezone.utc) - RESERVATION_TTL
     ):
-        # Abandoned (c234): never resolved by a webhook and long past any
-        # reasonable window for the member to still be mid-checkout. Best-effort
-        # cancel at Stripe so the stale intent cannot be confirmed out from under
-        # the rail switch below, but a failure here must NOT block the member —
-        # the DB row, not the Stripe side, is what actually gates uq_dues_intent_live.
+        # Maybe abandoned (c234): never resolved by a webhook and long past any
+        # reasonable window for the member to still be mid-checkout. AGE ALONE IS
+        # NOT PROOF OF ABANDONMENT (adversarial-review catch, c234 amendment): an
+        # ACH payment ordinarily sits in 'processing' for 1-3 business days -
+        # longer than this TTL - and a lost webhook can leave a succeeded intent
+        # looking 'open' here indefinitely. Expiring either and minting a fresh
+        # intent charges the member TWICE at Stripe, with the second capture only
+        # ever surfacing as _log_if_second_capture_unrecordable's ERROR line.
+        #
+        # So Stripe's cancel is used as the TEST, not as best-effort cleanup:
+        # Stripe accepts cancellation exactly in the states where no money is
+        # moving (requires_payment_method / _confirmation / _action) and refuses
+        # it once the money is in motion (processing, succeeded). Only a cancel
+        # Stripe accepts - or an intent it reports already canceled - releases
+        # this reservation. Anything else keeps the row: a stuck rail switch is
+        # a recoverable 409; a second real charge is not.
+        expire = True
         if reservation.stripe_payment_intent_id is not None:
             try:
                 await stripe_service.cancel_payment_intent(
                     account_id, reservation.stripe_payment_intent_id
                 )
             except Exception:
-                logger.warning(
-                    "c234: best-effort cancel failed for abandoned intent %s "
-                    "(reservation %s); expiring the reservation regardless",
-                    reservation.stripe_payment_intent_id,
-                    reservation.id,
-                )
-        # 'expired' is not a value the status CHECK constraint allows (migration
-        # 0010), so this reuses 'canceled' — the same retryable bucket
-        # _resolve_reservation already puts a genuinely failed/canceled payment in.
-        reservation.status = "canceled"
-        reservation.updated_at = datetime.now(timezone.utc)
-        await session.commit()
-        reservation = None
+                expire = False
+                try:
+                    stale = await stripe_service.retrieve_payment_intent(
+                        account_id, reservation.stripe_payment_intent_id
+                    )
+                    if stale.status == "canceled":
+                        expire = True
+                except Exception:
+                    logger.warning(
+                        "c234: could not determine state of aged intent %s "
+                        "(reservation %s); keeping the reservation - erring "
+                        "toward a 409 over a possible double charge",
+                        reservation.stripe_payment_intent_id,
+                        reservation.id,
+                    )
+        if expire:
+            # 'expired' is not a value the status CHECK constraint allows
+            # (migration 0010), so this reuses 'canceled' - the same retryable
+            # bucket _resolve_reservation already puts a genuinely failed/canceled
+            # payment in.
+            reservation.status = "canceled"
+            reservation.updated_at = datetime.now(timezone.utc)
+            await session.commit()
+            reservation = None
 
     if reservation is not None:
         if reservation.status == "succeeded":
