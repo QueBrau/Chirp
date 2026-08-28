@@ -336,6 +336,63 @@ async def test_payment_intent_created_emits_coarse_props(
     assert events[0]["rail"] == "card"
 
 
+async def test_same_rail_retry_does_not_double_emit_intent_created(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    stripe_calls: dict,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """c227 skeptic catch: the retrieve path re-serves an existing intent on every
+    same-rail retry/poll (for ACH, across days) - the emit lives in the CREATE
+    branch only, so retries never inflate the intents-created count."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle_id = await _create_dues_cycle(client, setup)
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO, logger="app.analytics"):
+        first = await client.post(
+            f"/payments/dues/{cycle_id}/intent",
+            json={"rail": "card"},
+            headers=setup.member.headers,
+        )
+        retry = await client.post(
+            f"/payments/dues/{cycle_id}/intent",
+            json={"rail": "card"},
+            headers=setup.member.headers,
+        )
+    assert first.status_code == 200 and retry.status_code == 200
+    assert len(stripe_calls["payment_intent"]) == 1, "retry stayed on the retrieve path"
+
+    events = [e for e in _analytics_events(caplog) if e["event"] == "payment_intent_created"]
+    assert len(events) == 1, "one real creation, one emit - the retry emitted nothing"
+
+
+async def test_webhook_without_chirp_metadata_emits_nothing(
+    client: AsyncClient,
+    make_chapter_with: MakeChapterWith,
+    stripe_env: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """c227 skeptic catch: an intent we did not create carries no chirp_* metadata
+    - mirrored guard with _record_dues_payment, skipped instead of emitted as a
+    junk all-None row."""
+    setup = await make_chapter_with(role="member")
+    await _create_dues_cycle(client, setup)
+    event = {
+        "id": "evt_foreign_intent",
+        "type": "payment_intent.succeeded",
+        "data": {"object": {"id": "pi_foreign", "metadata": {}}},
+    }
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO, logger="app.analytics"):
+        response = await post_stripe_webhook(client, event)
+    assert response.status_code == 200, response.text
+    assert _analytics_events(caplog) == []
+
+
 def _stripe_webhook_event(
     event_type: str, *, cycle_id: str, user_id: str, rail: str = "card"
 ) -> dict:

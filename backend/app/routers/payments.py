@@ -455,15 +455,21 @@ async def create_dues_payment_intent(
                 await session.commit()
             raise conflict("payment_intent_conflict") from None
 
+        # c227 (skeptic catch): emitted HERE, inside the create branch after the
+        # intent id committed, never after the branches converge - the retrieve
+        # path re-serves an existing intent on every same-rail retry/poll (for
+        # ACH, across days), and an emit there overcounts "intents created" by
+        # however many times the member reopens the screen.
+        emit(
+            "payment_intent_created",
+            chapter_id=chapter.id,
+            cycle_id=cycle.id,
+            user_id=user.id,
+            rail=body.rail,
+        )
+
     customer_session_secret = await stripe_service.create_customer_session(
         account_id, customer_id
-    )
-    emit(
-        "payment_intent_created",
-        chapter_id=chapter.id,
-        cycle_id=cycle.id,
-        user_id=user.id,
-        rail=body.rail,
     )
     return DuesIntentOut(
         payment_intent_client_secret=intent.client_secret,
@@ -593,6 +599,11 @@ def _emit_stripe_webhook_event(event: dict) -> None:
     if event_type not in ("payment_intent.succeeded", "payment_intent.payment_failed"):
         return
     metadata = event["data"]["object"].get("metadata") or {}
+    # c227 (skeptic catch): mirror _record_dues_payment's guard - an intent we did
+    # not create carries no chirp_* metadata and is ignored rather than emitted as
+    # a junk all-None row.
+    if not metadata.get("chirp_dues_cycle_id") or not metadata.get("chirp_user_id"):
+        return
     emit(
         "payment_succeeded" if event_type == "payment_intent.succeeded" else "payment_failed",
         event_type=event_type,
