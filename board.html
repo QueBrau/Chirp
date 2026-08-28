@@ -2323,6 +2323,15 @@
       "detail": "Recommend logs->BigQuery first pass. Needs Jose's scope + privacy sign-off before any build."
     },
     {
+      "id": "c219",
+      "col": "progress",
+      "owner": "court",
+      "tag": "design",
+      "area": "yak",
+      "title": "c219 IN BUILD Aug 27 - PRODUCT DECISION (braul): the Chirps board stops forcing the deep-navy campus wash in LIGHT mode. Navy stays in dark mode; light mode gets the app's normal canvas, so the screen no longer reads as an out-of-place island in light. REVERSES HALF OF DESIGN.md 10.5, which currently says the wash applies in BOTH modes - DESIGN.md is updated in the same PR rather than left contradicting the app",
+      "detail": "braul asked for 'the background of chirps the same color as the rest of the app'. Offered three scopes; braul picked the narrowest - light mode only. Chirps keeps its identity at night, which is what DESIGN.md 10.5's 'campus at night' line was actually protecting, and stops being the one screen that ignores the system scheme.\\n\\nWHY THIS IS NOT A ONE-LINE BACKGROUND SWAP. Nineteen colours on that screen are pinned to the LIGHT palette precisely BECAUSE the canvas is forced navy - light.surface cards, light.ink body text, light.border, the composer, both action sheets. Those pins turn out to be correct under the chosen option and need no change: in dark mode the canvas stays navy and light cards float on it exactly as today, and in light mode light-palette cards on the light canvas ARE the standard app look. The narrow option is the one that avoids touching them.\\n\\nWHAT DOES HAVE TO CHANGE IS THE HEADER. It is hand-rolled rather than Screen's, with tone='onAccent' (white), and the file says why: 'the canvas is forced navy regardless of system scheme, so header text is pinned to onAccent rather than the system-following ink tones'. The moment light mode gets a light canvas, white header text is invisible on it. Canvas and header tone must move together or the screen ships unreadable in one mode - which is exactly the class of bug a background-only change would have produced.\\n\\nGold vote states (DESIGN 10.6) are untouched - a different rule, not part of this decision."
+    },
+    {
       "id": "c218",
       "col": "progress",
       "owner": "court",
