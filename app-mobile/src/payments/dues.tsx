@@ -20,7 +20,7 @@ import {
   type DuesIntentOut,
   type PaymentRail,
 } from "@/api/payments";
-import { AppText, Button, Card } from "@/components";
+import { AppText, Button, Card, Chip } from "@/components";
 import { ProgressMeter } from "@/components/charts/ProgressMeter";
 import { showAlert } from "@/lib/alert";
 import { calendarDay } from "@/lib/dates";
@@ -62,6 +62,20 @@ function installmentPaidDate(isoInstant: string): string {
 }
 
 /**
+ * What one trip through the dues payment flow ended in.
+ *
+ * "already_processing"/"already_paid" (c236) are the two outcomes where the sheet
+ * was never opened at all, because the server said Stripe has already moved past
+ * waiting on this member.
+ */
+export type DuesPaymentOutcome =
+  | "paid"
+  | "initiated"
+  | "canceled"
+  | "already_processing"
+  | "already_paid";
+
+/**
  * Fetch intent params, hand them to PaymentSheet, and present it.
  *
  * Returns "paid" only for the card rail. An ACH sheet that closes successfully means
@@ -72,11 +86,21 @@ export async function presentDuesPaymentSheet(
   cycleId: string,
   rail: PaymentRail,
   amountCents: number,
-): Promise<"paid" | "initiated" | "canceled"> {
+): Promise<DuesPaymentOutcome> {
   if (stripeSdk === null) throw new Error(WEB_UNAVAILABLE);
   const { initStripe, initPaymentSheet, presentPaymentSheet } = stripeSdk;
 
   const params: DuesIntentOut = await createDuesPaymentIntent(cycleId, rail, amountCents);
+
+  // c236: a same-rail retry retrieves the intent the reservation already points at,
+  // and Stripe can have moved it past "awaiting payment" while the client was away
+  // (settled, or an ACH debit mid-flight) with our webhook not yet caught up. The
+  // client secret is real, so PaymentSheet would happily open on it and show a
+  // fresh-looking checkout to someone whose money has ALREADY moved. Bail before
+  // initStripe: nothing here should be presented.
+  if (params.payment_intent_status !== "awaiting_payment") {
+    return params.payment_intent_status === "succeeded" ? "already_paid" : "already_processing";
+  }
 
   // stripeAccountId is what routes the charge to the CHAPTER's connected account.
   // Without it the SDK pays the platform account instead — silently, and with a
@@ -282,6 +306,12 @@ export default function DuesPaymentScreen({
 }: DuesPaymentScreenProps): ReactElement {
   const [rail, setRail] = useState<PaymentRail>("card");
   const [paying, setPaying] = useState(false);
+  // c236: what the server told us about an intent that is already underway. An
+  // alert alone would drop the member straight back onto a live Pay button, and
+  // onPaid's refresh cannot be relied on to clear it — the webhook that marks the
+  // cycle settled may still be in flight, and an ACH debit is days from it. The
+  // screen holds the state so it stops offering a payment that must not be made.
+  const [underway, setUnderway] = useState<"processing" | "paid" | null>(null);
 
   const feeCents = platformFeeCents(amountCents, rail);
 
@@ -290,6 +320,26 @@ export default function DuesPaymentScreen({
     try {
       const outcome = await presentDuesPaymentSheet(cycleId, rail, amountCents);
       if (outcome === "canceled") return;
+      if (outcome === "already_paid" || outcome === "already_processing") {
+        setUnderway(outcome === "already_paid" ? "paid" : "processing");
+        if (outcome === "already_paid") {
+          showAlert(
+            "You already paid this cycle",
+            "Stripe already has this payment, so we didn't open checkout again. It can take a moment to show as paid here.",
+          );
+        } else {
+          showAlert(
+            "Payment already going through",
+            rail === "ach"
+              ? "Your bank payment is already on its way, so we didn't open checkout again. Bank payments take 1-3 business days to clear."
+              : "Your payment is already going through, so we didn't open checkout again. It should show as paid here shortly.",
+          );
+        }
+        // Refresh anyway: if the webhook has landed since, the cycle moves to
+        // Settled on its own and this card goes away entirely.
+        onPaid?.();
+        return;
+      }
       if (outcome === "paid") {
         showAlert("Dues paid", `${cycleName} is settled. Thanks!`);
       } else {
@@ -322,30 +372,52 @@ export default function DuesPaymentScreen({
           <AppText variant="display">{dollars(amountCents)}</AppText>
         </View>
 
-        <View style={{ gap: spacing.sm }}>
-          <AppText variant="micro" tone="secondary">
-            Pay with
-          </AppText>
-          <View style={{ flexDirection: "row", gap: spacing.sm }}>
-            {RAILS.map((option) => (
-              <RailOption
-                key={option.value}
-                rail={option}
-                selected={rail === option.value}
-                onSelect={() => setRail(option.value)}
-              />
-            ))}
+        {underway !== null ? (
+          // c236: the rail picker and the Pay button are both gone on purpose.
+          // There is nothing left to choose or confirm, and leaving the other rail
+          // selectable would invite a SECOND payment against a cycle Stripe is
+          // already collecting for.
+          <View style={{ gap: spacing.sm }}>
+            <Chip
+              label={underway === "paid" ? "Already paid" : "Payment processing"}
+              variant={underway === "paid" ? "success" : "warning"}
+            />
+            <AppText variant="caption" tone="secondary">
+              {underway === "paid"
+                ? "Stripe already has this payment. It can take a moment to show as paid here, and there is nothing else for you to do."
+                : rail === "ach"
+                  ? "Your bank payment is already on its way. Bank payments take 1-3 business days to clear, and your dues will show as paid once it settles."
+                  : "Your payment is already going through. It should show as paid here shortly."}
+            </AppText>
           </View>
-          <AppText variant="caption" tone="tertiary">
-            Includes a {dollars(feeCents)} platform fee.
-          </AppText>
-        </View>
+        ) : (
+          <>
+            <View style={{ gap: spacing.sm }}>
+              <AppText variant="micro" tone="secondary">
+                Pay with
+              </AppText>
+              <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                {RAILS.map((option) => (
+                  <RailOption
+                    key={option.value}
+                    rail={option}
+                    selected={rail === option.value}
+                    onSelect={() => setRail(option.value)}
+                  />
+                ))}
+              </View>
+              <AppText variant="caption" tone="tertiary">
+                Includes a {dollars(feeCents)} platform fee.
+              </AppText>
+            </View>
 
-        <Button
-          label={paying ? "Opening…" : `Pay ${dollars(amountCents)}`}
-          onPress={pay}
-          disabled={paying}
-        />
+            <Button
+              label={paying ? "Opening…" : `Pay ${dollars(amountCents)}`}
+              onPress={pay}
+              disabled={paying}
+            />
+          </>
+        )}
       </View>
     </Card>
   );

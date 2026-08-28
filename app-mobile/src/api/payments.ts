@@ -26,6 +26,18 @@ export interface ChapterPaymentsStatus {
   details_submitted: boolean;
 }
 
+/**
+ * Where the intent behind this response already stands with Stripe (board c234).
+ *
+ * "awaiting_payment" is the default and is what a freshly created intent always
+ * reports: the client secret is safe to open in PaymentSheet. The other two mean
+ * a same-rail retry retrieved an intent Stripe has already moved past waiting on
+ * the member (an ACH debit in flight, or money already taken) while our webhook
+ * has not resolved the reservation yet. The client secret is still real, but
+ * presenting it as a fresh checkout would ask someone to pay a second time.
+ */
+export type DuesIntentStatus = "awaiting_payment" | "processing" | "succeeded";
+
 /** Response of POST /payments/dues/{cycle_id}/intent — everything PaymentSheet needs. */
 export interface DuesIntentOut {
   payment_intent_client_secret: string;
@@ -36,6 +48,7 @@ export interface DuesIntentOut {
   amount_cents: number;
   application_fee_cents: number;
   rail: PaymentRail;
+  payment_intent_status: DuesIntentStatus;
 }
 
 /** Platform cut per rail in basis points, mirroring stripe_service.PLATFORM_FEE_BPS. */
