@@ -12,6 +12,7 @@ from sqlalchemy.orm import aliased
 
 from app import models
 from app.core.csv_export import csv_response, sanitize_csv_text
+from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, not_found
 from app.core.permissions import DUES_ADMIN, Role, require_role
 from app.db import get_session
@@ -123,6 +124,29 @@ async def create_ledger_entry(
     on the number it was meant to move while still returning 201 -- money-
     correctness finding c191/c194. Rejecting any correction-of-a-correction here
     closes that hole without narrowing what a correction may otherwise target.
+
+    entry_type="dues_installment" is ALWAYS rejected here (422
+    dues_installment_requires_plan_route -- c232). The only coherent way an
+    installment ledger row comes into existence is record_dues_installment_payment:
+    it stamps the specific plan installment's paid_at/ledger_entry_id in the same
+    transaction that inserts the row, which is what lets the plan's read path
+    (_load_installments/_plan_out, c233) net corrections back against a real
+    installment. A dues_installment row created here would have no seq, no
+    plan_id, nothing for that read path to attach it to -- exactly the plan/ledger
+    incoherence c233 exists to close, so this route refuses to manufacture one
+    rather than accept it and leave the plan's own view of itself wrong.
+
+    entry_type="dues_payment" for a (dues_cycle_id, related_user_id) that
+    currently has an ACTIVE DuesPaymentPlan 409s member_on_payment_plan (c232),
+    mirroring payments.py's create_dues_payment_intent guard (c195) from the
+    manual-entry side: a plan member pays through record_dues_installment_payment
+    so the plan's own state (paid_at, completion) stays coherent with the ledger.
+    A treasurer hand-entering a "dues_payment" against a plan member here would
+    collect real money the plan's installments already account for, double-
+    collecting them silently -- the plan and the ledger would each believe the
+    member still owes the full cycle amount independently. Checked only when both
+    dues_cycle_id and related_user_id are given: with either missing there is no
+    (cycle, member) pair to look up, same as every other guard on this route.
     """
     if body.entry_type == "correction":
         if body.corrects_entry_id is None:
@@ -136,6 +160,26 @@ async def create_ledger_entry(
             raise HTTPException(
                 status_code=422, detail="correction_target_is_correction"
             )
+    elif body.entry_type == "dues_installment":
+        # c232: only record_dues_installment_payment may create these — see the
+        # docstring above.
+        raise HTTPException(
+            status_code=422, detail="dues_installment_requires_plan_route"
+        )
+    elif (
+        body.entry_type == "dues_payment"
+        and body.dues_cycle_id is not None
+        and body.related_user_id is not None
+    ):
+        active_plan = await session.execute(
+            select(models.DuesPaymentPlan.id).where(
+                models.DuesPaymentPlan.dues_cycle_id == body.dues_cycle_id,
+                models.DuesPaymentPlan.user_id == body.related_user_id,
+                models.DuesPaymentPlan.status == "active",
+            )
+        )
+        if active_plan.scalar_one_or_none() is not None:
+            raise conflict("member_on_payment_plan")
 
     entry = models.LedgerEntry(
         chapter_id=chapter_id,
@@ -325,11 +369,79 @@ async def decide_spend_approval(
 # is treasurer/president-administered, same as the cycle it pays into.
 
 
+async def _corrections_by_entry(
+    session: AsyncSession, chapter_id: uuid.UUID, entry_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """Sum of correction amount_cents per corrected ledger entry, for exactly the
+    entry ids the caller cares about (c233).
+
+    Same corrects_entry_id join dues_status.py's dues_contributions_subquery uses
+    to net a correction against its target, narrowed to a specific set of entries
+    rather than "every payment in the cycle" — this is answering "is THIS
+    installment's ledger row still net-positive", not a member's whole-cycle
+    standing. A correction whose corrects_entry_id isn't in entry_ids (i.e. it
+    targets some other ledger entry entirely) is correctly excluded by the
+    .in_() filter.
+    """
+    if not entry_ids:
+        return {}
+    result = await session.execute(
+        select(
+            models.LedgerEntry.corrects_entry_id,
+            func.coalesce(func.sum(models.LedgerEntry.amount_cents), 0),
+        )
+        .where(
+            models.LedgerEntry.chapter_id == chapter_id,
+            models.LedgerEntry.entry_type == "correction",
+            models.LedgerEntry.corrects_entry_id.in_(entry_ids),
+        )
+        .group_by(models.LedgerEntry.corrects_entry_id)
+    )
+    return {corrects_entry_id: total for corrects_entry_id, total in result.all()}
+
+
+def _installment_out(
+    installment: models.DuesPlanInstallment, corrections_by_entry: dict[uuid.UUID, int]
+) -> DuesPlanInstallmentOut:
+    """Assemble one installment's response, adding effective_paid (c233) on top of
+    the write-once paid_at/ledger_entry_id columns — see DuesPlanInstallmentOut's
+    docstring for why both are exposed. effective_paid nets any corrections
+    targeting ledger_entry_id against that entry's own amount_cents; net>0 is the
+    same "money genuinely still in hand" threshold payments.py's guard and
+    dues_status.py's subquery both use for "paid", applied per-installment instead
+    of per-member/cycle.
+    """
+    effective_paid = installment.paid_at is not None
+    if effective_paid and installment.ledger_entry_id is not None:
+        net = installment.amount_cents + corrections_by_entry.get(
+            installment.ledger_entry_id, 0
+        )
+        effective_paid = net > 0
+    return DuesPlanInstallmentOut(
+        id=installment.id,
+        plan_id=installment.plan_id,
+        seq=installment.seq,
+        amount_cents=installment.amount_cents,
+        due_date=installment.due_date,
+        paid_at=installment.paid_at,
+        ledger_entry_id=installment.ledger_entry_id,
+        effective_paid=effective_paid,
+    )
+
+
 def _plan_out(
-    plan: models.DuesPaymentPlan, installments: list[models.DuesPlanInstallment]
+    plan: models.DuesPaymentPlan,
+    installments: list[models.DuesPlanInstallment],
+    corrections_by_entry: dict[uuid.UUID, int],
 ) -> DuesPaymentPlanOut:
     """Assemble the response shape by hand — like EventOut.rsvps, this codebase has
-    no ORM relationship() wired between the two tables, only the FK column."""
+    no ORM relationship() wired between the two tables, only the FK column.
+
+    corrections_by_entry is precomputed by the caller (not queried in here) so a
+    multi-plan caller (list_dues_payment_plans) can fetch it ONCE across every
+    plan's installments instead of once per plan — the same N+1-avoidance rule
+    that function's own docstring already names for the installments query itself.
+    """
     return DuesPaymentPlanOut(
         id=plan.id,
         chapter_id=plan.chapter_id,
@@ -341,7 +453,9 @@ def _plan_out(
         note=plan.note,
         created_by=plan.created_by,
         created_at=plan.created_at,
-        installments=[DuesPlanInstallmentOut.model_validate(i) for i in installments],
+        installments=[
+            _installment_out(i, corrections_by_entry) for i in installments
+        ],
     )
 
 
@@ -372,9 +486,16 @@ async def create_dues_payment_plan(
     installment_count must equal len(installments) (422) so the stored count can
     never silently disagree with the schedule actually written.
 
-    409 if the member already has a full dues_payment OR a completed plan's
-    dues_installment rows for this cycle (they do not need a plan — see the
-    existing_payment query below), already has an ACTIVE plan for it
+    409 already_paid if the member's NET standing for this cycle is still positive
+    (dues_contributions_subquery, app/core/dues_status.py — the same netting
+    create_dues_payment_intent's own guard uses, c232). This covers a full
+    dues_payment, a completed plan's dues_installment rows, or a partial payment
+    that has not been refunded back to zero — anyone still net-positive does not
+    need a new plan. A member fully refunded for this cycle (net <= 0) is NOT
+    blocked here, unlike payments.py's self-serve endpoint: reopening a plan for
+    them is exactly the treasurer-administered path this route exists for, not the
+    same-day guard change payments.py's own docstring says self-serve repayment
+    still needs. Also 409 if the member already has an ACTIVE plan for it
     (uq_dues_payment_plans_active_per_member, migration 0023, is the real guard
     under concurrency — the read here only picks the honest 409 reason before the
     race), or has a LIVE self-serve reservation in flight (an open/succeeded
@@ -402,23 +523,23 @@ async def create_dues_payment_plan(
             status_code=422, detail="installments_must_sum_to_cycle_amount"
         )
 
-    # entry_type also matches 'dues_installment', mirroring payments.py's own
-    # create_dues_payment_intent existence guard (c195) — a member who COMPLETED a
-    # prior plan has only dues_installment rows on the ledger, never a dues_payment
-    # row, so filtering to 'dues_payment' alone would miss them entirely and hand
-    # out a SECOND plan to someone already fully paid. LIMIT 1 for the same reason
-    # as that guard: a member can have SEVERAL dues_installment rows for one cycle,
-    # where scalar_one_or_none() only tolerates zero or one.
-    existing_payment = await session.execute(
-        select(models.LedgerEntry.id)
-        .where(
-            models.LedgerEntry.dues_cycle_id == cycle_id,
-            models.LedgerEntry.related_user_id == body.user_id,
-            models.LedgerEntry.entry_type.in_(("dues_payment", "dues_installment")),
+    # c232: NET the member's contributions for this cycle rather than checking raw
+    # row existence. The old query matched entry_type IN ('dues_payment',
+    # 'dues_installment') and 409'd the instant ANY such row existed — which is
+    # right for a member who still holds the money, but wrong for one who was
+    # fully refunded: their (now fully offset) dues_payment/dues_installment rows
+    # still exist, so existence alone 409'd already_paid FOREVER, with no way for
+    # a treasurer to ever set them up on a fresh plan. Netting (same
+    # dues_contributions_subquery chapter_overview and payments.py's own guard
+    # read, board c172/c195) fixes that: only a genuinely positive net — money
+    # still actually in hand — blocks a new plan.
+    contributions = dues_contributions_subquery(chapter_id, cycle_id)
+    net_cents = await session.scalar(
+        select(func.coalesce(func.sum(contributions.c.amount_cents), 0)).where(
+            contributions.c.user_id == body.user_id
         )
-        .limit(1)
     )
-    if existing_payment.scalar_one_or_none() is not None:
+    if net_cents > 0:
         raise conflict("already_paid")
 
     existing_active_plan = await session.execute(
@@ -484,7 +605,9 @@ async def create_dues_payment_plan(
         raise conflict("on_payment_plan") from None
 
     await session.refresh(plan)
-    return _plan_out(plan, await _load_installments(session, plan.id))
+    # Freshly created installments have no ledger_entry_id yet (none has been paid),
+    # so there is nothing to net — corrections_by_entry is trivially empty.
+    return _plan_out(plan, await _load_installments(session, plan.id), {})
 
 
 @router.post(
@@ -583,7 +706,10 @@ async def record_dues_installment_payment(
 
     await session.commit()
     await session.refresh(installment)
-    return DuesPlanInstallmentOut.model_validate(installment)
+    # No correction can exist yet against an entry this same request just created
+    # (corrects_entry_id would have to reference a row that didn't exist a moment
+    # ago), so effective_paid is trivially True here — {} skips the query.
+    return _installment_out(installment, {})
 
 
 @router.get("/chapters/{chapter_id}/dues-cycles/{cycle_id}/plans")
@@ -614,10 +740,22 @@ async def list_dues_payment_plans(
         .order_by(models.DuesPlanInstallment.seq)
     )
     installments_by_plan: dict[uuid.UUID, list[models.DuesPlanInstallment]] = {}
+    all_installments: list[models.DuesPlanInstallment] = []
     for installment in installments_result.scalars().all():
         installments_by_plan.setdefault(installment.plan_id, []).append(installment)
+        all_installments.append(installment)
 
-    return [_plan_out(plan, installments_by_plan.get(plan.id, [])) for plan in plans]
+    # ONE corrections query across every plan's installments, not one per plan —
+    # same N+1-avoidance rule as the installments query just above (c233).
+    entry_ids = [
+        i.ledger_entry_id for i in all_installments if i.ledger_entry_id is not None
+    ]
+    corrections_by_entry = await _corrections_by_entry(session, chapter_id, entry_ids)
+
+    return [
+        _plan_out(plan, installments_by_plan.get(plan.id, []), corrections_by_entry)
+        for plan in plans
+    ]
 
 
 @router.get("/chapters/{chapter_id}/dues-cycles/{cycle_id}/plans/mine")
@@ -645,7 +783,10 @@ async def get_my_dues_payment_plan(
     )
     if plan is None:
         raise not_found("dues_payment_plan_not_found")
-    return _plan_out(plan, await _load_installments(session, plan.id))
+    installments = await _load_installments(session, plan.id)
+    entry_ids = [i.ledger_entry_id for i in installments if i.ledger_entry_id is not None]
+    corrections_by_entry = await _corrections_by_entry(session, chapter_id, entry_ids)
+    return _plan_out(plan, installments, corrections_by_entry)
 
 
 @router.post("/chapters/{chapter_id}/dues-plans/{plan_id}/cancel")
@@ -679,4 +820,7 @@ async def cancel_dues_payment_plan(
 
     await session.commit()
     await session.refresh(plan)
-    return _plan_out(plan, await _load_installments(session, plan.id))
+    installments = await _load_installments(session, plan.id)
+    entry_ids = [i.ledger_entry_id for i in installments if i.ledger_entry_id is not None]
+    corrections_by_entry = await _corrections_by_entry(session, chapter_id, entry_ids)
+    return _plan_out(plan, installments, corrections_by_entry)
