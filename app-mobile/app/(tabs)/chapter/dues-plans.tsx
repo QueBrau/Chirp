@@ -72,6 +72,13 @@ function dueDateLabel(isoDay: string): string {
   return calendarDay(isoDay).toLocaleDateString(undefined, { month: "long", day: "numeric" });
 }
 
+/** paid_at is a real instant (the moment record_dues_installment_payment ran), not
+ * a bare calendar day, so it renders directly rather than through calendarDay() —
+ * same split src/payments/dues.tsx's installmentPaidDate documents. */
+function recordedDateLabel(isoInstant: string): string {
+  return new Date(isoInstant).toLocaleDateString(undefined, { month: "long", day: "numeric" });
+}
+
 function isoDate(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -398,7 +405,11 @@ function PlanCard({
   const [expanded, setExpanded] = useState(false);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
 
-  const paid = plan.installments.filter((i) => i.paid_at !== null);
+  // c235: how much is actually collected is effective_paid, not paid_at. paid_at
+  // is write-once history, so a refunded installment kept inflating this meter and
+  // the "N of M installments paid" line while the member's own screen and the
+  // ledger both said the money had gone back out.
+  const paid = plan.installments.filter((i) => i.effective_paid);
   const paidCents = paid.reduce((sum, i) => sum + i.amount_cents, 0);
   const fraction = plan.total_cents > 0 ? Math.min(paidCents / plan.total_cents, 1) : 0;
 
@@ -481,11 +492,22 @@ function PlanCard({
                       {`${dollars(installment.amount_cents)} · due ${dueDateLabel(installment.due_date)}`}
                     </AppText>
                   </View>
-                  {installment.paid_at !== null ? (
+                  {installment.effective_paid ? (
                     <Chip label="Paid" variant="success" />
+                  ) : installment.paid_at !== null ? (
+                    // c235: recorded once, then corrected back out. A "Paid" chip
+                    // here was the treasurer half of the two-screens-disagree bug:
+                    // this screen claimed collected while the ledger said refunded.
+                    <Chip label="Refunded" variant="warning" />
                   ) : null}
                 </View>
 
+                {/* c235: this gate stays on paid_at DELIBERATELY, while every paid/unpaid
+                    STATUS above now reads effective_paid. The backend claims an installment
+                    with `UPDATE ... WHERE paid_at IS NULL` and 409s installment_already_paid
+                    otherwise, so a refunded installment (paid_at set, effective_paid false)
+                    can never be recorded again. Gating this on effective_paid would put a
+                    Record payment button on a request that is guaranteed to fail. */}
                 {installment.paid_at === null && plan.status === "active" ? (
                   <View style={{ gap: spacing.sm }}>
                     <TextInput
@@ -513,6 +535,13 @@ function PlanCard({
                       }
                     />
                   </View>
+                ) : installment.paid_at !== null && !installment.effective_paid ? (
+                  // c235: the row above now correctly reads Refunded, which leaves a
+                  // treasurer looking at an unpaid installment with no way to record
+                  // it. Say why here instead of showing a button that would 409.
+                  <AppText variant="caption" tone="warning">
+                    {`Recorded ${recordedDateLabel(installment.paid_at)}, then refunded. An installment can only be recorded once, so add any replacement payment to the ledger.`}
+                  </AppText>
                 ) : null}
               </View>
             );
@@ -627,6 +656,12 @@ export default function DuesPlansScreen() {
           const nextInstallments = p.installments.map((i) =>
             i.id === updated.id ? updated : i,
           );
+          // c235: paid_at ON PURPOSE, unlike the paid/unpaid rendering above. This
+          // mirrors the server's own completion rule (record_dues_installment_payment
+          // flips the plan to completed when no installment has paid_at IS NULL), so
+          // reading effective_paid here would make this optimistic status disagree
+          // with what the same request just decided, and a refund could silently
+          // reopen a plan the backend still considers completed.
           const allPaid = nextInstallments.every((i) => i.paid_at !== null);
           return { ...p, installments: nextInstallments, status: allPaid ? "completed" : p.status };
         }),

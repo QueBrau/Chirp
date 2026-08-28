@@ -20,7 +20,7 @@ import {
   type DuesIntentOut,
   type PaymentRail,
 } from "@/api/payments";
-import { AppText, Button, Card } from "@/components";
+import { AppText, Button, Card, Chip } from "@/components";
 import { ProgressMeter } from "@/components/charts/ProgressMeter";
 import { showAlert } from "@/lib/alert";
 import { calendarDay } from "@/lib/dates";
@@ -62,6 +62,20 @@ function installmentPaidDate(isoInstant: string): string {
 }
 
 /**
+ * What one trip through the dues payment flow ended in.
+ *
+ * "already_processing"/"already_paid" (c236) are the two outcomes where the sheet
+ * was never opened at all, because the server said Stripe has already moved past
+ * waiting on this member.
+ */
+export type DuesPaymentOutcome =
+  | "paid"
+  | "initiated"
+  | "canceled"
+  | "already_processing"
+  | "already_paid";
+
+/**
  * Fetch intent params, hand them to PaymentSheet, and present it.
  *
  * Returns "paid" only for the card rail. An ACH sheet that closes successfully means
@@ -72,11 +86,21 @@ export async function presentDuesPaymentSheet(
   cycleId: string,
   rail: PaymentRail,
   amountCents: number,
-): Promise<"paid" | "initiated" | "canceled"> {
+): Promise<DuesPaymentOutcome> {
   if (stripeSdk === null) throw new Error(WEB_UNAVAILABLE);
   const { initStripe, initPaymentSheet, presentPaymentSheet } = stripeSdk;
 
   const params: DuesIntentOut = await createDuesPaymentIntent(cycleId, rail, amountCents);
+
+  // c236: a same-rail retry retrieves the intent the reservation already points at,
+  // and Stripe can have moved it past "awaiting payment" while the client was away
+  // (settled, or an ACH debit mid-flight) with our webhook not yet caught up. The
+  // client secret is real, so PaymentSheet would happily open on it and show a
+  // fresh-looking checkout to someone whose money has ALREADY moved. Bail before
+  // initStripe: nothing here should be presented.
+  if (params.payment_intent_status !== "awaiting_payment") {
+    return params.payment_intent_status === "succeeded" ? "already_paid" : "already_processing";
+  }
 
   // stripeAccountId is what routes the charge to the CHAPTER's connected account.
   // Without it the SDK pays the platform account instead — silently, and with a
@@ -123,9 +147,19 @@ export interface PlanProgressCardProps {
 export function PlanProgressCard({ cycleName, plan }: PlanProgressCardProps): ReactElement {
   const palette = useTheme();
   const installments = plan.installments; // seq order, per _load_installments
-  const paid = installments.filter((installment) => installment.paid_at !== null);
+  // c235: paid state comes from effective_paid, never paid_at. paid_at is
+  // write-once history, so a refunded installment keeps it forever and this card
+  // used to keep counting that money as collected while the ledger said it was
+  // gone. effective_paid nets corrections against the installment's ledger entry,
+  // so a refund drops out of the count, the meter and the money total together.
+  const paid = installments.filter((installment) => installment.effective_paid);
   const paidCents = paid.reduce((sum, installment) => sum + installment.amount_cents, 0);
-  const next = installments.find((installment) => installment.paid_at === null) ?? null;
+  const next = installments.find((installment) => !installment.effective_paid) ?? null;
+  // Recorded once, then refunded back out. Worth calling out on its own: the row
+  // silently reverting to unpaid is exactly the disagreement c235 is here to end.
+  const refunded = installments.filter(
+    (installment) => installment.paid_at !== null && !installment.effective_paid,
+  );
 
   return (
     <Card>
@@ -153,7 +187,18 @@ export function PlanProgressCard({ cycleName, plan }: PlanProgressCardProps): Re
 
         <View style={{ gap: spacing.sm }}>
           {installments.map((installment) => {
-            const isPaid = installment.paid_at !== null;
+            const isPaid = installment.effective_paid; // c235: status, not history
+            // paid_at set but no longer effective_paid: recorded, then refunded.
+            // Rendering it as plain "unpaid" would be honest about the balance but
+            // would erase the fact that the member did pay once, so it gets its own
+            // row treatment instead of falling in with the never-paid ones.
+            const wasRefunded = !isPaid && installment.paid_at !== null;
+            // effective_paid is only ever True when paid_at is set (backend
+            // _installment_out starts from `paid_at is not None`), but that is the
+            // server's invariant, not something this type can promise — so the
+            // date is narrowed here rather than asserted at the call.
+            const paidOn =
+              installment.paid_at !== null ? installmentPaidDate(installment.paid_at) : null;
             return (
               <View
                 key={installment.id}
@@ -166,23 +211,48 @@ export function PlanProgressCard({ cycleName, plan }: PlanProgressCardProps): Re
               >
                 <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
                   <Feather
-                    name={isPaid ? "check-circle" : "circle"}
+                    name={isPaid ? "check-circle" : wasRefunded ? "rotate-ccw" : "circle"}
                     size={16}
-                    color={isPaid ? palette.success : palette.inkFaint}
+                    color={
+                      isPaid ? palette.success : wasRefunded ? palette.warning : palette.inkFaint
+                    }
                   />
-                  <AppText variant="body" tone={isPaid ? "primary" : "secondary"}>
+                  <AppText variant="body" tone={isPaid || wasRefunded ? "primary" : "secondary"}>
                     {`Installment ${installment.seq}`}
                   </AppText>
                 </View>
-                <AppText variant="caption" tone={isPaid ? "success" : "tertiary"}>
-                  {installment.paid_at !== null
-                    ? `${dollars(installment.amount_cents)} · paid ${installmentPaidDate(installment.paid_at)}`
-                    : `${dollars(installment.amount_cents)} · due ${installmentDueDate(installment.due_date)}`}
+                <AppText
+                  variant="caption"
+                  tone={isPaid ? "success" : wasRefunded ? "warning" : "tertiary"}
+                >
+                  {isPaid && paidOn !== null
+                    ? // paid_at is still the right source for WHEN: it is the instant
+                      // the treasurer recorded this, and effective_paid above already
+                      // vouched that the money is genuinely still in hand.
+                      `${dollars(installment.amount_cents)} · paid ${paidOn}`
+                    : wasRefunded
+                      ? // Deliberately not dated: paid_at is the RECORDED date, and the
+                        // response carries no refund date, so "refunded March 3" would
+                        // be a made-up fact. The note below the list explains it.
+                        `${dollars(installment.amount_cents)} · refunded`
+                      : `${dollars(installment.amount_cents)} · due ${installmentDueDate(installment.due_date)}`}
                 </AppText>
               </View>
             );
           })}
         </View>
+
+        {refunded.length > 0 ? (
+          // c235: without this, an installment that quietly flips back to unpaid
+          // after a refund looks like the app losing track of a payment. Say what
+          // happened and who can explain it, rather than leaving the member to
+          // guess whether their money is gone.
+          <AppText variant="caption" tone="warning">
+            {refunded.length === 1
+              ? "One installment was refunded after it was recorded, so it counts as unpaid again. Your treasurer can tell you why."
+              : `${refunded.length} installments were refunded after they were recorded, so they count as unpaid again. Your treasurer can tell you why.`}
+          </AppText>
+        ) : null}
 
         <AppText variant="caption" tone="tertiary">
           Your treasurer records each installment as it comes in, so no action is needed here.
@@ -236,6 +306,12 @@ export default function DuesPaymentScreen({
 }: DuesPaymentScreenProps): ReactElement {
   const [rail, setRail] = useState<PaymentRail>("card");
   const [paying, setPaying] = useState(false);
+  // c236: what the server told us about an intent that is already underway. An
+  // alert alone would drop the member straight back onto a live Pay button, and
+  // onPaid's refresh cannot be relied on to clear it — the webhook that marks the
+  // cycle settled may still be in flight, and an ACH debit is days from it. The
+  // screen holds the state so it stops offering a payment that must not be made.
+  const [underway, setUnderway] = useState<"processing" | "paid" | null>(null);
 
   const feeCents = platformFeeCents(amountCents, rail);
 
@@ -244,6 +320,26 @@ export default function DuesPaymentScreen({
     try {
       const outcome = await presentDuesPaymentSheet(cycleId, rail, amountCents);
       if (outcome === "canceled") return;
+      if (outcome === "already_paid" || outcome === "already_processing") {
+        setUnderway(outcome === "already_paid" ? "paid" : "processing");
+        if (outcome === "already_paid") {
+          showAlert(
+            "You already paid this cycle",
+            "Stripe already has this payment, so we didn't open checkout again. It can take a moment to show as paid here.",
+          );
+        } else {
+          showAlert(
+            "Payment already going through",
+            rail === "ach"
+              ? "Your bank payment is already on its way, so we didn't open checkout again. Bank payments take 1-3 business days to clear."
+              : "Your payment is already going through, so we didn't open checkout again. It should show as paid here shortly.",
+          );
+        }
+        // Refresh anyway: if the webhook has landed since, the cycle moves to
+        // Settled on its own and this card goes away entirely.
+        onPaid?.();
+        return;
+      }
       if (outcome === "paid") {
         showAlert("Dues paid", `${cycleName} is settled. Thanks!`);
       } else {
@@ -276,30 +372,52 @@ export default function DuesPaymentScreen({
           <AppText variant="display">{dollars(amountCents)}</AppText>
         </View>
 
-        <View style={{ gap: spacing.sm }}>
-          <AppText variant="micro" tone="secondary">
-            Pay with
-          </AppText>
-          <View style={{ flexDirection: "row", gap: spacing.sm }}>
-            {RAILS.map((option) => (
-              <RailOption
-                key={option.value}
-                rail={option}
-                selected={rail === option.value}
-                onSelect={() => setRail(option.value)}
-              />
-            ))}
+        {underway !== null ? (
+          // c236: the rail picker and the Pay button are both gone on purpose.
+          // There is nothing left to choose or confirm, and leaving the other rail
+          // selectable would invite a SECOND payment against a cycle Stripe is
+          // already collecting for.
+          <View style={{ gap: spacing.sm }}>
+            <Chip
+              label={underway === "paid" ? "Already paid" : "Payment processing"}
+              variant={underway === "paid" ? "success" : "warning"}
+            />
+            <AppText variant="caption" tone="secondary">
+              {underway === "paid"
+                ? "Stripe already has this payment. It can take a moment to show as paid here, and there is nothing else for you to do."
+                : rail === "ach"
+                  ? "Your bank payment is already on its way. Bank payments take 1-3 business days to clear, and your dues will show as paid once it settles."
+                  : "Your payment is already going through. It should show as paid here shortly."}
+            </AppText>
           </View>
-          <AppText variant="caption" tone="tertiary">
-            Includes a {dollars(feeCents)} platform fee.
-          </AppText>
-        </View>
+        ) : (
+          <>
+            <View style={{ gap: spacing.sm }}>
+              <AppText variant="micro" tone="secondary">
+                Pay with
+              </AppText>
+              <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                {RAILS.map((option) => (
+                  <RailOption
+                    key={option.value}
+                    rail={option}
+                    selected={rail === option.value}
+                    onSelect={() => setRail(option.value)}
+                  />
+                ))}
+              </View>
+              <AppText variant="caption" tone="tertiary">
+                Includes a {dollars(feeCents)} platform fee.
+              </AppText>
+            </View>
 
-        <Button
-          label={paying ? "Opening…" : `Pay ${dollars(amountCents)}`}
-          onPress={pay}
-          disabled={paying}
-        />
+            <Button
+              label={paying ? "Opening…" : `Pay ${dollars(amountCents)}`}
+              onPress={pay}
+              disabled={paying}
+            />
+          </>
+        )}
       </View>
     </Card>
   );
