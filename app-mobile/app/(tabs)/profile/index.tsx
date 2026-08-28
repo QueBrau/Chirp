@@ -13,11 +13,20 @@ import { useRouter } from "expo-router";
 import { useEffect, useState, type ComponentProps } from "react";
 import { Pressable, View } from "react-native";
 
+import * as ImagePicker from "expo-image-picker";
+
 import { getMyAlumniProfile, type AlumniProfileOut } from "@/api/alumni";
-import { getCampus, type AccountType, type CampusOut } from "@/api/auth";
+import { getCampus, updateProfile, type AccountType, type CampusOut } from "@/api/auth";
+import {
+  getMediaUploadUrl,
+  uploadMediaBytes,
+  MAX_UPLOAD_BYTES,
+  type AllowedMediaContentType,
+} from "@/api/media";
 import { myMemberships, type MyMembershipOut } from "@/api/chapters";
 import { listPosts } from "@/api/feed";
 import { hasFirebaseConfig, signOutUser, useSession } from "@/auth";
+import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { AppText, Card, Chip, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
 import { ROLE_LABELS } from "@/lib/roleTerms";
 // mockProfileLayout is a LOCAL UI preference (section order/visibility), not
@@ -133,7 +142,8 @@ export default function ProfileScreen() {
   // this screen can mount (see app/(tabs)/_layout.tsx) — status "ready" means a
   // real Firebase-backed identity except in Firebase-less demo mode, where
   // `user` stays null forever. The loading gate below covers both.
-  const { status, user } = useSession();
+  const { status, user, refresh } = useSession();
+  const [savingAvatar, setSavingAvatar] = useState(false);
   const userId = user?.id ?? null;
   const accountType = user?.account_type ?? null;
   const campusId = user?.campus_id ?? null;
@@ -257,6 +267,100 @@ export default function ProfileScreen() {
       ? `${ACCOUNT_TYPE_LABELS[user.account_type]} · ${campus.name}`
       : ACCOUNT_TYPE_LABELS[user.account_type];
 
+
+  /**
+   * Pick, upload, and set the caller's profile picture (board c221).
+   *
+   * The bytes go STRAIGHT TO GCS on a signed url and never through the Chirp API, the
+   * same path post media takes. What reaches our backend is the tmp/ object_name, not a
+   * url - PATCH /auth/me moves that object to avatars/ and assigns the canonical url
+   * itself, so a client cannot point an avatar at an arbitrary address.
+   *
+   * The try/catch around the picker calls is not defensive padding: expo-image-picker
+   * is a native module, so on an EAS dev build cut before it was added these throw at
+   * module resolution rather than opening a picker. Without this the user taps their
+   * avatar and nothing happens at all, with no message. Same precedent as
+   * CreateSheet.pickPhoto and treasurer.exportCsv (c139).
+   */
+  const changeAvatar = async () => {
+    let permission: ImagePicker.PermissionResponse;
+    let result: ImagePicker.ImagePickerResult;
+    try {
+      permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        showAlert(
+          "Photo access needed",
+          "Chirp needs access to your photos to set a profile picture. You can allow it in Settings.",
+        );
+        return;
+      }
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 0.8,
+        selectionLimit: 1,
+        allowsEditing: true,
+        aspect: [1, 1],
+      });
+    } catch {
+      showAlert(
+        "Can't change your picture yet",
+        "Choosing a photo needs the latest app build. Rebuild the app (EAS dev build) and try again.",
+      );
+      return;
+    }
+    if (result.canceled || result.assets.length === 0) return;
+    const asset = result.assets[0];
+
+    const contentType = asset.mimeType;
+    if (contentType !== "image/jpeg" && contentType !== "image/png" && contentType !== "image/webp") {
+      showAlert("Unsupported photo", "Please choose a JPEG, PNG, or WebP image.");
+      return;
+    }
+    if (asset.fileSize !== undefined && asset.fileSize > MAX_UPLOAD_BYTES) {
+      showAlert("Photo too large", "Profile pictures are limited to 10MB. Try a different one.");
+      return;
+    }
+
+    setSavingAvatar(true);
+    try {
+      const typedContentType = contentType as AllowedMediaContentType;
+      const bytes = await (await fetch(asset.uri)).blob();
+      const { upload_url, object_name } = await getMediaUploadUrl(typedContentType, bytes.size);
+      await uploadMediaBytes(upload_url, bytes, typedContentType);
+      await updateProfile({ avatar_object_name: object_name });
+      // refresh() rather than a local setState: the avatar renders from useSession()'s
+      // user in the tab bar and on every post this person wrote, so updating one copy
+      // here would leave the rest stale until the next cold start.
+      await refresh();
+    } catch (error) {
+      showApiError(error, "Couldn't update your picture");
+    } finally {
+      setSavingAvatar(false);
+    }
+  };
+
+  const removeAvatar = () => {
+    confirmAction({
+      title: "Remove picture?",
+      message: "Your profile will go back to showing your initials.",
+      confirmLabel: "Remove",
+      destructive: true,
+      onConfirm: async () => {
+        setSavingAvatar(true);
+        try {
+          // Explicit null, which the API reads as "clear it" - distinct from omitting
+          // the field, which means "leave it alone".
+          await updateProfile({ avatar_object_name: null });
+          await refresh();
+        } catch (error) {
+          showApiError(error, "Couldn't remove your picture");
+        } finally {
+          setSavingAvatar(false);
+        }
+      },
+    });
+  };
+
   return (
     <Screen title="Profile" subtitle={subtitle}>
       <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
@@ -264,7 +368,37 @@ export default function ProfileScreen() {
       </View>
 
       <View style={{ alignItems: "center", gap: spacing.sm, marginBottom: spacing.xl }}>
-        <GradientAvatar name={user.display_name} size={64} photoUrl={user.avatar_url} />
+        {/* The avatar is the control, so the affordance has to be on it rather than in
+            a menu somewhere: tap to change, and a quiet Remove appears only once there
+            is something to remove. No camera-badge overlay - DESIGN.md rule 4 spends
+            the accent elsewhere on this screen, and a badge here would be a second
+            loud moment competing with the role Chip below. */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={
+            user.avatar_url !== null ? "Change your profile picture" : "Add a profile picture"
+          }
+          accessibilityState={{ busy: savingAvatar }}
+          disabled={savingAvatar}
+          onPress={() => void changeAvatar()}
+          style={({ pressed }) => ({ opacity: savingAvatar ? 0.4 : pressed ? 0.6 : 1 })}
+        >
+          <GradientAvatar name={user.display_name} size={64} photoUrl={user.avatar_url} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          disabled={savingAvatar}
+          onPress={() => (user.avatar_url !== null ? removeAvatar() : void changeAvatar())}
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        >
+          <AppText variant="caption" tone="secondary">
+            {savingAvatar
+              ? "Saving..."
+              : user.avatar_url !== null
+                ? "Change or remove photo"
+                : "Add a photo"}
+          </AppText>
+        </Pressable>
         <AppText variant="title">{user.display_name}</AppText>
         {membership !== null ? (
           <View style={{ flexDirection: "row", gap: spacing.sm }}>

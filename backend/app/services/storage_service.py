@@ -109,6 +109,19 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB (board c70 decision, Aug 22)
 UPLOAD_URL_TTL = timedelta(minutes=15)
 TMP_PREFIX = "tmp"
 PERMANENT_PREFIX = "posts"
+# Avatars get their OWN permanent prefix rather than sharing posts/ (board c221), and
+# this is a data-loss guard, not tidiness. jobs/media_reconcile.py builds its reference
+# set from `select(Post.media_urls)` and NOTHING else, then diffs it against everything
+# under posts/. users.avatar_url is not in that set, so an avatar finalized to posts/
+# would be unreferenced BY DEFINITION, age past min_age_hours, and be collected on the
+# next --delete run - roughly a day after the user set it.
+#
+# A separate prefix is also the safer of the two fixes. Teaching the job about
+# users.avatar_url would work, but leaves a version-skew window in which an older image
+# of the job deletes live avatars; avatars/ is inert to every version of that job,
+# past and present. The job's own stated asymmetry decides it: over-protection leaves an
+# orphan uncollected, under-protection destroys someone's photo.
+AVATAR_PREFIX = "avatars"
 
 
 @dataclass(frozen=True)
@@ -276,8 +289,17 @@ def generate_upload_url(user_id: str, content_type: str, byte_size: int) -> Sign
     )
 
 
-def finalize_media_object(user_id: str, tmp_object_name: str) -> str:
-    """Move one tmp/ upload to its permanent posts/ location; returns the new public url.
+def finalize_media_object(
+    user_id: str, tmp_object_name: str, *, destination_prefix: str = PERMANENT_PREFIX
+) -> str:
+    """Move one tmp/ upload to a permanent location; returns the new public url.
+
+    destination_prefix DEFAULTS TO posts/ so every existing caller is unchanged. Avatars
+    pass AVATAR_PREFIX (board c221) because media_reconcile diffs posts/ against
+    posts.media_urls alone - an avatar under posts/ is unreferenced by definition and
+    would be collected about a day after it was set. Keyword-only so a new destination
+    is always an explicit, greppable decision at the call site rather than a
+    positional argument someone can slip in.
 
     Board c132. Called once per media_object_names entry, at post-create/update time,
     AFTER validate_media_object_names() has already confirmed the shape and ownership
@@ -341,7 +363,7 @@ def finalize_media_object(user_id: str, tmp_object_name: str) -> str:
     bucket_name = _bucket_name()
     bucket = _storage_client().bucket(bucket_name)
     tmp_blob = bucket.blob(tmp_object_name)
-    permanent_object_name = f"{PERMANENT_PREFIX}/{user_id}/{suffix}"
+    permanent_object_name = f"{destination_prefix}/{user_id}/{suffix}"
 
     try:
         bucket.copy_blob(
