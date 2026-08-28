@@ -775,3 +775,234 @@ async def test_a_completed_then_fully_refunded_plan_member_is_not_reported_paid(
     assert dues["paid_members"] == 0
     assert dues["on_plan_members"] == 0  # the plan is 'completed', not 'active'
     assert dues["outstanding_members"] == 2  # the refunded member + the president
+
+
+# ---------------------------------------------------------------------------
+# c224 adversarial sweep follow-ups (board cards c232, c233) — falsify-first
+# ---------------------------------------------------------------------------
+
+
+async def test_a_generic_dues_payment_against_an_active_plan_member_is_409(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """FIX 1 (c232, HIGH). create_ledger_entry accepted entry_type='dues_payment'
+    for a member on an ACTIVE payment plan with no plan-awareness at all — a
+    treasurer hand-entering a check against dues would double-collect a plan
+    member silently, since the plan's own installments already account for the
+    full cycle amount. Mirrors payments.py's create_dues_payment_intent guard
+    (c195) from the manual-entry side.
+    """
+    setup = await make_chapter_with(role="member")
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    await _create_plan(client, setup, cycle_id, setup.member.id, _three_installments())
+
+    response = await client.post(
+        f"/chapters/{setup.chapter_id}/ledger",
+        json={
+            "entry_type": "dues_payment",
+            "amount_cents": 30_000,
+            "related_user_id": setup.member.id,
+            "dues_cycle_id": cycle_id,
+        },
+        headers=setup.president.headers,
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "member_on_payment_plan"
+
+    entries = await client.get(
+        f"/chapters/{setup.chapter_id}/ledger", headers=setup.president.headers
+    )
+    assert not [
+        e
+        for e in entries.json()
+        if e["entry_type"] == "dues_payment" and e["related_user_id"] == setup.member.id
+    ]
+
+
+async def test_a_manual_dues_installment_ledger_entry_is_always_422(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """FIX 1 (c232, HIGH), policy decision: entry_type='dues_installment' is
+    rejected at this generic route UNCONDITIONALLY -- with or without an active
+    plan in play -- not merely when it collides with one. The only coherent way
+    an installment ledger row comes into existence is
+    record_dues_installment_payment, which stamps ONE specific plan installment's
+    paid_at/ledger_entry_id in the same transaction; a dues_installment row
+    created here would have no seq or plan_id for FIX 3's read-path netting to
+    attach it to -- exactly the plan/ledger incoherence c233 fights. Checked with
+    no plan in existence at all, and again once an active one does, to pin that
+    this is a structural rejection, not a plan-conflict one.
+    """
+    setup = await make_chapter_with(role="member")
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
+
+    no_plan_yet = await client.post(
+        f"/chapters/{setup.chapter_id}/ledger",
+        json={
+            "entry_type": "dues_installment",
+            "amount_cents": 10_000,
+            "related_user_id": setup.member.id,
+            "dues_cycle_id": cycle_id,
+        },
+        headers=setup.president.headers,
+    )
+    assert no_plan_yet.status_code == 422, no_plan_yet.text
+    assert no_plan_yet.json()["detail"] == "dues_installment_requires_plan_route"
+
+    await _create_plan(client, setup, cycle_id, setup.member.id, _three_installments())
+
+    with_active_plan = await client.post(
+        f"/chapters/{setup.chapter_id}/ledger",
+        json={
+            "entry_type": "dues_installment",
+            "amount_cents": 10_000,
+            "related_user_id": setup.member.id,
+            "dues_cycle_id": cycle_id,
+        },
+        headers=setup.president.headers,
+    )
+    assert with_active_plan.status_code == 422, with_active_plan.text
+    assert with_active_plan.json()["detail"] == "dues_installment_requires_plan_route"
+
+
+async def test_a_completed_then_fully_refunded_plan_member_can_get_a_fresh_plan(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """FIX 2 (c233a, MED-HIGH). create_dues_payment_plan's already-paid pre-check
+    was raw row EXISTENCE, so a fully-refunded member could never get a new plan
+    (409 already_paid forever) even though dues_status.py's own netting
+    definition -- and the President overview -- both already agree they hold no
+    money and owe again. Same corrected-then-refunded sequence as GAP 4 above;
+    net reaches exactly 0, so a fresh plan must succeed with 201.
+    """
+    setup = await make_chapter_with(role="member")
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    plan = (
+        await _create_plan(client, setup, cycle_id, setup.member.id, _three_installments())
+    ).json()
+    for seq in (1, 2, 3):
+        await _record_payment(client, setup, plan["id"], seq)
+
+    entries = await client.get(
+        f"/chapters/{setup.chapter_id}/ledger", headers=setup.president.headers
+    )
+    installment_entries = [
+        e
+        for e in entries.json()
+        if e["entry_type"] == "dues_installment"
+        and e["related_user_id"] == setup.member.id
+    ]
+    assert len(installment_entries) == 3
+    for entry in installment_entries:
+        await _correct(client, setup, entry["id"], -entry["amount_cents"])
+
+    fresh = await _create_plan(
+        client, setup, cycle_id, setup.member.id, _three_installments()
+    )
+    assert fresh.status_code == 201, fresh.text
+
+
+async def test_a_net_positive_partial_refund_still_blocks_a_new_plan(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """FIX 2 (c233a) pin: netting is not the same as never blocking. A member
+    refunded only PART of a lump-sum dues_payment still has a positive net and
+    must still 409 already_paid -- the fix only reopens the FULLY-refunded (net
+    <= 0) case, the same net > 0 threshold payments.py's own already_paid vs.
+    refunded_contact_treasurer split hinges on.
+    """
+    setup = await make_chapter_with(role="member")
+    cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    entry_id = await _pay_on_ledger(client, setup, cycle_id, setup.member.id, 30_000)
+    await _correct(client, setup, entry_id, -5_000)  # net = 25,000 > 0
+
+    response = await _create_plan(
+        client, setup, cycle_id, setup.member.id, _three_installments()
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "already_paid"
+
+
+async def test_plans_mine_and_treasurer_list_reflect_corrections_via_effective_paid(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """FIX 3 (c233b, HIGH). _plan_out/_load_installments mirrored the write-once
+    paid_at/ledger_entry_id columns verbatim, so after GAP 4's corrections reverse
+    the money, plans/mine and the treasurer's plan list both kept showing every
+    installment paid even though the overview (and dues_contributions_subquery)
+    say outstanding. effective_paid must flip to False for a corrected
+    installment while paid_at (write-once, historical) stays exactly as it was.
+    A second, UNTOUCHED plan for the same member on a different cycle is the
+    control: it must still read effective_paid=True throughout, proving the
+    derived field isn't just globally false.
+    """
+    setup = await make_chapter_with(role="member")
+
+    # Plan A: paid in full, then every installment corrected away to zero.
+    cycle_a = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    plan_a = (
+        await _create_plan(client, setup, cycle_a, setup.member.id, _three_installments())
+    ).json()
+    for seq in (1, 2, 3):
+        await _record_payment(client, setup, plan_a["id"], seq)
+    entries = await client.get(
+        f"/chapters/{setup.chapter_id}/ledger", headers=setup.president.headers
+    )
+    plan_a_entries = [
+        e
+        for e in entries.json()
+        if e["entry_type"] == "dues_installment" and e["dues_cycle_id"] == cycle_a
+    ]
+    assert len(plan_a_entries) == 3
+    for entry in plan_a_entries:
+        await _correct(client, setup, entry["id"], -entry["amount_cents"])
+
+    # Plan B: paid in full, untouched -- the "still reads paid" control.
+    cycle_b = await _create_dues_cycle(client, setup, amount_cents=30_000)
+    plan_b = (
+        await _create_plan(client, setup, cycle_b, setup.member.id, _three_installments())
+    ).json()
+    for seq in (1, 2, 3):
+        await _record_payment(client, setup, plan_b["id"], seq)
+
+    mine_a = await client.get(
+        f"/chapters/{setup.chapter_id}/dues-cycles/{cycle_a}/plans/mine",
+        headers=setup.member.headers,
+    )
+    assert mine_a.status_code == 200, mine_a.text
+    assert len(mine_a.json()["installments"]) == 3
+    for installment in mine_a.json()["installments"]:
+        assert installment["paid_at"] is not None
+        assert installment["effective_paid"] is False
+
+    mine_b = await client.get(
+        f"/chapters/{setup.chapter_id}/dues-cycles/{cycle_b}/plans/mine",
+        headers=setup.member.headers,
+    )
+    assert mine_b.status_code == 200, mine_b.text
+    assert len(mine_b.json()["installments"]) == 3
+    for installment in mine_b.json()["installments"]:
+        assert installment["paid_at"] is not None
+        assert installment["effective_paid"] is True
+
+    list_a = await client.get(
+        f"/chapters/{setup.chapter_id}/dues-cycles/{cycle_a}/plans",
+        headers=setup.president.headers,
+    )
+    assert list_a.status_code == 200, list_a.text
+    [treasurer_plan_a] = list_a.json()
+    assert len(treasurer_plan_a["installments"]) == 3
+    for installment in treasurer_plan_a["installments"]:
+        assert installment["paid_at"] is not None
+        assert installment["effective_paid"] is False
+
+    list_b = await client.get(
+        f"/chapters/{setup.chapter_id}/dues-cycles/{cycle_b}/plans",
+        headers=setup.president.headers,
+    )
+    assert list_b.status_code == 200, list_b.text
+    [treasurer_plan_b] = list_b.json()
+    assert len(treasurer_plan_b["installments"]) == 3
+    for installment in treasurer_plan_b["installments"]:
+        assert installment["paid_at"] is not None
+        assert installment["effective_paid"] is True
