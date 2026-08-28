@@ -2387,11 +2387,11 @@
     },
     {
       "id": "c224",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "backend",
       "area": "orgs",
-      "title": "c224 SWEEP COMPLETE Aug 28 - 7 unique findings, ALL CONFIRMED by refute-by-default verification (0 refuted; both lenses independently found the cross-table race). Fixes: c230 (race guard, wave 2, migration 0028 CLAIMED), c231+c234 (payments.py wave 1), c232+c233 (finance.py wave 1). Root cause across the batch: c195 taught only two money surfaces about plans; everything else assumed the pre-plans world. - no dedicated adversarial sweep since payment plans went LIVE. Targets the deployed state: plans/installments vs one-shot dues interplay, concurrent attempts at volume, webhook retries/ordering, refund/correction chains, reservation lifecycle. Two find lenses -> refute-by-default verify -> findings to cards. Read-only.",
+      "title": "c224 DONE Aug 28 - PRE-LAUNCH MONEY SWEEP CLOSED END TO END. 7 findings, all 7 confirmed by refute-by-default verification, all 7 fixed, merged and DEPLOYED (PRs #145 #146 #147; revisions chirp-api-00038-br5 + chirp-ws-00003-zrp on DB head 0028). The ritual also caught a would-be double-charge inside one of the FIXES (c234's TTL would have expired ordinary in-flight ACH) and a latent 500 in the plan-insert path. Remaining money work is human: c11's cleared test payment at the device window.",
       "detail": "Invariants under test (never weaken): uq_ledger_dues_payment_once; dues_contributions_subquery nets installments+corrections; overview and pay-guard agree; retrieve-not-create on same-rail open reservation; cancel-on-exception only in create branch; active-plan member -> on_payment_plan."
     },
     {
@@ -2441,11 +2441,11 @@
     },
     {
       "id": "c230",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "backend",
       "area": "orgs",
-      "title": "c230 PR #147 OPEN Aug 28 - migration 0028 + BEFORE ROW triggers on both tables, advisory-lock-serialized, marker-mapped to the same 409s. Worker stalled 37min from done; manager verified line-level and committed. 10 guard tests + 93 money-path tests green. Bonus find: create_dues_payment_plan's flush() sat outside its try, so even the EXISTING unique-index race would have 500'd. Skeptic attacking the lock semantics + except-clause ordering; merge on PASS + CI. - migration 0028 CLAIMED HERE (parents on 0027) - plus honest 409s at both insert sites; concurrency test with two sessions interleaved.",
+      "title": "c230 DONE Aug 28 - MERGED 44fc989 (PR #147) and LIVE. Skeptic PASS with empirical proof: two real concurrent connections observed blocking in pg_locks (granted=false, wait_event=advisory), the blocked one then correctly saw the committed row and raised - exactly one row survived; no deadlock (webhook/expiry paths proven lock-free); except IntegrityError correctly ordered BEFORE except DBAPIError (parent class trap avoided); up/down/up independently re-verified. Migration 0028 applied to prod and both triggers + both functions confirmed present in the live catalog. - migration 0028 + BEFORE ROW triggers on both tables, advisory-lock-serialized, marker-mapped to the same 409s. Worker stalled 37min from done; manager verified line-level and committed. 10 guard tests + 93 money-path tests green. Bonus find: create_dues_payment_plan's flush() sat outside its try, so even the EXISTING unique-index race would have 500'd. Skeptic attacking the lock semantics + except-clause ordering; merge on PASS + CI. - migration 0028 CLAIMED HERE (parents on 0027) - plus honest 409s at both insert sites; concurrency test with two sessions interleaved.",
       "detail": "Refuter-verified evidence on the c224 outputs. Repo convention holds: the read picks the honest 409 reason, the constraint is the real guard."
     },
     {
@@ -2647,7 +2647,8 @@
     "Aug 27 - Jose: gcloud run deploy allow rule added to settings.local.json - manager is standing deployer again (proven same hour: 00036-f4h deployed by manager, DDIA batch live on DB 0027). c215a restore rehearsal approved and running; c215b HA tier deferred past alpha.",
     "Aug 27 - LAUNCH TARGET NEXT WEEK (Jose). c213 GO and building; c224 money re-sweep running; c227 telemetry GO and building (privacy rule: nothing may link chirp authorship); c225 DB tier = one priced confirm to Jose; c226 load test pending Jose go. RED FLAG restated: c11 - not one test-mode payment (card OR ACH) has ever cleared end to end; it MUST pass in the device/Apple window before launch. c71 fast path: Q (real student) confirms receipt at his own .edu mailbox - no school mailbox for Jose needed.",
     "Aug 28 - Jose's triple GO executed: (1) ws rule added + chirp-ws service created and live; (2) DB tier db-custom-1-3840 applied, prod healthy through restart, REGIONAL HA remains a separate priced call; (3) c11 test-payment gate re-flagged for the device window - it is the launch gate. c224 sweep: both lenses returned 7 unique findings incl. a convergent cross-table reservation-x-plan race; refute-by-default verification running before any fix work starts.",
-    "Aug 28 - WAVE 1 MONEY FIXES ALL MERGED: #145 (plan coherence) + #146 (retry nonce/belt + money-in-motion TTL). The adversarial ritual caught a would-be launch-week double-charge in the FIX itself (TTL on in-flight ACH) - fourth real pre-merge catch this week. Next: #144 telemetry rebase+fixes, then wave 2 c230 race guard (migration 0028), then migrate+deploy both services."
+    "Aug 28 - WAVE 1 MONEY FIXES ALL MERGED: #145 (plan coherence) + #146 (retry nonce/belt + money-in-motion TTL). The adversarial ritual caught a would-be launch-week double-charge in the FIX itself (TTL on in-flight ACH) - fourth real pre-merge catch this week. Next: #144 telemetry rebase+fixes, then wave 2 c230 race guard (migration 0028), then migrate+deploy both services.",
+    "Aug 28 - LAUNCH-HARDENING BATCH SHIPPED: migration 0028 applied to prod (head 0028, triggers verified in the live catalog) and both services deployed on one image (chirp-api-00038-br5, chirp-ws-00003-zrp), deploy-verify 4/4, new-surface probes 401. Live now: all 7 money-sweep fixes, telemetry emitter + BigQuery sink, WS concurrency split, DDIA batch, Q's c223. Repo down to main + the device-gated c174. THE remaining launch gate is c11: no test-mode payment (card or ACH) has ever cleared end to end - it must pass at the device/Apple window before real members are invited."
   ]
 }</script>
 <script>
