@@ -33,6 +33,7 @@ from app.middleware.org_scope import get_current_chapter_member, get_current_mem
 from app.schemas.social import (
     CampusPostCreate,
     FeedPostOut,
+    MyPostCountOut,
     PostCommentCreate,
     PostCommentOut,
     PostCreate,
@@ -360,6 +361,22 @@ async def _readable_post(
     return post
 
 
+def _visible_audiences(membership: models.Membership) -> tuple[str, ...]:
+    """The chapter post tiers this membership row may see LISTED (board c102).
+
+    One definition, two callers (list_posts and count_my_posts, c217). Extracted
+    rather than spelled twice because the second spelling is how a rule rots: a
+    count that disagrees with its own listing about who may see 'org_actives' is
+    a wrong number on a profile screen, and nothing would fail loudly. Same
+    lesson routers/moderation.py records about the FOURTH hand-rolled copy of the
+    campus check (c88).
+
+    'active' is Membership.status == 'active' — the existing status flag, NOT a
+    pledge/member model and NOT dues-paid standing.
+    """
+    return ("org", "org_actives") if membership.status == "active" else ("org",)
+
+
 @router.get("/chapters/{chapter_id}/posts")
 async def list_posts(
     chapter_id: uuid.UUID,
@@ -416,7 +433,7 @@ async def list_posts(
     `_post_counts_select` for the anti-join.
     """
     is_active = membership.status == "active"
-    visible_audiences: tuple[str, ...] = ("org", "org_actives") if is_active else ("org",)
+    visible_audiences = _visible_audiences(membership)
     stmt = _post_counts_select(membership.user_id).where(
         models.Post.chapter_id == chapter_id,
         models.Post.deleted_at.is_(None),
@@ -450,6 +467,90 @@ async def list_posts(
     response.headers["X-Actives-Only-Hidden"] = "true" if actives_only_hidden else "false"
 
     return posts
+
+
+@router.get("/chapters/{chapter_id}/posts/count")
+async def count_my_posts(
+    chapter_id: uuid.UUID,
+    membership: models.Membership = Depends(get_current_chapter_member),
+    session: AsyncSession = Depends(get_session),
+) -> MyPostCountOut:
+    """How many of this chapter's listable posts the CALLER wrote (board c217).
+
+    WHY THIS EXISTS AT ALL. app-mobile's profile screen showed a "posts by me"
+    stat by calling GET /chapters/{id}/posts and filtering the whole response by
+    author_id in JS. That was already a full-history download to render one
+    integer, and c210 capped that route at 50 with a cursor — so from post 51 on
+    the screen only ever saw page one and the stat SILENTLY UNDERCOUNTED. Found
+    during c210's caller sweep and flagged in PR #136 rather than shipped quietly.
+
+    WHY NOT UN-CAP list_posts. The cap is load-bearing (c210: every returned row
+    also pays `_post_counts_select`'s three correlated subqueries), and removing
+    a pagination limit to fix a stat trades an unbounded response for a number.
+    A count is one cheap aggregate; it should cost one.
+
+    WHY HERE AND NOT IN routers/chapters.py. This is the count OF list_posts'
+    result set, so its correctness is defined entirely by that route's own
+    predicates — soft-delete, the c102 audience tier taken from the caller's own
+    membership row, and c35's blocked-author exclusion. All three live in this
+    file, and `_visible_audiences` is now literally shared with list_posts.
+    Folding it into /chapters/{id}/overview was the other candidate and is wrong
+    twice over: that route is president-only (require_role(*MEMBERS_ADMIN)) while
+    the profile screen belongs to every member, and its payload is chapter health
+    rather than anything per-caller. Same for deputy-overview.
+
+    SELF-SCOPED BY CONSTRUCTION. The author filter is membership.user_id from the
+    auth dependency. There is no user id in the path, the query string, or a body,
+    so there is no request shape that asks for someone else's number and therefore
+    nothing to authorize — the safest version of "may I count your posts" is a
+    route that cannot express the question. Entry is get_current_chapter_member
+    (active OR inactive), the same deliberately-looser gate list_posts uses, so
+    the set of callers who can read this count is exactly the set who can read the
+    listing it counts.
+
+    THE NUMBER MATCHES THE LISTING, which is the whole point of a stat that sits
+    next to a feed:
+
+    - soft-deleted posts are excluded (deleted_at IS NULL), so deleting a post
+      decrements the profile stat the same load it leaves the feed;
+    - audience tiers are honored through `_visible_audiences`, so an inactive
+      member's own 'org_actives' posts are counted no more than they are listed
+      (they wrote them while active; they cannot see them now, and a stat that
+      counts invisible rows is the c102 honest-signal failure in miniature);
+    - 'campus' posts are absent from both, because list_posts never shows that
+      audience — those surface on GET /campuses/{id}/feed instead;
+    - the c35 blocked-author anti-join is carried over rather than dropped as
+      obviously-vacuous. Every row here has author_id == the caller, so it asks
+      exactly one degenerate question: does the caller block themselves? That is
+      reachable today — POST /moderation/blocks takes any blocked_id and has no
+      cannot_block_self guard (only block_chirp_author does) and user_blocks has
+      no CHECK constraint — and in that state list_posts shows the caller nothing.
+      The count agreeing costs one index probe.
+
+    ONE STATEMENT, no rows fetched, no join to users, none of the like/comment/
+    liked_by_me subqueries: nothing about a count needs author identity or
+    engagement, so this deliberately does NOT reuse `_post_counts_select`.
+    """
+    caller_id = membership.user_id
+    count = await session.scalar(
+        select(func.count())
+        .select_from(models.Post)
+        .where(
+            models.Post.chapter_id == chapter_id,
+            models.Post.author_id == caller_id,
+            models.Post.deleted_at.is_(None),
+            models.Post.audience.in_(_visible_audiences(membership)),
+            # c35's exclusion, in NOT EXISTS form (the anti-join in
+            # `_post_counts_select` needs the users join this query does not want).
+            ~select(models.UserBlock.blocker_id)
+            .where(
+                models.UserBlock.blocker_id == caller_id,
+                models.UserBlock.blocked_id == models.Post.author_id,
+            )
+            .exists(),
+        )
+    )
+    return MyPostCountOut(chapter_id=chapter_id, count=count or 0)
 
 
 @router.post("/chapters/{chapter_id}/posts", status_code=201)
