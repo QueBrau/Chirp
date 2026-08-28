@@ -165,10 +165,18 @@ export async function requestWithHeaders<T>(
  * a query-string token was never actually protectable. Pair with
  * wsAuthProtocol() for the second WebSocket() constructor argument instead —
  * RN CAN set that.
+ *
+ * c213: independently configurable via EXPO_PUBLIC_WS_URL, same read pattern
+ * as API_BASE_URL above (`??` against process.env, so only a truly unset var
+ * falls through — an explicit empty string is honored, same as
+ * EXPO_PUBLIC_API_URL). When set, that value is returned verbatim as the full
+ * endpoint (path included) — this is what lets realtime move to its own
+ * Cloud Run service (chirp-ws) independently of EXPO_PUBLIC_API_URL, with no
+ * client rebuild. When unset, behavior is unchanged: derived from
+ * API_BASE_URL by swapping the http(s) scheme for ws(s) and appending `/ws`.
  */
 export function wsUrl(): string {
-  const base = API_BASE_URL.replace(/^http/, "ws");
-  return `${base}/ws`;
+  return process.env.EXPO_PUBLIC_WS_URL ?? `${API_BASE_URL.replace(/^http/, "ws")}/ws`;
 }
 
 /**
