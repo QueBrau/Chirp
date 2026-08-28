@@ -24,7 +24,7 @@ import {
   type AllowedMediaContentType,
 } from "@/api/media";
 import { myMemberships, type MyMembershipOut } from "@/api/chapters";
-import { listPosts } from "@/api/feed";
+import { countMyPosts } from "@/api/feed";
 import { hasFirebaseConfig, signOutUser, useSession } from "@/auth";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { AppText, Card, Chip, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
@@ -208,8 +208,13 @@ export default function ProfileScreen() {
       setPostCount(0);
       return;
     }
-    listPosts(chapterId)
-      .then(({ posts }) => setPostCount(posts.filter((post) => post.author_id === userId).length))
+    // c217: this used to be listPosts(chapterId) filtered by author_id in JS. c210
+    // capped that route at 50 with a cursor, so from post 51 on this screen only
+    // ever saw page one and the stat quietly read low with nothing to signal it.
+    // One server-side aggregate instead, applying the same visibility rules the
+    // feed listing does, so the number and the feed can never disagree.
+    countMyPosts(chapterId)
+      .then(({ count }) => setPostCount(count))
       .catch(() => setPostCount(0));
   }, [memberships, chapterId, userId]);
 
