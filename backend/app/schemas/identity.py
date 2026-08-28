@@ -76,6 +76,33 @@ class UserUpdate(_Schema):
         return validate_public_url(value)
 
 
+class ProfileUpdate(_Schema):
+    """Body for PATCH /auth/me: the caller editing their own profile (board c221).
+
+    THE CLIENT SENDS AN OBJECT NAME, NOT A URL, and that is a deliberate narrowing of
+    what UserUpdate above would have allowed. UserUpdate carries an `avatar_url` behind
+    validate_public_url, which accepts any http(s) address - so wiring THAT up would let
+    anyone point their avatar at a tracking pixel, at someone else's host, or at
+    whatever they liked. This route instead takes the caller's OWN tmp/ object_name (the
+    one POST /media/upload-url returned) and the server assigns the canonical url,
+    exactly as post create already does with media_object_names.
+
+    OMITTED VS EXPLICIT NULL is the contract, and pydantic v2 gives it for free through
+    model_fields_set, the same way EventUpdate does (c202):
+
+        {}                              -> change nothing
+        {"avatar_object_name": null}    -> REMOVE the picture, back to initials
+        {"avatar_object_name": "tmp/…"} -> set a new picture
+
+    A field left out of the body never enters model_fields_set and is skipped; a field
+    sent as null does enter it, with a value of None. So "no opinion" and "clear it" stay
+    distinguishable without a sentinel.
+    """
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    avatar_object_name: str | None = None
+
+
 class UserOut(_Schema):
     id: uuid.UUID
     firebase_uid: str

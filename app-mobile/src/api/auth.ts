@@ -34,6 +34,28 @@ export interface UserOut {
   created_at: string;
 }
 
+/**
+ * Body for PATCH /auth/me (c221). Every field optional; omitted means "leave alone".
+ *
+ * avatar_object_name is the tmp/ `object_name` from getMediaUploadUrl(), NOT a url.
+ * The server moves that object and assigns the canonical avatar_url itself, exactly
+ * as post create does with media_object_names — so a client cannot point somebody's
+ * avatar at an arbitrary address.
+ *
+ * `null` and "absent" mean different things and the API distinguishes them:
+ * sending `avatar_object_name: null` REMOVES the picture, while leaving the key out
+ * keeps whatever is stored. Build the object conditionally rather than defaulting
+ * fields to null, or a name-only edit will silently wipe the user's photo.
+ */
+export interface ProfileUpdate {
+  display_name?: string;
+  avatar_object_name?: string | null;
+}
+
+export async function updateProfile(body: ProfileUpdate): Promise<UserOut> {
+  return request<UserOut>("/auth/me", { method: "PATCH", body });
+}
+
 export interface CampusOut {
   id: string;
   name: string;
