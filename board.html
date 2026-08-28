@@ -2459,20 +2459,20 @@
     },
     {
       "id": "c232",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c232 IN BUILD [HIGH, c224 plans-F1] Plan-blind generic ledger writer: POST /chapters/{id}/ledger accepts dues_payment/dues_installment for an active-plan member with no plan check (schema explicitly allows both types) - treasurer data-entry double-collects; overview flips to paid; plan stays active. Fix: active-plan guard in create_ledger_entry mirroring payments.py:190-198. Bundled with c233 (same file).",
+      "title": "c232 DONE Aug 28 - MERGED 8c741cc (PR #145) - worker-built, manager-committed after repeated machine-sleep interruptions, full line-level review + finder/refuter layers upstream. Suite 664p in worktree + CI 4/4. Mobile paid_at->effective_paid swap carded as follow-up c235. - treasurer data-entry double-collects; overview flips to paid; plan stays active. Fix: active-plan guard in create_ledger_entry mirroring payments.py:190-198. Bundled with c233 (same file).",
       "detail": "Wave 1 worker owns finance.py + schemas/finance.py exclusively."
     },
     {
       "id": "c233",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c233 IN BUILD [HIGH+MED-HIGH, c224 plans-F2/F3] Netting-blind plan surfaces: (a) create_dues_payment_plan's existence-only pre-check permanently 409s a fully-refunded member who needs a NEW plan (net corrections like payments.py does); (b) installment views (plans/mine + treasurer list) show paid_at forever after corrections reverse the money - net each installment against corrections in the read path. The two-screens-disagree class, relocated.",
+      "title": "c233 DONE Aug 28 - MERGED 8c741cc (PR #145) - worker-built, manager-committed after repeated machine-sleep interruptions, full line-level review + finder/refuter layers upstream. Suite 664p in worktree + CI 4/4. Mobile paid_at->effective_paid swap carded as follow-up c235. - net each installment against corrections in the read path. The two-screens-disagree class, relocated.",
       "detail": "Same wave-1 finance.py worker as c232."
     },
     {
@@ -2483,6 +2483,15 @@
       "area": "orgs",
       "title": "c234 IN BUILD [MED, c224 F3/F4] Reservation lifecycle: (a) abandoned open reservations never expire and block rail-switch forever (no TTL, no cancel route, no job) - treat old-enough open rows as expired at the guard using created_at, NO new column; (b) same-rail retry during a delayed webhook returns a client_secret for an already-succeeded intent with no status branch - branch on intent.status and answer honestly.",
       "detail": "Same wave-1 payments.py worker as c231."
+    },
+    {
+      "id": "c235",
+      "col": "backlog",
+      "owner": "pool",
+      "tag": "frontend",
+      "area": "orgs",
+      "title": "c235 Mobile renders installment paid state from write-once paid_at; backend now exposes derived effective_paid (c233, PR #145) which nets corrections - swap app-mobile/src/payments/dues.tsx (and any other installment renderer) to effective_paid so a refunded installment stops showing as paid. Small.",
+      "detail": "Backend schema docstring (schemas/finance.py DuesPlanInstallmentOut) documents the contract: paid_at is history, effective_paid is status."
     }
   ],
   "decisions": [
