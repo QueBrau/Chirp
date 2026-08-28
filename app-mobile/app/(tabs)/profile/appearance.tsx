@@ -149,7 +149,14 @@ function PreviewActionChip({
         justifyContent: "center",
       }}
     >
-      <Feather name={name} size={16} color={active ? palette.accent : palette.inkFaint} />
+      {/* c222: same icon-keyed rule as MediaPostCard - this preview has to agree with
+          the real feed, or Appearance settings show an accent heart while the feed
+          shows red. */}
+      <Feather
+        name={name}
+        size={16}
+        color={active ? (name === "heart" ? palette.like : palette.accent) : palette.inkFaint}
+      />
     </View>
   );
 }
