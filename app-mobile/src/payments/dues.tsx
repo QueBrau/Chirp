@@ -185,7 +185,7 @@ export function PlanProgressCard({ cycleName, plan }: PlanProgressCardProps): Re
         </View>
 
         <AppText variant="caption" tone="tertiary">
-          Your treasurer records each installment as it comes in — no action needed here.
+          Your treasurer records each installment as it comes in, so no action is needed here.
         </AppText>
       </View>
     </Card>

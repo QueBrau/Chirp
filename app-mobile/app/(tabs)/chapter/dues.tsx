@@ -140,7 +140,7 @@ export default function DuesScreen() {
         {cyclesFailed ? (
           <EmptyState
             title="Couldn't load your dues"
-            message="Check your connection and try again — this isn't a statement that you owe nothing."
+            message="Check your connection and try again. This isn't a statement that you owe nothing."
           />
         ) : cycles.length === 0 ? (
           <EmptyState
@@ -180,7 +180,7 @@ export default function DuesScreen() {
                         Due {dueDate(cycle.due_date)}
                       </AppText>
                       <AppText variant="caption" tone="tertiary">
-                        In-app payment isn't switched on yet — your treasurer has to finish
+                        In-app payment isn't switched on yet. Your treasurer has to finish
                         Stripe setup. Pay them directly for now.
                       </AppText>
                     </View>

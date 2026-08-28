@@ -278,7 +278,7 @@ export default function SignInScreen() {
 
             {!hasFirebaseConfig() ? (
               <AppText variant="caption" tone="tertiary">
-                Demo mode — Firebase not configured
+                Demo mode. Firebase not configured
               </AppText>
             ) : null}
 

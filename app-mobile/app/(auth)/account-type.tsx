@@ -148,7 +148,7 @@ export default function AccountTypeScreen() {
   };
 
   return (
-    <Screen title="Who are you?" subtitle="Pick how you'll use Chirp — you can add a chapter later.">
+    <Screen title="Who are you?" subtitle="Pick how you'll use Chirp. You can add a chapter later.">
       <View style={{ gap: spacing.md }}>
         {OPTIONS.map((option) => {
           const isSelected = selected === option.type;

@@ -92,7 +92,7 @@ export default function JoinChapterScreen() {
               }}
             />
             <AppText variant="caption" tone="tertiary">
-              Codes look like this — ask your chapter's e-board if you don't have one yet.
+              Codes look like this. Ask your chapter's e-board if you don't have one yet.
             </AppText>
             {error !== null ? (
               <AppText variant="caption" tone="danger">

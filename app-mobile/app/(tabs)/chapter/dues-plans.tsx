@@ -148,7 +148,7 @@ function planCreateErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     switch (error.detail) {
       case "already_paid":
-        return "This member has already paid this cycle in full — no plan needed.";
+        return "This member has already paid this cycle in full, so no plan is needed.";
       case "on_payment_plan":
         return "This member already has an active payment plan for this cycle.";
       case "payment_in_progress":
@@ -303,7 +303,7 @@ function CreatePlanForm({
         </View>
 
         <View style={{ gap: spacing.md }}>
-          <FieldLabel>Installments — amount and due date, editable</FieldLabel>
+          <FieldLabel>Installments, amount and due date, editable</FieldLabel>
           {installments.map((item, index) => (
             <View key={index} style={{ gap: spacing.xs }}>
               <AppText variant="caption" tone="tertiary">
@@ -636,8 +636,8 @@ export default function DuesPlansScreen() {
         showAlert(
           "Couldn't record that payment",
           error.detail === "plan_not_active"
-            ? "This plan is no longer active — it may have been completed or canceled."
-            : "Someone already recorded this installment — refreshing.",
+            ? "This plan is no longer active. It may have been completed or canceled."
+            : "Someone already recorded this installment. Refreshing.",
         );
         if (cycle !== undefined) await load(chapterId, cycle.id);
       } else {
@@ -658,7 +658,7 @@ export default function DuesPlansScreen() {
       message:
         `${dollars(installment.amount_cents)} · due ${dueDateLabel(installment.due_date)}` +
         (note.length > 0 ? `\nNote: ${note}` : "") +
-        "\n\nThis appends a permanent ledger entry — it can't be undone, only offset later by a correction.",
+        "\n\nThis appends a permanent ledger entry. It can't be undone, only offset later by a correction.",
       confirmLabel: "Record payment",
       onConfirm: () => void recordInstallment(plan, installment, note),
     });
@@ -672,7 +672,7 @@ export default function DuesPlansScreen() {
       setPlans((current) => (current ?? []).map((p) => (p.id === updated.id ? updated : p)));
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        showAlert("Already settled", "This plan was already completed or canceled — refreshing.");
+        showAlert("Already settled", "This plan was already completed or canceled. Refreshing.");
         if (cycle !== undefined) await load(chapterId, cycle.id);
       } else {
         showApiError(error, "Couldn't cancel that plan");

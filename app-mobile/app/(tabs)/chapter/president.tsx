@@ -347,7 +347,7 @@ export default function PresidentScreen() {
       showAlert(
         "This chapter would lose its last president",
         "At least one active president has to remain, or nobody will be able to change a " +
-          "role here again — recovery would need to go outside the app. Promote someone " +
+          "role here again. Recovery would need to go outside the app. Promote someone " +
           "else to president first.",
       );
       return;

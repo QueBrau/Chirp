@@ -322,7 +322,7 @@ function OrgFeedSegment({
         {hiddenNotice}
         <EmptyState
           title="Nothing posted yet"
-          message={`Chapter-only posts land here — only ${orgName} members ever see this feed.`}
+          message={`Chapter-only posts land here, and only ${orgName} members ever see this feed.`}
         />
       </View>
     );
@@ -490,7 +490,7 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
     <View style={{ gap: spacing.lg }}>
       <SectionHeader
         title="Upcoming"
-        caption="The Partiful corner — plan the next one"
+        caption="The Partiful corner. Plan the next one"
         right={
           <Pressable
             accessibilityRole="button"
@@ -515,7 +515,7 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
       {events !== null && events.length === 0 ? (
         <EmptyState
           title="No events yet"
-          message="Plan a rush cookout, a formal, or a tailgate — it takes a minute."
+          message="Plan a rush cookout, a formal, or a tailgate. It takes a minute."
           actionLabel="New event"
           onAction={() => setSheetOpen(true)}
         />
@@ -639,7 +639,7 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
         <View style={{ gap: spacing.xs }}>
           <AppText variant="headline">Invite someone</AppText>
           <AppText variant="caption" tone="secondary">
-            E-board only — pick a role and mint a code.
+            E-board only. Pick a role and mint a code.
           </AppText>
         </View>
 
@@ -951,7 +951,7 @@ function FindYourOrg() {
         </View>
         <EmptyState
           title="Org discovery is coming"
-          message={`Browsing ${category.toLowerCase()} lands soon — join with an invite code for now.`}
+          message={`Browsing ${category.toLowerCase()} lands soon. Join with an invite code for now.`}
         />
       </View>
     </View>
