@@ -2414,11 +2414,11 @@
     },
     {
       "id": "c227",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "backend",
       "area": "orgs",
-      "title": "c227 PR #144 OPEN, SKEPTIC FAILED IT (working as intended) - two confirmed catches in the payments.py hunk: payment_intent_created double-emits on the retrieve path (every same-rail retry/poll overcounts; ACH spans days), and _emit_stripe_webhook_event lacks the no-chirp-metadata guard its siblings have (junk None rows). HELD until the c231/c234 payments worker lands (same lines); manager applies the two 5-line fixes on the rebased branch, skeptic re-verifies, then merge. Everything else in #144 passed: emit exception-safety proven, replay-gating correct, PII clean. - logs->BigQuery first pass: structured app.analytics JSON events at key actions (signup, session, post, message send, rsvp, payment attempt/outcome), Cloud Logging sink to a BigQuery dataset. PRIVACY RULE (the c216 sign-off, enforced in code): NO event may carry or link chirp authorship - the pipeline must be unable to deanonymize what the API withholds. Worker on the emitter; manager on the sink infra.",
+      "title": "c227 DONE Aug 28 - PIPELINE COMPLETE: emitter MERGED 4ab4ed8 (PR #144, after the skeptic's two catches were fixed and re-verified PASS - create-branch-only emit, metadata guard) + infra LIVE (BigQuery dataset chirp_analytics, Cloud Logging sink chirp-analytics-bq, writer granted). Privacy rule enforced in code+test: chirps router provably analytics-free. Data flows from the next deploy. c216 epic satisfied for launch. - two confirmed catches in the payments.py hunk: payment_intent_created double-emits on the retrieve path (every same-rail retry/poll overcounts; ACH spans days), and _emit_stripe_webhook_event lacks the no-chirp-metadata guard its siblings have (junk None rows). HELD until the c231/c234 payments worker lands (same lines); manager applies the two 5-line fixes on the rebased branch, skeptic re-verifies, then merge. Everything else in #144 passed: emit exception-safety proven, replay-gating correct, PII clean. - logs->BigQuery first pass: structured app.analytics JSON events at key actions (signup, session, post, message send, rsvp, payment attempt/outcome), Cloud Logging sink to a BigQuery dataset. PRIVACY RULE (the c216 sign-off, enforced in code): NO event may carry or link chirp authorship - the pipeline must be unable to deanonymize what the API withholds. Worker on the emitter; manager on the sink infra.",
       "detail": "c216 stays as the epic; this card is the first pass. No schema migration, no client SDK. Event volume rides Cloud Logging free tier at launch scale."
     },
     {
