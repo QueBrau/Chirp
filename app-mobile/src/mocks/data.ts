@@ -403,11 +403,16 @@ export const MOCK_POST_LIKES: PostLikeOut[] = [
   { post_id: "post-org-4", user_id: "usr-maria", created_at: "2026-08-12T18:50:00Z" },
 ];
 
+// display_name/avatar_url mirror the MOCK_USERS rows these author_ids point at, since
+// c228 made them part of the wire shape — a fixture that dropped them would describe a
+// response the backend can no longer send.
 export const MOCK_POST_COMMENTS: PostCommentOut[] = [
   {
     id: "cmt-1",
     post_id: "post-1",
     author_id: "usr-chris",
+    display_name: "Chris Nakamura",
+    avatar_url: "https://i.pravatar.cc/150?u=usr-chris",
     body: "My eyes were closed in mine. Requesting a reshoot.",
     created_at: "2026-08-09T21:40:00Z",
     deleted_at: null,
@@ -416,6 +421,8 @@ export const MOCK_POST_COMMENTS: PostCommentOut[] = [
     id: "cmt-2",
     post_id: "post-1",
     author_id: "usr-priya",
+    display_name: "Priya Shah",
+    avatar_url: "https://i.pravatar.cc/150?u=usr-priya",
     body: "The composite is FINAL, Chris.",
     created_at: "2026-08-09T21:44:00Z",
     deleted_at: null,
@@ -424,6 +431,8 @@ export const MOCK_POST_COMMENTS: PostCommentOut[] = [
     id: "cmt-3",
     post_id: "post-3",
     author_id: "usr-alexis",
+    display_name: "Alexis Turner",
+    avatar_url: "https://i.pravatar.cc/150?u=usr-alexis",
     body: "Proud of you guys. It was 12 bags back in my day.",
     created_at: "2026-08-11T14:00:00Z",
     deleted_at: null,
@@ -432,6 +441,8 @@ export const MOCK_POST_COMMENTS: PostCommentOut[] = [
     id: "cmt-4",
     post_id: "post-6",
     author_id: "usr-sam",
+    display_name: "Sam Osei",
+    avatar_url: "https://i.pravatar.cc/150?u=usr-sam",
     body: "Applying tonight, thank you!",
     created_at: "2026-08-11T19:30:00Z",
     deleted_at: null,
@@ -440,6 +451,8 @@ export const MOCK_POST_COMMENTS: PostCommentOut[] = [
     id: "cmt-5",
     post_id: "post-9",
     author_id: "usr-noah",
+    display_name: "Noah Kim",
+    avatar_url: "https://i.pravatar.cc/150?u=usr-noah",
     body: "Yeah still closed, saw the sign this morning.",
     created_at: "2026-08-12T10:20:00Z",
     deleted_at: null,
@@ -448,6 +461,8 @@ export const MOCK_POST_COMMENTS: PostCommentOut[] = [
     id: "cmt-org-1",
     post_id: "post-org-2",
     author_id: "usr-chris",
+    display_name: "Chris Nakamura",
+    avatar_url: "https://i.pravatar.cc/150?u=usr-chris",
     body: "not a word out of me, promise",
     created_at: "2026-08-12T14:55:00Z",
     deleted_at: null,

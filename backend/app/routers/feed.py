@@ -285,6 +285,29 @@ def _feed_post_out(row: Any, viewer_id: uuid.UUID) -> FeedPostOut:
     )
 
 
+def _comment_out(
+    comment: models.PostComment,
+    display_name: str,
+    avatar_url: str | None,
+) -> PostCommentOut:
+    """Build a PostCommentOut from a comment row plus its author's identity (c228).
+
+    Identity is passed in rather than read off a relationship, because the two callers
+    already have it from different places and neither should pay for a lazy load:
+    list_comments gets it from its join, create_comment from the authenticated caller.
+    """
+    return PostCommentOut(
+        id=comment.id,
+        post_id=comment.post_id,
+        author_id=comment.author_id,
+        body=comment.body,
+        created_at=comment.created_at,
+        deleted_at=comment.deleted_at,
+        display_name=display_name,
+        avatar_url=avatar_url,
+    )
+
+
 async def _readable_post(
     post_id: uuid.UUID,
     user: models.User,
@@ -781,10 +804,19 @@ async def list_comments(
     a reader preference; moderation is not. The moderation routes reach comments by id
     (remove_content) and never through this query, so that separation holds today —
     keep it that way.
+
+    c228: the author JOIN. This used to return author_id and nothing else, which is
+    unrenderable — see PostCommentOut's docstring for why the client cannot resolve a
+    user id on its own. The join is pre-done here rather than left to the caller for
+    the same reason _post_counts_select pre-joins author identity onto FeedPostOut: a
+    thread of twenty comments must cost one query, not twenty requests.
     """
     await _readable_post(post_id, user, session)
     result = await session.execute(
-        select(models.PostComment)
+        select(models.PostComment, models.User.display_name, models.User.avatar_url)
+        # INNER JOIN, same call as _post_counts_select makes: display_name is non-null
+        # on PostCommentOut, and every comment has an author row by FK.
+        .join(models.User, models.User.id == models.PostComment.author_id)
         .outerjoin(
             models.UserBlock,
             (models.UserBlock.blocked_id == models.PostComment.author_id)
@@ -797,7 +829,10 @@ async def list_comments(
         )
         .order_by(models.PostComment.created_at)
     )
-    return [PostCommentOut.model_validate(c) for c in result.scalars().all()]
+    return [
+        _comment_out(comment, display_name, avatar_url)
+        for comment, display_name, avatar_url in result.all()
+    ]
 
 
 @router.post("/posts/{post_id}/comments", status_code=201)
@@ -813,4 +848,7 @@ async def create_comment(
     session.add(comment)
     await session.commit()
     await session.refresh(comment)
-    return PostCommentOut.model_validate(comment)
+    # No lookup for the identity half (c228): the author of this comment is the
+    # authenticated caller, already loaded. Re-reading the same row through
+    # list_comments' join would be a second query for something we are holding.
+    return _comment_out(comment, user.display_name, user.avatar_url)

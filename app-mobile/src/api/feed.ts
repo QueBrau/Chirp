@@ -83,6 +83,17 @@ export interface PostCommentCreate {
   body: string;
 }
 
+/**
+ * A comment plus its author's display identity (c228).
+ *
+ * The identity fields are pre-joined server-side, exactly like FeedPostOut's, and for
+ * a harder reason: nothing in this API turns a user id into a person. There is no GET
+ * /users/{id}, and the chapter roster only covers chapters the caller belongs to — so
+ * without display_name a thread renders as a column of raw UUIDs, and with one
+ * request per comment it would not render at all on a slow connection.
+ *
+ * display_name is non-null: routers/feed.py INNER JOINs users on author_id.
+ */
 export interface PostCommentOut {
   id: string;
   post_id: string;
@@ -90,6 +101,8 @@ export interface PostCommentOut {
   body: string;
   created_at: string;
   deleted_at: string | null;
+  display_name: string;
+  avatar_url: string | null;
 }
 
 export interface ListFeedOptions {

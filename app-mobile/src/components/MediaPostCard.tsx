@@ -13,6 +13,12 @@
  * message-circle / send) with a count Badge attached; active state =
  * accentSoft chip + accent icon.
  *
+ * Comments (board c228): the message-circle in both densities opens CommentsSheet
+ * on this card. It had carried a real count, a button role and a "Comment" label
+ * with no onPress since the FYP landed, which is worse than no control at all.
+ * A sheet rather than a post-detail route, because this component renders from two
+ * screens with separate navigation and a sheet needs neither of them to change.
+ *
  * Overflow control (board c35, App Store Guideline 1.2): a discreet
  * more-horizontal icon in the header row of every variant, offering Report
  * and (unless `canBlock` is false) Block — mirrors the Chirps board's own
@@ -37,6 +43,7 @@ import { cardShadow, light, radii, spacing, useTheme, withAlpha } from "@/theme"
 import { AppText } from "./AppText";
 import { Badge } from "./Badge";
 import { Chip } from "./Chip";
+import { CommentsSheet } from "./CommentsSheet";
 import { GradientAvatar } from "./GradientAvatar";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -296,6 +303,23 @@ export function MediaPostCard({
   // `true` would keep showing the fallback over a url that now works perfectly.
   useEffect(() => setMediaFailed(false), [mediaUrl]);
 
+  // c228: the comments sheet, mounted only while THIS card's thread is open, for the
+  // same reason the report/block Modal above is - a long feed must not carry N idle
+  // Modals.
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  // The thread's real length once the sheet has loaded it, else null. Preferred over
+  // the `commentCount` prop because both numbers are produced by the same server-side
+  // rule (c109: comment_count and list_comments apply the identical blocked-author
+  // filter), so the loaded rows ARE the count - and the chip can then never read "3"
+  // over a sheet showing two.
+  const [loadedCommentCount, setLoadedCommentCount] = useState<number | null>(null);
+  // Drop the local number whenever the screen hands down a fresh one, same
+  // reset-on-input-change shape as mediaFailed above. Server truth is never older than
+  // what we cached from it, so a refetch (after a block, or anyone else's comment) must
+  // not lose to a stale local count.
+  useEffect(() => setLoadedCommentCount(null), [commentCount]);
+  const shownCommentCount = loadedCommentCount ?? commentCount;
+
   const openReportReasons = () => {
     setSheet({
       title: "What's wrong with it?",
@@ -345,7 +369,12 @@ export function MediaPostCard({
         label={likedByMe ? "Unlike" : "Like"}
         onPress={onToggleLike}
       />
-      <ActionChip icon="message-circle" count={commentCount} label="Comment" />
+      <ActionChip
+        icon="message-circle"
+        count={shownCommentCount}
+        label="Comment"
+        onPress={() => setCommentsOpen(true)}
+      />
       <ActionChip icon="send" count={mockShareCount(post.id)} label="Send" />
     </View>
   );
@@ -412,6 +441,17 @@ export function MediaPostCard({
       </Modal>
     ) : null;
 
+  // c228: the other sheet this card owns. Rendered next to sheetModal in BOTH density
+  // branches below, which is what makes the comment chip work identically from the
+  // Home feed and the org Feed segment without either screen learning a new route.
+  const commentsModal = commentsOpen ? (
+    <CommentsSheet
+      postId={post.id}
+      onClose={() => setCommentsOpen(false)}
+      onCountChange={setLoadedCommentCount}
+    />
+  ) : null;
+
   if (type === "text") {
     // Compact/Twitter density (§10 rule 3): tight single-line header, body, inline counts —
     // deliberately less breathing room than the photo/video cards below.
@@ -438,10 +478,16 @@ export function MediaPostCard({
             label={likedByMe ? "Unlike" : "Like"}
             onPress={onToggleLike}
           />
-          <InlineAction icon="message-circle" count={commentCount} label="Comment" />
+          <InlineAction
+            icon="message-circle"
+            count={shownCommentCount}
+            label="Comment"
+            onPress={() => setCommentsOpen(true)}
+          />
           <InlineAction icon="send" count={mockShareCount(post.id)} label="Send" />
         </View>
         {sheetModal}
+        {commentsModal}
       </View>
     );
   }
@@ -569,6 +615,7 @@ export function MediaPostCard({
         {actions}
       </View>
       {sheetModal}
+      {commentsModal}
     </View>
   );
 }
