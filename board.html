@@ -2292,7 +2292,7 @@
       "owner": "court",
       "tag": "infra",
       "area": "orgs",
-      "title": "c213 GO Aug 27 (Jose: launch NEXT WEEK) - BUILDING the WS split: second Cloud Run service chirp-ws (same image, /ws only), own scaling + tiny pool. Free-arithmetic fallback if the tier decision waits: api maxScale 4->3 (15) + ws maxScale 2 x pool 1+1 (4) + reserved 4 = 23 <= 25. Worker on client WS-URL configurability; manager on service infra. - and raising maxScale breaks the S2 pool arithmetic (the two levers fight). DESIGN NEEDED before code: split /ws to its own Cloud Run service (own scaling, own pool budget) vs dedicated always-on realtime instance. Court scopes options + costs for Jose.",
+      "title": "c213 BOTH HALVES LANDED Aug 27/28 - chirp-ws service LIVE (chirp-ws-00002-j6b, chirp-api-run SA after the c182 hardening correctly refused the default SA; probes match chirp-api exactly) + client EXPO_PUBLIC_WS_URL override MERGED (PR #143, verbatim-source unit test, CI 4/4). REMAINING before done: set EXPO_PUBLIC_WS_URL in the mobile build config at the device window + one real authenticated WS round-trip against chirp-ws. - BUILDING the WS split: second Cloud Run service chirp-ws (same image, /ws only), own scaling + tiny pool. Free-arithmetic fallback if the tier decision waits: api maxScale 4->3 (15) + ws maxScale 2 x pool 1+1 (4) + reserved 4 = 23 <= 25. Worker on client WS-URL configurability; manager on service infra. - and raising maxScale breaks the S2 pool arithmetic (the two levers fight). DESIGN NEEDED before code: split /ws to its own Cloud Run service (own scaling, own pool budget) vs dedicated always-on realtime instance. Court scopes options + costs for Jose.",
       "detail": "This is the honest ceiling for 100s-1000s concurrent. L effort; sequenced after the S fixes land."
     },
     {
@@ -2396,11 +2396,11 @@
     },
     {
       "id": "c225",
-      "col": "backlog",
+      "col": "done",
       "owner": "J",
       "tag": "infra",
       "area": "orgs",
-      "title": "c225 LAUNCH DECISION (Jose, money, ONE CONFIRM NEEDED): DB tier - f1-micro's ~25 connections cannot fund chirp-api + chirp-ws + jobs, shared-core throttles under real payment volume, HA structurally unavailable. Recommended for launch: db-g1-small ~$25-35/mo (~50 conns) minimum; db-custom-1-3840 ~$50/mo if HA comes too (c215b) - reply 'tier go' (+ which) and manager runs it (sql instances patch allow-listed, ~5min restart at a quiet moment).",
+      "title": "c225 DONE Aug 28 - Jose said GO on all three calls: chirp-db upgraded to db-custom-1-3840 (~$50/mo class, dedicated core, HA-capable, ~100 max_connections vs 25) - patched by manager (allow-listed), RUNNABLE, prod probed healthy through the restart. availabilityType stays ZONAL: flipping to REGIONAL HA roughly doubles the instance cost and is a separate priced call. Pool arithmetic now has real headroom; config defaults stay conservative on purpose.",
       "detail": "Jose's 'continue the resilience bundle' message quoted the old post-alpha framing, so this spend gets one explicit confirm rather than silent execution. Free fallback (api maxScale 3) ships c213 either way."
     },
     {
@@ -2582,7 +2582,8 @@
     "Aug 27 - deploy window closed: prod chirp-api-00035-6zk at DB head 0018. Classifier behavior flipped: migration (previously blocked) went through for the manager, gcloud run deploy (previously allowed) blocked twice - Jose ran the deploy paste. If manager should deploy in future windows, Jose adds a Bash allow rule for gcloud run deploy.",
     "Aug 27 - c209 DDIA batch COMPLETE: all four pool fixes merged same-day (c210 feed cap 29f76fe, c211 event-loop 1a26c9a, c212 inbox index cbc34ca, c214 email compensation a512618). Next deploy needs migrate FIRST, expect 0027 (head). Remaining from the sweep: c213 (WS/HTTP split - court designs), c215 (DB resilience - Jose), c216 (telemetry - Jose), c217 (profile stat count endpoint - pool).",
     "Aug 27 - Jose: gcloud run deploy allow rule added to settings.local.json - manager is standing deployer again (proven same hour: 00036-f4h deployed by manager, DDIA batch live on DB 0027). c215a restore rehearsal approved and running; c215b HA tier deferred past alpha.",
-    "Aug 27 - LAUNCH TARGET NEXT WEEK (Jose). c213 GO and building; c224 money re-sweep running; c227 telemetry GO and building (privacy rule: nothing may link chirp authorship); c225 DB tier = one priced confirm to Jose; c226 load test pending Jose go. RED FLAG restated: c11 - not one test-mode payment (card OR ACH) has ever cleared end to end; it MUST pass in the device/Apple window before launch. c71 fast path: Q (real student) confirms receipt at his own .edu mailbox - no school mailbox for Jose needed."
+    "Aug 27 - LAUNCH TARGET NEXT WEEK (Jose). c213 GO and building; c224 money re-sweep running; c227 telemetry GO and building (privacy rule: nothing may link chirp authorship); c225 DB tier = one priced confirm to Jose; c226 load test pending Jose go. RED FLAG restated: c11 - not one test-mode payment (card OR ACH) has ever cleared end to end; it MUST pass in the device/Apple window before launch. c71 fast path: Q (real student) confirms receipt at his own .edu mailbox - no school mailbox for Jose needed.",
+    "Aug 28 - Jose's triple GO executed: (1) ws rule added + chirp-ws service created and live; (2) DB tier db-custom-1-3840 applied, prod healthy through restart, REGIONAL HA remains a separate priced call; (3) c11 test-payment gate re-flagged for the device window - it is the launch gate. c224 sweep: both lenses returned 7 unique findings incl. a convergent cross-table reservation-x-plan race; refute-by-default verification running before any fix work starts."
   ]
 }</script>
 <script>
