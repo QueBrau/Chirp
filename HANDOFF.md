@@ -1,6 +1,6 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 24 2026 (c63 Redis/VPC deployment and release-hygiene audit)._
+_Last updated: Aug 28 2026 (launch-hardening batch: money sweep, WS split, telemetry, DB tier)._
 
 **This file deliberately contains almost no numbers.** The previous version rotted
 within a week because it hardcoded the prod revision, the open-PR list, the migration
@@ -24,55 +24,68 @@ rules that are load-bearing, and the lessons that cost us something to learn.
 > board, or it belongs in a command someone can run. The one exception is the
 > verified-state snapshot below, which is explicitly dated and explicitly sourced.
 
-## State snapshot — Aug 23 2026, with its sourcing
+## State snapshot — Aug 28 2026, with its sourcing
 
 Sourcing is split on purpose. "Verified" means someone ran the check this session.
 "Board-sourced" means it is the board's claim and nobody has re-run it against the live
-system. Do not promote a board-sourced line to verified without re-checking it.
+system. Do not promote a board-sourced line to verified without re-checking it. The
+Aug 23/24 snapshots that used to sit here were removed rather than stacked on: three
+dated tables in one file is how a reader ends up trusting the wrong row.
 
 | Thing | State | How we know |
 | --- | --- | --- |
-| API revision | `chirp-api-00027-hwf`, serving 100% | **court-verified Aug 23** against Cloud Run |
-| Open PRs | none at session start | **court-verified Aug 23** |
-| Merged PRs | through **#78** | **verified Aug 23** via `gh pr list --state merged` |
-| Alembic head (repo) | **0013**, single head | **verified Aug 23** via `alembic heads` |
-| Prod DB `alembic_version` | **0013** | **board-sourced** (c71, applied by Jose Aug 22) — **re-verify at the next deploy** |
-| Local backend suite | 357 passed, 3 skipped | **verified Aug 23**, local PG14, run from `backend/` |
+| Serving revisions | **two services now**: `chirp-api-00038-br5` and `chirp-ws-00003-zrp`, each 100%, both on the SAME image | **court-verified Aug 28** against Cloud Run |
+| Why two services | open WebSockets were consuming chirp-api's HTTP concurrency budget, capping concurrently-online users near 320 (c209/c213) | see `INFRA-PRIVATE.html#chirpws`; **every image update must deploy BOTH** |
+| Prod DB `alembic_version` | **0028**, and both c230 triggers confirmed present in the live catalog | **court-verified Aug 28** through the Auth Proxy |
+| Alembic head (repo) | matches prod as of this line — **but run `alembic heads` yourself**, see the migrations section | **verified Aug 28** |
+| DB tier | `db-custom-1-3840` (dedicated core, ~100 connections), ZONAL | **verified Aug 28**; regional HA is a separate priced call Jose has not taken |
+| Backups / restore | daily, 14 retained, 7-day PITR, deletion protection on — and the restore is **rehearsed**, not just configured (~15 min to data, ~25 min to full service) | **court-rehearsed Aug 27**, runbook at `INFRA-PRIVATE.html#restore` |
+| Local backend suite | 664+ passed, 5 skipped (the skips are Redis-gated WS tests; CI has Redis) | **verified Aug 28**, local PG14, run from `backend/` |
 | Website | https://chirps-prod.web.app | live |
-| Stripe | test mode, armed | **no money has ever moved** |
-| Redis | not provisioned as of this Aug 23 snapshot | historical only; superseded by the Aug 24 verification below |
+| Stripe | test mode, armed | **NO MONEY HAS EVER MOVED — and no test-mode payment has ever cleared end to end (board c11). That is the launch gate.** |
+| Analytics | emitter live; Cloud Logging sink `chirp-analytics-bq` into BigQuery dataset `chirp_analytics` | **verified Aug 28**; chirp authorship is provably never linked (c227 rule, test-pinned) |
 
-## Latest verification — Aug 24 2026
+## Durable infrastructure facts (not revision-dated)
 
-| Thing | State | How we know |
-| --- | --- | --- |
-| API revision | `chirp-api-00030-m97`, serving 100% | **verified Aug 24** against Cloud Run after the merge-safe Redis/VPC service update; serving image digest is unchanged from `00029-s4d` |
-| Prod DB `alembic_version` | **0013** | **verified Aug 24** through the Cloud SQL Auth Proxy |
-| Media signing secret | configured and bound to the Cloud Run runtime account | **verified Aug 24** by Secret Manager and revision inspection; the bucket remains public until a physical-device capability-route render passes and Jose explicitly approves the privacy flip |
-| Deployed route checks | `/_health` 200, `/auth/me` 401, lineage/attendance auth routes 401, malformed `/media/{token}` 403, `/openapi.json` 404 | **verified Aug 24** against the live revision |
-| Mobile/release static checks | TypeScript, API contract verifier (82 client calls / 92 backend routes), Expo public config, Python syntax, and c156's two-call dashboard wiring pass | **delegated GPT-5.6 QA audit Aug 24**; fresh backend pytest is blocked by a local Python 3.11/pytest startup segfault, not a test assertion |
-| c153 reconciliation operations | Dedicated runner SA, read-only DB secret, restricted bucket roles, and dry-run Cloud Run Job are live; execution `chirp-media-reconcile-p679k` reported `scanned=1 referenced=1 eligible=0 deleted=0` | **verified Aug 24**; no media deletion was attempted and the runtime `tmp/`-only IAM was preserved |
-| c145 log cleanup | The two affected Cloud Logging streams were purged; unrelated logs remain | **verified Aug 24**; 6,328 request and 17,275 stderr entries removed, exact post-delete cutoff checks returned zero |
-| Redis infrastructure | `chirp-redis` Basic 1 GiB/Redis 7.0 and `chirp-vpc` on `10.8.0.0/28`, `e2-micro` min 2/max 3 are `READY`; `REDIS_URL` v1 and private-ranges-only connector egress are bound to Cloud Run | **verified Aug 24** from live resource descriptions and revision inspection; two real Firebase users completed an HTTP 201 message to WebSocket 101 event round-trip, with authenticated history read-back |
-| Repository / GitHub | `origin/main` was `53d34f6`; the shared root `main` was at `75b8d2a`, two board-only commits behind, while this hygiene branch was cut directly from `origin/main`; no open PRs; Actions run **493** passed on `53d34f6` | **verified Aug 24** via fetch, GitHub's public API, and local ref inspection; treat this as a dated snapshot and run the commands at the top of this file for live state |
+These do not change every deploy, so they are kept here rather than in the snapshot
+above. Anything with a revision number or a migration number belongs in the snapshot or,
+better, in a command you run.
 
-The snapshot is evidence, not a cache to trust forever. Re-run the live-source commands
-at the top before any release. In particular, `0013` was verified on prod before
-`00029-s4d`; c63 changed only service networking/secrets and did not run a migration or
-change the image. A future code deploy still re-checks the database first.
+- **Redis / VPC**: `chirp-redis` Basic 1 GiB Redis 7.0 and connector `chirp-vpc` on
+  `10.8.0.0/28`, `e2-micro`, min 2 / max 3, both `READY` and bound to Cloud Run. Redis is
+  fan-out only, never storage, and the app degrades gracefully when it is down. A real
+  Firebase-authenticated HTTP-201-to-WebSocket-101 round-trip with authenticated history
+  read-back was proven live (c63).
+- **Media**: the bucket is private (public-access prevention enforced, `allUsers` removed)
+  and reads go through app-signed HMAC capability URLs; a direct object URL 403s (c140/c155).
+  Signing is done off the event loop since c211 — do not reintroduce a synchronous
+  `signBlob` call on a request path.
+- **c153 reconciliation**: dedicated runner SA, read-only DB credential, delete permission
+  conditioned to `posts/` only, stored job is dry-run by default. Never add a schedule or
+  a `--delete` default; the runtime SA must keep its `tmp/`-only IAM.
+- **c145**: the log streams that briefly carried WS tokens were purged in full; the scrub
+  that prevents a recurrence lives in `app/core/log_scrub.py`.
+- **Deployed route shapes** worth knowing when you verify a release: `/_health` 200,
+  auth-gated routes 401 unauthenticated, malformed `/media/{token}` 403, `/openapi.json`
+  404 on any non-local env. `/healthz` is intercepted by Google's frontend — never use it.
 
 ## Migrations — read this before you write one
 
-**The head is not the highest number on disk, and right now it is not even close.**
-The chain is:
+**The head is not the highest number on disk, and it never has been. Do not read a
+head number out of this file — run `cd backend && .venv/bin/alembic heads` and parent on
+what it prints.** Any number written here is stale the next time anyone merges; this
+section deliberately no longer names one. Alembic walks `down_revision`, not filenames,
+so an out-of-order chain is correct and must never be "fixed" by renumbering. `0012` was
+claimed for c69 and released unused, so it is a hole in the sequence, not a missing file.
 
-```
-0011 -> 0014 -> 0017 -> 0015 -> 0016 -> 0013
-```
-
-`0013` is the head. Alembic walks `down_revision`, not filenames, so this is correct and
-must not be "fixed" by renumbering. `0012` was claimed for c69 and released unused, so it
-is a hole in the sequence, not a missing file.
+**This trap has now cost four separate branches**, which is why it leads this section:
+0024 (c198), 0018 (c162), and two more all wrote `down_revision` pointing at whatever the
+head was on the day the file was WRITTEN, then sat on a branch while main moved. Each one
+would have produced two heads the moment it merged, and each was caught only because
+someone re-ran `alembic heads` at merge time. **Re-point at the current head immediately
+before you merge, not when you start** — that is the rule the merges above actually
+enforce, and CI's single-head check cannot see the collision while the other migration is
+still unmerged.
 
 - **Run `alembic heads` and parent on what it prints.** Claiming a number on the board
   prevents duplicate revision ids; it does not stop two people parenting different numbers
@@ -176,11 +189,24 @@ These are live in front of users right now. Each has a card; the card is authori
   Apple guideline 4.8 makes Sign in with Apple mandatory once Google ships.
 - **`/terms` and `/privacy` are not lawyer-reviewed** (c75), scoped to NC and UNCG on
   purpose. The liability sections are still placeholders.
-- **Transactional email cannot reach arbitrary recipients** (c87). The app-to-Resend chain
-  works, but without a verified sending domain Resend refuses anyone outside the account.
-- **The media bucket is still public by design** (c140). Signed capability URLs are live,
-  but Public Access Prevention and `allUsers` removal remain gated on physical-device
-  render proof plus Jose's explicit approval. Redis/c63 did not close that gate.
+- **No test-mode payment has ever cleared end to end** (c11) — card or ACH. The money code
+  is heavily reviewed and hardened, but that is not the same claim as "a payment worked".
+  **This is the launch gate**: it must pass at the device window before real members are
+  invited to pay.
+- **`.edu` verification: the last hop is unproven** (c134/c71). Sending IS proven — a real
+  202 from `hello@josedev.app` to an arbitrary `.edu` address, Aug 25. What has never
+  happened is a mailbox the team controls RECEIVING one. Q is a real student; one send to
+  his own `.edu` inbox closes it, and no school mailbox for Jose is needed.
+- **Mobile realtime still points at chirp-api's own `/ws`** (c213). The dedicated
+  `chirp-ws` service is live and the client supports `EXPO_PUBLIC_WS_URL`, but until that
+  var is set in the build config and one authenticated round-trip is proven against it,
+  the concurrency split is not actually buying anything.
+
+Corrected here rather than left to rot, because both were stated as current in this file
+until Aug 28 and both are now false: the **media bucket is private** (public-access
+prevention enforced, `allUsers` removed, capability URLs verified, direct object access
+403s — c140/c155 flipped Aug 24), and **email is not domain-blocked** (`josedev.app` is
+verified in Resend, c134).
 
 ## Alpha
 
