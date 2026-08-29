@@ -7,7 +7,7 @@ import { View } from "react-native";
 import { listMembers, type MemberOut, type RoleName } from "@/api/chapters";
 import { chipVariant, prettifyRole, roleLabel } from "@/lib/roleTerms";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
-import { AppText, Chip, Card, EmptyState, GradientAvatar, ListRow, Screen, SectionHeader } from "@/components";
+import { Chip, Card, EmptyState, GradientAvatar, ListRow, Screen, SectionHeader } from "@/components";
 import { spacing } from "@/theme";
 
 /**

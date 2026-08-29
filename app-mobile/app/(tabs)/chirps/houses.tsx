@@ -27,7 +27,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 
-import { listMembers } from "@/api/chapters";
 import {
   castHouseBallot,
   getHouseLeaderboard,
