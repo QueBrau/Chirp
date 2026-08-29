@@ -4,9 +4,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.core.validation import validate_public_url
+from app.schemas.base import _Schema
 
 RsvpStatus = Literal["going", "maybe", "cant"]
 
@@ -16,10 +17,6 @@ RsvpStatus = Literal["going", "maybe", "cant"]
 #   verified - any .edu-verified user, so a sister chapter or another school can be invited
 #   public   - no account at all
 EventVisibility = Literal["chapter", "campus", "verified", "public"]
-
-
-class _Schema(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ---- events ----

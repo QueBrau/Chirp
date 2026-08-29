@@ -4,10 +4,11 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import Field, field_validator
 
 from app.core.invites import INVITE_DEFAULT_MAX_USES, INVITE_MAX_USES_CAP
 from app.core.validation import validate_public_url
+from app.schemas.base import _Schema
 
 AccountType = Literal["greek", "non_greek", "alumni"]
 RoleName = Literal[
@@ -21,10 +22,6 @@ RoleName = Literal[
     "alumni",
 ]
 MembershipStatus = Literal["active", "inactive", "removed"]
-
-
-class _Schema(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ---- users ----

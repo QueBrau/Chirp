@@ -3,11 +3,7 @@
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict
-
-
-class _Schema(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+from app.schemas.base import _Schema
 
 
 class HouseBallotCreate(_Schema):

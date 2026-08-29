@@ -5,7 +5,9 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import AliasChoices, BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import AliasChoices, BeforeValidator, Field
+
+from app.schemas.base import _Schema
 
 
 def _to_b64(value: object) -> object:
@@ -16,10 +18,6 @@ def _to_b64(value: object) -> object:
 
 
 Base64Str = Annotated[str, BeforeValidator(_to_b64)]
-
-
-class _Schema(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ---- prekey inputs ----

@@ -3,13 +3,10 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import Field, field_validator
 
 from app.core.validation import validate_public_url
-
-
-class _Schema(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+from app.schemas.base import _Schema
 
 
 # ---- alumni profile (GET/PUT /alumni/profile, GET /alumni/directory) ----

@@ -4,7 +4,9 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.schemas.base import _Schema
 
 ModerationActionName = Literal[
     "suspend_user", "unsuspend_user", "remove_content", "resolve_report"
@@ -14,10 +16,6 @@ ModerationTargetType = Literal["user", "chirp", "post", "comment", "report"]
 # anonymous-content shaped); this generic endpoint covers the named-author content
 # types instead of a third near-identical route.
 RemovableContentType = Literal["post", "comment"]
-
-
-class _Schema(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ---- account suspension ----

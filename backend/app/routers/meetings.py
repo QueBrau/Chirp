@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.errors import not_found
-from app.core.permissions import MINUTES_ADMIN, Role, require_role
+from app.core.permissions import MINUTES_ADMIN, require_role
 from app.core.windows import meeting_window
 from app.db import get_session
 from app.middleware.org_scope import get_current_membership

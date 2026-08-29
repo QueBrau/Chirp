@@ -10,15 +10,13 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import Field, field_validator
+
+from app.schemas.base import _Schema
 
 PollStatus = Literal["open", "closed"]
 
 MAX_OPTIONS = 10
-
-
-class _Schema(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class PollCreate(_Schema):
