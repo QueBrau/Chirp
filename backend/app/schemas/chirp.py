@@ -4,14 +4,12 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.schemas.base import _Schema
 
 ReportTargetType = Literal["chirp", "post", "comment", "message_forward", "user"]
 ReportStatus = Literal["open", "actioned", "dismissed"]
-
-
-class _Schema(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ---- chirps ----

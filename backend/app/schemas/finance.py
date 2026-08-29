@@ -8,7 +8,9 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.schemas.base import _Schema
 
 LedgerEntryType = Literal[
     "dues_payment",
@@ -20,10 +22,6 @@ LedgerEntryType = Literal[
 ]
 SpendApprovalStatus = Literal["pending", "approved", "rejected"]
 DuesPaymentPlanStatus = Literal["active", "completed", "canceled"]
-
-
-class _Schema(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ---- dues cycles ----
