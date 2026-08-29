@@ -18,17 +18,9 @@ export function setAuthToken(token: string | null): void {
   authToken = token;
 }
 
-export function getAuthToken(): string | null {
-  return authToken;
-}
-
 /** Emulated-auth mode only: uid sent as `X-Debug-Firebase-Uid` (backend auth_mode="emulated"). */
 export function setDebugFirebaseUid(uid: string | null): void {
   debugFirebaseUid = uid;
-}
-
-export function getDebugFirebaseUid(): string | null {
-  return debugFirebaseUid;
 }
 
 /** Non-2xx response from the backend; `detail` mirrors FastAPI's `{"detail": ...}` body. */

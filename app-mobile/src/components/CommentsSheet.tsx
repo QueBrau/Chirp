@@ -37,6 +37,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { createComment, listComments, type PostCommentOut } from "@/api/feed";
 import { showApiError } from "@/lib/alert";
+import { compactAge as age } from "@/lib/dates";
 import { light, radii, spacing, typography, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
@@ -46,16 +47,6 @@ import { GradientAvatar } from "./GradientAvatar";
 /** A failed load is its own state, never an empty list (the mistake feed/index.tsx's
  * own LoadState comment records: a silent [] hid a broken fetch for a week). */
 type LoadState = "loading" | "loaded" | "error";
-
-/** Compact relative age, same scale the feed cards use for their own timestamps. */
-function age(iso: string): string {
-  const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.round(hours / 24)}d`;
-}
 
 function CommentRow({ comment }: { comment: PostCommentOut }) {
   return (

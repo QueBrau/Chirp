@@ -22,14 +22,9 @@ import { StyleSheet, View } from "react-native";
 import { getRoleTerms, listMembers, type MemberOut, type RoleTerm } from "@/api/chapters";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { chipVariant, roleLabel, termDateLabel } from "@/lib/roleTerms";
+import { findMember } from "@/lib/roster";
 import { AppText, Card, Chip, EmptyState, GradientAvatar, Screen, SectionHeader } from "@/components";
 import { spacing, useTheme } from "@/theme";
-
-/** Resolve a user id against the chapter roster — the only name/photo source
- * available (mirrors the helper in chapter/event/[id].tsx). */
-function findMember(members: MemberOut[], userId: string): MemberOut | undefined {
-  return members.find((member) => member.user_id === userId);
-}
 
 export default function MemberDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();

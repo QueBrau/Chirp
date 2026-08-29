@@ -54,8 +54,9 @@ import {
   type CreateEventInput,
 } from "@/components";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
-import { eventWhen } from "@/lib/dates";
+import { compactAge as age, eventWhen } from "@/lib/dates";
 import { ROLE_LABELS, roleLabel } from "@/lib/roleTerms";
+import { findMember } from "@/lib/roster";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
@@ -136,22 +137,6 @@ const SEGMENTS: { key: OrgSegment; label: string }[] = [
   { key: "events", label: "Events" },
   { key: "tools", label: "Tools" },
 ];
-
-/** Resolve a user id against the chapter roster — the only name source available
- * (there is no GET /users/{id}). Mirrors the helper in chapter/event/[id].tsx. */
-function findMember(members: MemberOut[], userId: string): MemberOut | undefined {
-  return members.find((member) => member.user_id === userId);
-}
-
-/** Compact relative age for card captions ("just now", "5m", "3h", "2d") — matches Home's feed. */
-function age(iso: string): string {
-  const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.round(hours / 24)}d`;
-}
 
 /** Pill segmented control under the org hero (§8.7): Feed · Events · Tools, org-accent active state. */
 function OrgSegmentedControl({

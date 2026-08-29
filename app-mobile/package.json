@@ -23,7 +23,6 @@
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@stripe/stripe-react-native": "0.50.3",
     "babel-preset-expo": "~54.0.10",
-    "d3-force": "^3.0.0",
     "expo": "~54.0.0",
     "expo-constants": "~18.0.0",
     "expo-dev-client": "~6.0.21",
@@ -51,7 +50,6 @@
     "react-native-worklets": "0.5.1"
   },
   "devDependencies": {
-    "@types/d3-force": "^3.0.10",
     "@types/react": "~19.1.0",
     "typescript": "~5.9.2"
   }
