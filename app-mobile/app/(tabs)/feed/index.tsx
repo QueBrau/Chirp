@@ -34,7 +34,7 @@ import { blockUser, createReport } from "@/api/moderation";
 import { useCampus, useCampusAccess, useSession } from "@/auth";
 import { AppText, Card, Chip, EmptyState, Fab, MediaPostCard, Screen } from "@/components";
 import { showAlert, showApiError } from "@/lib/alert";
-import { eventWhen } from "@/lib/dates";
+import { compactAge as age, eventWhen } from "@/lib/dates";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
 
 type FeedFilter = "forYou" | "campus";
@@ -44,16 +44,6 @@ type FeedFilter = "forYou" | "campus";
  * be presented the same as a genuinely empty feed (that's what hid the
  * hardcoded-chapter-id bug for a week: a failed load silently rendered []). */
 type LoadState = "loading" | "loaded" | "error";
-
-/** Compact relative age for card captions ("just now", "5m", "3h", "2d"). */
-function age(iso: string): string {
-  const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.round(hours / 24)}d`;
-}
 
 const FILTERS: { key: FeedFilter; label: string }[] = [
   { key: "forYou", label: "For You" },

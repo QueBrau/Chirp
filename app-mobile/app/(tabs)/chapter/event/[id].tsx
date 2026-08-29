@@ -51,6 +51,7 @@ import {
 } from "@/components";
 import { confirmAction, showApiError } from "@/lib/alert";
 import { eventWhen } from "@/lib/dates";
+import { findMember } from "@/lib/roster";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { light, radii, spacing, useTheme, withAlpha } from "@/theme";
 
@@ -78,13 +79,6 @@ const VISIBILITY_LABELS: Record<EventOut["visibility"], string> = {
   verified: "Any verified student",
   public: "Anyone with the link",
 };
-
-/** Resolve a user id to their roster row. There is no GET /users/{id} - the
- * member list of the caller's own chapter is the only name/photo source, so a
- * host or guest who has since left the roster falls back to "Unknown"/"Guest". */
-function findMember(members: MemberOut[], userId: string): MemberOut | undefined {
-  return members.find((member) => member.user_id === userId);
-}
 
 export default function EventDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();

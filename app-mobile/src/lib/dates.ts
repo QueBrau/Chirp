@@ -69,3 +69,26 @@ export function eventWhen(startsAt: string, endsAt?: string | null): string {
       )}`;
   return `${opening} to ${endText}`;
 }
+
+/**
+ * Compact relative age for card captions ("just now", "5m", "3h", "2d") - the one
+ * scale Home's feed, an org's feed and the comments thread all caption their
+ * timestamps with (board card c238; it was the same six lines in all three).
+ *
+ * DELIBERATELY NOT calendarDay(), exactly like eventWhen above. A post's created_at
+ * is a real INSTANT, not a calendar day, and this reads it as elapsed milliseconds
+ * from now, which carries no timezone opinion at all - "5m" is 5m everywhere.
+ *
+ * This is the MINUTE-scale formatter. The hour-scale copies in chirps/index.tsx and
+ * chapter/moderation.tsx are deliberately NOT folded in here: they emit different
+ * strings ("5h ago", not "5h"), so sharing them would need a suffix flag, and a flag
+ * costs more than the duplication saves.
+ */
+export function compactAge(iso: string): string {
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
