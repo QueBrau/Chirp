@@ -32,6 +32,7 @@ from tests.conftest import (
     MakeUser,
     RegisterDevice,
     b64,
+    share_verified_campus,
 )
 from tests.test_campus_verification import DOMAIN, _code_from, _set_domains, sent_codes
 from tests.test_payments import (
@@ -205,6 +206,9 @@ async def test_message_sent_emits_coarse_props_never_ciphertext(
 ) -> None:
     creator = await make_user("Analytics Sender")
     other = await make_user("Analytics Recipient")
+    # c243: a chapter-less DM now requires a reachable recipient; this test is about the
+    # emitted analytics props, so make the pair campus peers.
+    await share_verified_campus(creator.id, other.id)
     device = await register_device(creator, one_time_prekey_count=1)
 
     created = await client.post(

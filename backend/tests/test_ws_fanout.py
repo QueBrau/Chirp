@@ -175,7 +175,44 @@ def _register_device(client: TestClient, user: WsUser) -> dict[str, Any]:
     return response.json()
 
 
+def _share_verified_campus(client: TestClient, *users: WsUser) -> None:
+    """Put these users on one verified campus so they may open a chapter-less DM (c243).
+
+    tests/conftest.py's async share_verified_campus cannot be awaited from these sync
+    TestClient tests. Run it through `client.portal.call` rather than a fresh
+    asyncio.run(): the portal owns the loop app.db's engine singleton is bound to, and
+    the module docstring's whole warning is about handing those connections to a second
+    loop.
+    """
+
+    async def _write() -> None:
+        from app.db import get_session_factory
+
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                text(
+                    "INSERT INTO campuses (name, slug) VALUES (:name, :slug) RETURNING id"
+                ),
+                {"name": "Test Campus", "slug": f"campus-{uuid.uuid4().hex[:12]}"},
+            )
+            campus_id = str(result.scalar_one())
+            for user in users:
+                await session.execute(
+                    text(
+                        "UPDATE users SET campus_id = :campus, "
+                        "campus_verified_at = now() WHERE id = :id"
+                    ),
+                    {"campus": campus_id, "id": user.id},
+                )
+            await session.commit()
+
+    client.portal.call(_write)
+
+
 def _make_dm(client: TestClient, creator: WsUser, other: WsUser) -> str:
+    # c243: a chapter-less DM needs a reachable recipient. Fan-out, not authorization, is
+    # what this file tests, so make the pair campus peers first.
+    _share_verified_campus(client, creator, other)
     response = client.post(
         "/conversations",
         json={"kind": "dm", "member_user_ids": [other.id]},

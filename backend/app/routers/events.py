@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.analytics import emit
+from app.core.blocks import blockers_of
 from app.core.campus_access import is_campus_verified
 from app.core.errors import forbidden, not_found
 from app.core.permissions import EBOARD
@@ -376,21 +377,32 @@ async def invite_to_event(
     if unknown:
         raise HTTPException(status_code=422, detail="unknown_user_in_invite_list")
 
-    await session.execute(
-        pg_insert(models.EventInvite)
-        .values(
-            [
-                {
-                    "event_id": event_id,
-                    "invited_user_id": invited_id,
-                    "invited_by": user.id,
-                }
-                for invited_id in known_ids
-            ]
+    # An invite is contact: it puts this event in the invitee's list_my_invites and grants
+    # them read access, so someone who blocked the inviter must not receive one (board
+    # card c243 - blocks used to be enforced on read paths only, which let a blocked user
+    # keep reaching people through events). Dropped SILENTLY rather than refused: a 403
+    # naming the ids that were skipped would tell the inviter exactly who blocked them,
+    # and inviting a roster is a bulk action where one blocked member must not fail the
+    # other fifty. The blocked-by user simply is not invited.
+    blockers = await blockers_of(session, subject_id=user.id, candidate_ids=known_ids)
+    invitable_ids = known_ids - blockers
+
+    if invitable_ids:
+        await session.execute(
+            pg_insert(models.EventInvite)
+            .values(
+                [
+                    {
+                        "event_id": event_id,
+                        "invited_user_id": invited_id,
+                        "invited_by": user.id,
+                    }
+                    for invited_id in invitable_ids
+                ]
+            )
+            .on_conflict_do_nothing(constraint="pk_event_invites")
         )
-        .on_conflict_do_nothing(constraint="pk_event_invites")
-    )
-    await session.commit()
+        await session.commit()
 
     rows = await session.execute(
         select(models.EventInvite)

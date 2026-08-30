@@ -32,7 +32,15 @@ class ConversationCreate(_Schema):
     chapter_id: uuid.UUID | None = None
     kind: ConversationKind
     title: str | None = None
-    member_user_ids: list[uuid.UUID] = Field(default_factory=list)
+    # Bounded because the route writes one conversation_members row per entry and then
+    # every message fans out once per member (board c243, same reasoning as
+    # MeetingAttendanceUpdate.entries): unbounded, one request lets the caller choose how
+    # much work it costs AND how many people it reaches. 256 is far above any real
+    # chapter roster — sender-key distribution is O(members x devices) of client work, so
+    # groups near this size are already impractical — and far below a payload worth
+    # sending. The eligibility rule in the route decides WHO may be named; this only
+    # decides how many.
+    member_user_ids: list[uuid.UUID] = Field(default_factory=list, max_length=256)
 
 
 class ConversationMemberOut(_Schema):
