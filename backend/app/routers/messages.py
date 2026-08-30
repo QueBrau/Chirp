@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.analytics import emit
+from app.core.blocks import blockers_of
+from app.core.campus_access import is_campus_verified
 from app.core.errors import forbidden, not_found
 from app.db import get_session
 from app.middleware.auth import get_current_user
@@ -48,6 +50,68 @@ async def _require_active_member(
     if member is None or member.left_at is not None:
         raise forbidden("not_a_member")
     return member
+
+
+async def _require_reachable_off_chapter(
+    session: AsyncSession, caller: models.User, member_ids: set[uuid.UUID]
+) -> None:
+    """Eligibility rule for a conversation with NO chapter_id (board card c243).
+
+    This path used to have no check whatsoever — the membership test below it was inside
+    `if body.chapter_id is not None`, so omitting chapter_id let any authenticated user
+    open a conversation naming ANY user ids in the system, campus and chapter irrelevant.
+    That is the cold-DM channel the app never intended to ship.
+
+    WHO IS A LEGITIMATE RECIPIENT. `conversations.chapter_id` is documented as "NULL for
+    cross-chapter DMs" (SPEC §3), so this path exists to let a Sigma Chi member DM a
+    Delta Gamma member — people in DIFFERENT chapters on the SAME campus, which is the
+    exact social graph the campus feed and Chirp already serve. Cross-CHAPTER is the
+    documented feature; cross-CAMPUS is not, and nothing in SPEC, the schema, or the
+    mobile app asks for it. So a recipient is reachable when either:
+
+      1. they share an ACTIVE chapter membership with the caller — chapter content, and
+         per Jose's Aug 16 ruling (core/campus_access.py) chapter membership stands on
+         its own without an .edu; or
+      2. they are on the caller's campus and the CALLER is currently campus-verified —
+         the same gate campus-wide reach goes through everywhere else.
+
+    Anything else is refused. A NULL campus on either side is not a match: `None == None`
+    would otherwise make every campus-less account mutually reachable, which is the
+    `campus_id is not None` shortcut core/campus_access.py explicitly forbids.
+
+    The RECIPIENT is deliberately not required to be verified. Requiring it would make
+    every not-yet-verified account unreachable, which during onboarding week is most of
+    them; the abuse this rule stops needs a verified .edu on the SENDER's side, and that
+    is where the bar belongs.
+    """
+    others = member_ids - {caller.id}
+    if not others:
+        return
+
+    shared_chapters = select(models.Membership.chapter_id).where(
+        models.Membership.user_id == caller.id,
+        models.Membership.status == "active",
+    )
+    chapter_mates = await session.execute(
+        select(models.Membership.user_id).where(
+            models.Membership.user_id.in_(others),
+            models.Membership.status == "active",
+            models.Membership.chapter_id.in_(shared_chapters),
+        )
+    )
+    unreachable = others - set(chapter_mates.scalars())
+
+    if unreachable and caller.campus_id is not None and is_campus_verified(caller):
+        campus_mates = await session.execute(
+            select(models.User.id).where(
+                models.User.id.in_(unreachable),
+                models.User.campus_id == caller.campus_id,
+            )
+        )
+        unreachable -= set(campus_mates.scalars())
+
+    if unreachable:
+        raise forbidden("recipient_not_reachable")
 
 
 def _conversation_out(
@@ -98,6 +162,17 @@ async def create_conversation(
         }
         if not non_ghost_ids.issubset(active_member_ids):
             raise forbidden("not_a_member")
+    else:
+        await _require_reachable_off_chapter(session, user, member_ids)
+
+    # Blocks are checked on BOTH paths, because a chapter_id does not make contact
+    # consensual: someone you blocked is still on the roster and could otherwise name
+    # you into a chapter conversation. Same refusal string as the eligibility failure
+    # above so "they blocked me" and "they are not reachable" are one indistinguishable
+    # response — the chapter branch already collapses four distinct causes into a single
+    # not_a_member for the same reason.
+    if await blockers_of(session, subject_id=user.id, candidate_ids=member_ids):
+        raise forbidden("recipient_not_reachable")
 
     conversation = models.Conversation(
         chapter_id=body.chapter_id, kind=body.kind, title=body.title
@@ -175,6 +250,29 @@ async def send_message(
     if device.revoked_at is not None:
         raise forbidden("device_revoked")
 
+    recipients_result = await session.execute(
+        select(models.ConversationMember.user_id).where(
+            models.ConversationMember.conversation_id == conversation_id,
+            models.ConversationMember.left_at.is_(None),
+        )
+    )
+    member_ids = list(recipients_result.scalars().all())
+
+    # Block enforcement, resolved BEFORE the insert so a refused send never leaves
+    # ciphertext behind (board card c243). A conversation that already exists is not a
+    # standing licence to keep talking — the block may well have been created because of
+    # what was said in this very thread.
+    blockers = await blockers_of(session, subject_id=user.id, candidate_ids=member_ids)
+    others = {member_id for member_id in member_ids if member_id != user.id}
+    if others and others <= blockers:
+        # Everyone left to hear this has blocked the sender, so there is no one to
+        # deliver to — the 1:1 DM case, and a group everybody has shut them out of.
+        raise forbidden("recipient_not_reachable")
+    # In a group where only SOME members blocked the sender, the send succeeds and the
+    # blockers are simply dropped from the fan-out below. Refusing the whole send would
+    # hand any single member a veto over everyone else's group, which is its own abuse.
+    recipient_ids = [member_id for member_id in member_ids if member_id not in blockers]
+
     message = models.Message(
         conversation_id=conversation_id,
         sender_device_id=body.sender_device_id,
@@ -184,14 +282,6 @@ async def send_message(
     session.add(message)
     await session.flush()
     await session.refresh(message)
-
-    recipients_result = await session.execute(
-        select(models.ConversationMember.user_id).where(
-            models.ConversationMember.conversation_id == conversation_id,
-            models.ConversationMember.left_at.is_(None),
-        )
-    )
-    recipient_ids = list(recipients_result.scalars().all())
     await session.commit()
     emit(
         "message_sent",
