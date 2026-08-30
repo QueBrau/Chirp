@@ -2609,6 +2609,15 @@
       "area": "",
       "title": "c248 [MED] THE POOL-ARITHMETIC GUARD IS STALE IN TWO WAYS and no longer models the real topology. tests/test_db_pool_config.py pins CLOUD_RUN_MAX_INSTANCES=4 and DB_MAX_CONNECTIONS=25. Both are now wrong: (a) LIVE max_connections IS 100, not 25 - manager read it off prod through the proxy Aug 30 (c225 upgraded the tier to db-custom-1-3840); (b) there are TWO services on this database now, not one - chirp-ws sets its own DB_POOL_SIZE=1 / DB_MAX_OVERFLOW=1 as Cloud Run env, which the test does not model at all. REAL LIVE ARITHMETIC: chirp-api 4 x (3+2) = 20, chirp-ws 2 x (1+1) = 4, total 24, + 3 reserved + 1 proxy = 28 against 100. Genuinely SAFE - 72 connections of unused headroom - so this is not a live bug and nothing is failing. But the guard passes for the wrong reason, would block a legitimate scale-up, and reads as authoritative to the next person. Update both constants to the live values and add the chirp-ws term.",
       "detail": ""
+    },
+    {
+      "id": "c249",
+      "col": "done",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c249 DONE Aug 30 - TWO PASTE-TRAPS KILLED IN INFRA-PRIVATE.html (manager; file is gitignored, edited in the shared tree only, confirmed still untracked). Found while documenting the c247 timeout, from chirps-23's c241 catch that the block was missing EMAIL_PROVIDER. (a) The chirp-api FIRST-DEPLOY block was far more stale than one flag: measured against the live service it lacked --vpc-connector, REDIS_URL and MEDIA_SIGNING_SECRET in --set-secrets, all three STRIPE_* secrets, MEDIA_BUCKET_NAME, EMAIL_PROVIDER, EMAIL_FROM and --timeout. Since --set-env-vars REPLACES rather than merges, pasting it would have dropped email to the 'log' provider (accepting sends, delivering nothing), cut Redis and so WS fan-out, broken media signing, and reverted every socket to a 300s cut - all of it still green on /healthz. Rather than reconstruct a command I had not tested, it is now marked HISTORICAL - DO NOT PASTE, with the specific omissions listed and 'services describe --format=export | services replace' given as the way to generate truth from the live service. Deliberately NOT replaced with a maintained first-deploy command: keeping one in sync with a weekly-changing service is the staleness that caused this. (b) The chirp-ws first-deploy block was missing --service-account, which the prose immediately above it has always said is mandatory (default compute SA lost secret access in c182), plus the new --timeout=3600. Both added to the command itself, not just described near it. Same lesson as c93: fix the trap AT the paste point.",
+      "detail": ""
     }
   ],
   "decisions": [
