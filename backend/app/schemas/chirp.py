@@ -6,7 +6,11 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.core.validation import MAX_CHIRP_BODY_LENGTH, MAX_REASON_LENGTH
+from app.core.validation import (
+    MAX_CHIRP_BODY_LENGTH,
+    MAX_FORWARDED_PLAINTEXT_LENGTH,
+    MAX_REASON_LENGTH,
+)
 from app.schemas.base import _Schema
 
 ReportTargetType = Literal["chirp", "post", "comment", "message_forward", "user"]
@@ -50,7 +54,13 @@ class ChirpVoteOut(_Schema):
 class ContentReportCreate(_Schema):
     target_type: ReportTargetType
     target_id: uuid.UUID | None = None
-    forwarded_plaintext: str | None = None
+    # A reported E2EE message's decrypted body (SPEC §6.7). Bounded by the message
+    # plaintext ceiling rather than by a number of its own: this IS one of those
+    # messages, and picking the two apart would make a message reportable only up to
+    # some other length. c245 left this alone deliberately for that reason.
+    forwarded_plaintext: str | None = Field(
+        default=None, max_length=MAX_FORWARDED_PLAINTEXT_LENGTH
+    )
     reason: str = Field(min_length=1, max_length=MAX_REASON_LENGTH)
 
 

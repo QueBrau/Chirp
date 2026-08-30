@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import AliasChoices, BeforeValidator, Field
 
+from app.core.validation import MAX_CIPHERTEXT_B64_LENGTH
 from app.schemas.base import _Schema
 
 ConversationKind = Literal["dm", "group"]
@@ -67,7 +68,12 @@ class MessageCreate(_Schema):
     """Ciphertext in — the server never parses ciphertext_b64 (SPEC §8.1)."""
 
     sender_device_id: uuid.UUID
-    ciphertext_b64: str = Field(min_length=1)
+    # Bounded as EXPANDED plaintext, not as text: see MAX_CIPHERTEXT_B64_LENGTH for
+    # the UTF-8 -> Signal framing -> base64 arithmetic it is derived from. Capping the
+    # request shape only — MessageOut below is deliberately left uncapped so a message
+    # stored before this limit existed still reads back instead of 500ing a whole
+    # conversation's history.
+    ciphertext_b64: str = Field(min_length=1, max_length=MAX_CIPHERTEXT_B64_LENGTH)
     message_type: MessageType = "signal"
 
 
