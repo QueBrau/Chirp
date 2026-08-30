@@ -55,10 +55,14 @@ class Settings(BaseSettings):
     # "resend" and supplies resend_api_key from Secret Manager.
     email_provider: Literal["log", "resend"] = "log"
     resend_api_key: str | None = None
-    # Sender identity. Until c73 buys a domain this is Resend's shared onboarding
-    # sender, which Resend only permits to reach our OWN account address — a
-    # deliberate, temporary state, explained in full in app.services.email_service.
-    email_from: str = "Chirp <onboarding@resend.dev>"
+    # Sender identity. josedev.app has been verified in Resend since Aug 24 (board c134),
+    # so this default is our real sender now, not Resend's shared onboarding address —
+    # the old "we own no domain" note here was true only before that date. Prod does not
+    # rely on this default: EMAIL_FROM is set explicitly in the Cloud Run env and wins.
+    # It matters for local dev and for anyone reading this to learn who Chirp mails as.
+    # Sending is proven; a school inbox actually RECEIVING a code is not — see
+    # app.services.email_service for exactly where the evidence stops.
+    email_from: str = "Chirp <hello@josedev.app>"
     # Where a human reply should land. Once c74's support mailbox exists this becomes
     # that address, so a student replying to a verification mail reaches a person
     # rather than a sender nobody reads.
