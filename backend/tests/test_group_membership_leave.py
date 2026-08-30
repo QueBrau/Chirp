@@ -8,7 +8,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 
-from tests.conftest import MakeUser, RegisterDevice, b64
+from tests.conftest import MakeUser, RegisterDevice, b64, share_verified_campus
 
 
 async def test_leave_sets_left_at_and_fanout_skips_left_member(
@@ -21,6 +21,9 @@ async def test_leave_sets_left_at_and_fanout_skips_left_member(
     creator = await make_user("Group Creator")
     stayer = await make_user("Group Stayer")
     leaver = await make_user("Group Leaver")
+    # c243: a chapter-less group now requires every named member to be reachable. The
+    # subject here is left_at and fan-out, so make the three of them campus peers.
+    await share_verified_campus(creator.id, stayer.id, leaver.id)
     device = await register_device(creator, one_time_prekey_count=1)
 
     created = await client.post(

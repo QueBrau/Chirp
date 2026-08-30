@@ -7,10 +7,13 @@ from datetime import datetime, timezone
 from httpx import AsyncClient
 from sqlalchemy import text
 
-from tests.conftest import ApiUser, MakeUser, RegisterDevice, b64
+from tests.conftest import ApiUser, MakeUser, RegisterDevice, b64, share_verified_campus
 
 
 async def _make_dm(client: AsyncClient, creator: ApiUser, other: ApiUser) -> str:
+    # c243: a chapter-less conversation now requires a reachable recipient. These tests
+    # are about cursor behaviour, not authorization, so make the pair campus peers.
+    await share_verified_campus(creator.id, other.id)
     created = await client.post(
         "/conversations",
         json={"kind": "dm", "member_user_ids": [other.id]},

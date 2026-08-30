@@ -469,6 +469,42 @@ async def set_campus(user_id: str, campus_id: str, *, verified: bool = True) -> 
         await session.commit()
 
 
+async def share_verified_campus(*user_ids: str) -> str:
+    """Put several users on ONE new campus, all verified, and return the campus id.
+
+    Board c243. A conversation with no chapter_id used to accept ANY user ids; it now
+    requires each named person to be reachable — a shared active chapter, or the caller's
+    campus with the caller verified. Tests whose subject is something else entirely
+    (pagination cursors, WS fan-out, the analytics payload, group leave) still have to
+    hand the route a legitimately reachable pair before they can get a conversation at
+    all. This is the one-line way to say "these people are campus peers" without standing
+    up chapters those tests do not otherwise need.
+
+    Note this is the opposite default from make_chapter_with, whose members arrive
+    UNVERIFIED on purpose (see verify_campus below) — callers here want reachability, not
+    a tripwire.
+    """
+    campus_id = None
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            text("INSERT INTO campuses (name, slug) VALUES (:name, :slug) RETURNING id"),
+            {"name": "Test Campus", "slug": f"campus-{uuid.uuid4().hex[:12]}"},
+        )
+        campus_id = str(result.scalar_one())
+        for user_id in user_ids:
+            await session.execute(
+                text(
+                    "UPDATE users SET campus_id = :campus, campus_verified_at = now() "
+                    "WHERE id = :id"
+                ),
+                {"campus": campus_id, "id": user_id},
+            )
+        await session.commit()
+    return campus_id
+
+
 async def verify_campus(user_id: str) -> None:
     """Stamp campus_verified_at without touching campus_id.
 
