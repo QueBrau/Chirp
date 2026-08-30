@@ -2654,6 +2654,15 @@
       "area": "",
       "title": "c253 DONE Aug 30 - REPO AND DOC CLEANUP + TWO ARCHITECTURE ARTIFACTS FOR JOSE. 8 merged remote branches deleted (c239-dry-wave2, c239-verify-campus, c241, c242, c243, c245, c246-ws-url, c246-ci-step); 3 remain and all are legitimate - c237/c248 were in flight at the time and c174 is the deliberately gated SDK 54->57 upgrade. 6 stale worktrees removed, 4 active remain. Note for anyone auditing: squash-merge means `git branch -r --merged` returns NOTHING even for fully merged work, so branches must be matched to their PR state instead - do not read an empty --merged list as 'nothing to clean'. CORRECTION TO c244: the GCS lifecycle rule EXISTS and always did - delete under tmp/ at age 1 day, set by chirp.shared@gmail.com on Aug 23 per the audit log. The manager's earlier 'no lifecycle rule' reading was WRONG and Jose was asked to approve something already done. tmp/ is empty; only posts/ holds objects. c244's REMAINING half is real: /media/upload-url still has no rate limit or quota. Artifacts: architecture reference (20edec1f) and demo walkthrough (96ab4bc1).",
       "detail": ""
+    },
+    {
+      "id": "c254",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c254 [LAUNCH TRAP - FALSE SECURITY CLAIM IF THE COMPOSER IS EVER ENABLED] The messaging UI TELLS USERS IT IS ENCRYPTED AND IT IS NOT. app-mobile/app/(tabs)/messages/index.tsx:79 sets the screen subtitle to 'End-to-end encrypted' and [id].tsx:124 renders 'Direct message / Group - encrypted'. There is NO encryption: src/crypto/signal.ts is a 58-line typed stub whose every function throws TODO(milestone-3): libsignal, and it has ZERO callers anywhere in app-mobile. NOT CURRENTLY EXPLOITABLE - the composer is disabled ([id].tsx:179, accessibilityState disabled), so nothing can be sent and no plaintext reaches the server today. That is the ONLY reason this is not already a live incident. THE TRAP: the moment anyone enables that composer before libsignal lands, ciphertext_b64 carries base64'd PLAINTEXT to a server that stores it verbatim, while the screen keeps telling the student it is end-to-end encrypted. A false security claim to real students about real messages. CREDIT WHERE DUE: signal.ts throws instead of fake-encrypting, and says why - 'a stub that encrypts would be worse than one that throws'. The stub is right. The UI copy is what is wrong. FIX (small, do before alpha): change the copy to something true - 'Coming soon' or a disabled-state explanation - and add a guard/test that fails if the composer is enabled while signal.ts still throws, so the copy and the crypto cannot diverge. SERVER SIDE IS GENUINELY READY: ciphertext stored as opaque bytes and never parsed, prekey tables present (devices, signed_prekeys, one_time_prekeys, kyber_prekeys - a post-quantum Signal shape). The gap is entirely client crypto (c7/c23/c36).",
+      "detail": ""
     }
   ],
   "decisions": [
