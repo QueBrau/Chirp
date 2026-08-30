@@ -102,5 +102,42 @@ check(
   "",
 );
 
+// --- eas.json: the BUILD-TIME half, which is what c246 was actually about ---
+//
+// c213 shipped wsUrl()'s override and the cases above prove the function works.
+// Nothing ever SET the variable, though: all four build profiles left it unset,
+// so every build derived the socket URL from the api host and every socket
+// landed on chirp-api. chirp-ws sat dark - 14 days of its request logs held not
+// one 101 upgrade, only manual probes. A green function with unset config looks
+// exactly like a working feature, which is why these cases check the config
+// itself rather than only the code that reads it.
+
+const EAS = JSON.parse(readFileSync(new URL("../eas.json", import.meta.url), "utf8"));
+const CHIRP_WS = "wss://chirp-ws-593616178468.us-central1.run.app/ws";
+const profileWsUrl = (name) => EAS.build?.[name]?.env?.EXPO_PUBLIC_WS_URL;
+
+for (const profile of ["preview", "production"]) {
+  check(`eas.json "${profile}" sets EXPO_PUBLIC_WS_URL to chirp-ws`, profileWsUrl(profile), CHIRP_WS);
+  // Not redundant with the override case above: that one feeds in a hand-written
+  // value, this one feeds in whatever eas.json ACTUALLY ships, so a typo in the
+  // host fails here instead of at runtime on a real phone.
+  check(
+    `eas.json "${profile}" value survives the real wsUrl() verbatim`,
+    callRealWsUrl({ wsUrlEnv: profileWsUrl(profile), apiBaseUrl: "not-a-real-url-should-never-be-read" }),
+    CHIRP_WS,
+  );
+}
+
+// Both development profiles are UNSET ON PURPOSE, and this asserts it stays that
+// way. A developer pointing EXPO_PUBLIC_API_URL at localhost must get a localhost
+// socket; pinning the prod socket here would pair a local backend with PROD
+// realtime, and that split brain reads as a realtime bug rather than as
+// misconfiguration. "Finishing the job" by adding these two is the mistake this
+// case exists to catch. development-simulator inherits via `extends`, so leaving
+// development unset covers both.
+for (const profile of ["development", "development-simulator"]) {
+  check(`eas.json "${profile}" deliberately leaves EXPO_PUBLIC_WS_URL unset`, profileWsUrl(profile), undefined);
+}
+
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);
