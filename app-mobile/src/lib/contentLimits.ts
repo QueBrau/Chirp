@@ -31,7 +31,7 @@ export const MAX_CHIRP_BODY_LENGTH = 2_000;
 export const MAX_POST_BODY_LENGTH = 10_000;
 
 /** PostCommentCreate.body — the comments sheet composer. */
-export const MAX_COMMENT_BODY_LENGTH = 2_000;
+export const MAX_COMMENT_BODY_LENGTH = 999;
 
 /**
  * How close to the cap the counter starts showing: the last 10% of the allowance.
