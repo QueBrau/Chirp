@@ -2627,6 +2627,24 @@
       "area": "",
       "title": "c250 DECISION Aug 30 - deploy-verify DEFAULTS TO localhost:8000 AND SAYS SO, but a manager still ran it bare after a prod deploy and got '0 passed, 4 failed' with four 000s. That is operator error, not a prod failure and NOT the Aug 29 cold-start flake - the two look nothing alike and must not be conflated: a cold-start flake is a PARTIAL red (3/1) against a real URL, this was a TOTAL red (0/4) with 000 status codes, which means nothing answered at all. RULE: 000 across every probe = wrong target, check the 'target:' line the script prints as its second line before re-running or diagnosing. Re-running bare would have reproduced it forever. Correct invocation is scripts/deploy-verify --base-url <service URL>; both services returned 4/4 that way.",
       "detail": ""
+    },
+    {
+      "id": "c251",
+      "col": "backlog",
+      "owner": "pool",
+      "tag": "frontend",
+      "area": "mobile",
+      "title": "c251 MOBILE COMPOSERS DO NOT ENFORCE THE c245 BODY CAPS. The backend now 422s an over-length body (chirp 2000, post 10000, comment 2000, moderation reason 1000 - app/core/validation.py, merged 7692a9d), but no composer in app-mobile counts characters or disables send, so a student who pastes something long writes the WHOLE thing and only then gets a generic failure with nothing telling them what to cut. That is the exact shape of a bug report that reads as 'the app ate my post'. Wants a character counter plus a disabled send on the post composer (CreateSheet), the comment composer (CommentsSheet), the chirp composer, and the moderation reason inputs.",
+      "detail": "Filed by the backend session that built c245, which found the gap while capping the server side; app-mobile is not that session's lane so it is written up rather than built. The caps themselves are live and correct - this is purely the missing client-side half. IMPORTANT: the numbers must be read from the API contract rather than retyped as literals in the app, or the two drift apart the first time a cap moves. Low risk, high polish value."
+    },
+    {
+      "id": "c252",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "security",
+      "area": "messages",
+      "title": "c252 IN PROGRESS - cap MessageCreate.ciphertext_b64 (schemas/messaging.py) and ContentReportCreate.forwarded_plaintext (schemas/chirp.py), the two user-supplied bodies c245 deliberately left unbounded. Taken as ONE card because their ceilings are related: both carry message content, so forwarded_plaintext derives from the same intended plaintext ceiling rather than being picked independently. Ciphertext is NOT prose and must not be sized by analogy to the 2000-char post cap - base64 costs ~4 bytes per 3 and the encryption layer adds nonce/tag/padding before encoding, so the cap is a function of the largest plaintext message we intend to allow, expanded twice. c243 is merged AND deployed, so the messaging fence is down. Branch court/c252-message-caps.",
+      "detail": "Follow-on from c245 (merged 7692a9d), which capped the ten prose bodies and left these two alone on purpose - deriving forwarded_plaintext separately would have been a guess. Same discipline as c245: constants in app/core/validation.py beside MAX_URL_LENGTH, REQUEST schemas only and never the *Out shapes (a row written before the cap must still read back without a 500), new tests FALSIFIED against the uncapped schema before being kept, and a realistically long real message proven to still send. If capping ciphertext would require RELAXING an existing messaging test, stop and ask - that means the cap is wrong, not the test."
     }
   ],
   "decisions": [
