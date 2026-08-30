@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from app.core.validation import MAX_REASON_LENGTH
 from app.schemas.base import _Schema
 
 ModerationActionName = Literal[
@@ -25,7 +26,7 @@ class SuspendUserRequest(_Schema):
     """Body for both POST /moderation/users/{id}/suspend and .../unsuspend — a reason
     is required either way so the moderation_actions audit row always has a 'why'."""
 
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=MAX_REASON_LENGTH)
 
 
 class SuspensionStateOut(_Schema):
@@ -45,7 +46,7 @@ class ContentRemoveRequest(_Schema):
 
     target_type: RemovableContentType
     target_id: uuid.UUID
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=MAX_REASON_LENGTH)
 
 
 # ---- report resolution ----
@@ -67,7 +68,7 @@ class ReportResolveRequest(_Schema):
     """
 
     status: ReportResolution
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=MAX_REASON_LENGTH)
 
 
 # ---- audit trail ----

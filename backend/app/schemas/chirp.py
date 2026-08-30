@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from app.core.validation import MAX_CHIRP_BODY_LENGTH, MAX_REASON_LENGTH
 from app.schemas.base import _Schema
 
 ReportTargetType = Literal["chirp", "post", "comment", "message_forward", "user"]
@@ -16,7 +17,7 @@ ReportStatus = Literal["open", "actioned", "dismissed"]
 
 
 class ChirpCreate(_Schema):
-    body: str = Field(min_length=1)
+    body: str = Field(min_length=1, max_length=MAX_CHIRP_BODY_LENGTH)
 
 
 class ChirpOut(_Schema):
@@ -50,7 +51,7 @@ class ContentReportCreate(_Schema):
     target_type: ReportTargetType
     target_id: uuid.UUID | None = None
     forwarded_plaintext: str | None = None
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=MAX_REASON_LENGTH)
 
 
 class ContentReportOut(_Schema):
@@ -72,7 +73,7 @@ class ContentReportOut(_Schema):
 class ChirpRemoveRequest(_Schema):
     """Body for POST /moderation/chirps/{chirp_id}/remove."""
 
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=MAX_REASON_LENGTH)
 
 
 # ---- blocks ----
