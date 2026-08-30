@@ -2582,6 +2582,33 @@
       "area": "orgs",
       "title": "c245 [MED] No max_length on ANY user-supplied content body: ChirpCreate.body, PostCreate.body, CampusPostCreate.body, PostCommentCreate.body, every moderation reason field, MessageCreate.ciphertext_b64 are all Field(min_length=1) with no upper bound (schemas/chirp.py:29,50,71; schemas/social.py:22,45,113; schemas/moderation.py:29,46,63; schemas/messaging.py:63). The effective ceiling is Cloud Run's 32MB request limit, so one post can carry megabytes into a row every reader then downloads. The schemas package already uses max_length elsewhere (identity.py:99 display_name 80, polls, meetings), so this is inconsistency, not policy.",
       "detail": "Cheap and behavior-safe if the caps are generous (a real post is under a few thousand chars). Pair with the unbounded-list-response gap: many GETs still have no limit param (comments, alumni directory, jobs, members, invites, guests, meetings, polls, ledger, lineage) - same class as c127/c201/c210, worth its own card if not folded in."
+    },
+    {
+      "id": "c246",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c246 [CRITICAL FOR THE SCALE STORY] chirp-ws IS DARK - the socket service is deployed, healthy and receiving ZERO WebSocket traffic. PROVEN IN PROD LOGS (manager, Aug 30): 14 days of chirp-ws request logs contain only manager probes (/auth/me 401, /never-existed 404, /favicon.ico 404) and NOT ONE 101 upgrade; every real 101 in the same window is on chirp-api. ROOT CAUSE: app-mobile/src/api/client.ts:171 reads EXPO_PUBLIC_WS_URL and falls back to API_BASE_URL + '/ws', and EXPO_PUBLIC_WS_URL IS NOT SET IN ANY of the four eas.json build profiles (development, development-simulator, preview, production - all have env {}). So sockets still land on chirp-api and still consume its 320 request slots and its 20-connection DB pool. c213's whole purpose - isolating socket load from HTTP load - is UNREALIZED IN PRODUCTION. This is why c213 is still In Progress. FIX: set EXPO_PUBLIC_WS_URL=wss://chirp-ws-593616178468.us-central1.run.app/ws in eas.json's production+preview env, rebuild, and re-verify by watching for 101s on chirp-ws. Needs a rebuild, so it rides with the c39 device build.",
+      "detail": ""
+    },
+    {
+      "id": "c247",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c247 [HIGH, MEASURED] EVERY WEBSOCKET IS KILLED AT 5 MINUTES by Cloud Run's request timeout. Both services run timeoutSeconds=300; Cloud Run applies the request timeout to WS connections (max allowed is 3600). EMPIRICAL PROOF (manager, Aug 30, gcloud logging, 14d of status=101 on chirp-api): 17 of 30 upgrades report latency 301.001919s / 301.001959s / 301.001725s / 301.000626s - identical to the millisecond, across different days AND different revisions. Successive upgrades sit 302s apart. That is not a flaky network, it is the deadline. IMPACT: it degrades rather than breaks today because c152's reconnect logic re-establishes, and gateway.py has NO server-side ping so nothing else would keep it alive. At scale it is a permanent churn: every connected user re-handshakes every 5 minutes, each reconnect paying a Firebase token verify + DB lookup + Redis subscribe. 1000 concurrent users = ~3.3 full reconnects/sec forever, for nothing. FIX: --timeout=3600 on chirp-ws (and on chirp-api while sockets still live there per c246). One flag, no code. Consider a heartbeat separately.",
+      "detail": ""
+    },
+    {
+      "id": "c248",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c248 [MED] THE POOL-ARITHMETIC GUARD IS STALE IN TWO WAYS and no longer models the real topology. tests/test_db_pool_config.py pins CLOUD_RUN_MAX_INSTANCES=4 and DB_MAX_CONNECTIONS=25. Both are now wrong: (a) LIVE max_connections IS 100, not 25 - manager read it off prod through the proxy Aug 30 (c225 upgraded the tier to db-custom-1-3840); (b) there are TWO services on this database now, not one - chirp-ws sets its own DB_POOL_SIZE=1 / DB_MAX_OVERFLOW=1 as Cloud Run env, which the test does not model at all. REAL LIVE ARITHMETIC: chirp-api 4 x (3+2) = 20, chirp-ws 2 x (1+1) = 4, total 24, + 3 reserved + 1 proxy = 28 against 100. Genuinely SAFE - 72 connections of unused headroom - so this is not a live bug and nothing is failing. But the guard passes for the wrong reason, would block a legitimate scale-up, and reads as authoritative to the next person. Update both constants to the live values and add the chirp-ws term.",
+      "detail": ""
     }
   ],
   "decisions": [
