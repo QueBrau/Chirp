@@ -2546,6 +2546,42 @@
       "area": "orgs",
       "title": "c241 EMAIL DOCS ARE STALE AND ONE PROD VALUE IS UNDOCUMENTED. (a) email_service.py:14-20, config.py:58-60 and verify-campus.tsx:20-25 all still say we have NO sending domain and that a real student's send will 502 - false since Aug 24 (josedev.app verified in Resend, c134), so the next reader is actively misled about whether email works. (b) EMAIL_FROM='Chirp <hello@josedev.app>' is live in the Cloud Run env but appears NOWHERE in INFRA-PRIVATE.html - it exists only in a board card, so a rebuild from the runbook would ship the wrong sender. (c) config.py's default is still the resend.dev onboarding sender.",
       "detail": "Comment/doc-only in the backend; verify-campus.tsx is a comment too. No behavior change. Found by the c238-adjacent email exploration Aug 30."
+    },
+    {
+      "id": "c242",
+      "col": "progress",
+      "owner": "court",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c242 [CRITICAL - PHISHING CHANNEL TO EVERY USER] account_type is CLIENT-DECLARED at signup (schemas/identity.py:47 -> written straight to the row, auth.py:70) and it is load-bearing authorization at alumni.py:130-133: is_eligible = has-eboard/alumni-membership OR account_type=='alumni'. So ANYONE can self-declare alumni at signup and POST /jobs. And GET /jobs (alumni.py:166) returns every chapter_id IS NULL job to EVERY authenticated user network-wide - no campus scope, no chapter scope - each carrying an apply_url that the mobile client opens via Linking.openURL. That is a spam/phishing distribution channel into the whole user base, gated by a field the attacker sets themselves.",
+      "detail": "Fix direction: a self-declared attribute must not be authorization. Eligibility should come from a real membership (eboard/alumni role) or a verified signal, not from body.account_type. Also scope GET /jobs - network-wide with no campus filter is its own problem even with posting fixed. apply_url is already validated http/https<=2048 (c184) but validation is not trust."
+    },
+    {
+      "id": "c243",
+      "col": "progress",
+      "owner": "court",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c243 [CRITICAL - HARASSMENT PATH THAT SURVIVES BLOCKING] Two joined gaps in messaging. (a) POST /conversations only checks chapter membership when chapter_id is NOT null (messages.py:69-79), so with chapter_id omitted ANY authenticated user can open a conversation naming ANY user ids in the system, and member_user_ids has NO length cap (schemas/messaging.py:38). (b) UserBlock is enforced on READ paths only - feed and chirps - and NOT in messages.py, events.py, polls.py or the push path. So a blocked user can still DM you, add you to a group, invite you to events and trigger your push notifications. Blocking does not stop contact.",
+      "detail": "Verified by repo-wide grep for UserBlock: enforcement appears at feed.py:224-227/255-259/568-571/922-929 and chirps.py:59-66 only. Fix: a real recipient-eligibility rule for DMs (shared chapter, or an accepted request), a cap on member_user_ids, and block enforcement on the contact paths, not just the read paths."
+    },
+    {
+      "id": "c244",
+      "col": "progress",
+      "owner": "court",
+      "tag": "infra",
+      "area": "orgs",
+      "title": "c244 [HIGH, COST] Unbounded media storage: POST /media/upload-url has NO rate limit and NO quota (media.py:26, any authenticated user), each call mints a 10MB signed PUT. storage_service.py:41-49 says orphaned uploads are safe because 'an age-based GCS lifecycle rule scoped to tmp/' reclaims them - MANAGER VERIFIED AGAINST LIVE GCS Aug 30: the bucket has NO lifecycle rule configured at all. The code's stated safety assumption is false in prod, so abandoned tmp/ objects accumulate forever and nothing reaps them. Two fixes: configure the tmp/ lifecycle rule (infra, manager) AND rate-limit/quota the minting (code).",
+      "detail": "Also verified live and worth recording: public_access_prevention=enforced and NO allUsers binding - the bucket IS private. DEPLOY.md:313-323 still says the opposite ('intentionally remains publicly readable, do not enforce') and is stale; SECURITY-REVIEW and HANDOFF are correct. Fix DEPLOY.md in the same pass."
+    },
+    {
+      "id": "c245",
+      "col": "backlog",
+      "owner": "pool",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c245 [MED] No max_length on ANY user-supplied content body: ChirpCreate.body, PostCreate.body, CampusPostCreate.body, PostCommentCreate.body, every moderation reason field, MessageCreate.ciphertext_b64 are all Field(min_length=1) with no upper bound (schemas/chirp.py:29,50,71; schemas/social.py:22,45,113; schemas/moderation.py:29,46,63; schemas/messaging.py:63). The effective ceiling is Cloud Run's 32MB request limit, so one post can carry megabytes into a row every reader then downloads. The schemas package already uses max_length elsewhere (identity.py:99 display_name 80, polls, meetings), so this is inconsistency, not policy.",
+      "detail": "Cheap and behavior-safe if the caps are generous (a real post is under a few thousand chars). Pair with the unbounded-list-response gap: many GETs still have no limit param (comments, alumni directory, jobs, members, invites, guests, meetings, polls, ledger, lineage) - same class as c127/c201/c210, worth its own card if not folded in."
     }
   ],
   "decisions": [
