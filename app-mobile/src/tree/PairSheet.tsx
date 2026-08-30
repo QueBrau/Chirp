@@ -19,6 +19,7 @@ import type { MemberOut } from "@/api/chapters";
 import { ApiError } from "@/api/client";
 import { createEdge, type LineageEdgeOut, type LineageTreeOut } from "@/api/lineage";
 import { AppText, Button, Chip, GradientAvatar } from "@/components";
+import { apiErrorMessage } from "@/lib/alert";
 import { light, radii, spacing, typography, useTheme, withAlpha } from "@/theme";
 
 export interface PairSheetProps {
@@ -231,7 +232,7 @@ export function PairSheet({
       } else if (err instanceof ApiError && err.detail === "lineage_cycle") {
         setError("That pairing would loop the tree. A big can't also be their little's descendant.");
       } else {
-        setError(err instanceof ApiError ? err.detail : "Something went wrong. Try again.");
+        setError(apiErrorMessage(err));
       }
     } finally {
       setSaving(false);

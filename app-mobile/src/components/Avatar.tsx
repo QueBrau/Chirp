@@ -5,6 +5,7 @@
 
 import { View } from "react-native";
 
+import { initials } from "@/lib/initials";
 import { radii, useTheme } from "@/theme";
 
 import { AppText } from "./AppText";
@@ -16,13 +17,6 @@ export interface AvatarProps {
   size?: number;
   /** Placeholder historical member (users.is_ghost). */
   ghost?: boolean;
-}
-
-function initials(name: string): string {
-  const words = name.replace(/["'.]/g, "").split(/\s+/).filter(Boolean);
-  const first = words[0]?.[0] ?? "?";
-  const last = words.length > 1 ? words[words.length - 1][0] : "";
-  return `${first}${last}`.toUpperCase();
 }
 
 export function Avatar({ name, size = 40, ghost = false }: AvatarProps) {

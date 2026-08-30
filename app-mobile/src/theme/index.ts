@@ -4,22 +4,24 @@
  * (DESIGN §8.5 — see ./appearance.tsx).
  */
 
-import { useColorScheme, type ViewStyle } from "react-native";
+import { useColorScheme, type TextStyle, type ViewStyle } from "react-native";
 import { useMemo } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { Palette } from "./colors";
 import { resolvePalette, useAppearance } from "./appearance";
 import { applyOrgAccent, useOrgAccentColors } from "./orgScope";
+import { radii } from "./radii";
 import { spacing } from "./spacing";
+import { typography } from "./typography";
 
 export { brand, dark, light } from "./colors";
 export type { GradientPair, Palette } from "./colors";
 export { spacing };
 export type { SpacingToken } from "./spacing";
-export { typography } from "./typography";
+export { typography };
 export type { TypeStyle, TypographyVariant } from "./typography";
-export { radii } from "./radii";
+export { radii };
 export type { RadiusToken } from "./radii";
 export {
   AppearanceProvider,
@@ -83,6 +85,30 @@ export type ElevationToken = keyof typeof elevation;
 /** Card shadow per §4: soft shadow in light mode, none in dark (border carries the edge). */
 export function cardShadow(palette: Palette): ViewStyle {
   return palette.mode === "dark" ? {} : elevation.card;
+}
+
+/**
+ * The one text-field surface: body type on `surfaceAlt` (DESIGN §2 names it the
+ * input bg) at the §4 input radius. Same role as cardShadow() above — a token
+ * combination every input needs, in one place, so changing the input treatment
+ * moves all of them together.
+ *
+ * Spread it FIRST and put per-field extras after, exactly as the call sites
+ * already ordered them: `{ ...inputField(palette), minHeight: 96 }`. Overriding
+ * a value it sets is a smell, not a feature — the two `paddingVertical:
+ * spacing.sm` compact fields (president.tsx, dues-plans.tsx) deliberately do
+ * NOT use this and keep their own literal block, because routing them through
+ * here would cost more lines than it saves and hide that they are different.
+ */
+export function inputField(palette: Palette): TextStyle {
+  return {
+    ...typography.body,
+    color: palette.ink,
+    backgroundColor: palette.surfaceAlt,
+    borderRadius: radii.input,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  };
 }
 
 /**

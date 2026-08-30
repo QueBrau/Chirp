@@ -13,7 +13,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { listMembers, type MemberOut } from "@/api/chapters";
-import { ApiError } from "@/api/client";
 import {
   confirmEdge,
   deleteEdge,
@@ -24,7 +23,7 @@ import {
 import { useSession } from "@/auth";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { AppText, Button, EmptyState, Screen } from "@/components";
-import { confirmAction, showAlert } from "@/lib/alert";
+import { confirmAction, showApiError } from "@/lib/alert";
 import { radii, spacing, useTheme } from "@/theme";
 import { muli, useMuliFonts } from "@/tree/fonts";
 import { unplacedCount } from "@/tree/layout";
@@ -117,10 +116,7 @@ export default function TreeScreen() {
             },
       );
     } catch (error) {
-      showAlert(
-        "Couldn't confirm",
-        error instanceof ApiError ? error.detail : "Something went wrong. Try again.",
-      );
+      showApiError(error, "Couldn't confirm");
     } finally {
       setConfirming(false);
     }
@@ -148,10 +144,7 @@ export default function TreeScreen() {
             await deleteEdge(chapterId, edge.id);
             await load();
           } catch (error) {
-            showAlert(
-              "Couldn't remove it",
-              error instanceof ApiError ? error.detail : "Something went wrong. Try again.",
-            );
+            showApiError(error, "Couldn't remove it");
           }
         })();
       },

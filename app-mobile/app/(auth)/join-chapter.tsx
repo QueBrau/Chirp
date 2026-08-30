@@ -8,7 +8,7 @@ import { joinChapter } from "@/api/chapters";
 import { ApiError } from "@/api/client";
 import { useSession, withInviteCode } from "@/auth";
 import { AppText, Button, Card, Screen } from "@/components";
-import { radii, spacing, typography, useTheme } from "@/theme";
+import { inputField, spacing, useTheme } from "@/theme";
 
 export default function JoinChapterScreen() {
   const router = useRouter();
@@ -82,14 +82,7 @@ export default function JoinChapterScreen() {
               placeholderTextColor={palette.inkFaint}
               autoCapitalize="characters"
               autoCorrect={false}
-              style={{
-                ...typography.body,
-                color: palette.ink,
-                backgroundColor: palette.surfaceAlt,
-                borderRadius: radii.input,
-                paddingHorizontal: spacing.lg,
-                paddingVertical: spacing.md,
-              }}
+              style={inputField(palette)}
             />
             <AppText variant="caption" tone="tertiary">
               Codes look like this. Ask your chapter's e-board if you don't have one yet.

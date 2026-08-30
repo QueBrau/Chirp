@@ -23,7 +23,7 @@ import { Image, Modal, Pressable, ScrollView, TextInput, View } from "react-nati
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { EventVisibility } from "@/api/events";
-import { light, radii, spacing, typography, useTheme, withAlpha } from "@/theme";
+import { inputField, light, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
 import { Button } from "./Button";
@@ -199,14 +199,7 @@ export function CreateEventSheet({
     onClose();
   };
 
-  const inputStyle = {
-    ...typography.body,
-    color: palette.ink,
-    backgroundColor: palette.surfaceAlt,
-    borderRadius: radii.input,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  };
+  const inputStyle = inputField(palette);
 
   const selectedTier = VISIBILITY_TIERS.find((t) => t.key === visibility);
 

@@ -55,7 +55,7 @@ import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { shareCsv } from "@/lib/export";
 import { duesProgress, runningBalance, spendByCategory } from "@/lib/treasury";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
-import { radii, spacing, typography, useAppearance, useTheme } from "@/theme";
+import { inputField, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 /** Entry types offered in the "Add entry" form — "correction" needs a
  * per-entry "correct this" flow (a valid corrects_entry_id) that's out of
@@ -405,14 +405,7 @@ export default function TreasurerScreen() {
     );
   }
 
-  const inputStyle = {
-    ...typography.body,
-    color: palette.ink,
-    backgroundColor: palette.surfaceAlt,
-    borderRadius: radii.input,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  };
+  const inputStyle = inputField(palette);
 
   return (
     <Screen title="Treasurer" subtitle="Money in the dashboard, talk in the chat">
