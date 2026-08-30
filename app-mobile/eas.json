@@ -21,10 +21,7 @@
       }
     },
     "production": {
-      "autoIncrement": true,
-      "env": {
-        "EXPO_PUBLIC_WS_URL": "wss://chirp-ws-593616178468.us-central1.run.app/ws"
-      }
+      "autoIncrement": true
     }
   },
   "submit": {
