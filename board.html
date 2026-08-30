@@ -2504,11 +2504,11 @@
     },
     {
       "id": "c237",
-      "col": "backlog",
+      "col": "progress",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c237 A USER CAN BLOCK THEMSELVES - POST /moderation/blocks accepts any blocked_id with no cannot_block_self guard (only block_chirp_author has one) and user_blocks has no CHECK constraint. Effect today: a self-blocked member's own posts vanish from their chapter feed (the c35 anti-join hides them), which reads as data loss. Found by c217's worker while making the count agree with the listing - it correctly made the count MATCH this behavior rather than paper over it, so fixing the root cause is a clean follow-up. Small: guard + constraint + test.",
+      "title": "c237 IN PROGRESS Aug 30 (chirps-ad) - MIGRATION 0029 CLAIMED HERE (parents 0028; head is single at 0028 and 0019 was c102's, long spent). Self-block guard: 403 cannot_block_self at POST /moderation/blocks, matching block_chirp_author's existing shape rather than inventing a second one. The CHECK (blocker_id <> blocked_id) cannot apply if a self-block row already exists, so the migration must DELETE FROM user_blocks WHERE blocker_id = blocked_id first. MANAGER QUERIED PROD DIRECTLY BEFORE AUTHORIZING THAT DELETE: user_blocks holds 0 self-blocks and 0 rows total, so the delete is a NO-OP against current data - it stays in the migration only as a guard for rows created between now and when it runs. Symptom being fixed: a self-block does not break contact (blockers_of filters out subject_id) but feed.py's anti-join DOES hide the user's own posts, so it reads to the user as data loss.",
       "detail": "c217's count deliberately carries the same anti-join so the number and the list agree in the self-blocked state. When this is fixed, that reasoning stays valid - the count follows the listing either way."
     },
     {
@@ -2576,11 +2576,11 @@
     },
     {
       "id": "c245",
-      "col": "backlog",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c245 [MED] No max_length on ANY user-supplied content body: ChirpCreate.body, PostCreate.body, CampusPostCreate.body, PostCommentCreate.body, every moderation reason field, MessageCreate.ciphertext_b64 are all Field(min_length=1) with no upper bound (schemas/chirp.py:29,50,71; schemas/social.py:22,45,113; schemas/moderation.py:29,46,63; schemas/messaging.py:63). The effective ceiling is Cloud Run's 32MB request limit, so one post can carry megabytes into a row every reader then downloads. The schemas package already uses max_length elsewhere (identity.py:99 display_name 80, polls, meetings), so this is inconsistency, not policy.",
+      "title": "c245 DONE Aug 30 - MERGED 7692a9d (PR #161, CI 4/4). Caps: chirp 2000 / post 10000 / comment 2000 / moderation reason 1000, constants in core/validation.py beside MAX_URL_LENGTH (MAX_REASON_LENGTH is shared by chirp.py and moderation.py, so two copies would have drifted). FALSIFIED, not just green: all 11 passed first run, which proves nothing for a new cap, so the worker stashed the three schema files and re-ran - 10 of 11 FAILED without the caps (every over-limit assertion returned 201/200 instead of 422); the 11th is the exact-boundary case, which by design does not depend on a cap existing. Caps on REQUEST schemas ONLY, never the *Out shapes - capping ChirpOut.body would have 500'd every existing long row on read. FOUND BEYOND THE CARD: PostUpdate.body was uncapped, so capping create alone would have left the whole gap open behind a PATCH. Also every one of the card's nine line numbers had gone stale - checking rather than trusting is what surfaced the PATCH hole. Suite 743 passed / 5 skipped / 0 failed. STILL OPEN: mobile composers do not enforce these lengths client-side, so a long paste meets a 422 rather than a character counter (own card, app-mobile lane).",
       "detail": "Cheap and behavior-safe if the caps are generous (a real post is under a few thousand chars). Pair with the unbounded-list-response gap: many GETs still have no limit param (comments, alumni directory, jobs, members, invites, guests, meetings, polls, ledger, lineage) - same class as c127/c201/c210, worth its own card if not folded in."
     },
     {
@@ -2603,11 +2603,11 @@
     },
     {
       "id": "c248",
-      "col": "backlog",
+      "col": "progress",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c248 [MED] THE POOL-ARITHMETIC GUARD IS STALE IN TWO WAYS and no longer models the real topology. tests/test_db_pool_config.py pins CLOUD_RUN_MAX_INSTANCES=4 and DB_MAX_CONNECTIONS=25. Both are now wrong: (a) LIVE max_connections IS 100, not 25 - manager read it off prod through the proxy Aug 30 (c225 upgraded the tier to db-custom-1-3840); (b) there are TWO services on this database now, not one - chirp-ws sets its own DB_POOL_SIZE=1 / DB_MAX_OVERFLOW=1 as Cloud Run env, which the test does not model at all. REAL LIVE ARITHMETIC: chirp-api 4 x (3+2) = 20, chirp-ws 2 x (1+1) = 4, total 24, + 3 reserved + 1 proxy = 28 against 100. Genuinely SAFE - 72 connections of unused headroom - so this is not a live bug and nothing is failing. But the guard passes for the wrong reason, would block a legitimate scale-up, and reads as authoritative to the next person. Update both constants to the live values and add the chirp-ws term.",
+      "title": "c248 [MED] THE POOL-ARITHMETIC GUARD IS STALE IN TWO WAYS and no longer models the real topology. tests/test_db_pool_config.py pins CLOUD_RUN_MAX_INSTANCES=4 and DB_MAX_CONNECTIONS=25. Both are now wrong: (a) LIVE max_connections IS 100, not 25 - manager read it off prod through the proxy Aug 30 (c225 upgraded the tier to db-custom-1-3840); (b) there are TWO services on this database now, not one - chirp-ws sets its own DB_POOL_SIZE=1 / DB_MAX_OVERFLOW=1 as Cloud Run env, which the test does not model at all. REAL LIVE ARITHMETIC: chirp-api 4 x (3+2) = 20, chirp-ws 2 x (1+1) = 4, total 24, + 3 reserved + 1 proxy = 28 against 100. Genuinely SAFE - 72 connections of unused headroom - so this is not a live bug and nothing is failing. But the guard passes for the wrong reason, would block a legitimate scale-up, and reads as authoritative to the next person. Update both constants to the live values and add the chirp-ws term. [IN PROGRESS Aug 30 - PR #162 open, CI running.]",
       "detail": ""
     },
     {
