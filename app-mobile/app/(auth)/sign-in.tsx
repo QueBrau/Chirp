@@ -29,7 +29,7 @@ import {
   withInviteCode,
 } from "@/auth";
 import { AppText, Button, HeroCard, Screen } from "@/components";
-import { radii, spacing, typography, useTheme } from "@/theme";
+import { inputField, spacing, useTheme } from "@/theme";
 
 type EmailAuthMode = "signin" | "signup";
 
@@ -242,14 +242,7 @@ export default function SignInScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               textContentType="emailAddress"
-              style={{
-                ...typography.body,
-                color: palette.ink,
-                backgroundColor: palette.surfaceAlt,
-                borderRadius: radii.input,
-                paddingHorizontal: spacing.lg,
-                paddingVertical: spacing.md,
-              }}
+              style={inputField(palette)}
             />
             <TextInput
               value={password}
@@ -260,14 +253,7 @@ export default function SignInScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               textContentType={authMode === "signin" ? "password" : "newPassword"}
-              style={{
-                ...typography.body,
-                color: palette.ink,
-                backgroundColor: palette.surfaceAlt,
-                borderRadius: radii.input,
-                paddingHorizontal: spacing.lg,
-                paddingVertical: spacing.md,
-              }}
+              style={inputField(palette)}
             />
 
             {error !== null ? (

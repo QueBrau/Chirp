@@ -13,10 +13,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { ApiError } from "@/api/client";
 import { createFamily, type FamilyOut } from "@/api/lineage";
 import { AppText, Button } from "@/components";
-import { light, radii, spacing, typography, useTheme, withAlpha } from "@/theme";
+import { apiErrorMessage } from "@/lib/alert";
+import { inputField, light, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 export interface FamilySheetProps {
   visible: boolean;
@@ -63,7 +63,7 @@ export function FamilySheet({ visible, onClose, chapterId, existing, onSaved }: 
       onSaved(family);
       onClose();
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Something went wrong. Try again.");
+      setError(apiErrorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -129,14 +129,7 @@ export function FamilySheet({ visible, onClose, chapterId, existing, onSaved }: 
               onChangeText={setName}
               placeholder="e.g. Hammer, Anchor, Compass"
               placeholderTextColor={palette.inkFaint}
-              style={{
-                ...typography.body,
-                color: palette.ink,
-                backgroundColor: palette.surfaceAlt,
-                borderRadius: radii.input,
-                paddingHorizontal: spacing.lg,
-                paddingVertical: spacing.md,
-              }}
+              style={inputField(palette)}
             />
           </View>
 

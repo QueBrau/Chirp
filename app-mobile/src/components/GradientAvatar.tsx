@@ -16,6 +16,7 @@
 import { useState } from "react";
 import { Image, View } from "react-native";
 
+import { initials } from "@/lib/initials";
 import { radii, useTheme, type GradientPair } from "@/theme";
 
 import { AppText } from "./AppText";
@@ -26,13 +27,6 @@ export interface GradientAvatarProps {
   size?: number;
   /** Optional mock photo, e.g. `https://i.pravatar.cc/150?u=<id>` (§10.2). Falls back to the initials gradient when omitted or on load failure. */
   photoUrl?: string | null;
-}
-
-function initials(name: string): string {
-  const words = name.replace(/["'.]/g, "").split(/\s+/).filter(Boolean);
-  const first = words[0]?.[0] ?? "?";
-  const last = words.length > 1 ? words[words.length - 1][0] : "";
-  return `${first}${last}`.toUpperCase();
 }
 
 function hashName(name: string): number {

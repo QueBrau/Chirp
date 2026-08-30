@@ -1,6 +1,7 @@
 /** Tidy tree layout — branching big→littles (one big per little), forest of family trees. */
 
 import type { FamilyOut, LineageEdgeOut, LineageNodeOut, LineageTreeOut } from "@/api/lineage";
+import { initials } from "@/lib/initials";
 
 export interface GraphNode {
   id: string;
@@ -47,13 +48,6 @@ interface LayoutNode {
   width: number;
   x: number;
   y: number;
-}
-
-function initials(name: string): string {
-  const words = name.replace(/["'.]/g, "").split(/\s+/).filter(Boolean);
-  const first = words[0]?.[0] ?? "?";
-  const last = words.length > 1 ? (words[words.length - 1][0] ?? "") : "";
-  return `${first}${last}`.toUpperCase();
 }
 
 function shortName(name: string): string {

@@ -38,7 +38,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { createComment, listComments, type PostCommentOut } from "@/api/feed";
 import { showApiError } from "@/lib/alert";
 import { compactAge as age } from "@/lib/dates";
-import { light, radii, spacing, typography, useTheme, withAlpha } from "@/theme";
+import { inputField, light, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
 import { EmptyState } from "./EmptyState";
@@ -241,16 +241,7 @@ export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetP
               placeholder="Add a comment"
               placeholderTextColor={palette.inkFaint}
               multiline
-              style={{
-                flex: 1,
-                ...typography.body,
-                color: palette.ink,
-                backgroundColor: palette.surfaceAlt,
-                borderRadius: radii.input,
-                paddingHorizontal: spacing.lg,
-                paddingVertical: spacing.md,
-                maxHeight: 96,
-              }}
+              style={{ flex: 1, ...inputField(palette), maxHeight: 96 }}
             />
             <Pressable
               accessibilityRole="button"

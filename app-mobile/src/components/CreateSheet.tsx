@@ -45,7 +45,7 @@ import {
   type AllowedMediaContentType,
 } from "@/api/media";
 import { showAlert, showApiError } from "@/lib/alert";
-import { light, radii, spacing, typography, useTheme, withAlpha } from "@/theme";
+import { inputField, light, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
 import { Badge } from "./Badge";
@@ -475,16 +475,7 @@ export function CreateSheet({
                 placeholderTextColor={palette.inkFaint}
                 multiline
                 autoFocus
-                style={{
-                  ...typography.body,
-                  color: palette.ink,
-                  backgroundColor: palette.surfaceAlt,
-                  borderRadius: radii.input,
-                  paddingHorizontal: spacing.lg,
-                  paddingVertical: spacing.md,
-                  minHeight: 96,
-                  textAlignVertical: "top",
-                }}
+                style={{ ...inputField(palette), minHeight: 96, textAlignVertical: "top" }}
               />
 
               <View style={{ gap: spacing.sm }}>

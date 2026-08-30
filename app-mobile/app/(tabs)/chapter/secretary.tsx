@@ -52,7 +52,7 @@ import { calendarDay } from "@/lib/dates";
 import { shareCsv } from "@/lib/export";
 import { currentSemesterWindow } from "@/org/semester";
 import { chirpSocket, isPollEvent } from "@/realtime/socket";
-import { radii, spacing, typography, useTheme, type Palette } from "@/theme";
+import { inputField, radii, spacing, useTheme, type Palette } from "@/theme";
 
 interface MeetingItem {
   meeting: MeetingOut;
@@ -307,14 +307,7 @@ export default function SecretaryScreen() {
       a.display_name.localeCompare(b.display_name),
   );
 
-  const inputStyle = {
-    ...typography.body,
-    color: palette.ink,
-    backgroundColor: palette.surfaceAlt,
-    borderRadius: radii.input,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  };
+  const inputStyle = inputField(palette);
 
   const handleCreateMeeting = async () => {
     if (chapterId === null || creatingMeeting) return; // double-submit guard
