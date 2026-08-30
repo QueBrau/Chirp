@@ -105,6 +105,14 @@ class ContentReport(Base):
 
 class UserBlock(Base):
     __tablename__ = "user_blocks"
+    __table_args__ = (
+        # c237, migration 0029. Blocking yourself is not a moderation setting: feed.py's
+        # c35 anti-join hides posts whose author the caller has blocked and does not
+        # exempt the caller, so such a row takes the user's own posts off their own
+        # feed. The route refuses it (403 cannot_block_self at both block endpoints);
+        # this is the same rule where it cannot be routed around.
+        CheckConstraint("blocker_id <> blocked_id", name="ck_user_blocks_no_self_block"),
+    )
 
     blocker_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True

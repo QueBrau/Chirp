@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from tests.conftest import ApiUser, MakeChapterWith, MakeUser, set_campus, verify_campus
 
@@ -191,6 +194,35 @@ async def test_a_refused_self_block_leaves_your_own_posts_on_your_own_feed(
     assert any(p["id"] == post_id for p in listing.json()), (
         "a user's own post must stay on their own feed after a refused self-block"
     )
+
+
+async def test_the_database_refuses_a_self_block_row_directly(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """migration 0029's CHECK, tested at the level the route cannot reach.
+
+    The 403 above is the good error message; this is the rule. It is asserted
+    directly rather than trusted because the routers currently happen to be careful:
+    a future endpoint, a fixture, a backfill script or a psql session would all
+    bypass the handler, and the feed damage does not care which path wrote the row.
+    """
+    setup = await make_chapter_with("member")
+
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        with pytest.raises(IntegrityError) as excinfo:
+            await session.execute(
+                text(
+                    "INSERT INTO user_blocks (blocker_id, blocked_id)"
+                    " VALUES (:uid, :uid)"
+                ),
+                {"uid": uuid.UUID(setup.member.id)},
+            )
+            await session.commit()
+        await session.rollback()
+
+    assert "ck_user_blocks_no_self_block" in str(excinfo.value)
 
 
 async def test_blocking_one_author_does_not_hide_another_authors_chapter_posts(
