@@ -132,6 +132,67 @@ async def test_blocked_authors_chapter_posts_hidden_from_blocker_visible_to_byst
     )
 
 
+# ---------------------------------------------------------------------------
+# Self-block (board card c237)
+# ---------------------------------------------------------------------------
+
+
+async def test_self_block_is_refused_with_403(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """POST /moderation/blocks must refuse the caller's own id.
+
+    It used to accept it, while POST /moderation/blocks/by-chirp has always refused
+    (403 cannot_block_self, tests/test_blocks.py) - the same act was legal through one
+    endpoint and forbidden through the other. Asserted as the same status AND the same
+    detail string, since a second spelling of this refusal is the thing that lets the
+    two drift apart again.
+    """
+    setup = await make_chapter_with("member")
+
+    response = await client.post(
+        "/moderation/blocks", json={"blocked_id": setup.member.id}, headers=setup.member.headers
+    )
+
+    assert response.status_code == 403, response.text
+    assert response.json() == {"detail": "cannot_block_self"}
+
+
+async def test_a_refused_self_block_leaves_your_own_posts_on_your_own_feed(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """The symptom c237 is actually about, asserted end to end rather than inferred.
+
+    The anti-join above hides posts whose author the caller has blocked, and it does
+    not exempt the caller - so a stored self-block takes the user's OWN posts off
+    their OWN feed, which reads as data loss rather than as a moderation setting.
+    This drives the whole path: post, attempt the self-block, and confirm the post is
+    still there. It fails if the guard is removed, because the block would then be
+    stored and the anti-join would hide the post.
+    """
+    setup = await make_chapter_with("member")
+    author = setup.member
+
+    post = await client.post(
+        f"/chapters/{setup.chapter_id}/posts",
+        json={"body": "still mine"},
+        headers=author.headers,
+    )
+    assert post.status_code == 201, post.text
+    post_id = post.json()["id"]
+
+    refused = await client.post(
+        "/moderation/blocks", json={"blocked_id": author.id}, headers=author.headers
+    )
+    assert refused.status_code == 403, refused.text
+
+    listing = await client.get(f"/chapters/{setup.chapter_id}/posts", headers=author.headers)
+    assert listing.status_code == 200, listing.text
+    assert any(p["id"] == post_id for p in listing.json()), (
+        "a user's own post must stay on their own feed after a refused self-block"
+    )
+
+
 async def test_blocking_one_author_does_not_hide_another_authors_chapter_posts(
     client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
 ) -> None:
