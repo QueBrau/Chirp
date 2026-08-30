@@ -2522,11 +2522,11 @@
     },
     {
       "id": "c239",
-      "col": "backlog",
+      "col": "done",
       "owner": "court",
       "tag": "frontend",
       "area": "orgs",
-      "title": "c239 DRY WAVE 2 (from c238's re-run mobile-components lens) - four more approved-shape findings, QUEUED behind wave 1 because they collide in CommentsSheet.tsx: (a) the identical 6-property text-input style block copy-pasted TWELVE times -> theme.inputField(palette) beside the existing cardShadow, ~50 lines; (b) Badge maps five tones to identically-named Chip variants through a pointless identity map, 9 lines; (c) initials() exists three times and the third copy has ALREADY drifted textually, 7 lines; (d) tree.tsx hand-rolls showApiError's body twice plus two more sites re-typing its fallback string, 6 lines. The inputField one needs its own verifier pass first: 12 files, visual, and it touches dues-plans.tsx.",
+      "title": "c239 DONE Aug 30 - MERGED 647413a (PR #154, squash, CI 4/4). DRY wave 2: one inputField token across 9 of 12 sites, Badge's identity map deleted, initials hoisted to lib/initials.ts, showApiError shared. Net -32 lines. Worker proved equivalence per site by evaluating each object before/after against real token values - keys, KEY ORDER and values all identical, so no pixel moves. 3 sites deferred on purpose (verify-campus.tsx :132/:189 and dues-plans.tsx, the money screen) - the first two now unblocked and assigned as a follow-up.",
       "detail": "That lens also REFUTED its own biggest candidate and the reasoning is worth keeping: the sheet chrome (Modal + backdrop + handle + Close) really is duplicated three ways and c131/c141 prove the copies carry bugs together, BUT the three diverge on four independent style knobs (gap, two different maxHeights, handle margin, close zIndex), so a shared shell needs all four as pass-through props and normalizing any of them moves pixels. Worse than the duplication - do not re-propose it. It also cleared three false-positive dead symbols (highestOfficeTerm, MAX_CATEGORY_SLICES, ChirpSocket) that are used inside their own files, and left MomentsRow/queue.ts/keys.ts/messages.ts alone as documented-intentional."
     },
     {
@@ -2540,29 +2540,29 @@
     },
     {
       "id": "c241",
-      "col": "backlog",
+      "col": "done",
       "owner": "pool",
       "tag": "backend",
       "area": "orgs",
-      "title": "c241 EMAIL DOCS ARE STALE AND ONE PROD VALUE IS UNDOCUMENTED. (a) email_service.py:14-20, config.py:58-60 and verify-campus.tsx:20-25 all still say we have NO sending domain and that a real student's send will 502 - false since Aug 24 (josedev.app verified in Resend, c134), so the next reader is actively misled about whether email works. (b) EMAIL_FROM='Chirp <hello@josedev.app>' is live in the Cloud Run env but appears NOWHERE in INFRA-PRIVATE.html - it exists only in a board card, so a rebuild from the runbook would ship the wrong sender. (c) config.py's default is still the resend.dev onboarding sender.",
+      "title": "c241 DONE Aug 30 - MERGED 71a4e77 (PR #153, squash). Three stale email blocks CORRECTED not deleted, now split into WHAT IS PROVEN / WHAT IS NOT PROVEN: sending is proven through the real prod flow (c134), acceptance is where the evidence stops, no team .edu mailbox has been watched receive a code (c71). email_from default moved off the abandoned resend.dev address to the real prod sender - safe because prod sets EMAIL_FROM in env and provider defaults to 'log'; manager verified test_email_service.py:131 passes the sender EXPLICITLY, so it pins configured-value behavior, not the default. INFRA-PRIVATE.html got the EMAIL_FROM trap documented, confirmed still untracked. Suite 713 passed.",
       "detail": "Comment/doc-only in the backend; verify-campus.tsx is a comment too. No behavior change. Found by the c238-adjacent email exploration Aug 30."
     },
     {
       "id": "c242",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "backend",
       "area": "orgs",
-      "title": "c242 [CRITICAL - PHISHING CHANNEL TO EVERY USER] account_type is CLIENT-DECLARED at signup (schemas/identity.py:47 -> written straight to the row, auth.py:70) and it is load-bearing authorization at alumni.py:130-133: is_eligible = has-eboard/alumni-membership OR account_type=='alumni'. So ANYONE can self-declare alumni at signup and POST /jobs. And GET /jobs (alumni.py:166) returns every chapter_id IS NULL job to EVERY authenticated user network-wide - no campus scope, no chapter scope - each carrying an apply_url that the mobile client opens via Linking.openURL. That is a spam/phishing distribution channel into the whole user base, gated by a field the attacker sets themselves.",
+      "title": "c242 DONE Aug 30 - MERGED 4606121 (PR #155, squash, CI 4/4). NOT YET DEPLOYED. Job-board eligibility now comes from a real active membership row with an e-board or alumni role HELD IN THE TARGET CHAPTER - never from self-declared account_type. Worker closed a SECOND hole beyond the report: the old code asked 'eligible role anywhere?' and 'member of this chapter?' separately, so an alumnus of chapter A could post to chapter B on a plain member row. Read path scoped too - a chapter_id IS NULL job now reaches only users who share a chapter with the POSTER, not every authenticated user network-wide. No migration. MANAGER VERIFIED LINE-LEVEL: _caller_chapter_ids does filter status='active'; the falsification test posts as account_type='alumni' with no membership and asserts 403, so restoring the old branch turns it green and fails the file. 9 new tests. The 5 changed tests in test_alumni_url_validation.py only ever passed BECAUSE of the bug - assertions unchanged, only the poster's provenance moved.",
       "detail": "Fix direction: a self-declared attribute must not be authorization. Eligibility should come from a real membership (eboard/alumni role) or a verified signal, not from body.account_type. Also scope GET /jobs - network-wide with no campus filter is its own problem even with posting fixed. apply_url is already validated http/https<=2048 (c184) but validation is not trust."
     },
     {
       "id": "c243",
-      "col": "progress",
+      "col": "done",
       "owner": "court",
       "tag": "backend",
       "area": "orgs",
-      "title": "c243 [CRITICAL - HARASSMENT PATH THAT SURVIVES BLOCKING] Two joined gaps in messaging. (a) POST /conversations only checks chapter membership when chapter_id is NOT null (messages.py:69-79), so with chapter_id omitted ANY authenticated user can open a conversation naming ANY user ids in the system, and member_user_ids has NO length cap (schemas/messaging.py:38). (b) UserBlock is enforced on READ paths only - feed and chirps - and NOT in messages.py, events.py, polls.py or the push path. So a blocked user can still DM you, add you to a group, invite you to events and trigger your push notifications. Blocking does not stop contact.",
+      "title": "c243 DONE Aug 30 - MERGED 9618683 (PR #156, squash, CI 4/4). NOT YET DEPLOYED. Blocking now stops CONTACT, not just content: new core/blocks.py consulted by messages, events and fan-out. Chapter-less DMs got the eligibility rule they never had (shared active chapter, OR same campus with the CALLER campus-verified; null campus never matches). member_user_ids capped at 256. BLOCK DIRECTION IS ASYMMETRIC ON PURPOSE - manager verified the premise independently: there are exactly 3 block endpoints and NO GET listing your own blocks, so a symmetric rule would let a blocker deanonymise an anonymous chirp author by blocking via by-chirp then DMing candidates until one is refused. Block+eligibility share one refusal string so the two are indistinguishable. MANAGER VERIFIED the changed test: make_chapter_with calls make_campus() every invocation, so the old assertion really did pin a cross-CAMPUS DM between strangers and passed only because the route ran no check at all. Nothing weakened. DEFERRED with reasons: no migration for block provenance, prekey-bundle fetch left open (would break group sender-key distribution), message history not block-filtered.",
       "detail": "Verified by repo-wide grep for UserBlock: enforcement appears at feed.py:224-227/255-259/568-571/922-929 and chirps.py:59-66 only. Fix: a real recipient-eligibility rule for DMs (shared chapter, or an accepted request), a cap on member_user_ids, and block enforcement on the contact paths, not just the read paths."
     },
     {
@@ -2585,11 +2585,11 @@
     },
     {
       "id": "c246",
-      "col": "backlog",
+      "col": "progress",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c246 [CRITICAL FOR THE SCALE STORY] chirp-ws IS DARK - the socket service is deployed, healthy and receiving ZERO WebSocket traffic. PROVEN IN PROD LOGS (manager, Aug 30): 14 days of chirp-ws request logs contain only manager probes (/auth/me 401, /never-existed 404, /favicon.ico 404) and NOT ONE 101 upgrade; every real 101 in the same window is on chirp-api. ROOT CAUSE: app-mobile/src/api/client.ts:171 reads EXPO_PUBLIC_WS_URL and falls back to API_BASE_URL + '/ws', and EXPO_PUBLIC_WS_URL IS NOT SET IN ANY of the four eas.json build profiles (development, development-simulator, preview, production - all have env {}). So sockets still land on chirp-api and still consume its 320 request slots and its 20-connection DB pool. c213's whole purpose - isolating socket load from HTTP load - is UNREALIZED IN PRODUCTION. This is why c213 is still In Progress. FIX: set EXPO_PUBLIC_WS_URL=wss://chirp-ws-593616178468.us-central1.run.app/ws in eas.json's production+preview env, rebuild, and re-verify by watching for 101s on chirp-ws. Needs a rebuild, so it rides with the c39 device build.",
+      "title": "c246 CONFIG MERGED Aug 30 - 15f28af (PR #157, squash, CI 4/4). INERT UNTIL THE NEXT EAS BUILD, and NOT closed until proven. EXPO_PUBLIC_WS_URL now set on the preview and production profiles only; both development profiles deliberately left deriving so a localhost API is never paired with a PROD socket. client.ts needed nothing - the bug was entirely absent config. verify-ws-url.mjs gained 4 cases guarding the CONFIG rather than the function, sabotage-tested three ways (drop production's env, typo the host, add the prod socket to development - all exit 1). WHAT ACTUALLY CLOSES THIS CARD: after the next EAS build, gcloud logging read on chirp-ws filtered to httpRequest.status=101 must show real upgrades. Today that query returns only manager probes across 14 days. Rides with c39's device build.",
       "detail": ""
     },
     {
