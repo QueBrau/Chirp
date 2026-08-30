@@ -17,12 +17,19 @@
  * is how you lose them, which is why the status endpoint returns verified_at even when
  * it refuses.
  *
- * THE ONE THAT WILL ACTUALLY HAPPEN TODAY is email_send_failed. c73's domain purchase is
- * on the backlog by Jose's decision, and Resend will not deliver to anyone but our own
- * account address without a verified sending domain. So a real student pressing "Send my
- * code" gets a 502 — and the honest thing is to say the code cannot be sent yet, not
- * "something went wrong", which would send them round the loop retyping a correct
- * address. Verified against the live provider, not guessed.
+ * email_send_failed IS STILL A SCREEN STATE, but it is no longer the one to expect. This
+ * comment used to promise that a real student pressing "Send my code" gets a 502, because
+ * we had no verified sending domain; that stopped being true on Aug 24, when josedev.app
+ * was verified in Resend and prod moved to sending as "Chirp <hello@josedev.app>" (board
+ * c134). The real flow returns 202 now. The state stays because the backend still raises
+ * 502 email_send_failed on a provider outage or any >=400, and the honest copy for that is
+ * still "the code cannot be sent yet" rather than "something went wrong", which would send
+ * them round the loop retyping a correct address.
+ *
+ * WHAT THIS SCREEN STILL CANNOT SEE: a 202 means Resend accepted the message, not that it
+ * reached the student. No .edu mailbox the team controls has been watched to receive a
+ * code yet (board c71), so the first real run on a device may still surface a delivery
+ * problem that looks like success from here.
  */
 import { useRouter } from "expo-router";
 import { useState } from "react";

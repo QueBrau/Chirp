@@ -7,14 +7,24 @@ receipt. They all call `send_email` here rather than growing three integrations 
 drift apart.
 
 PROVIDER: Resend, decided Aug 16, keyed from Secret Manager alongside the Stripe keys.
-It lives behind this module specifically so swapping the sender once c73 buys a domain
-is a config change rather than a rewrite.
+It lives behind this module specifically so swapping the sender is a config change
+rather than a rewrite — which is exactly how the Aug 24 move onto our own domain went:
+one env var, no code touched.
 
-THE CONSTRAINT THIS SHIPS WITH, and it will look like a bug if you have not read it:
-we deliberately do NOT own a sending domain yet. Resend restricts an account with no
-verified domain to sending at its OWN address, so a send to a real student's inbox
-will be refused by the provider, not by this code. That is expected until c73 lands.
-The failure is loud and logged rather than silent, which is the point.
+WHAT IS PROVEN, because this module used to ship with the opposite constraint and that
+note outlived its truth: we DO have a verified sending domain. josedev.app was verified
+in Resend on Aug 24 (board c134), and prod sends as `Chirp <hello@josedev.app>` via
+EMAIL_FROM in the Cloud Run env — not via the default in config.py. The send path is
+proven through the real prod flow: POST /auth/campus-verification returned 202 for an
+arbitrary .edu recipient, and 202 IS proof Resend accepted the message, because the only
+way out of `_send_via_resend` without a 502 is a provider response under 400. The
+failure, when it comes, is still loud and logged rather than silent.
+
+WHAT IS NOT PROVEN is the far end. No .edu mailbox the team controls has ever been
+watched to RECEIVE a code, so provider acceptance is where the evidence stops (board
+c71, still open by Jose's call). Acceptance is not delivery — do not let "Resend took
+it" get written up as "the student got it" until someone has read a code out of a real
+school inbox.
 
 WHAT THIS MODULE MUST NEVER DO IS LOG A MESSAGE BODY OR A FULL RECIPIENT ADDRESS.
 c86 puts one-time verification codes and student email addresses through here; either
