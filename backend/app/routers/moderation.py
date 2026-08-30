@@ -357,7 +357,17 @@ async def create_block(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> UserBlockOut:
-    """Block another user; 409 if the block already exists (incl. a concurrent double-tap)."""
+    """Block another user; 403 on self, 409 if the block already exists (incl. a concurrent double-tap)."""
+    # c237. Self-blocking was accepted here while block_chirp_author below has always
+    # refused it, so the same act was legal through one endpoint and forbidden through
+    # the other. It is not harmless: contact is unaffected (blockers_of filters
+    # subject_id out), but feed.py's c35 anti-join hides posts whose author the caller
+    # has blocked, and that includes the caller themselves - so a self-block silently
+    # removes your OWN posts from your own feed, which reads as data loss rather than
+    # as a moderation setting. Same 403 cannot_block_self as by-chirp, deliberately:
+    # one act, one status, one detail string.
+    if body.blocked_id == user.id:
+        raise forbidden("cannot_block_self")
     existing = await session.get(models.UserBlock, (user.id, body.blocked_id))
     if existing is not None:
         raise conflict("already_blocked")
