@@ -190,6 +190,17 @@ jobs:
         # absent config that only runs when a human remembers to type the command
         # reproduces the same failure one level up. So it runs here.
         run: npm run verify:ws-url
+      - name: Content length caps
+        working-directory: app-mobile
+        # Board cards c245, c251. The backend caps every content body and 422s anything
+        # longer; the composers enforce the same numbers client-side so a student is
+        # warned while typing instead of rejected after hitting send. There is no
+        # build-time path from Python to the Expo bundle, so the client's copy is a
+        # hand-copy - this step is what stops it drifting silently when a server cap
+        # moves. It also executes the real helpers to pin the boundary itself: the
+        # server allows exactly max_length and sees body.trim(), so an off-by-one or a
+        # raw-length count here would put the after-the-fact 422 straight back.
+        run: npm run verify:content-limits
 
   web:
     # Board card c113. web/ is the PUBLIC MARKETING SITE and it had no gate at

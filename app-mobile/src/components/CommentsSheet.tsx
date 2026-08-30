@@ -37,10 +37,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { createComment, listComments, type PostCommentOut } from "@/api/feed";
 import { showApiError } from "@/lib/alert";
+import { isOverLimit, MAX_COMMENT_BODY_LENGTH } from "@/lib/contentLimits";
 import { compactAge as age } from "@/lib/dates";
 import { inputField, light, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
+import { CharCounter } from "./CharCounter";
 import { EmptyState } from "./EmptyState";
 import { GradientAvatar } from "./GradientAvatar";
 
@@ -116,7 +118,8 @@ export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetP
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [postId]);
 
-  const canSend = draft.trim().length > 0 && !sending;
+  const canSend =
+    draft.trim().length > 0 && !isOverLimit(draft, MAX_COMMENT_BODY_LENGTH) && !sending;
 
   const send = async () => {
     if (!canSend || sendingRef.current) return;
@@ -243,6 +246,7 @@ export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetP
               multiline
               style={{ flex: 1, ...inputField(palette), maxHeight: 96 }}
             />
+            <CharCounter value={draft} limit={MAX_COMMENT_BODY_LENGTH} />
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Send comment"
