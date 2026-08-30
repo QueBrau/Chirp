@@ -43,7 +43,7 @@ import {
 import { ApiError } from "@/api/client";
 import { useCampusAccess, useSession } from "@/auth";
 import { AppText, Button, Card, Screen } from "@/components";
-import { radii, spacing, typography, useTheme } from "@/theme";
+import { inputField, spacing, useTheme } from "@/theme";
 
 type Phase = "email" | "code" | "done";
 
@@ -136,14 +136,7 @@ export default function VerifyCampusScreen() {
                 keyboardType="number-pad"
                 autoCorrect={false}
                 maxLength={6}
-                style={{
-                  ...typography.body,
-                  color: palette.ink,
-                  backgroundColor: palette.surfaceAlt,
-                  borderRadius: radii.input,
-                  paddingHorizontal: spacing.lg,
-                  paddingVertical: spacing.md,
-                }}
+                style={inputField(palette)}
               />
               {error !== null ? (
                 <AppText variant="caption" tone="danger">
@@ -193,14 +186,7 @@ export default function VerifyCampusScreen() {
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
-              style={{
-                ...typography.body,
-                color: palette.ink,
-                backgroundColor: palette.surfaceAlt,
-                borderRadius: radii.input,
-                paddingHorizontal: spacing.lg,
-                paddingVertical: spacing.md,
-              }}
+              style={inputField(palette)}
             />
             <AppText variant="caption" tone="tertiary">
               We only use this to check you go here. It stays off your profile.
