@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from app.core.validation import MAX_COMMENT_BODY_LENGTH, MAX_POST_BODY_LENGTH
 from app.schemas.base import _Schema
 
 Audience = Literal["org", "campus", "org_actives"]
@@ -17,7 +18,7 @@ PostType = Literal["text", "photo", "video"]
 
 
 class PostCreate(_Schema):
-    body: str = Field(min_length=1)
+    body: str = Field(min_length=1, max_length=MAX_POST_BODY_LENGTH)
     # tmp/ object_name(s) from POST /media/upload-url (c132) - NOT a url. The route
     # moves the referenced tmp/ object to its permanent location and assigns the
     # resulting url itself; media_urls is never accepted as client input anywhere.
@@ -43,14 +44,19 @@ class CampusPostCreate(_Schema):
     send here that should produce an org post, so the type says so.
     """
 
-    body: str = Field(min_length=1)
+    body: str = Field(min_length=1, max_length=MAX_POST_BODY_LENGTH)
     media_object_names: list[str] | None = None  # see PostCreate.media_object_names
     post_type: PostType = "text"
     duration_sec: int | None = None  # video posts only
 
 
 class PostUpdate(_Schema):
-    body: str | None = None
+    # Capped for the same reason PostCreate.body is, and NOT reachable from that one:
+    # an edit writes the same column, so a ceiling only on create would leave the
+    # whole gap open behind a PATCH. (Left as `str | None` with no min_length, which
+    # is a separate pre-existing inconsistency with PostCreate — an edit to "" is
+    # accepted here and rejected there. Out of scope for c245, not a decision.)
+    body: str | None = Field(default=None, max_length=MAX_POST_BODY_LENGTH)
     media_object_names: list[str] | None = None  # see PostCreate.media_object_names
 
 
@@ -120,7 +126,7 @@ class PostLikeOut(_Schema):
 
 
 class PostCommentCreate(_Schema):
-    body: str = Field(min_length=1)
+    body: str = Field(min_length=1, max_length=MAX_COMMENT_BODY_LENGTH)
 
 
 class PostCommentOut(_Schema):
