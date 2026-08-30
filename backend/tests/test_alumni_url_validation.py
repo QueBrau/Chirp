@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import MakeUser
+from tests.conftest import MakeChapterWith, MakeUser
 
 BAD_URLS = [
     "javascript:alert(1)",
@@ -93,10 +93,14 @@ async def test_untouched_profile_fields_still_round_trip(
 
 # ---- job posts: POST /jobs (apply_url) ----
 #
-# account_type="alumni" makes the caller is_eligible in create_job_post without
-# any chapter setup (routers/alumni.py: `user.account_type == "alumni"`), and
-# chapter_id=None posts network-wide, so these stay independent of chapter/
-# membership plumbing entirely — the field under test is apply_url alone.
+# THE POSTER HERE USED TO BE make_user(account_type="alumni") WITH NO CHAPTER AT
+# ALL, because create_job_post accepted the self-declared account_type as
+# eligibility. c242 removed that branch — eligibility is now a real e-board or
+# alumni MEMBERSHIP row — so these tests post as a genuine alumni member of a
+# chapter instead. Nothing about what they assert changed: the field under test is
+# still apply_url alone, and chapter_id stays None so the posts remain
+# network-wide. The chapter setup is now the cost of having a legitimate poster,
+# not a widening of scope.
 
 
 def _job_body(apply_url: str | None) -> dict[str, object]:
@@ -112,39 +116,39 @@ def _job_body(apply_url: str | None) -> dict[str, object]:
 
 @pytest.mark.parametrize("bad_url", BAD_URLS)
 async def test_bad_apply_url_is_422(
-    client: AsyncClient, make_user: MakeUser, bad_url: str
+    client: AsyncClient, make_chapter_with: MakeChapterWith, bad_url: str
 ) -> None:
-    user = await make_user(account_type="alumni")
-    resp = await client.post("/jobs", json=_job_body(bad_url), headers=user.headers)
+    poster = (await make_chapter_with("alumni")).member
+    resp = await client.post("/jobs", json=_job_body(bad_url), headers=poster.headers)
     assert resp.status_code == 422, resp.text
 
 
 async def test_good_apply_url_is_accepted_and_persisted(
-    client: AsyncClient, make_user: MakeUser
+    client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
-    user = await make_user(account_type="alumni")
+    poster = (await make_chapter_with("alumni")).member
     resp = await client.post(
-        "/jobs", json=_job_body("https://linkedin.com/in/x"), headers=user.headers
+        "/jobs", json=_job_body("https://linkedin.com/in/x"), headers=poster.headers
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["apply_url"] == "https://linkedin.com/in/x"
 
 
 async def test_none_apply_url_is_accepted(
-    client: AsyncClient, make_user: MakeUser
+    client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
-    user = await make_user(account_type="alumni")
-    resp = await client.post("/jobs", json=_job_body(None), headers=user.headers)
+    poster = (await make_chapter_with("alumni")).member
+    resp = await client.post("/jobs", json=_job_body(None), headers=poster.headers)
     assert resp.status_code == 201, resp.text
     assert resp.json()["apply_url"] is None
 
 
 async def test_untouched_job_fields_still_behave(
-    client: AsyncClient, make_user: MakeUser
+    client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
     """The validator must not affect required-field enforcement on the same body
     (title/company/location/description all keep their existing min_length=1)."""
-    user = await make_user(account_type="alumni")
+    poster = (await make_chapter_with("alumni")).member
     resp = await client.post(
         "/jobs",
         json={
@@ -155,12 +159,12 @@ async def test_untouched_job_fields_still_behave(
             "description": "Paid summer internship.",
             "apply_url": "https://linkedin.com/in/x",
         },
-        headers=user.headers,
+        headers=poster.headers,
     )
     assert resp.status_code == 422, resp.text
 
     good = await client.post(
-        "/jobs", json=_job_body("https://linkedin.com/in/x"), headers=user.headers
+        "/jobs", json=_job_body("https://linkedin.com/in/x"), headers=poster.headers
     )
     assert good.status_code == 201, good.text
     assert good.json()["title"] == "Summer Analyst"

@@ -10,6 +10,30 @@ from app.core.invites import INVITE_DEFAULT_MAX_USES, INVITE_MAX_USES_CAP
 from app.core.validation import validate_public_url
 from app.schemas.base import _Schema
 
+# SELF-DECLARED. DISPLAY AND ROUTING ONLY — NEVER AUTHORIZATION (board c242).
+#
+# The value arrives in the POST /auth/bootstrap body from the account-type screen
+# (app/(auth)/account-type.tsx) and routers/auth.py writes it to users.account_type
+# unchanged. Nothing verifies it and nothing can: it is the signup question "which
+# of these are you", not a fact the system established. Picking "alumni" costs a
+# tap.
+#
+# What it legitimately drives, and all it may ever drive: the label under the name
+# on Profile (ACCOUNT_TYPE_LABELS) and whether the alumni info section renders
+# there, plus an analytics dimension on user_signed_up. Presentation.
+#
+# It was also load-bearing once, and that is why this comment exists. POST /jobs
+# read `user.account_type == "alumni"` as an eligibility branch, so any account
+# could tick alumni at signup and post to the job board — whose rows carry an
+# apply_url the mobile client opens with Linking.openURL, and which was served
+# network-wide to every authenticated user. A phishing channel, keyed on a field
+# the attacker fills in for themselves. Eligibility now comes from a memberships
+# row (routers/alumni.py create_job_post) because that is the kind of fact a caller
+# cannot assert about themselves.
+#
+# If you are about to gate something on this field: you want a membership role
+# (core/permissions.py), users.is_platform_admin, or campus_verified_at — the
+# things the server owns. Not this.
 AccountType = Literal["greek", "non_greek", "alumni"]
 RoleName = Literal[
     "president",

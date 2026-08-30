@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -26,6 +26,19 @@ def _caller_chapter_ids(user_id: uuid.UUID) -> Select[tuple[uuid.UUID]]:
     return select(models.Membership.chapter_id).where(
         models.Membership.user_id == user_id,
         models.Membership.status == "active",
+    )
+
+
+def _chapter_peer_ids(user_id: uuid.UUID) -> Select[tuple[uuid.UUID]]:
+    """Subquery of user ids holding an active membership in one of the caller's chapters.
+
+    The same "shares a chapter with the caller" relation GET /alumni/directory is
+    built on, factored out because GET /jobs now needs it too (c242). Includes the
+    caller themselves, which is correct: their own posts must stay visible to them.
+    """
+    return select(models.Membership.user_id).where(
+        models.Membership.status == "active",
+        models.Membership.chapter_id.in_(_caller_chapter_ids(user_id)),
     )
 
 
@@ -116,36 +129,44 @@ async def create_job_post(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> JobPostOut:
-    """Post a job; alumni or e-board members only."""
-    allowed_roles = {role.value for role in EBOARD} | {Role.alumni.value}
-    role_result = await session.execute(
-        select(models.Membership.id)
-        .where(
-            models.Membership.user_id == user.id,
-            models.Membership.status == "active",
-            models.Membership.role.in_(allowed_roles),
-        )
-        .limit(1)
-    )
-    is_eligible = (
-        role_result.scalar_one_or_none() is not None or user.account_type == "alumni"
-    )
-    if not is_eligible:
-        raise forbidden("alumni_or_eboard_only")
+    """Post a job; requires a real e-board or alumni MEMBERSHIP row (c242).
 
+    ELIGIBILITY COMES FROM A MEMBERSHIP, NEVER FROM users.account_type. This check
+    used to read `... or user.account_type == "alumni"`, and account_type is a
+    self-declared field: the signup body carries it (schemas/identity.py) and
+    bootstrap writes it straight to the row. So anyone could tick "alumni" on the
+    account-type screen and post to the job board — and every job carries an
+    apply_url that the app opens with Linking.openURL, which made this a phishing
+    channel gated by a field the attacker sets for themselves. A membership row is
+    the opposite kind of fact: the only ways to get one are redeeming an invite code
+    minted by an e-board member (routers/chapters.py create_invite) or a president
+    changing your role. Nothing a caller can assert about themselves.
+
+    THE ROLE MUST BE HELD IN THE TARGET CHAPTER, not merely somewhere. The old code
+    asked two separate questions — "eligible role in ANY chapter?" and "member of
+    THIS chapter?" — which let an alumnus of chapter A post to chapter B's board on
+    the strength of a plain `member` row there. One query, scoped to the target
+    chapter, closes that.
+
+    A network-wide post (chapter_id NULL) has no target chapter to scope to, so it
+    requires the qualifying role in at least one chapter. That is the weakest rule
+    in here on purpose: see list_job_posts for how far such a post actually reaches.
+    """
+    eligible_roles = {role.value for role in EBOARD} | {Role.alumni.value}
+    memberships = select(models.Membership.role).where(
+        models.Membership.user_id == user.id,
+        models.Membership.status == "active",
+    )
     if body.chapter_id is not None:
-        # Chapter-scoped posts require membership in that chapter (§8.4 spirit).
-        member_result = await session.execute(
-            select(models.Membership.id)
-            .where(
-                models.Membership.user_id == user.id,
-                models.Membership.chapter_id == body.chapter_id,
-                models.Membership.status == "active",
-            )
-            .limit(1)
-        )
-        if member_result.scalar_one_or_none() is None:
-            raise forbidden("not_a_member")
+        memberships = memberships.where(models.Membership.chapter_id == body.chapter_id)
+    roles_held = set((await session.execute(memberships)).scalars().all())
+
+    if body.chapter_id is not None and not roles_held:
+        # Not in that chapter at all — the §8.4 answer, kept as its own detail so a
+        # non-member and a member of the wrong role stay distinguishable.
+        raise forbidden("not_a_member")
+    if not roles_held & eligible_roles:
+        raise forbidden("alumni_or_eboard_only")
 
     job = models.JobPost(
         posted_by=user.id,
@@ -168,7 +189,31 @@ async def list_job_posts(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[JobPostOut]:
-    """List network-wide jobs plus jobs scoped to the caller's chapters; no expired.
+    """Jobs the caller shares a chapter with; no expired.
+
+    SCOPE (c242). This used to return every `chapter_id IS NULL` row to EVERY
+    authenticated caller — no campus scope, no chapter scope, network-wide by
+    literal default — while each row carries an apply_url the app opens with
+    Linking.openURL. One post reached the entire user base. Now:
+
+      chapter-scoped job  -> visible in the chapters the caller belongs to
+      network-wide job    -> visible to users who share a chapter with the POSTER
+
+    So a caller with no active membership sees nothing at all, which is the right
+    answer: the job board is a chapter benefit, and everything about the surface
+    says so — the screen lives under the chapter tab, its subtitle is "Directory
+    and chapter job board", and its empty state reads "Alumni and e-board can post
+    openings for the chapter".
+
+    `chapter_id IS NULL` STILL MEANS "not tied to one chapter" ON THE ROW — the
+    column's meaning is unchanged and no migration is involved. What changed is the
+    AUDIENCE such a row gets, which was never written down anywhere except in this
+    query. Deriving it from the poster's chapters is the rule GET /alumni/directory
+    already uses for people ("shares a chapter with the caller", and its docstring
+    is explicit that v1 has no campus-wide or network-wide discovery), applied to
+    jobs so the two reads on this router cannot disagree. In practice a NULL post
+    now means "all of my chapters at once", which is the one thing a single
+    chapter_id cannot express.
 
     Joins users so each row carries the poster's display name. Without it the
     client gets a bare UUID and there is no GET /users/{id} to resolve it, which
@@ -178,12 +223,16 @@ async def list_job_posts(
     branch that can never be taken.
     """
     now = datetime.now(timezone.utc)
+    peers = _chapter_peer_ids(user.id)
     result = await session.execute(
         select(models.JobPost, models.User.display_name)
         .join(models.User, models.User.id == models.JobPost.posted_by)
         .where(
             or_(
-                models.JobPost.chapter_id.is_(None),
+                and_(
+                    models.JobPost.chapter_id.is_(None),
+                    models.JobPost.posted_by.in_(peers),
+                ),
                 models.JobPost.chapter_id.in_(_caller_chapter_ids(user.id)),
             ),
             or_(
