@@ -37,6 +37,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(Text)
+    # Self-declared at signup, display/routing only — never authorization (c242).
+    # The full account of why is on AccountType in schemas/identity.py; read it
+    # before gating anything on this column.
     account_type: Mapped[str] = mapped_column(Text, nullable=False)
     campus_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("campuses.id")
