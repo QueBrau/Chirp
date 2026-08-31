@@ -121,7 +121,7 @@ export default function ThreadScreen() {
   return (
     <Screen
       title={conversationTitle(conversation)}
-      subtitle={conversation?.kind === "group" ? "Group · encrypted" : "Direct message · encrypted"}
+      subtitle={conversation?.kind === "group" ? "Group" : "Direct message"}
     >
       <View style={{ gap: spacing.sm }}>
         {messages.map((message) => (

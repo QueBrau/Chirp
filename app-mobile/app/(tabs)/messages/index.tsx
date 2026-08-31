@@ -76,7 +76,7 @@ export default function MessagesScreen() {
   }, []);
 
   return (
-    <Screen title="Messages" subtitle="End-to-end encrypted">
+    <Screen title="Messages" subtitle="Read only for now">
       {items !== null && items.length === 0 ? (
         <EmptyState
           title="No conversations"

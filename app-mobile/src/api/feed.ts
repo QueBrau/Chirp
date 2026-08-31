@@ -33,11 +33,6 @@ export interface CampusPostCreate {
   duration_sec?: number | null;
 }
 
-export interface PostUpdate {
-  body?: string | null;
-  media_object_names?: string[] | null; // see PostCreate.media_object_names
-}
-
 /** DESIGN §7 FYP: drives which MediaPostCard layout a post renders as. */
 export type PostType = "text" | "photo" | "video";
 
