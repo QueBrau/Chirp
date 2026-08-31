@@ -161,6 +161,22 @@ def _git(*args):
 BRANCH_ID = re.compile(r"(?:^|/)(c\d+)[-_]")
 SUBJECT_IDS = re.compile(r"\bc\d+\b")
 
+# An abbreviated git SHA that happens to start with 'c' and continue with only
+# digits matches SUBJECT_IDS exactly - it already happened: a board commit
+# quoting merge c157514 (PR #167) made every board-check on every session fail
+# with "id used in git with NO card", and pushed history cannot be rewritten to
+# fix it. Charset cannot tell the two apart, but magnitude can: card ids are
+# sequential and three digits deep after four months, while abbreviated SHAs
+# are seven-plus characters, so an all-digit one is a six-plus-digit number.
+# Anything at or past this bound is a quoted SHA (or a typo so wild it is not
+# a claim), never a card. If the board somehow approaches c100000, this line
+# will be the least of the problems.
+MAX_PLAUSIBLE_CARD_ID = 100_000
+
+
+def _is_card_token(token):
+    return int(token[1:]) < MAX_PLAUSIBLE_CARD_ID
+
 for ref in _git("branch", "-a", "--format=%(refname:short)").splitlines():
     ref = ref.strip()
     match = BRANCH_ID.search(ref)
@@ -170,7 +186,8 @@ for ref in _git("branch", "-a", "--format=%(refname:short)").splitlines():
 for subject in _git("log", "--all", "--format=%s").splitlines():
     subject = subject.strip()
     for card_id in SUBJECT_IDS.findall(subject):
-        _note(card_id, "commit %r" % subject[:60])
+        if _is_card_token(card_id):
+            _note(card_id, "commit %r" % subject[:60])
 
 known = set(ids)
 undeclared = sorted((i for i in seen if i not in known), key=lambda x: int(x[1:]))
