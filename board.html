@@ -2630,11 +2630,11 @@
     },
     {
       "id": "c251",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "frontend",
       "area": "mobile",
-      "title": "c251 RENDER PASS PENDING Aug 30 (chirps-ad) - PR #164 built, CI 4/4, HELD from merge until the visual pass, per the worker's own recommendation. THE LIST IS THREE COMPOSERS, NOT FOUR - confirmed from code, not the card: chirp 2000 (chirps/index), post 10000 (CreateSheet, covers campus too), comment 2000 (CommentsSheet). NO moderation reason field exists on mobile - every reason is a preset (longest reachable string is 26 chars), so a counter there would be UI for an unreachable state. CharCounter: hidden until the last tenth, counts DOWN, warning then danger tone, tabular numerals, NEVER truncates - over-limit is shown as negative and only send refuses. verify-content-limits.mjs wired as the fifth mobile CI step: extracts the real constants from core/validation.py (extraction failure is LOUD, not a pass on an empty set), and EXECUTES the shared helpers to pin boundary semantics - exactly-at-limit legal, one past not, trim() before counting - against the backend's own boundary tests. Proven red in real CI on a throwaway branch, six sabotage modes. Remaining: Expo web pass on 8082, all three composers, both themes, screenshots.",
+      "title": "c251 DONE Aug 30 - MERGED a5a3982 (PR #164, CI 4/4) AFTER the render pass, which CAUGHT A REAL WCAG FAILURE the token-level reasoning could not: warning text measured 2.03:1 on the light composer at 11px (danger 3.91:1, chip variant worse at 1.84:1) while dark mode was always fine (10.5/6.2) - invisible to any single-mode check. Fix inverts the treatment: semantic token as the FILL, near-black text on top - all four combos clear 4.5:1 (9.15/10.78 warning, 4.74/6.39 danger). Walked all three composers on the real seeded stack at 390x844: reveal at last tenth, amber then red, negative count over limit, send greys, zero reflow, zero console errors. Dark verified by token arithmetic (CDP blocked scheme emulation) - stated, not hidden. BONUS: the new verify:content-limits step fired FOR REAL mid-flight - c252's cap merged during the pass and CI went red with 'a backend cap with no mobile counterpart'. Deferred honestly to KNOWN_UNMIRRORED (composer is disabled per c254), not mirrored blind, not exempted quietly. First live firing of the guard, on its own author.",
       "detail": "Filed by the backend session that built c245, which found the gap while capping the server side; app-mobile is not that session's lane so it is written up rather than built. The caps themselves are live and correct - this is purely the missing client-side half. IMPORTANT: the numbers must be read from the API contract rather than retyped as literals in the app, or the two drift apart the first time a cap moves. Low risk, high polish value."
     },
     {
@@ -2689,6 +2689,15 @@
       "tag": "",
       "area": "",
       "title": "c257 [Q - READ THIS FIRST, Aug 30 CATCH-UP] Where everything stands so you can pick up without reading the whole board. MERGED TODAY (11 PRs): c242 job-board authz + c243 blocking-stops-contact (both LIVE on chirp-api-00041-tjt), c245/c252 content+message length caps, c237 self-block guard (migration 0029 merged NOT yet applied - manager runs it), c248 pool guard, c239 DRY wave 2, c241 email docs, c246 socket config + CI guard, c247 socket timeout 3600s (was killing every WS at exactly 301s - measured). IN FLIGHT: chirps-ad on c251 (composer char counters, PR #164 held for a render pass), chirps-23 on c244 (rate limiting). DO NOT touch CommentsSheet/CreateSheet/chirps-index or backend routers/core until those land. YOURS RIGHT NOW, no waiting: c254 (messaging UI claims E2EE and must not - small copy+guard fix), c255 (dead updatePost, tiny). YOURS WHEN APPLE ENROLLMENT CLEARS: c39 build (pull main first - eas.json changed), then c71 (your own .edu inbox) and c11 (first real payment, card+ACH, double-tap must 409). HELD/PARKED: c174/#115 Expo 57 closed-not-merged (reopen after alpha device build), c226 load test (Jose parked), c240 email provider (Jose deciding, Resend caps at 100/day). NEW REFERENCE: ARCHITECTURE.html at repo root - UML deployment/class/sequence diagrams drawn from live prod. House rules unchanged: q/* lane self-merged, claim ids via scripts/board-check, migrate-first-then-deploy is manager-run.",
+      "detail": ""
+    },
+    {
+      "id": "c258",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c258 [QUEUED BEHIND c244 - chirps-ad next] UNBOUNDED LIST RESPONSES - the gap c245 flagged and left uncarded, surfaced again by chirps-23's independent read. Comments, alumni directory, jobs, members, invites, event guests, meetings, polls, ledger, lineage: all still return EVERYTHING with no cap or cursor. Same class as c127/c201/c210; a chapter with a year of history downloads its whole ledger on every open. House pattern: compound-cursor pagination (c201/c210). Each endpoint: cap + cursor, proven both ways (cap fires on an oversized seed; a realistic page reads clean), client updated where it consumes the list. SEQUENCED BEHIND c244 ON PURPOSE - same router files rate limiting is decorating; land c244, rebase, then build. Assignee confirms the endpoint list from the routers, not from this card.",
       "detail": ""
     }
   ],
