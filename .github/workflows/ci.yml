@@ -202,6 +202,19 @@ jobs:
         # raw-length count here would put the after-the-fact 422 straight back.
         run: npm run verify:content-limits
 
+      - name: Messaging encryption claims
+        working-directory: app-mobile
+        # Board card c254. The Messages screens claimed "End-to-end encrypted"
+        # while src/crypto/signal.ts was a stub whose every function throws, with
+        # zero callers. Nothing could be sent, so no plaintext was ever at risk -
+        # the app simply told users a security property it does not have. tsc
+        # cannot see a false sentence, and neither can any test that only exercises
+        # code that runs. This guard fails if an encryption claim reappears while
+        # the crypto is still a stub, if the composer is ever enabled while it is,
+        # and - deliberately - when real crypto finally lands, so the cautious copy
+        # gets re-reviewed instead of under-claiming forever.
+        run: npm run verify:e2ee-claims
+
   web:
     # Board card c113. web/ is the PUBLIC MARKETING SITE and it had no gate at
     # all, so a break merged silently and surfaced at the next manual deploy.
