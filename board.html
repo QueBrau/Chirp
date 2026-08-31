@@ -2710,12 +2710,12 @@
       "detail": "The other half of c244 is already closed and NOT by us: the GCS lifecycle rule (delete under tmp/ at age 1 day) exists, set by the shared account Aug 23, verified live - tmp/ is empty and only posts/ holds objects. So storage accumulation is fine; unbounded minting is not. RULES ON THIS CARD: numbers are the judgment, not the wiring - generous enough that a real student never sees a 429, tight enough that a loop does, every limit documented inline with what a plausible heavy user actually does, and each one proven BOTH ways (blocks a loop, and a realistic usage pattern stays comfortably under). A limiter that fires on normal use is worse than none and at alpha would look identical to the app being broken. New tests falsified before being kept, same as c245/c252. MONEY PATHS FENCED: routers/payments.py, routers/finance.py, core/dues_status.py, services/stripe_service.py are not to be touched - if a dues endpoint genuinely needs a limiter that is an adversarial-review path, stop and raise it rather than adding it. No synthetic traffic against prod: Jose has not approved a load test, so these limits are proven in the suite. NOTE ON THE ID: c258 was skipped deliberately - the manager reported carding the unbounded-list-response gap as c258 before it reached the board, so this took the next id up rather than collide with it."
     },
     {
-      "id": "c259",
+      "id": "c260",
       "col": "done",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c259 DEPLOY WINDOW #2 Aug 30 - CLOSED CLEAN. Order: migrate FIRST (0029, the self-block DELETE was a verified no-op - prod user_blocks had 0 rows), then both services redeployed from main a5a3982. Now live: c245 content caps, c252 message/forwarded caps, c237 self-block guard+constraint, plus everything already live from window #1. deploy-verify 4/4 on chirp-api AND chirp-ws (--base-url passed correctly this time, per c250's rule). The known 500-window between constraint and guard lasted the length of one build and prod had zero traffic in it.",
+      "title": "c260 DEPLOY WINDOW #2 (renumbered from c259 - manager collided with chirps-23s card-before-branch claim; the branchless card yields) Aug 30 - CLOSED CLEAN. Order: migrate FIRST (0029, the self-block DELETE was a verified no-op - prod user_blocks had 0 rows), then both services redeployed from main a5a3982. Now live: c245 content caps, c252 message/forwarded caps, c237 self-block guard+constraint, plus everything already live from window #1. deploy-verify 4/4 on chirp-api AND chirp-ws (--base-url passed correctly this time, per c250's rule). The known 500-window between constraint and guard lasted the length of one build and prod had zero traffic in it.",
       "detail": ""
     }
   ],
