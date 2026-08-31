@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chirp — UML Architecture</title>
+<style>
+:root{
+  --bg:#FBFAF8; --panel:#FFFFFF; --sunk:#F1EFEA;
+  --ink:#14181B; --ink-2:#4B545A; --ink-3:#79848B;
+  --rule:#D4D9DC; --rule-2:#E6E9EA;
+  --line:#5A6469;            /* UML strokes */
+  --fill:#FFFFFF;            /* class/node fill */
+  --fill-2:#F3F6F7;          /* compartment tint */
+  --accent:#0F6E78;          /* our components */
+  --accent-fill:#E4F1F2;
+  --ext:#8A6A18;             /* external systems */
+  --ext-fill:#F7EFDB;
+  --risk:#9E332B; --risk-fill:#F8E2DF;
+  --shadow:0 1px 2px rgba(20,24,27,.05),0 10px 28px -16px rgba(20,24,27,.25);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0D1113; --panel:#151A1D; --sunk:#111618;
+    --ink:#E8EDEE; --ink-2:#AEB9BD; --ink-3:#7E8A8F;
+    --rule:#283034; --rule-2:#1D2427;
+    --line:#93A1A7;
+    --fill:#1B2225; --fill-2:#212A2E;
+    --accent:#4CC3CE; --accent-fill:#123236;
+    --ext:#D6A544; --ext-fill:#31260F;
+    --risk:#E0736B; --risk-fill:#331A18;
+    --shadow:0 1px 2px rgba(0,0,0,.5),0 10px 28px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0D1113; --panel:#151A1D; --sunk:#111618;
+  --ink:#E8EDEE; --ink-2:#AEB9BD; --ink-3:#7E8A8F;
+  --rule:#283034; --rule-2:#1D2427;
+  --line:#93A1A7;
+  --fill:#1B2225; --fill-2:#212A2E;
+  --accent:#4CC3CE; --accent-fill:#123236;
+  --ext:#D6A544; --ext-fill:#31260F;
+  --risk:#E0736B; --risk-fill:#331A18;
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 10px 28px -16px rgba(0,0,0,.8);
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 26px 90px}
+h1,h2,h3{letter-spacing:-.02em;text-wrap:balance}
+h1{font-size:2.5rem;font-weight:800;margin:0 0 10px;line-height:1.08}
+h2{font-size:1.5rem;font-weight:700;margin:0 0 6px}
+h3{font-size:1.02rem;font-weight:700;margin:0 0 6px}
+p{margin:0 0 15px;max-width:76ch}
+code,.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:.86em}
+code{background:var(--sunk);border:1px solid var(--rule-2);border-radius:4px;padding:.08em .36em}
+.eyebrow{font-family:ui-monospace,Menlo,monospace;font-size:.68rem;font-weight:700;
+  letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin:0 0 12px}
+header{padding:60px 0 30px;border-bottom:2px solid var(--ink)}
+.lede{font-size:1.12rem;color:var(--ink-2);max-width:70ch}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px;
+  font-family:ui-monospace,Menlo,monospace;font-size:.7rem;color:var(--ink-3)}
+.meta span{border:1px solid var(--rule);border-radius:100px;padding:4px 11px;background:var(--panel)}
+section{padding:46px 0;border-bottom:1px solid var(--rule)}
+section:last-of-type{border-bottom:0}
+figure{margin:24px 0 0;background:var(--panel);border:1px solid var(--rule);border-radius:5px;
+  padding:20px;box-shadow:var(--shadow);overflow-x:auto}
+figcaption{margin-top:14px;padding-top:12px;border-top:1px solid var(--rule-2);
+  font-size:.87rem;color:var(--ink-2)}
+svg{display:block;min-width:820px}
+svg text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:var(--ink)}
+.t-name{font-size:12.5px;font-weight:700}
+.t-attr{font-size:10.5px;fill:var(--ink-2)}
+.t-stereo{font-size:9.5px;fill:var(--ink-3);font-style:italic}
+.t-mult{font-size:9.5px;fill:var(--ink-3)}
+.t-label{font-size:10px;fill:var(--ink-2)}
+.t-note{font-size:10px;fill:var(--ink-2)}
+.s{stroke:var(--line);fill:none;stroke-width:1.2}
+.s-dash{stroke:var(--line);fill:none;stroke-width:1.2;stroke-dasharray:5 4}
+.box{fill:var(--fill);stroke:var(--line);stroke-width:1.2}
+.box-2{fill:var(--fill-2);stroke:var(--line);stroke-width:1.2}
+.box-acc{fill:var(--accent-fill);stroke:var(--accent);stroke-width:1.4}
+.box-ext{fill:var(--ext-fill);stroke:var(--ext);stroke-width:1.2;stroke-dasharray:4 3}
+.box-note{fill:var(--sunk);stroke:var(--rule);stroke-width:1}
+.lifeline{stroke:var(--line);stroke-width:1;stroke-dasharray:4 4}
+.activation{fill:var(--accent-fill);stroke:var(--accent);stroke-width:1}
+.legend{display:flex;flex-wrap:wrap;gap:12px 26px;margin-top:18px;font-size:.85rem;color:var(--ink-2)}
+.legend b{display:inline-flex;align-items:center;gap:8px;font-weight:400}
+.sw{width:26px;height:14px;border-radius:2px;flex:none;border:1.2px solid var(--line);background:var(--fill)}
+.sw.acc{background:var(--accent-fill);border-color:var(--accent)}
+.sw.ext{background:var(--ext-fill);border-color:var(--ext);border-style:dashed}
+.callout{background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--accent);
+  border-radius:4px;padding:18px 22px;margin:24px 0}
+.callout.risk{border-left-color:var(--risk)}
+.callout p:last-child{margin-bottom:0}
+.callout h3{margin-bottom:6px}
+table{border-collapse:collapse;width:100%;font-size:.88rem;margin-top:18px;min-width:560px}
+th{font-family:ui-monospace,Menlo,monospace;font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);text-align:left;padding:0 12px 8px 0;border-bottom:1px solid var(--ink)}
+td{padding:11px 12px 11px 0;border-bottom:1px solid var(--rule-2);vertical-align:top;color:var(--ink-2)}
+td:first-child{color:var(--ink);font-weight:600}
+.tablewrap{overflow-x:auto}
+footer{padding:36px 0 0;color:var(--ink-3);font-size:.85rem}
+@media print{
+  body{background:#fff}
+  figure{box-shadow:none;break-inside:avoid}
+  section{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Chirp / internal engineering reference</p>
+  <h1>UML Architecture</h1>
+  <p class="lede">Deployment, domain model and the two sequences that carry the most risk. Drawn from the
+  deployed system and the merged schema, not from intent — where the diagram and the code disagree, the code
+  is right and this file is a bug.</p>
+  <div class="meta">
+    <span>chirp-api-00041-tjt</span>
+    <span>chirp-ws-00006-vb8</span>
+    <span>schema 0029 (merged, not yet applied)</span>
+    <span>2026-08-30</span>
+  </div>
+</header>
+
+<!-- ============ DEPLOYMENT ============ -->
+<section>
+  <p class="eyebrow">Figure 1 — Deployment diagram</p>
+  <h2>Nodes, artifacts and the paths between them</h2>
+  <p>The single fact that most often surprises a new reader: <code>chirp-api</code> and <code>chirp-ws</code>
+  are the <em>same container image</em> with every route mounted on both. They are not an API tier and a
+  socket tier by construction. What separates them is the URL a client is pointed at, and the scaling knobs
+  set on each.</p>
+
+  <figure>
+    <svg viewBox="0 0 1080 700" role="img" aria-label="UML deployment diagram of the Chirp production system">
+      <defs>
+        <marker id="arrowOpen" markerWidth="11" markerHeight="11" refX="9.5" refY="4" orient="auto">
+          <path d="M0,0 L9,4 L0,8" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        </marker>
+      </defs>
+      <g color="var(--line)">
+
+      <!-- device: phone -->
+      <path class="box" d="M40,44 L200,44 L214,30 L214,96 L200,110 L40,110 Z"/>
+      <path class="s" d="M40,44 L54,30 L214,30 M40,110 L54,96 L214,96"/>
+      <text class="t-stereo" x="52" y="60">&#171;device&#187;</text>
+      <text class="t-name" x="52" y="76">:MobileDevice</text>
+      <text class="t-attr" x="52" y="90">Expo SDK 54 / RN</text>
+
+      <!-- device: browser -->
+      <path class="box" d="M250,44 L400,44 L414,30 L414,96 L400,110 L250,110 Z"/>
+      <path class="s" d="M250,44 L264,30 L414,30 M250,110 L264,96 L414,96"/>
+      <text class="t-stereo" x="262" y="60">&#171;device&#187;</text>
+      <text class="t-name" x="262" y="76">:Browser</text>
+      <text class="t-attr" x="262" y="90">Vite / React SPA</text>
+
+      <!-- Firebase Hosting -->
+      <rect class="box" x="250" y="150" width="164" height="52" rx="2"/>
+      <text class="t-stereo" x="262" y="167">&#171;execution env&#187;</text>
+      <text class="t-name" x="262" y="184">FirebaseHosting</text>
+      <text class="t-attr" x="262" y="196">rewrite /media/** &#8594; Run</text>
+
+      <!-- Cloud Run boundary -->
+      <rect class="box-2" x="40" y="240" width="480" height="176" rx="3"/>
+      <text class="t-stereo" x="54" y="260">&#171;execution environment&#187; Google Cloud Run — us-central1</text>
+
+      <rect class="box-acc" x="60" y="276" width="210" height="122" rx="2"/>
+      <text class="t-stereo" x="72" y="294">&#171;artifact&#187; one image</text>
+      <text class="t-name" x="72" y="312">chirp-api</text>
+      <text class="t-attr" x="72" y="330">maxScale = 4</text>
+      <text class="t-attr" x="72" y="344">concurrency = 80</text>
+      <text class="t-attr" x="72" y="358">timeout = 3600 s</text>
+      <text class="t-attr" x="72" y="372">pool = 3 + 2 / instance</text>
+      <text class="t-attr" x="72" y="388">serves: HTTP + WS today</text>
+
+      <rect class="box-acc" x="292" y="276" width="210" height="122" rx="2"/>
+      <text class="t-stereo" x="304" y="294">&#171;artifact&#187; same image</text>
+      <text class="t-name" x="304" y="312">chirp-ws</text>
+      <text class="t-attr" x="304" y="330">maxScale = 2</text>
+      <text class="t-attr" x="304" y="344">concurrency = 200</text>
+      <text class="t-attr" x="304" y="358">timeout = 3600 s</text>
+      <text class="t-attr" x="304" y="372">pool = 1 + 1 / instance</text>
+      <text class="t-attr" x="304" y="388">serves: no traffic yet</text>
+
+      <!-- data tier -->
+      <rect class="box" x="600" y="240" width="200" height="84" rx="2"/>
+      <text class="t-stereo" x="612" y="258">&#171;database&#187;</text>
+      <text class="t-name" x="612" y="276">Cloud SQL / PG 16</text>
+      <text class="t-attr" x="612" y="292">db-custom-1-3840, ZONAL</text>
+      <text class="t-attr" x="612" y="306">max_connections = 100</text>
+      <text class="t-attr" x="612" y="318">demand = 28</text>
+
+      <rect class="box" x="600" y="344" width="200" height="62" rx="2"/>
+      <text class="t-stereo" x="612" y="362">&#171;cache / broker&#187;</text>
+      <text class="t-name" x="612" y="380">Memorystore Redis 7</text>
+      <text class="t-attr" x="612" y="396">Basic 1 GB — no failover</text>
+
+      <rect class="box" x="600" y="426" width="200" height="62" rx="2"/>
+      <text class="t-stereo" x="612" y="444">&#171;object store&#187;</text>
+      <text class="t-name" x="612" y="462">GCS chirps-prod-media</text>
+      <text class="t-attr" x="612" y="478">private; PAP enforced</text>
+
+      <!-- external -->
+      <rect class="box-ext" x="856" y="240" width="184" height="46" rx="2"/>
+      <text class="t-stereo" x="868" y="258">&#171;external&#187;</text>
+      <text class="t-name" x="868" y="276">Firebase Auth</text>
+
+      <rect class="box-ext" x="856" y="302" width="184" height="46" rx="2"/>
+      <text class="t-stereo" x="868" y="320">&#171;external&#187;</text>
+      <text class="t-name" x="868" y="338">Stripe Connect</text>
+
+      <rect class="box-ext" x="856" y="364" width="184" height="46" rx="2"/>
+      <text class="t-stereo" x="868" y="382">&#171;external&#187;</text>
+      <text class="t-name" x="868" y="400">Resend</text>
+
+      <rect class="box-ext" x="856" y="426" width="184" height="46" rx="2"/>
+      <text class="t-stereo" x="868" y="444">&#171;external&#187;</text>
+      <text class="t-name" x="868" y="462">BigQuery</text>
+
+      <!-- edges -->
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M120,110 L120,276"/>
+      <text class="t-label" x="126" y="150">&#171;HTTPS&#187; bearer token</text>
+      <text class="t-label" x="126" y="164">&#171;WSS&#187; /ws  (should be ws)</text>
+
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M332,110 L332,150"/>
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M370,202 L400,276"/>
+      <text class="t-label" x="380" y="240">&#171;HTTPS&#187;</text>
+
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M520,300 L600,282"/>
+      <text class="t-label" x="524" y="278">&#171;asyncpg&#187;</text>
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M520,340 L600,372"/>
+      <text class="t-label" x="524" y="348">&#171;pub/sub&#187;</text>
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M520,380 L600,452"/>
+      <text class="t-label" x="524" y="404">&#171;signed URL&#187;</text>
+
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M800,272 L856,266"/>
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M800,300 L856,322"/>
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M800,368 L856,386"/>
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M800,400 L856,444"/>
+
+      <!-- phone direct to GCS -->
+      <path class="s-dash" marker-end="url(#arrowOpen)" d="M214,70 C 470,60 700,140 700,426"/>
+      <text class="t-label" x="440" y="96">&#171;HTTPS PUT&#187; bytes bypass our servers entirely</text>
+
+      <!-- note -->
+      <path class="box-note" d="M40,470 L470,470 L470,560 L40,560 Z"/>
+      <path class="s" d="M452,470 L452,488 L470,488"/>
+      <text class="t-note" x="52" y="492">{ constraint }  Cloud Run counts a WebSocket as one</text>
+      <text class="t-note" x="52" y="508">in-flight request for its whole lifetime. Sockets</text>
+      <text class="t-note" x="52" y="524">landing on chirp-api therefore consume its 4 x 80</text>
+      <text class="t-note" x="52" y="540">HTTP slots: ~320 concurrent apps starves HTTP.</text>
+      <path class="s-dash" d="M250,470 L250,416"/>
+
+      </g>
+    </svg>
+    <figcaption><strong>Figure 1.</strong> Deployment view. Dashed open arrows are UML dependencies, labelled
+    with the protocol. The mobile device's direct <code>PUT</code> to object storage is drawn deliberately —
+    it is the only path where payload bytes avoid our compute entirely, and it is why one slow upload cannot
+    crowd out other requests.</figcaption>
+  </figure>
+
+  <div class="legend">
+    <b><span class="sw acc"></span> Our deployed artifacts</b>
+    <b><span class="sw"></span> Managed infrastructure we operate</b>
+    <b><span class="sw ext"></span> Third-party systems</b>
+  </div>
+</section>
+
+<!-- ============ CLASS DIAGRAM ============ -->
+<section>
+  <p class="eyebrow">Figure 2 — Domain class diagram</p>
+  <h2>The entities permission actually depends on</h2>
+  <p>Forty-two tables exist; these are the ones that carry authorization or money. The rule the whole model
+  encodes: <strong><code>Membership</code> is the fact, <code>User.account_type</code> is only a claim.</strong>
+  A user can set the latter at signup and it must never gate anything.</p>
+
+  <figure>
+    <svg viewBox="0 0 1080 780" role="img" aria-label="UML class diagram of the Chirp core domain model">
+      <defs>
+        <marker id="openArr" markerWidth="11" markerHeight="11" refX="9.5" refY="4" orient="auto">
+          <path d="M0,0 L9,4 L0,8" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        </marker>
+        <marker id="diamondF" markerWidth="14" markerHeight="12" refX="12" refY="5" orient="auto">
+          <path d="M0,5 L6,1 L12,5 L6,9 Z" fill="currentColor" stroke="currentColor" stroke-width="1"/>
+        </marker>
+      </defs>
+      <g color="var(--line)">
+
+      <!-- Campus -->
+      <rect class="box" x="40" y="40" width="188" height="84" rx="2"/>
+      <line class="s" x1="40" y1="62" x2="228" y2="62"/>
+      <text class="t-name" x="52" y="56">Campus</text>
+      <text class="t-attr" x="52" y="78">id : UUID</text>
+      <text class="t-attr" x="52" y="93">slug : text {unique}</text>
+      <text class="t-attr" x="52" y="108">email_domains : text[]</text>
+
+      <!-- Chapter -->
+      <rect class="box" x="40" y="176" width="188" height="98" rx="2"/>
+      <line class="s" x1="40" y1="198" x2="228" y2="198"/>
+      <text class="t-name" x="52" y="192">Chapter</text>
+      <text class="t-attr" x="52" y="214">id : UUID</text>
+      <text class="t-attr" x="52" y="229">campus_id : UUID</text>
+      <text class="t-attr" x="52" y="244">org_name : text</text>
+      <text class="t-attr" x="52" y="259">stripe_account_id : text?</text>
+
+      <!-- User -->
+      <rect class="box-acc" x="416" y="40" width="216" height="144" rx="2"/>
+      <line class="s" x1="416" y1="62" x2="632" y2="62"/>
+      <text class="t-name" x="428" y="56">User</text>
+      <text class="t-attr" x="428" y="78">id : UUID</text>
+      <text class="t-attr" x="428" y="93">firebase_uid : text {unique}</text>
+      <text class="t-attr" x="428" y="108">campus_id : UUID?</text>
+      <text class="t-attr" x="428" y="123">campus_verified_at : ts?</text>
+      <text class="t-attr" x="428" y="138">is_platform_admin : bool</text>
+      <text class="t-attr" x="428" y="153">suspended_at : ts?</text>
+      <text class="t-attr" x="428" y="170" style="fill:var(--risk)">account_type : text (claim)</text>
+
+      <!-- Membership -->
+      <rect class="box-acc" x="416" y="216" width="216" height="98" rx="2"/>
+      <line class="s" x1="416" y1="238" x2="632" y2="238"/>
+      <text class="t-name" x="428" y="232">Membership</text>
+      <text class="t-attr" x="428" y="254">user_id : UUID</text>
+      <text class="t-attr" x="428" y="269">chapter_id : UUID</text>
+      <text class="t-attr" x="428" y="284">role : text</text>
+      <text class="t-attr" x="428" y="299">status : text = active</text>
+
+      <!-- UserBlock -->
+      <rect class="box" x="820" y="40" width="204" height="84" rx="2"/>
+      <line class="s" x1="820" y1="62" x2="1024" y2="62"/>
+      <text class="t-name" x="832" y="56">UserBlock</text>
+      <text class="t-attr" x="832" y="78">blocker_id : UUID</text>
+      <text class="t-attr" x="832" y="93">blocked_id : UUID</text>
+      <text class="t-attr" x="832" y="110" style="fill:var(--accent)">{blocker &#8800; blocked} 0029</text>
+
+      <!-- Chirp -->
+      <rect class="box" x="820" y="176" width="204" height="84" rx="2"/>
+      <line class="s" x1="820" y1="198" x2="1024" y2="198"/>
+      <text class="t-name" x="832" y="192">Chirp</text>
+      <text class="t-attr" x="832" y="214">campus_id : UUID</text>
+      <text class="t-attr" x="832" y="229">author_id : UUID {never served}</text>
+      <text class="t-attr" x="832" y="244">body : text &#8804; 2000</text>
+
+      <!-- Post -->
+      <rect class="box" x="40" y="330" width="188" height="98" rx="2"/>
+      <line class="s" x1="40" y1="352" x2="228" y2="352"/>
+      <text class="t-name" x="52" y="346">Post</text>
+      <text class="t-attr" x="52" y="368">chapter_id : UUID?</text>
+      <text class="t-attr" x="52" y="383">campus_id : UUID</text>
+      <text class="t-attr" x="52" y="398">audience : text</text>
+      <text class="t-attr" x="52" y="413">body : text &#8804; 10000</text>
+
+      <!-- DuesCycle -->
+      <rect class="box" x="40" y="480" width="188" height="84" rx="2"/>
+      <line class="s" x1="40" y1="502" x2="228" y2="502"/>
+      <text class="t-name" x="52" y="496">DuesCycle</text>
+      <text class="t-attr" x="52" y="518">chapter_id : UUID</text>
+      <text class="t-attr" x="52" y="533">amount_cents : int</text>
+      <text class="t-attr" x="52" y="548">due_date : date</text>
+
+      <!-- LedgerEntry -->
+      <rect class="box-acc" x="40" y="616" width="240" height="112" rx="2"/>
+      <line class="s" x1="40" y1="638" x2="280" y2="638"/>
+      <text class="t-name" x="52" y="632">LedgerEntry</text>
+      <text class="t-attr" x="52" y="654">entry_type : text</text>
+      <text class="t-attr" x="52" y="669">amount_cents : int</text>
+      <text class="t-attr" x="52" y="684">dues_cycle_id : UUID?</text>
+      <text class="t-attr" x="52" y="699">corrects_entry_id : UUID?</text>
+      <text class="t-attr" x="52" y="716" style="fill:var(--accent)">{1 dues_payment / member / cycle}</text>
+
+      <!-- Conversation -->
+      <rect class="box" x="416" y="366" width="216" height="84" rx="2"/>
+      <line class="s" x1="416" y1="388" x2="632" y2="388"/>
+      <text class="t-name" x="428" y="382">Conversation</text>
+      <text class="t-attr" x="428" y="404">chapter_id : UUID?  {null = DM}</text>
+      <text class="t-attr" x="428" y="419">kind : text</text>
+      <text class="t-attr" x="428" y="434">protocol_version : int</text>
+
+      <!-- ConversationMember -->
+      <rect class="box" x="416" y="490" width="216" height="70" rx="2"/>
+      <line class="s" x1="416" y1="512" x2="632" y2="512"/>
+      <text class="t-name" x="428" y="506">ConversationMember</text>
+      <text class="t-attr" x="428" y="528">user_id : UUID</text>
+      <text class="t-attr" x="428" y="543">left_at : ts?  {partial idx}</text>
+
+      <!-- Message -->
+      <rect class="box" x="416" y="600" width="216" height="86" rx="2"/>
+      <line class="s" x1="416" y1="622" x2="632" y2="622"/>
+      <text class="t-name" x="428" y="616">Message</text>
+      <text class="t-attr" x="428" y="638">sender_device_id : UUID</text>
+      <text class="t-attr" x="428" y="653">ciphertext : bytea {opaque}</text>
+      <text class="t-attr" x="428" y="670" style="fill:var(--risk)">not yet encrypted — c254</text>
+
+      <!-- relations -->
+      <path class="s" marker-start="url(#diamondF)" d="M134,124 L134,176"/>
+      <text class="t-mult" x="140" y="142">1</text><text class="t-mult" x="140" y="170">0..*</text>
+
+      <path class="s" d="M228,82 L416,82"/>
+      <text class="t-mult" x="236" y="76">1</text><text class="t-mult" x="386" y="76">0..*</text>
+      <text class="t-label" x="286" y="98">attends</text>
+
+      <path class="s" d="M524,184 L524,216"/>
+      <text class="t-mult" x="530" y="200">1</text><text class="t-mult" x="530" y="214">0..*</text>
+
+      <path class="s" d="M416,264 L228,240"/>
+      <text class="t-mult" x="238" y="234">1</text><text class="t-mult" x="392" y="258">0..*</text>
+      <text class="t-label" x="270" y="222">grants role in</text>
+
+      <path class="s" d="M416,120 L300,120 L300,330 L228,368"/>
+      <text class="t-mult" x="236" y="364">0..*</text>
+      <text class="t-label" x="306" y="300">authors</text>
+
+      <path class="s" d="M632,110 L820,82"/>
+      <text class="t-mult" x="640" y="106">1</text><text class="t-mult" x="792" y="76">0..*</text>
+
+      <path class="s" d="M632,140 L740,140 L740,218 L820,218"/>
+      <text class="t-mult" x="748" y="212">0..*</text>
+
+      <path class="s" marker-start="url(#diamondF)" d="M134,564 L134,616"/>
+      <text class="t-mult" x="140" y="582">1</text><text class="t-mult" x="140" y="610">0..*</text>
+
+      <path class="s" marker-start="url(#diamondF)" d="M524,450 L524,490"/>
+      <text class="t-mult" x="530" y="468">1</text><text class="t-mult" x="530" y="486">1..*</text>
+      <path class="s" marker-start="url(#diamondF)" d="M524,560 L524,600"/>
+      <text class="t-mult" x="530" y="578">1</text><text class="t-mult" x="530" y="596">0..*</text>
+
+      <path class="s-dash" marker-end="url(#openArr)" d="M280,672 L416,660"/>
+      <text class="t-label" x="292" y="690">&#171;references&#187; related_user</text>
+
+      </g>
+    </svg>
+    <figcaption><strong>Figure 2.</strong> Filled diamonds are composition — delete the whole and the parts go
+    with it. Constraints in braces are enforced by the database, not by application code: the self-block
+    check arrives with migration 0029, and the one-dues-payment-per-cycle rule is a unique constraint backed
+    by advisory-lock triggers across two tables.</figcaption>
+  </figure>
+
+  <div class="callout risk">
+    <h3>Read <code>account_type</code> as a warning label</h3>
+    <p>It is drawn in the risk colour on purpose. It is set by the user at signup, is presentation-only, and
+    was — until 30 August — the gate on who could post to the alumni job board. Any authorization that starts
+    from this attribute is a bug by construction. Use <code>Membership.role</code>,
+    <code>User.campus_verified_at</code>, or <code>User.is_platform_admin</code>.</p>
+  </div>
+</section>
+
+<!-- ============ SEQUENCE: DUES ============ -->
+<section>
+  <p class="eyebrow">Figure 3 — Sequence diagram</p>
+  <h2>Paying dues, and the two guards that make it safe</h2>
+
+  <figure>
+    <svg viewBox="0 0 1080 520" role="img" aria-label="UML sequence diagram for the dues payment flow">
+      <defs>
+        <marker id="sqFilled" markerWidth="11" markerHeight="10" refX="9" refY="4" orient="auto">
+          <path d="M0,0 L9,4 L0,8 Z" fill="currentColor"/>
+        </marker>
+        <marker id="sqOpen" markerWidth="11" markerHeight="10" refX="9.5" refY="4" orient="auto">
+          <path d="M0,0 L9,4 L0,8" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        </marker>
+      </defs>
+      <g color="var(--line)">
+
+      <rect class="box" x="40" y="30" width="130" height="34" rx="2"/>
+      <text class="t-name" x="56" y="52">:MobileApp</text>
+      <rect class="box-acc" x="250" y="30" width="130" height="34" rx="2"/>
+      <text class="t-name" x="272" y="52">:chirp-api</text>
+      <rect class="box" x="460" y="30" width="130" height="34" rx="2"/>
+      <text class="t-name" x="486" y="52">:Postgres</text>
+      <rect class="box-ext" x="670" y="30" width="140" height="34" rx="2"/>
+      <text class="t-name" x="690" y="52">:StripeConnect</text>
+
+      <line class="lifeline" x1="105" y1="64" x2="105" y2="490"/>
+      <line class="lifeline" x1="315" y1="64" x2="315" y2="490"/>
+      <line class="lifeline" x1="525" y1="64" x2="525" y2="490"/>
+      <line class="lifeline" x1="740" y1="64" x2="740" y2="490"/>
+
+      <rect class="activation" x="309" y="96" width="12" height="300"/>
+      <rect class="activation" x="519" y="126" width="12" height="46"/>
+      <rect class="activation" x="734" y="216" width="12" height="120"/>
+      <rect class="activation" x="519" y="366" width="12" height="46"/>
+
+      <path class="s" marker-end="url(#sqFilled)" d="M105,96 L307,96"/>
+      <text class="t-label" x="120" y="90">1: POST /dues/{cycle}/pay</text>
+
+      <path class="s" marker-end="url(#sqFilled)" d="M321,130 L517,130"/>
+      <text class="t-label" x="336" y="124">2: reserve intent + nonce</text>
+      <path class="s-dash" marker-end="url(#sqOpen)" d="M517,166 L321,166"/>
+      <text class="t-label" x="336" y="160">reservation</text>
+
+      <path class="s" marker-end="url(#sqFilled)" d="M321,220 L732,220"/>
+      <text class="t-label" x="336" y="214">3: create PaymentIntent (idempotency key)</text>
+      <path class="s-dash" marker-end="url(#sqOpen)" d="M732,254 L321,254"/>
+      <text class="t-label" x="336" y="248">client_secret</text>
+
+      <path class="s-dash" marker-end="url(#sqOpen)" d="M307,286 L105,286"/>
+      <text class="t-label" x="120" y="280">4: client_secret</text>
+      <path class="s" marker-end="url(#sqFilled)" d="M105,312 L732,312"/>
+      <text class="t-label" x="120" y="306">5: confirm card in PaymentSheet (bypasses our servers)</text>
+
+      <path class="s" marker-end="url(#sqFilled)" d="M732,356 L321,356"/>
+      <text class="t-label" x="336" y="350">6: webhook — verified by signature</text>
+
+      <path class="s" marker-end="url(#sqFilled)" d="M321,392 L517,392"/>
+      <text class="t-label" x="336" y="386">7: write LedgerEntry</text>
+
+      <path class="box-note" d="M600,412 L1040,412 L1040,494 L600,494 Z"/>
+      <path class="s" d="M1022,412 L1022,430 L1040,430"/>
+      <text class="t-note" x="612" y="434">{ guards }  uq_ledger_dues_payment_once rejects a</text>
+      <text class="t-note" x="612" y="450">second dues_payment for the same member and cycle.</text>
+      <text class="t-note" x="612" y="466">Advisory-lock triggers on both intents and plans</text>
+      <text class="t-note" x="612" y="482">serialise concurrent attempts across the two tables.</text>
+      <path class="s-dash" d="M600,452 L531,404"/>
+
+      </g>
+    </svg>
+    <figcaption><strong>Figure 3.</strong> Step 5 matters as much as any guard: the card is confirmed directly
+    between the app and Stripe, so raw card data never reaches Chirp. Steps 2 and 3 both carry idempotency,
+    which is what makes an impatient double-tap safe. <strong>No real card has yet been charged in
+    production</strong> — this path is proven by tests and adversarial review only.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ SEQUENCE: MESSAGE ============ -->
+<section>
+  <p class="eyebrow">Figure 4 — Sequence diagram</p>
+  <h2>A message, and why the write and the read take different paths</h2>
+
+  <figure>
+    <svg viewBox="0 0 1080 430" role="img" aria-label="UML sequence diagram for message send and realtime fan-out">
+      <g color="var(--line)">
+      <rect class="box" x="40" y="30" width="120" height="34" rx="2"/>
+      <text class="t-name" x="56" y="52">:SenderApp</text>
+      <rect class="box-acc" x="230" y="30" width="120" height="34" rx="2"/>
+      <text class="t-name" x="252" y="52">:chirp-api</text>
+      <rect class="box" x="420" y="30" width="120" height="34" rx="2"/>
+      <text class="t-name" x="446" y="52">:Postgres</text>
+      <rect class="box" x="610" y="30" width="120" height="34" rx="2"/>
+      <text class="t-name" x="640" y="52">:Redis</text>
+      <rect class="box-acc" x="800" y="30" width="120" height="34" rx="2"/>
+      <text class="t-name" x="822" y="52">:chirp-ws</text>
+      <rect class="box" x="960" y="30" width="104" height="34" rx="2"/>
+      <text class="t-name" x="974" y="52">:PeerApp</text>
+
+      <line class="lifeline" x1="100" y1="64" x2="100" y2="400"/>
+      <line class="lifeline" x1="290" y1="64" x2="290" y2="400"/>
+      <line class="lifeline" x1="480" y1="64" x2="480" y2="400"/>
+      <line class="lifeline" x1="670" y1="64" x2="670" y2="400"/>
+      <line class="lifeline" x1="860" y1="64" x2="860" y2="400"/>
+      <line class="lifeline" x1="1012" y1="64" x2="1012" y2="400"/>
+
+      <rect class="activation" x="284" y="96" width="12" height="190"/>
+      <rect class="activation" x="474" y="150" width="12" height="40"/>
+      <rect class="activation" x="854" y="86" width="12" height="290"/>
+
+      <path class="s" stroke-dasharray="5 4" d="M1012,86 L866,86"/>
+      <text class="t-label" x="880" y="80">0: socket held open (subscribed)</text>
+
+      <path class="s" marker-end="url(#sqFilled)" d="M100,120 L282,120"/>
+      <text class="t-label" x="114" y="114">1: POST /messages  (HTTP, not the socket)</text>
+
+      <path class="s" marker-end="url(#sqFilled)" d="M296,154 L472,154"/>
+      <text class="t-label" x="310" y="148">2: check reachability + blocks</text>
+      <path class="s" marker-end="url(#sqFilled)" d="M296,190 L472,190"/>
+      <text class="t-label" x="310" y="184">3: INSERT message (durable first)</text>
+
+      <path class="s" marker-end="url(#sqFilled)" d="M296,226 L664,226"/>
+      <text class="t-label" x="310" y="220">4: PUBLISH to recipient channel</text>
+
+      <path class="s" marker-end="url(#sqFilled)" d="M676,262 L852,262"/>
+      <text class="t-label" x="690" y="256">5: delivered to subscriber</text>
+
+      <path class="s" marker-end="url(#sqFilled)" d="M866,298 L1006,298"/>
+      <text class="t-label" x="878" y="292">6: push frame</text>
+
+      <path class="s-dash" marker-end="url(#sqOpen)" d="M282,330 L100,330"/>
+      <text class="t-label" x="114" y="324">201 Created</text>
+
+      <path class="box-note" d="M40,352 L620,352 L620,404 L40,404 Z"/>
+      <path class="s" d="M602,352 L602,368 L620,368"/>
+      <text class="t-note" x="52" y="374">{ rationale }  Redis is what lets a message reach a socket held by a</text>
+      <text class="t-note" x="52" y="392">different instance. Without it, fan-out works only by coincidence.</text>
+
+      </g>
+    </svg>
+    <figcaption><strong>Figure 4.</strong> Sending is an ordinary HTTP request; only delivery uses the socket.
+    Writing to Postgres before publishing is deliberate — realtime accelerates delivery of state that is
+    already durable, and a Redis outage degrades the product to "refresh to see new messages" rather than
+    losing anything.</figcaption>
+  </figure>
+
+  <div class="callout risk">
+    <h3>The <code>ciphertext</code> column is not yet ciphertext</h3>
+    <p>The server is built correctly for end-to-end encryption: it stores the payload as opaque bytes, never
+    parses it, and the prekey tables exist (<code>signed_prekeys</code>, <code>one_time_prekeys</code>,
+    <code>kyber_prekeys</code>). The client half does not exist — <code>src/crypto/signal.ts</code> is a typed
+    stub whose every function throws, with zero callers. The composer is disabled, so nothing can be sent
+    today, but the Messages screen still reads <em>"End-to-end encrypted"</em>. Fix the copy before the
+    composer is ever enabled. Tracked as c254.</p>
+  </div>
+</section>
+
+<!-- ============ CEILINGS ============ -->
+<section>
+  <p class="eyebrow">Reference</p>
+  <h2>Capacity, as configured</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Resource</th><th>Configured</th><th>Ceiling it implies</th><th>Evidence</th></tr></thead>
+      <tbody>
+        <tr><td>chirp-api</td><td>maxScale 4 &times; concurrency 80</td><td>320 in-flight requests</td><td>Service description, live</td></tr>
+        <tr><td>chirp-ws</td><td>maxScale 2 &times; concurrency 200</td><td>400 concurrent sockets</td><td>Service description, live</td></tr>
+        <tr><td>Postgres</td><td>max_connections 100</td><td>Demand is 28 &mdash; 72 spare</td><td>Read through the proxy</td></tr>
+        <tr><td>Request timeout</td><td>3600 s, both services</td><td>Sockets survive an hour</td><td>Fixed 30 Aug; was 300 s</td></tr>
+        <tr><td>Redis</td><td>Basic tier, 1 GB</td><td>No failover; realtime dies with it</td><td>Instance description</td></tr>
+        <tr><td>Cloud SQL zone</td><td>ZONAL</td><td>No HA; restore rehearsed at ~25 min</td><td>Drill, 27 Aug</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <h3>Every ceiling here is computed, not measured</h3>
+    <p>These follow from configuration that was read correctly, but no load has been driven against this
+    system to confirm the arithmetic survives contact with real traffic. Treat them as upper bounds on
+    optimism until the load test runs.</p>
+  </div>
+</section>
+
+<footer>
+  <p>Internal reference — not published. Regenerate the figures from the deployed system rather than editing
+  numbers by hand; a diagram that disagrees with production is worse than no diagram. Companion documents:
+  <code>DEPLOY.md</code>, <code>SECURITY-REVIEW.md</code>, <code>SPEC.md</code>, and <code>board.html</code>
+  for live task state.</p>
+</footer>
+
+</div>
+</body>
+</html>
