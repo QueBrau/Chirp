@@ -215,6 +215,19 @@ jobs:
         # gets re-reviewed instead of under-claiming forever.
         run: npm run verify:e2ee-claims
 
+      - name: Auth, invites and message pagination
+        working-directory: app-mobile
+        # Board card c266. These three guards existed long before the convention
+        # of landing a guard WITH its CI step, so the three OLDEST were the three
+        # least protected - the opposite of what anyone would assume. They were
+        # reachable only when a human remembered to type the command, which is the
+        # exact failure the c246 note above already spells out. All three passed
+        # when this step was added, so it closes a rot window rather than a bug.
+        run: |
+          npm run verify:auth
+          npm run verify:invites
+          npm run verify:messages-pagination
+
   web:
     # Board card c113. web/ is the PUBLIC MARKETING SITE and it had no gate at
     # all, so a break merged silently and surfaced at the next manual deploy.

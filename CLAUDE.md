@@ -88,9 +88,29 @@ see what is going on. Update it at EVERY step, not just at the end of a task:
   the binary is stripped, so `strings`/`nm` find nothing, but every pod ships a
   resource bundle - `ls <sim-container>/chirp.app | grep RNCAsyncStorage` settles it
   in one command. Booted simulators hold builds of DIFFERENT ages, so take the
-  newest-dated .app across ALL of them, not the first sim that boots. Rebuilding
-  locally is not possible on this Mac (no CocoaPods, and Xcode 15.3 is below what
-  Expo SDK 54 / RN 0.81 with newArchEnabled needs): cut a cloud build with the
+  newest-dated .app across ALL of them, not the first sim that boots.
+- **Local iOS builds still do NOT work on this Mac, but the REASON changed (c267,
+  Aug 31) - and the old reason in this file was wrong.** It used to say "no
+  CocoaPods, and Xcode 15.3 is below what Expo SDK 54 / RN 0.81 with newArchEnabled
+  needs". Both halves are now false: Xcode is 26.6 (build 17F113), CocoaPods 1.17.0
+  is installed, and `npx expo prebuild --platform ios` SUCCEEDS, producing
+  app-mobile/ios with chirp.xcworkspace and a populated Pods/. What actually fails is
+  the COMPILE, and it is one pod: @stripe/stripe-react-native 0.50.3 vs Xcode 26.6.
+  Its generated stripe_react_native-Swift.h forward-declares STPPaymentStatus as
+  NSInteger while the Stripe iOS SDK declares it NSUInteger, so clang aborts with
+  "enumeration redeclared with different underlying type" and xcodebuild exits 65.
+  Nothing else in the build failed. Do NOT re-derive this from scratch: prebuild
+  succeeding makes it look like the toolchain is fine right up until the Stripe pod.
+- Two consequences worth knowing before planning around it. A SIMULATOR build needs
+  no code signing, so it is NOT blocked by Apple Developer enrollment - the enrollment
+  gate and this build gate are separate problems, and fixing one does not touch the
+  other. And src/api/client.ts defaults to the PROD api, so any local build talks to
+  production unless EXPO_PUBLIC_API_URL says otherwise; eas.json's EXPO_PUBLIC_WS_URL
+  is EAS-only and does NOT reach a local build, so a local client will not exercise
+  chirp-ws unless it is set in the environment.
+- ios/ is generated output and is gitignored - never commit it, and re-running
+  prebuild resets anything hand-edited in Xcode, including the signing team.
+- For a DEVICE build, or to reproduce what EAS ships: cut a cloud build with the
   `development-simulator` profile in app-mobile/eas.json (`npx eas-cli`, logged in
   as quebrau).
 
