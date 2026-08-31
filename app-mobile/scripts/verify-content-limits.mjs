@@ -36,7 +36,24 @@ const KNOWN_UNMIRRORED = {
   MAX_URL_LENGTH:
     "validate_public_url's cap on stored profile/job URLs, not a composer body - " +
     "no character counter applies to it",
+  MAX_MESSAGE_PLAINTEXT_LENGTH:
+    "DEFERRED, NOT EXEMPT (c252 landed this after c251 was scoped). The message " +
+    "composer genuinely should get a counter; the messaging lane was explicitly " +
+    "held back from c251 while this ceiling was still being decided, so wiring one " +
+    "now would be building on a number that had not settled. This entry is the " +
+    "record of that deferral - delete it and mirror the constant when the message " +
+    "composer is picked up, rather than treating it as a permanent exemption.",
 };
+
+/**
+ * Note on what this extraction does NOT see: the pattern matches numeric literals
+ * only, so a cap DERIVED from another (MAX_FORWARDED_PLAINTEXT_LENGTH is literally
+ * `= MAX_MESSAGE_PLAINTEXT_LENGTH`) is skipped rather than checked. That is sound
+ * today - a derived cap cannot drift away from its source, which is the whole point
+ * of deriving it - but if one is ever given its own literal it starts being checked
+ * from that moment, and would fail here until a decision is recorded. Stated so the
+ * skipped constant is not mistaken for a covered one.
+ */
 
 const readNumbers = (url, pattern, label) => {
   const source = readFileSync(url, "utf8");
