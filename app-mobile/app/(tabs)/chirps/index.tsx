@@ -27,8 +27,9 @@ import { useRouter } from "expo-router";
 import { createReport, blockChirpAuthor } from "@/api/moderation";
 import { createChirp, listChirps, voteChirp, type ChirpFeedOut, type ChirpVoteValue } from "@/api/chirps";
 import { useCampus, useCampusAccess, useSession } from "@/auth";
-import { AppText, EmptyState, Screen, VotePill } from "@/components";
+import { AppText, CharCounter, EmptyState, Screen, VotePill } from "@/components";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
+import { isOverLimit, MAX_CHIRP_BODY_LENGTH } from "@/lib/contentLimits";
 import {
   campusNightWash,
   elevation,
@@ -222,7 +223,10 @@ export default function ChirpScreen() {
 
   // §10 rule 6: the single highest score on the board is the "notable number" that gets gold.
   const topScore = (chirps ?? []).reduce((max, y) => Math.max(max, y.score), -Infinity);
-  const canCompose = composerText.trim().length > 0 && !posting;
+  const canCompose =
+    composerText.trim().length > 0 &&
+    !isOverLimit(composerText, MAX_CHIRP_BODY_LENGTH) &&
+    !posting;
 
   return (
     <Screen backgroundColor={canvas} scroll>
@@ -353,7 +357,10 @@ export default function ChirpScreen() {
                 color: light.ink,
               }}
             />
-            <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
+            <View
+              style={{ flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: spacing.sm }}
+            >
+              <CharCounter value={composerText} limit={MAX_CHIRP_BODY_LENGTH} />
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Post"

@@ -14,6 +14,7 @@ export {
   type CategoryDonutProps,
   type ProgressMeterProps,
 } from "./charts";
+export { CharCounter, type CharCounterProps } from "./CharCounter";
 export { Chip, type ChipProps, type ChipVariant } from "./Chip";
 export { CommentsSheet, type CommentsSheetProps } from "./CommentsSheet";
 export { CreateEventSheet, type CreateEventInput, type CreateEventSheetProps } from "./CreateEventSheet";

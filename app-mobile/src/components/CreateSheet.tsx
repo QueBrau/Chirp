@@ -45,9 +45,11 @@ import {
   type AllowedMediaContentType,
 } from "@/api/media";
 import { showAlert, showApiError } from "@/lib/alert";
+import { isOverLimit, MAX_POST_BODY_LENGTH } from "@/lib/contentLimits";
 import { inputField, light, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
+import { CharCounter } from "./CharCounter";
 import { Badge } from "./Badge";
 import { Button } from "./Button";
 import { ListRow } from "./ListRow";
@@ -225,7 +227,10 @@ export function CreateSheet({
   // Somewhere to post is either a chapter or a campus; without both there is no
   // route at all, and Fab already declines to render in that case.
   const canSubmit =
-    body.trim().length > 0 && (chapterId !== null || campusId !== null) && !posting;
+    body.trim().length > 0 &&
+    !isOverLimit(body, MAX_POST_BODY_LENGTH) &&
+    (chapterId !== null || campusId !== null) &&
+    !posting;
 
   /**
    * Pick a photo from the library, then request+upload in the same tap — the user
@@ -540,6 +545,9 @@ export function CreateSheet({
                 ) : null}
               </View>
 
+              <View style={{ alignItems: "flex-end" }}>
+                <CharCounter value={body} limit={MAX_POST_BODY_LENGTH} />
+              </View>
               <Button
                 label={posting ? "Posting..." : "Post"}
                 onPress={() => void submit()}
