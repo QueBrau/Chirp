@@ -2733,7 +2733,7 @@
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c263 IN PROGRESS (renumbered - collided with Q claiming c261 in the same minutes; branchless card yields again) Aug 30 (chirps-ad) - INDEPENDENT ABUSE SWEEP, READ-ONLY. The c242-c245 wave was reactive to one explorer's findings; nobody has done an independent pass over the write paths since. Scope: every authenticated write endpoint, asked the c243 questions - who can call this, against whom, what does a block/suspension/expiry actually stop, what does the response leak, what can be minted in a loop. Deliverable: findings carded with file:line evidence, or a documented clean bill per router. READ-ONLY BY DESIGN: zero collision with c259's router edits - no branch, no code, findings become cards. Explicitly out of scope: money paths (adversarial ritual owns those), rate limiting (c259 in flight), list caps (c258 queued).",
+      "title": "c263 SWEEP PASS 1 DONE Aug 30 (chirps-ad, read-only) - ONE REAL FINDING (-> c264/c265) + CLEAN BILLS, manager spot-verified the finding at every cited line. FINDING: uncapped caller-supplied LISTS in request bodies - one permitted call inserts one row per element, no ceiling. Falls BETWEEN c259 (bounds call frequency, not rows-per-call) and c258 (response pagination). The convention already exists (meetings 500, member_user_ids 256, poll options) - five sites missed it. CLEAN BILLS, read not pattern-matched: all 68 write endpoints authenticated (bootstrap + stripe webhook by design); suspension enforced centrally; c242 class closed (no gate reads account_type); IDOR clean (nested writes scope child to path parent, attendance validates active members per c151); c109 comment counts agree with block-filtered lists; receipts/RSVP properly gated. METHOD NOTES worth keeping: single-line decorator regex missed every multi-line @router.post( (63 of 68 - caught because messages.py showing one write route contradicted CONVENTIONS.md); three Depends(_require_any_eboard) routes nearly reported as no-auth false criticals - read before reporting. NOT YET SWEPT, labeled: timing leaks beyond by-chirp, chirps/house/media detail, money (out of scope). Sweep pauses here - c264 fix first, then c258 on c259's merge.",
       "detail": ""
     },
     {
@@ -2743,6 +2743,24 @@
       "tag": "",
       "area": "",
       "title": "c262 [QUEUED - first free session] OPS DOCS ARE A DAY BEHIND A BIG DAY. DEPLOY.md still carries at least one stale claim (the 313-323 media-bucket passage contradicted by the verified-private bucket) and does NOT document --timeout=3600, which any future deploy must carry or sockets revert to the 300s kill (c247). HANDOFF.md predates today's ~20 merges, two deploy windows, migration 0029, and ARCHITECTURE.html. Job: sweep both files against live state the way c241 did email docs - correct, do not delete history; every claim verifiable against prod or the board. The c249 paste-trap lesson applies: fix wrong commands AT the paste point.",
+      "detail": ""
+    },
+    {
+      "id": "c264",
+      "col": "progress",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c264 IN PROGRESS Aug 30 (chirps-ad) - CAP THE FIVE UNCAPPED REQUEST-BODY LISTS (c263 finding, manager-verified): schemas/e2ee.py one_time_prekeys + kyber_one_time on BOTH DeviceCreate and PrekeyUpload (drive session.add_all at keys.py:149/163/198/218), schemas/events.py:164 user_ids on event invites (pg_insert per element at events.py:392). Fix shape: Field(max_length=N) per the existing house convention (meetings 500 / members 256 / poll options), each N reasoned in a comment against the real use - a prekey top-up batch and a full-roster invite must fit comfortably. Both-ways proof per cap: oversized payload 422s, realistic batch clean. Falsify before keeping (stash schemas, watch tests fail). NOT E2EE feature work - these endpoints are LIVE surface today; hardening them is not touched by the E2EE park. EXCLUDES finance.py installments -> c265, money lane.",
+      "detail": ""
+    },
+    {
+      "id": "c265",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c265 [MANAGER-OWNED - MONEY LANE] Cap DuesPlanCreate.installments (schemas/finance.py:126, min_length=1 no max). Manager analysis: treasurer-gated and the route 422s unless installments sum exactly to the cycle amount - which bounds VALUE, not COUNT: a $325 cycle legally accepts 32,500 one-cent installments, one row each. Realistic plans are 2-12 payments; max_length=36 (3 years monthly) is generous headroom. Money file, so this follows the ritual: manager writes it, line-level + adversarial pass before merge, invariants untouched (the cap is upstream of all ledger logic). Queued behind the c259 review.",
       "detail": ""
     }
   ],
