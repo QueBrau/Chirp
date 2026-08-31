@@ -159,7 +159,18 @@ def _git(*args):
 
 
 BRANCH_ID = re.compile(r"(?:^|/)(c\d+)[-_]")
-SUBJECT_IDS = re.compile(r"\bc\d+\b")
+# Failure mode 6, Aug 30. The digit bound is NOT cosmetic. `\bc\d+\b` also matches
+# an abbreviated git SHA that happens to be "c" followed by digits - c157514 was a
+# real squash sha, written into a board commit subject as evidence exactly the way
+# this project asks for, and it read as a claim on card id "c157514". That FAILED
+# THE CHECK FOR EVERY SESSION on main, and it could not be undone by rewriting the
+# subject: another session had already pushed on top, and force-pushing a shared
+# main is worse than the bug. Card ids are c1..c999 today; a short sha is 7+ chars,
+# so "c" + at least 6 digits. Bounding to 4 digits keeps every real claim (verified
+# against this repo's full history) with headroom to c9999, and can no longer match
+# a sha of that shape. Put the sha in the commit BODY, which is deliberately not
+# scanned - see the note above.
+SUBJECT_IDS = re.compile(r"\bc\d{1,4}\b")
 
 # An abbreviated git SHA that happens to start with 'c' and continue with only
 # digits matches SUBJECT_IDS exactly - it already happened: a board commit
