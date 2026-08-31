@@ -15,6 +15,7 @@ from app.core.analytics import emit
 from app.core.blocks import blockers_of
 from app.core.campus_access import is_campus_verified
 from app.core.errors import forbidden, not_found
+from app.core.rate_limits import MESSAGE_SEND_LIMIT, limit_per_user
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.schemas.messaging import (
@@ -235,6 +236,7 @@ async def list_conversations(
     "/conversations/{conversation_id}/messages",
     response_model=MessageOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(limit_per_user("message_send", MESSAGE_SEND_LIMIT))],
 )
 async def send_message(
     conversation_id: uuid.UUID,
