@@ -2630,20 +2630,20 @@
     },
     {
       "id": "c251",
-      "col": "backlog",
+      "col": "progress",
       "owner": "pool",
       "tag": "frontend",
       "area": "mobile",
-      "title": "c251 MOBILE COMPOSERS DO NOT ENFORCE THE c245 BODY CAPS. The backend now 422s an over-length body (chirp 2000, post 10000, comment 2000, moderation reason 1000 - app/core/validation.py, merged 7692a9d), but no composer in app-mobile counts characters or disables send, so a student who pastes something long writes the WHOLE thing and only then gets a generic failure with nothing telling them what to cut. That is the exact shape of a bug report that reads as 'the app ate my post'. Wants a character counter plus a disabled send on the post composer (CreateSheet), the comment composer (CommentsSheet), the chirp composer, and the moderation reason inputs.",
+      "title": "c251 RENDER PASS PENDING Aug 30 (chirps-ad) - PR #164 built, CI 4/4, HELD from merge until the visual pass, per the worker's own recommendation. THE LIST IS THREE COMPOSERS, NOT FOUR - confirmed from code, not the card: chirp 2000 (chirps/index), post 10000 (CreateSheet, covers campus too), comment 2000 (CommentsSheet). NO moderation reason field exists on mobile - every reason is a preset (longest reachable string is 26 chars), so a counter there would be UI for an unreachable state. CharCounter: hidden until the last tenth, counts DOWN, warning then danger tone, tabular numerals, NEVER truncates - over-limit is shown as negative and only send refuses. verify-content-limits.mjs wired as the fifth mobile CI step: extracts the real constants from core/validation.py (extraction failure is LOUD, not a pass on an empty set), and EXECUTES the shared helpers to pin boundary semantics - exactly-at-limit legal, one past not, trim() before counting - against the backend's own boundary tests. Proven red in real CI on a throwaway branch, six sabotage modes. Remaining: Expo web pass on 8082, all three composers, both themes, screenshots.",
       "detail": "Filed by the backend session that built c245, which found the gap while capping the server side; app-mobile is not that session's lane so it is written up rather than built. The caps themselves are live and correct - this is purely the missing client-side half. IMPORTANT: the numbers must be read from the API contract rather than retyped as literals in the app, or the two drift apart the first time a cap moves. Low risk, high polish value."
     },
     {
       "id": "c252",
-      "col": "progress",
+      "col": "done",
       "owner": "pool",
       "tag": "security",
       "area": "messages",
-      "title": "c252 IN PROGRESS - cap MessageCreate.ciphertext_b64 (schemas/messaging.py) and ContentReportCreate.forwarded_plaintext (schemas/chirp.py), the two user-supplied bodies c245 deliberately left unbounded. Taken as ONE card because their ceilings are related: both carry message content, so forwarded_plaintext derives from the same intended plaintext ceiling rather than being picked independently. Ciphertext is NOT prose and must not be sized by analogy to the 2000-char post cap - base64 costs ~4 bytes per 3 and the encryption layer adds nonce/tag/padding before encoding, so the cap is a function of the largest plaintext message we intend to allow, expanded twice. c243 is merged AND deployed, so the messaging fence is down. Branch court/c252-message-caps.",
+      "title": "c252 DONE Aug 30 - MERGED f9af2b7 (PR #166, CI 4/4, suite 753/5/0). ONE plaintext ceiling drives everything: MAX_MESSAGE_PLAINTEXT_LENGTH=10000 (equal to the post cap - pasting a long post into a DM is ordinary), forwarded_plaintext inherits it, ciphertext_b64 = that plaintext expanded twice (UTF-8 worst case 40000 + Signal framing ~256 = 40256 -> base64 53676) rounded to 65536 with ~22% headroom - ~650x tighter than the 32MB it replaces. A no-DB test EXECUTES the arithmetic so moving the plaintext ceiling without redoing the expansion fails loudly. WORKER'S FALSIFICATION CAUGHT A REAL DEFECT IN THEIR OWN TESTS: the over-limit payload 'A'*(cap+1) is not a multiple of 4, so the base64 DECODER 422'd it and the test passed with or without a cap - a cap with no test behind it, exposed only by stashing the schemas. Replaced with valid base64 four chars over, asserting the 422 is NOT the decoder's. MessageOut deliberately uncapped and PINNED BY TEST: prod has accepted unbounded ciphertext since messaging shipped, so a response-shape cap would 500 an entire conversation history on one legacy row - proven by inserting a row at 2x cap and reading history back. Sizes derived from the intended protocol, not measured - signal.ts is still a stub (c254); re-check when real ciphertext first flows.",
       "detail": "Follow-on from c245 (merged 7692a9d), which capped the ten prose bodies and left these two alone on purpose - deriving forwarded_plaintext separately would have been a guess. Same discipline as c245: constants in app/core/validation.py beside MAX_URL_LENGTH, REQUEST schemas only and never the *Out shapes (a row written before the cap must still read back without a 500), new tests FALSIFIED against the uncapped schema before being kept, and a realistically long real message proven to still send. If capping ciphertext would require RELAXING an existing messaging test, stop and ask - that means the cap is wrong, not the test."
     },
     {
@@ -2662,6 +2662,24 @@
       "tag": "",
       "area": "",
       "title": "c254 [LAUNCH TRAP - FALSE SECURITY CLAIM IF THE COMPOSER IS EVER ENABLED] The messaging UI TELLS USERS IT IS ENCRYPTED AND IT IS NOT. app-mobile/app/(tabs)/messages/index.tsx:79 sets the screen subtitle to 'End-to-end encrypted' and [id].tsx:124 renders 'Direct message / Group - encrypted'. There is NO encryption: src/crypto/signal.ts is a 58-line typed stub whose every function throws TODO(milestone-3): libsignal, and it has ZERO callers anywhere in app-mobile. NOT CURRENTLY EXPLOITABLE - the composer is disabled ([id].tsx:179, accessibilityState disabled), so nothing can be sent and no plaintext reaches the server today. That is the ONLY reason this is not already a live incident. THE TRAP: the moment anyone enables that composer before libsignal lands, ciphertext_b64 carries base64'd PLAINTEXT to a server that stores it verbatim, while the screen keeps telling the student it is end-to-end encrypted. A false security claim to real students about real messages. CREDIT WHERE DUE: signal.ts throws instead of fake-encrypting, and says why - 'a stub that encrypts would be worse than one that throws'. The stub is right. The UI copy is what is wrong. FIX (small, do before alpha): change the copy to something true - 'Coming soon' or a disabled-state explanation - and add a guard/test that fails if the composer is enabled while signal.ts still throws, so the copy and the crypto cannot diverge. SERVER SIDE IS GENUINELY READY: ciphertext stored as opaque bytes and never parsed, prekey tables present (devices, signed_prekeys, one_time_prekeys, kyber_prekeys - a post-quantum Signal shape). The gap is entirely client crypto (c7/c23/c36).",
+      "detail": ""
+    },
+    {
+      "id": "c255",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c255 [LOW, DEAD CODE] updatePost in app-mobile/src/api/ has ZERO callers - PostUpdate.body got a server-side cap in c245 but no client code ever PATCHes a post. Same shape as c125's listChapters. Either wire an edit-post UI to it someday or delete the client function; a capped endpoint nobody calls is fine, a dead client function invites misuse.",
+      "detail": ""
+    },
+    {
+      "id": "c256",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c256 [NOTE FOR WHOEVER BUILDS A REASON COMPOSER] MAX_REASON_LENGTH is carried by FIVE request schemas (ContentReportCreate, ChirpRemoveRequest, SuspendUserRequest, ContentRemoveRequest, ReportResolveRequest). Today mobile sends only presets (longest 26 chars), so no counter is needed (c251 finding). The day a free-text reason field ships, cap the COMPOSER against the same constant and extend verify-content-limits.mjs - capping one schema's UI would leave four.",
       "detail": ""
     }
   ],
