@@ -161,7 +161,15 @@ class EventInviteCreate(_Schema):
     one request per member would be N round trips and N chances to half-finish.
     """
 
-    user_ids: list[uuid.UUID] = Field(min_length=1)
+    # Bounded because the route writes one EventInvite row per id (routers/events.py's
+    # pg_insert): an unbounded list lets the caller decide how much work one request
+    # costs, and a rate limit caps call frequency rather than rows per call (c263/c264).
+    #
+    # The same 500 as MeetingAttendanceUpdate.entries, on purpose and not by coincidence:
+    # both take a whole chapter roster, so "far above any real roster and far below a
+    # payload that could tie up a connection" resolves to the same number. A second,
+    # bespoke ceiling for the same object would only be a second thing to keep in sync.
+    user_ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
 
 
 class EventInviteOut(_Schema):
