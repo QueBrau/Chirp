@@ -105,6 +105,28 @@ MESSAGE_SEND_LIMIT = (300, 600)
 # five reports in a sitting.
 REPORT_CREATE_LIMIT = (20, 3600)
 
+# Campus verification sends, keyed on the TARGET mailbox rather than the caller (c268).
+# The existing per-caller limit bounds one account's sends; it does nothing about N
+# accounts all aiming at ONE student's inbox. That is mailbox-bombing, and the cost does
+# not land on the attacker — it lands on the shared Resend quota (c240: the free tier is
+# 100/DAY, not 3,000/month), so an unbounded campaign against one victim degrades
+# verification for EVERY user.
+#
+# THE NUMBER HAS A FLOOR IT MUST CLEAR, which is what makes it awkward rather than
+# arbitrary: the per-caller limit already permits 3 sends per 15 minutes, i.e. up to 12
+# an hour from ONE legitimate owner re-requesting their own code. A per-target ceiling
+# below that would fire on a single frustrated student whose mail is slow — the exact
+# failure this project keeps refusing to ship. 30 a day sits well clear of any real
+# owner (a student chasing a missing code manages maybe 10-15 before giving up) while
+# capping one victim's share of the daily quota at roughly a third.
+#
+# THE TRADE-OFF, said plainly rather than discovered later: a per-target cap is itself a
+# denial vector — an attacker who burns a victim's 30 stops that student verifying until
+# the window rolls. That is a worse day for one person and a better day for everyone
+# else, because the alternative lets one campaign exhaust the quota for the whole
+# product. If c240 raises the Resend ceiling, this can rise with it.
+CAMPUS_VERIFY_TARGET_LIMIT = (30, 86_400)
+
 
 def _client_ip(request: Request) -> str:
     """Best available client address for an unauthenticated caller.
@@ -128,12 +150,31 @@ def _client_ip(request: Request) -> str:
     return client.host if client else "unknown"
 
 
-async def _enforce(scope: str, subject: str, limit: tuple[int, int]) -> None:
+async def enforce_limit(
+    scope: str, subject: str, limit: tuple[int, int], *, detail: str | None = None
+) -> None:
+    """Consume one unit of `subject`'s budget for `scope`, or raise 429.
+
+    The dependencies below are the usual way in, but this is public because not every
+    limit belongs on a route: services/campus_verification.py limits on the TARGET
+    mailbox (c268), which is a value the handler has not resolved yet at dependency
+    time. Such callers use this rather than reaching for rate_limit.allow directly, so
+    the key shape, the window handling and the 429 body stay in one place.
+
+    `detail` overrides the default `<scope>_rate_limited` body. Two reasons it exists:
+    an endpoint that predates this module keeps the string its clients already handle,
+    and two limits guarding one endpoint can deliberately answer IDENTICALLY where
+    telling them apart would leak something (see the campus-verification pair).
+
+    NOTE that this INCREMENTS: a call that raises has already spent a unit, and a
+    caller checking two limits should order them so the cheaper-to-lose budget is
+    consumed second.
+    """
     max_calls, window_seconds = limit
     if not await allow(
         f"{scope}:{subject}", max_calls=max_calls, window_seconds=window_seconds
     ):
-        raise too_many_requests(f"{scope}_rate_limited")
+        raise too_many_requests(detail or f"{scope}_rate_limited")
 
 
 def limit_per_user(
@@ -153,7 +194,7 @@ def limit_per_user(
     """
 
     async def _check(uid: str = Depends(get_verified_uid)) -> None:
-        await _enforce(scope, uid, limit)
+        await enforce_limit(scope, uid, limit)
 
     return _check
 
@@ -166,6 +207,6 @@ def limit_per_ip(scope: str, limit: tuple[int, int]) -> Callable[..., Awaitable[
     """
 
     async def _check(request: Request) -> None:
-        await _enforce(scope, _client_ip(request), limit)
+        await enforce_limit(scope, _client_ip(request), limit)
 
     return _check

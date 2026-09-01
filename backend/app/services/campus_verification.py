@@ -32,7 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.errors import forbidden, not_found, too_many_requests
-from app.services import email_service, rate_limit
+from app.core.rate_limits import CAMPUS_VERIFY_TARGET_LIMIT, enforce_limit
+from app.services import email_service
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,13 @@ CODE_TTL = timedelta(minutes=15)
 MAX_ATTEMPTS = 5
 
 # A student mistyping their address should be able to retry; a script should not be able
-# to mail an inbox repeatedly. Keyed per user, not per address, so switching the address
+# to mail an inbox repeatedly. Keyed per USER, not per address, so switching the address
 # does not reset the budget.
+#
+# This bounds one account. It says nothing about N accounts aiming at one inbox, which is
+# why start_verification also checks CAMPUS_VERIFY_TARGET_LIMIT against the target
+# mailbox (c268) — the two limits answer different questions and neither substitutes for
+# the other.
 SEND_MAX_PER_WINDOW = 3
 SEND_WINDOW_SECONDS = 15 * 60
 
@@ -65,6 +71,32 @@ def _generate_code() -> str:
     that gates access.
     """
     return f"{secrets.randbelow(10**CODE_DIGITS):0{CODE_DIGITS}d}"
+
+
+def _mailbox_key(address: str) -> str:
+    """The rate-limit subject for a target address: the MAILBOX it actually reaches.
+
+    Plus-addressing is the obvious way around a per-target limit — victim+1@uncg.edu
+    and victim+2@uncg.edu are two different strings that land in one inbox, so keying on
+    the address as given would let a bombing campaign mint unlimited fresh budgets
+    against the same student. Essentially every .edu runs on Google Workspace or M365,
+    where +tags are aliases, so the tag is stripped for the KEY only.
+
+    Case is folded here TOO, not only in normalize_email. Today every caller passes an
+    already-normalized address so the lower() is redundant — but redundant is the point:
+    Jose@uncg.edu and jose@uncg.edu splitting into two budgets is the same bypass as
+    plus-addressing one rung down, and the only thing preventing it was a caller
+    remembering to normalize first. A second caller that forgets would reopen the hole
+    silently. Cheaper to make the key self-sufficient than to rely on that.
+
+    Key only: the address that is mailed and stored on the verification row is still
+    exactly what the student typed, because that is the address they have to be able to
+    receive at. At an institution that treats + as a literal character this merges two
+    real mailboxes onto one generous shared budget, which is a far better failure than
+    handing an attacker an unlimited supply of them.
+    """
+    local, _, domain = address.strip().lower().partition("@")
+    return f"{local.partition('+')[0]}@{domain}"
 
 
 def normalize_email(raw: str) -> tuple[str, str]:
@@ -101,12 +133,27 @@ async def start_verification(
     address, domain = normalize_email(raw_email)
     campus = await resolve_campus(session, domain)
 
-    if not await rate_limit.allow(
-        f"campus_verify_send:{user.id}",
-        max_calls=SEND_MAX_PER_WINDOW,
-        window_seconds=SEND_WINDOW_SECONDS,
-    ):
-        raise too_many_requests("verification_rate_limited")
+    # TWO limits guard this send, and they answer with the SAME detail on purpose.
+    #
+    # Per caller first: someone already over their own budget must not spend the
+    # target's as well, or one blocked spammer could still burn down a victim's
+    # ability to receive their own code (enforce_limit increments even when it raises).
+    await enforce_limit(
+        "campus_verify_send",
+        str(user.id),
+        (SEND_MAX_PER_WINDOW, SEND_WINDOW_SECONDS),
+        detail="verification_rate_limited",
+    )
+    # Then per target mailbox (c268): the per-caller key bounds one account, not N
+    # accounts converging on ONE student's inbox. The reply is deliberately identical
+    # to the per-caller refusal — a distinct body would tell any stranger that someone
+    # else has been mailing that address, which is not theirs to learn.
+    await enforce_limit(
+        "campus_verify_target",
+        _mailbox_key(address),
+        CAMPUS_VERIFY_TARGET_LIMIT,
+        detail="verification_rate_limited",
+    )
 
     # Any earlier pending code for this user is retired first, so "resend" cannot leave
     # two live codes and double an attacker's guessing budget.
