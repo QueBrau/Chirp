@@ -796,7 +796,7 @@
     {
       "id": "c36",
       "col": "backlog",
-      "title": "[PARKED Aug 30, Jose: 'lets wait on e2ee have to talk to q about it' - no E2EE work starts, incl. the AGPL decision, until Jose+Q have talked. c254's guard keeps the UI honest meanwhile.] m4 E2EE \u2014 CARD IS 2/3 STALE, re-scoped Aug 16",
+      "title": "[PARKED Aug 30; LICENSING RULED Sep 1, Jose: 'we dont want this to be open source its a private app we are building for revenue' - AGPL REJECTED, so @signalapp/libsignal-client is EXCLUDED (Signal offers no commercial license; the AGPL is deliberate). The c23 spike target changes to a proprietary-compatible stack - leading candidates vodozemac (Apache-2.0, same Double-Ratchet family, prekey tables map closely) or mls-rs (Apache-2.0, IETF MLS, stronger groups, needs schema rework); Kyber tables idle under vodozemac for now. VERIFY EXACT LICENSES as spike step zero. Work still starts only after the Jose+Q talk - the remaining question there is TIMING, the license half is settled.] m4 E2EE \u2014 CARD IS 2/3 STALE, re-scoped Aug 16",
       "owner": "Q",
       "tag": "vert:social-msg",
       "area": "messages",
@@ -868,7 +868,7 @@
     {
       "id": "c23",
       "col": "backlog",
-      "title": "[PARKED Aug 30, Jose: 'lets wait on e2ee have to talk to q about it' - no E2EE work starts, incl. the AGPL decision, until Jose+Q have talked. c254's guard keeps the UI honest meanwhile.] libsignal on two PHYSICAL devices via EAS dev build",
+      "title": "[PARKED Aug 30; LICENSING RULED Sep 1, Jose: 'we dont want this to be open source its a private app we are building for revenue' - AGPL REJECTED, so @signalapp/libsignal-client is EXCLUDED (Signal offers no commercial license; the AGPL is deliberate). The c23 spike target changes to a proprietary-compatible stack - leading candidates vodozemac (Apache-2.0, same Double-Ratchet family, prekey tables map closely) or mls-rs (Apache-2.0, IETF MLS, stronger groups, needs schema rework); Kyber tables idle under vodozemac for now. VERIFY EXACT LICENSES as spike step zero. Work still starts only after the Jose+Q talk - the remaining question there is TIMING, the license half is settled.] libsignal on two PHYSICAL devices via EAS dev build",
       "owner": "",
       "tag": "m3",
       "area": "messages",
@@ -904,7 +904,7 @@
     {
       "id": "c7",
       "col": "backlog",
-      "title": "[PARKED Aug 30, Jose: 'lets wait on e2ee have to talk to q about it' - no E2EE work starts, incl. the AGPL decision, until Jose+Q have talked. c254's guard keeps the UI honest meanwhile.] E2EE DMs + groups + sender-key rotation + offline queue +",
+      "title": "[PARKED Aug 30; LICENSING RULED Sep 1, Jose: 'we dont want this to be open source its a private app we are building for revenue' - AGPL REJECTED, so @signalapp/libsignal-client is EXCLUDED (Signal offers no commercial license; the AGPL is deliberate). The c23 spike target changes to a proprietary-compatible stack - leading candidates vodozemac (Apache-2.0, same Double-Ratchet family, prekey tables map closely) or mls-rs (Apache-2.0, IETF MLS, stronger groups, needs schema rework); Kyber tables idle under vodozemac for now. VERIFY EXACT LICENSES as spike step zero. Work still starts only after the Jose+Q talk - the remaining question there is TIMING, the license half is settled.] E2EE DMs + groups + sender-key rotation + offline queue +",
       "owner": "",
       "tag": "m4",
       "area": "messages",
@@ -994,7 +994,7 @@
     {
       "id": "c14",
       "col": "backlog",
-      "title": "[PARKED Aug 30, Jose: 'lets wait on e2ee have to talk to q about it' - no E2EE work starts, incl. the AGPL decision, until Jose+Q have talked. c254's guard keeps the UI honest meanwhile.] Encrypted backups / new-phone history",
+      "title": "[PARKED Aug 30; LICENSING RULED Sep 1, Jose: 'we dont want this to be open source its a private app we are building for revenue' - AGPL REJECTED, so @signalapp/libsignal-client is EXCLUDED (Signal offers no commercial license; the AGPL is deliberate). The c23 spike target changes to a proprietary-compatible stack - leading candidates vodozemac (Apache-2.0, same Double-Ratchet family, prekey tables map closely) or mls-rs (Apache-2.0, IETF MLS, stronger groups, needs schema rework); Kyber tables idle under vodozemac for now. VERIFY EXACT LICENSES as spike step zero. Work still starts only after the Jose+Q talk - the remaining question there is TIMING, the license half is settled.] Encrypted backups / new-phone history",
       "owner": "",
       "tag": "m11",
       "area": "messages",
@@ -2806,6 +2806,15 @@
       "tag": "",
       "area": "",
       "title": "c270 [QUEUED - chirps-7b after the c226 harness] SECURITY SWEEP PASS 2, read-only - the scope c263 honestly labeled unswept: response/timing leaks beyond the by-chirp constant-latency precedent, and the chirps/house/media write paths in detail. c263's method rules carry over: read before reporting (two near-false-criticals last pass came from heuristics - multi-line decorators, Depends(_require_any_eboard)), findings become cards with file:line evidence, a clean bill per router is a deliverable, MONEY PATHS EXCLUDED. Manager note: chirps-7b claims its own ids from board-check on takeup.",
+      "detail": ""
+    },
+    {
+      "id": "c271",
+      "col": "done",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c271 DECISION Sep 1 (Jose) - CHIRP STAYS PROPRIETARY; AGPL rejected: 'we dont want this to be open source its a private app we are building for revenue'. Consequences: libsignal excluded from the E2EE plan permanently (no commercial license exists); the long-standing 'AGPL when E2EE starts' pending item is RESOLVED as rejected; any future dependency review must screen for AGPL/SSPL-class licenses BEFORE a spike builds on one - this decision was nearly made for us by a library choice. Backend prekey directory survives the swap (maps to vodozemac's identity/fallback/one-time key model). E2EE work overall remains parked pending the Jose+Q talk, which now only needs to settle timing.",
       "detail": ""
     }
   ],
