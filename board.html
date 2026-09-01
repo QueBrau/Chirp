@@ -2738,11 +2738,11 @@
     },
     {
       "id": "c262",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "Q",
       "tag": "",
-      "area": "",
-      "title": "c262 [QUEUED - first free session] OPS DOCS ARE A DAY BEHIND A BIG DAY. DEPLOY.md still carries at least one stale claim (the 313-323 media-bucket passage contradicted by the verified-private bucket) and does NOT document --timeout=3600, which any future deploy must carry or sockets revert to the 300s kill (c247). HANDOFF.md predates today's ~20 merges, two deploy windows, migration 0029, and ARCHITECTURE.html. Job: sweep both files against live state the way c241 did email docs - correct, do not delete history; every claim verifiable against prod or the board. The c249 paste-trap lesson applies: fix wrong commands AT the paste point.",
+      "area": "infra",
+      "title": "c262 IN PROGRESS Sep 1 (Q lane, Sonnet worker, branch q/c262-ops-docs) - ops-docs sweep of DEPLOY.md + HANDOFF.md against live state. Router pre-verified the three concrete targets so the worker is not re-deriving them: (1) DEPLOY.md:313-323 media-privacy gate still says chirps-prod-media 'intentionally remains publicly readable' and tells the reader NOT to remove the allUsers grant - false since c244 (bucket private, tmp/ auto-deleted at 1 day), so the file currently instructs an operator to preserve a hole that is already closed; (2) --timeout=3600 appears NOWHERE in DEPLOY.md's deploy commands (:165, :177, :236 - the only 'timeout' hit in the file is an unrelated --task-timeout=10m on the reconcile job at :379) even though c247 made it load-bearing on BOTH services, and c249's paste-trap rule says fix it AT the paste point, not in prose nearby; (3) HANDOFF.md's dated snapshot is Aug 28 (00038-br5 / 00003-zrp, alembic 0028, suite 664) against a live Sep 1 state of 00043-7ts / chirp-ws-00008, alembic 0029, suite 753+, and it predates ARCHITECTURE.html and deploy windows #2/#3. RULES: correct do not delete history (c241 shape - split into what is proven vs not proven); no new hardcoded numbers outside HANDOFF's explicitly-dated snapshot, which is the file's own stated exception; deploy-verify documented with --base-url per c250. OPS DOCS ONLY - no code, no board edits by the worker. ORIGINAL: c262 [QUEUED - first free session] OPS DOCS ARE A DAY BEHIND A BIG DAY. DEPLOY.md still carries at least one stale claim (the 313-323 media-bucket passage contradicted by the verified-private bucket) and does NOT document --timeout=3600, which any future deploy must carry or sockets revert to the 300s kill (c247). HANDOFF.md predates today's ~20 merges, two deploy windows, migration 0029, and ARCHITECTURE.html. Job: sweep both files against live state the way c241 did email docs - correct, do not delete history; every claim verifiable against prod or the board. The c249 paste-trap lesson applies: fix wrong commands AT the paste point.",
       "detail": ""
     },
     {
