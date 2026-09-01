@@ -2693,11 +2693,11 @@
     },
     {
       "id": "c258",
-      "col": "backlog",
+      "col": "progress",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c258 [QUEUED BEHIND c244 - chirps-ad next] UNBOUNDED LIST RESPONSES - the gap c245 flagged and left uncarded, surfaced again by chirps-23's independent read. Comments, alumni directory, jobs, members, invites, event guests, meetings, polls, ledger, lineage: all still return EVERYTHING with no cap or cursor. Same class as c127/c201/c210; a chapter with a year of history downloads its whole ledger on every open. House pattern: compound-cursor pagination (c201/c210). Each endpoint: cap + cursor, proven both ways (cap fires on an oversized seed; a realistic page reads clean), client updated where it consumes the list. SEQUENCED BEHIND c244 ON PURPOSE - same router files rate limiting is decorating; land c244, rebase, then build. Assignee confirms the endpoint list from the routers, not from this card.",
+      "title": "c258 IN PROGRESS Aug 31 (chirps-ad) - UNBOUNDED LIST RESPONSES, staged after their scope re-check found 18 bare-list endpoints + 2 wrapper shapes the card missed (event guests {invites,rsvps}, lineage {nodes,edges,families}). STAGING RULED: PR1 Bucket B cap-only (roster-bounded: memberships, role-terms, attendance-read - which cannot exceed c264's write cap - plans, members, invites) BUILDING NOW; PR2 Bucket A cursors screen-by-screen, comments FIRST then LEDGER (grows weekly from day one, money-adjacent read) then meetings/polls then alumni/jobs/moderation; Bucket C: lineage capped generously (truncated tree is VISIBLY wrong), event guests -> own card (wrapper reshape = contract change). HONEST FRAMING in every PR: at alpha scale nothing truncates - durability work, never blocks a launch-critical merge. Client paging exercised per screen like c251's render pass, else it is c246's dark-service shape again.",
       "detail": ""
     },
     {
@@ -2729,11 +2729,11 @@
     },
     {
       "id": "c263",
-      "col": "progress",
+      "col": "done",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c263 SWEEP PASS 1 DONE Aug 30 (chirps-ad, read-only) - ONE REAL FINDING (-> c264/c265) + CLEAN BILLS, manager spot-verified the finding at every cited line. FINDING: uncapped caller-supplied LISTS in request bodies - one permitted call inserts one row per element, no ceiling. Falls BETWEEN c259 (bounds call frequency, not rows-per-call) and c258 (response pagination). The convention already exists (meetings 500, member_user_ids 256, poll options) - five sites missed it. CLEAN BILLS, read not pattern-matched: all 68 write endpoints authenticated (bootstrap + stripe webhook by design); suspension enforced centrally; c242 class closed (no gate reads account_type); IDOR clean (nested writes scope child to path parent, attendance validates active members per c151); c109 comment counts agree with block-filtered lists; receipts/RSVP properly gated. METHOD NOTES worth keeping: single-line decorator regex missed every multi-line @router.post( (63 of 68 - caught because messages.py showing one write route contradicted CONVENTIONS.md); three Depends(_require_any_eboard) routes nearly reported as no-auth false criticals - read before reporting. NOT YET SWEPT, labeled: timing leaks beyond by-chirp, chirps/house/media detail, money (out of scope). Sweep pauses here - c264 fix first, then c258 on c259's merge.",
+      "title": "c263 DONE (pass 1; pass 2 unscheduled unless a gap opens) Aug 30 (chirps-ad, read-only) - ONE REAL FINDING (-> c264/c265) + CLEAN BILLS, manager spot-verified the finding at every cited line. FINDING: uncapped caller-supplied LISTS in request bodies - one permitted call inserts one row per element, no ceiling. Falls BETWEEN c259 (bounds call frequency, not rows-per-call) and c258 (response pagination). The convention already exists (meetings 500, member_user_ids 256, poll options) - five sites missed it. CLEAN BILLS, read not pattern-matched: all 68 write endpoints authenticated (bootstrap + stripe webhook by design); suspension enforced centrally; c242 class closed (no gate reads account_type); IDOR clean (nested writes scope child to path parent, attendance validates active members per c151); c109 comment counts agree with block-filtered lists; receipts/RSVP properly gated. METHOD NOTES worth keeping: single-line decorator regex missed every multi-line @router.post( (63 of 68 - caught because messages.py showing one write route contradicted CONVENTIONS.md); three Depends(_require_any_eboard) routes nearly reported as no-auth false criticals - read before reporting. NOT YET SWEPT, labeled: timing leaks beyond by-chirp, chirps/house/media detail, money (out of scope). Sweep pauses here - c264 fix first, then c258 on c259's merge.",
       "detail": ""
     },
     {
@@ -2756,11 +2756,11 @@
     },
     {
       "id": "c265",
-      "col": "backlog",
+      "col": "progress",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c265 [MANAGER-OWNED - MONEY LANE] Cap DuesPlanCreate.installments (schemas/finance.py:126, min_length=1 no max). Manager analysis: treasurer-gated and the route 422s unless installments sum exactly to the cycle amount - which bounds VALUE, not COUNT: a $325 cycle legally accepts 32,500 one-cent installments, one row each. Realistic plans are 2-12 payments; max_length=36 (3 years monthly) is generous headroom. Money file, so this follows the ritual: manager writes it, line-level + adversarial pass before merge, invariants untouched (the cap is upstream of all ledger logic). Queued behind the c259 review.",
+      "title": "c265 IN PROGRESS Aug 31 (MANAGER, money lane, branch court/c265-installments-cap) - MAX_PLAN_INSTALLMENTS=36 on DuesPlanCreate.installments. Sum rule bounds VALUE not COUNT ($325 cycle legally accepted 32,500 one-cent rows); 36 = 3yr monthly, installment_count needs no separate cap (route enforces count==len). Both-ways proven: 37-row payload with VALID sum+count 422s with too_long SHAPE (c264's lesson - only the cap can produce it), exactly-36 creates, plan tests 33/33. FALSIFIED: cap stripped -> over-limit red, restored -> green. Full suite under the lock running now; PR + adversarial pass + merge when green, rides window #3.",
       "detail": ""
     },
     {
