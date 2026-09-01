@@ -301,6 +301,30 @@ def migrated_db(database_url: str) -> str:
     return database_url
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limits() -> None:
+    """Clear the in-process rate-limit windows before every test (board c259).
+
+    app.services.rate_limit keeps its local fallback windows in a MODULE-GLOBAL dict,
+    and the suite runs with env == "local", so that fallback is the live limiter here.
+    Without this, limits leak between tests in one process.
+
+    Per-user limits would mostly survive that on their own — every test bootstraps
+    users with fresh uuid4 uids, so their keys never collide. The per-IP limit on
+    account creation would NOT: httpx's ASGITransport reports the same client address
+    for every request in the run, so all ~750 tests share ONE bootstrap key and the
+    suite would start 429ing partway through for reasons that have nothing to do with
+    the test that failed.
+
+    This is isolation of global state, not a relaxation of any limit: the tests that
+    are ABOUT limits still drive them to the ceiling within a single test, which is
+    where a limit should be proven anyway.
+    """
+    from app.services import rate_limit
+
+    rate_limit._reset_all()
+
+
 @pytest.fixture
 async def client(migrated_db: str) -> AsyncIterator[AsyncClient]:
     """Fresh ASGI client per test: engine bound to this test's loop, all tables truncated."""

@@ -20,6 +20,11 @@ from app.core.permissions import (
     capabilities_for,
     require_role,
 )
+from app.core.rate_limits import (
+    INVITE_MINT_LIMIT,
+    INVITE_REDEEM_LIMIT,
+    limit_per_user,
+)
 from app.core.windows import meeting_window
 from app.db import get_session
 from app.middleware.auth import get_current_user
@@ -617,7 +622,11 @@ async def list_role_terms(
     return [RoleTermOut.model_validate(term) for term in result.scalars().all()]
 
 
-@router.post("/chapters/{chapter_id}/invites", status_code=201)
+@router.post(
+    "/chapters/{chapter_id}/invites",
+    status_code=201,
+    dependencies=[Depends(limit_per_user("invite_mint", INVITE_MINT_LIMIT))],
+)
 async def create_invite(
     chapter_id: uuid.UUID,
     body: ChapterInviteCreate,
@@ -730,7 +739,11 @@ async def revoke_invite(
     return ChapterInviteOut.model_validate(invite)
 
 
-@router.post("/chapters/join", status_code=201)
+@router.post(
+    "/chapters/join",
+    status_code=201,
+    dependencies=[Depends(limit_per_user("invite_redeem", INVITE_REDEEM_LIMIT))],
+)
 async def join_chapter(
     body: ChapterJoinRequest,
     user: models.User = Depends(get_current_user),

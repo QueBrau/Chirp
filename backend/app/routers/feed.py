@@ -27,6 +27,11 @@ from app.core.campus_access import (
 )
 from app.core.errors import forbidden, not_found
 from app.core.permissions import Role
+from app.core.rate_limits import (
+    COMMENT_CREATE_LIMIT,
+    POST_CREATE_LIMIT,
+    limit_per_user,
+)
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.middleware.org_scope import get_current_chapter_member, get_current_membership
@@ -576,7 +581,11 @@ async def count_my_posts(
     return MyPostCountOut(chapter_id=chapter_id, count=count or 0)
 
 
-@router.post("/chapters/{chapter_id}/posts", status_code=201)
+@router.post(
+    "/chapters/{chapter_id}/posts",
+    status_code=201,
+    dependencies=[Depends(limit_per_user("post_create", POST_CREATE_LIMIT))],
+)
 async def create_post(
     chapter_id: uuid.UUID,
     body: PostCreate,
@@ -644,7 +653,11 @@ async def create_post(
     return _post_out(post, membership.user_id)
 
 
-@router.post("/campuses/{campus_id}/posts", status_code=201)
+@router.post(
+    "/campuses/{campus_id}/posts",
+    status_code=201,
+    dependencies=[Depends(limit_per_user("post_create", POST_CREATE_LIMIT))],
+)
 async def create_campus_post(
     campus_id: uuid.UUID,
     body: CampusPostCreate,
@@ -936,7 +949,11 @@ async def list_comments(
     ]
 
 
-@router.post("/posts/{post_id}/comments", status_code=201)
+@router.post(
+    "/posts/{post_id}/comments",
+    status_code=201,
+    dependencies=[Depends(limit_per_user("comment_create", COMMENT_CREATE_LIMIT))],
+)
 async def create_comment(
     post_id: uuid.UUID,
     body: PostCommentCreate,

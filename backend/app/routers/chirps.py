@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.core.campus_access import require_campus_member, require_verified_campus
 from app.core.errors import forbidden, not_found
+from app.core.rate_limits import CHIRP_CREATE_LIMIT, limit_per_user
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.schemas.chirp import ChirpCreate, ChirpOut, ChirpVoteCreate, ChirpVoteOut
@@ -85,7 +86,11 @@ async def list_chirps(
     return items
 
 
-@router.post("/campuses/{campus_id}/chirps", status_code=201)
+@router.post(
+    "/campuses/{campus_id}/chirps",
+    status_code=201,
+    dependencies=[Depends(limit_per_user("chirp_create", CHIRP_CREATE_LIMIT))],
+)
 async def create_chirp(
     campus_id: uuid.UUID,
     body: ChirpCreate,

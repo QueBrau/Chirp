@@ -15,6 +15,7 @@ from app import models
 from app.config import get_settings
 from app.core.analytics import emit
 from app.core.errors import conflict, not_found
+from app.core.rate_limits import ACCOUNT_BOOTSTRAP_LIMIT, limit_per_ip
 from app.db import get_session
 from app.middleware.auth import get_current_user, get_user_by_uid, get_verified_identity
 from app.schemas.identity import (
@@ -38,6 +39,7 @@ router = APIRouter(tags=["auth"])
     "/auth/bootstrap",
     response_model=UserOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(limit_per_ip("account_bootstrap", ACCOUNT_BOOTSTRAP_LIMIT))],
 )
 async def bootstrap_account(
     body: UserCreate,

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 
 from app import models
+from app.core.rate_limits import MEDIA_UPLOAD_URL_LIMIT, limit_per_user
 from app.middleware.auth import get_current_user
 from app.schemas.media import MediaUploadUrlOut, MediaUploadUrlRequest
 from app.services.storage_service import (
@@ -23,7 +24,11 @@ from app.services.storage_service import (
 router = APIRouter(tags=["media"])
 
 
-@router.post("/media/upload-url", status_code=201)
+@router.post(
+    "/media/upload-url",
+    status_code=201,
+    dependencies=[Depends(limit_per_user("media_upload_url", MEDIA_UPLOAD_URL_LIMIT))],
+)
 async def create_upload_url(
     body: MediaUploadUrlRequest,
     user: models.User = Depends(get_current_user),

@@ -13,6 +13,7 @@ from app import models
 from app.core.campus_access import require_verified_campus
 from app.core.errors import conflict, forbidden, not_found
 from app.core.permissions import EBOARD, require_platform_admin
+from app.core.rate_limits import REPORT_CREATE_LIMIT, limit_per_user
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.schemas.moderation import (
@@ -206,7 +207,11 @@ async def _require_eboard_for_campus(
         require_verified_campus(moderator, campus_id)
 
 
-@router.post("/moderation/reports", status_code=201)
+@router.post(
+    "/moderation/reports",
+    status_code=201,
+    dependencies=[Depends(limit_per_user("report_create", REPORT_CREATE_LIMIT))],
+)
 async def create_report(
     body: ContentReportCreate,
     user: models.User = Depends(get_current_user),
