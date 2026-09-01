@@ -2706,7 +2706,7 @@
       "owner": "pool",
       "tag": "security",
       "area": "api",
-      "title": "c259 DONE Aug 31 - MERGED (PR #170, CI 4/4, suite 766/5/0). RATE LIMITING SHIPPED: core/rate_limits.py, opt-in via route-decorator dependencies so a handler edit cannot drop the limiter; 429 + <scope>_rate_limited machine-readable detail everywhere; keyed on verified Firebase uid (no DB round trip), per-IP only where no account exists. Nine limits in damage order: media 60/10min, bootstrap 200/hr, invite mint 30/hr, redeem 20/hr, posts 60/10min, comments 60/10min, chirps 30/10min, messages 300/10min, reports 20/hr. TWO EXISTING TESTS FAILED FIRST AND WERE RIGHT: the leaderboard fixture crossed a 30/hr bootstrap ceiling inside ONE test (an org-fair queue on campus NAT certainly would - and a student who cannot sign up cannot report it), and c217's 55-post fixture crossed 30/10min. Both fixed by RAISING THE LIMITS on evidence, no assertion touched. Design points pinned by tests: 401-beats-429 for anonymous callers (no endpoint-existence leak), per-user not global (one exhausted account cannot lock out a bystander), per-IP honestly documented as a speed bump (XFF is client-supplied). Invite redemption limiter doubles as a code-guessing control on c105's bearer codes. Falsified: decorations stripped, 10 of 13 red. Autouse conftest fixture isolates the in-process limiter's module-global windows between tests - ASGITransport reports ONE client address for the whole suite, so without it all ~760 tests share a single bootstrap key. NOT YET DEPLOYED - rides window #3 with c264/c265.",
+      "title": "c259 DONE Aug 31 - MERGED (PR #170, CI 4/4, suite 766/5/0). RATE LIMITING SHIPPED: core/rate_limits.py, opt-in via route-decorator dependencies so a handler edit cannot drop the limiter; 429 + <scope>_rate_limited machine-readable detail everywhere; keyed on verified Firebase uid (no DB round trip), per-IP only where no account exists. Nine limits in damage order: media 60/10min, bootstrap 200/hr, invite mint 30/hr, redeem 20/hr, posts 60/10min, comments 60/10min, chirps 30/10min, messages 300/10min, reports 20/hr. TWO EXISTING TESTS FAILED FIRST AND WERE RIGHT: the leaderboard fixture crossed a 30/hr bootstrap ceiling inside ONE test (an org-fair queue on campus NAT certainly would - and a student who cannot sign up cannot report it), and c217's 55-post fixture crossed 30/10min. Both fixed by RAISING THE LIMITS on evidence, no assertion touched. Design points pinned by tests: 401-beats-429 for anonymous callers (no endpoint-existence leak), per-user not global (one exhausted account cannot lock out a bystander), per-IP honestly documented as a speed bump (XFF is client-supplied). Invite redemption limiter doubles as a code-guessing control on c105's bearer codes. Falsified: decorations stripped, 10 of 13 red. Autouse conftest fixture isolates the in-process limiter's module-global windows between tests - ASGITransport reports ONE client address for the whole suite, so without it all ~760 tests share a single bootstrap key. LIVE (window #3).",
       "detail": "The other half of c244 is already closed and NOT by us: the GCS lifecycle rule (delete under tmp/ at age 1 day) exists, set by the shared account Aug 23, verified live - tmp/ is empty and only posts/ holds objects. So storage accumulation is fine; unbounded minting is not. RULES ON THIS CARD: numbers are the judgment, not the wiring - generous enough that a real student never sees a 429, tight enough that a loop does, every limit documented inline with what a plausible heavy user actually does, and each one proven BOTH ways (blocks a loop, and a realistic usage pattern stays comfortably under). A limiter that fires on normal use is worse than none and at alpha would look identical to the app being broken. New tests falsified before being kept, same as c245/c252. MONEY PATHS FENCED: routers/payments.py, routers/finance.py, core/dues_status.py, services/stripe_service.py are not to be touched - if a dues endpoint genuinely needs a limiter that is an adversarial-review path, stop and raise it rather than adding it. No synthetic traffic against prod: Jose has not approved a load test, so these limits are proven in the suite. NOTE ON THE ID: c258 was skipped deliberately - the manager reported carding the unbounded-list-response gap as c258 before it reached the board, so this took the next id up rather than collide with it."
     },
     {
@@ -2756,11 +2756,11 @@
     },
     {
       "id": "c265",
-      "col": "progress",
+      "col": "done",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c265 IN PROGRESS Aug 31 (MANAGER, money lane, branch court/c265-installments-cap) - MAX_PLAN_INSTALLMENTS=36 on DuesPlanCreate.installments. Sum rule bounds VALUE not COUNT ($325 cycle legally accepted 32,500 one-cent rows); 36 = 3yr monthly, installment_count needs no separate cap (route enforces count==len). Both-ways proven: 37-row payload with VALID sum+count 422s with too_long SHAPE (c264's lesson - only the cap can produce it), exactly-36 creates, plan tests 33/33. FALSIFIED: cap stripped -> over-limit red, restored -> green. Full suite under the lock running now; PR + adversarial pass + merge when green, rides window #3.",
+      "title": "c265 DONE Aug 31 + LIVE - MERGED 9cdbb96 (PR #171, CI 4/4) and deployed in window #3. MAX_PLAN_INSTALLMENTS=36; sum rule bounds value not count ($325 cycle legally accepted 32,500 one-cent rows). Full money ritual: both-ways (37 valid-sum rows 422 with too_long SHAPE, exactly-36 creates), falsified (cap stripped -> red), suite 778/5/0 under the lock, adversarial pass (no edit route resubmits a schedule; prod checked directly - zero plans exist, no legacy row can trip it).",
       "detail": ""
     },
     {
@@ -2788,6 +2788,15 @@
       "tag": "",
       "area": "",
       "title": "c268 IN PROGRESS (chirps-23, branch court/c268-verify-target-limit) [FOLLOW-UP (renumbered off a third collision - branchless card yields) from c263, backend, small] campus_verification's send limiter is keyed per CALLER (campus_verify_send:{user.id}) - it bounds one account's sends but NOT N accounts all targeting ONE victim .edu inbox (mailbox-bombing a specific student; cost lands on the c240 Resend quota). Fix shape: add a SECOND allow() check keyed on the normalized target address, generous (a real student re-requesting a code a few times must never hit it; N strangers aiming at one inbox should). Both-ways proof. Uses c259's core/rate_limits.py pattern - do not hand-copy the check.",
+      "detail": ""
+    },
+    {
+      "id": "c269",
+      "col": "done",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c269 DEPLOY WINDOW #3 Aug 31 - CLOSED CLEAN, deploy-only (no migration; all three changes are pydantic/code). chirp-api-00043-7ts / chirp-ws-00008, deploy-verify 4/4 BOTH. NOW LIVE: the nine c259 rate limits (FIRST real run against shared Redis - watch for 429s in logs that a real student pattern should never produce), c264's five request-list caps, c265's installment cap. NOTE: #172 (c258 PR1 read caps) merged AFTER this window was cut - prod does NOT carry it yet; rides window #4 with c268.",
       "detail": ""
     }
   ],
