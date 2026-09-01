@@ -1,5 +1,6 @@
 """Finance: dues cycles, append-only ledger (SPEC §8.2 — no update/delete), spend
 approvals, dues payment plans (board card c195)."""
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -14,6 +15,7 @@ from app import models
 from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, is_cross_table_dues_guard_conflict, not_found
+from app.core.pagination import MAX_ROSTER_PAGE, warn_if_capped
 from app.core.permissions import DUES_ADMIN, Role, require_role
 from app.db import get_session
 from app.middleware.org_scope import get_current_membership
@@ -32,6 +34,7 @@ from app.schemas.finance import (
 )
 
 router = APIRouter(tags=["finance"])
+logger = logging.getLogger(__name__)
 
 # NOTE: There is intentionally NO update or delete route for ledger entries anywhere
 # (SPEC §2.5, §8.2). Corrections are new entries with entry_type="correction".
@@ -754,8 +757,18 @@ async def list_dues_payment_plans(
             models.DuesPaymentPlan.dues_cycle_id == cycle_id,
         )
         .order_by(models.DuesPaymentPlan.created_at.desc())
+        # Cap-only rather than a cursor (c258): one active plan per member per cycle,
+        # so this is roster-bounded like the roster itself. Cancelled plans mean a
+        # member can appear more than once, which is why the ceiling is the generous
+        # MAX_ROSTER_PAGE rather than an exact roster count.
+        .limit(MAX_ROSTER_PAGE)
     )
     plans = list(plans_result.scalars().all())
+    warn_if_capped(
+        logger, plans, MAX_ROSTER_PAGE,
+        "GET /chapters/{chapter_id}/dues-cycles/{cycle_id}/plans",
+        chapter_id=str(chapter_id), cycle_id=str(cycle_id),
+    )
     if not plans:
         return []
 
