@@ -45,6 +45,23 @@ class KyberPrekeyCreate(_Schema):
 # ---- device registration ----
 
 
+# Bounded because POST /devices and POST /devices/{device_id}/prekeys write one row
+# per element (routers/keys.py's session.add_all calls): an unbounded list lets the
+# caller decide how much work one request costs. Rate limiting does not close this -
+# it caps how OFTEN a caller may post, not how many rows a single permitted post
+# inserts, so the two guards are complements rather than substitutes (board c263/c264).
+#
+# 200 is twice SPEC 6.1's "~100 one-time prekeys" registration batch, which is also the
+# largest batch the client ever sends: app-mobile/src/crypto/keys.ts sets
+# INITIAL_ONE_TIME_PREKEY_COUNT = 100 and replenishes only when the server reports
+# fewer than PREKEY_REPLENISH_THRESHOLD = 20 unconsumed. So a full registration and a
+# full top-up both fit with the whole batch again to spare, while a payload that writes
+# tens of thousands of rows does not. Deliberately generous: the cost of a cap that is
+# slightly too high is nothing, and the cost of one that is too low is a device that
+# cannot register.
+MAX_PREKEY_BATCH = 200
+
+
 class DeviceCreate(_Schema):
     """Body for POST /devices — identity key + signed prekey + one-time prekey batch.
 
@@ -57,9 +74,13 @@ class DeviceCreate(_Schema):
     registration_id: int
     identity_key_b64: str = Field(min_length=1)
     signed_prekey: SignedPrekeyCreate
-    one_time_prekeys: list[OneTimePrekeyCreate] = Field(default_factory=list)
+    one_time_prekeys: list[OneTimePrekeyCreate] = Field(
+        default_factory=list, max_length=MAX_PREKEY_BATCH
+    )
     kyber_last_resort: KyberPrekeyCreate | None = None
-    kyber_one_time: list[KyberPrekeyCreate] = Field(default_factory=list)
+    kyber_one_time: list[KyberPrekeyCreate] = Field(
+        default_factory=list, max_length=MAX_PREKEY_BATCH
+    )
 
 
 class DeviceOut(_Schema):
@@ -86,9 +107,13 @@ class PrekeyUpload(_Schema):
     """
 
     signed_prekey: SignedPrekeyCreate | None = None
-    one_time_prekeys: list[OneTimePrekeyCreate] = Field(default_factory=list)
+    one_time_prekeys: list[OneTimePrekeyCreate] = Field(
+        default_factory=list, max_length=MAX_PREKEY_BATCH
+    )
     kyber_last_resort: KyberPrekeyCreate | None = None
-    kyber_one_time: list[KyberPrekeyCreate] = Field(default_factory=list)
+    kyber_one_time: list[KyberPrekeyCreate] = Field(
+        default_factory=list, max_length=MAX_PREKEY_BATCH
+    )
 
 
 PrekeyUploadRequest = PrekeyUpload
