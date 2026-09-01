@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict, deque
 
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.errors import conflict, forbidden, not_found
+from app.core.pagination import MAX_ROSTER_PAGE, warn_if_capped
 from app.schemas.lineage import (
     FamilyOut,
     LineageEdgeCreate,
@@ -19,6 +21,8 @@ from app.schemas.lineage import (
     LineageNodeOut,
     LineageTreeOut,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _would_create_cycle(
@@ -174,11 +178,32 @@ async def build_lineage_tree(session: AsyncSession, chapter_id: uuid.UUID) -> Li
     families_result = await session.execute(
         select(models.Family).where(models.Family.chapter_id == chapter_id)
     )
-    return LineageTreeOut(
-        nodes=nodes,
-        edges=[LineageEdgeOut.model_validate(edge) for edge in edges],
-        families=[FamilyOut.model_validate(f) for f in families_result.scalars().all()],
-    )
+
+    # PRODUCT LIMIT, not a paging boundary (c258, manager ruling). A lineage tree is
+    # roster-bounded - nodes are members plus the ghosts their edges reference, edges
+    # are at most one big per little - so it cannot grow with time the way a ledger
+    # does. Reshaping this wrapper to carry three separate cursors would be a contract
+    # change every tree screen has to move with, to page a list that in practice fits
+    # in one page.
+    #
+    # Capping a TREE is also honestly different from truncating a list: a tree missing
+    # branches renders visibly wrong, which produces a bug report, rather than looking
+    # like a complete-but-short list. That is why cap-only is acceptable HERE and would
+    # not be for comments. If any of these three warns fires, this needs a real design,
+    # not a bigger number.
+    node_list = nodes[:MAX_ROSTER_PAGE]
+    edge_list = [LineageEdgeOut.model_validate(edge) for edge in edges][:MAX_ROSTER_PAGE]
+    family_list = [
+        FamilyOut.model_validate(f) for f in families_result.scalars().all()
+    ][:MAX_ROSTER_PAGE]
+    for name, rows in (
+        ("nodes", node_list), ("edges", edge_list), ("families", family_list)
+    ):
+        warn_if_capped(
+            logger, rows, MAX_ROSTER_PAGE,
+            f"GET /chapters/{{chapter_id}}/lineage[{name}]", chapter_id=str(chapter_id),
+        )
+    return LineageTreeOut(nodes=node_list, edges=edge_list, families=family_list)
 
 
 async def create_lineage_edge(

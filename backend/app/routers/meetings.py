@@ -1,4 +1,5 @@
 """Secretary: meetings CRUD (minutes), bulk attendance upsert, roster attendance totals."""
+import logging
 import uuid
 from datetime import datetime
 
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.errors import not_found
+from app.core.pagination import MAX_ROSTER_PAGE, warn_if_capped
 from app.core.permissions import MINUTES_ADMIN, require_role
 from app.core.windows import meeting_window
 from app.db import get_session
@@ -26,6 +28,7 @@ from app.schemas.meetings import (
 )
 
 router = APIRouter(tags=["meetings"])
+logger = logging.getLogger(__name__)
 
 
 async def _get_chapter_meeting(
@@ -360,8 +363,21 @@ async def get_attendance(
         select(models.MeetingAttendance)
         .where(models.MeetingAttendance.meeting_id == meeting.id)
         .order_by(models.MeetingAttendance.user_id)
+        # Cap-only, and here it DOCUMENTS AN INVARIANT THAT ALREADY EXISTS rather
+        # than imposing a new one: c264 capped the write side
+        # (MeetingAttendanceUpdate.entries) at this same MAX_ROSTER_PAGE, and every
+        # entry must name an active member of this chapter (c151). So this read cannot
+        # exceed what a write was allowed to store, and a cursor would page a list that
+        # cannot outgrow one page (c258).
+        .limit(MAX_ROSTER_PAGE)
     )
-    return [MeetingAttendanceOut.model_validate(a) for a in result.scalars().all()]
+    rows = [MeetingAttendanceOut.model_validate(a) for a in result.scalars().all()]
+    warn_if_capped(
+        logger, rows, MAX_ROSTER_PAGE,
+        "GET /chapters/{chapter_id}/meetings/{meeting_id}/attendance",
+        meeting_id=str(meeting.id),
+    )
+    return rows
 
 
 @router.put("/chapters/{chapter_id}/meetings/{meeting_id}/attendance")

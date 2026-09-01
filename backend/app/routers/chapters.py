@@ -1,4 +1,5 @@
 """Chapter CRUD, member management, invite creation, and invite-code join."""
+import logging
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from app import models
 from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
 from app.core.invites import clamp_invite_expiry
+from app.core.pagination import MAX_HISTORY_PAGE, MAX_ROSTER_PAGE, warn_if_capped
 from app.core.permissions import (
     DEPUTY_OVERVIEW,
     EBOARD,
@@ -54,6 +56,7 @@ from app.schemas.identity import (
 from app.services.role_term_service import apply_role_change, open_initial_term
 
 router = APIRouter(tags=["chapters"])
+logger = logging.getLogger(__name__)
 
 _EBOARD_ROLE_VALUES: frozenset[str] = frozenset(role.value for role in EBOARD)
 
@@ -159,6 +162,12 @@ async def list_members(
         .join(models.User, models.User.id == models.Membership.user_id)
         .where(models.Membership.chapter_id == chapter_id)
         .order_by(models.Membership.joined_at)
+        # Cap-only rather than a cursor (c258): bounded by the chapter's roster, not
+        # by time, so it cannot grow indefinitely the way comments or the ledger do.
+        # REVISIT CONDITION, stated so this is a plan and not a hope: a chapter beyond
+        # MAX_ROSTER_PAGE members moves this route to a compound cursor, and the
+        # warn_if_capped below is what tells us that happened.
+        .limit(MAX_ROSTER_PAGE)
     )
     entries: list[MemberOut] = []
     for membership, member_user in result.all():
@@ -175,6 +184,10 @@ async def list_members(
                 avatar_url=member_user.avatar_url,
             )
         )
+    warn_if_capped(
+        logger, entries, MAX_ROSTER_PAGE, "GET /chapters/{chapter_id}/members",
+        chapter_id=str(chapter_id),
+    )
     return entries
 
 
@@ -618,8 +631,17 @@ async def list_role_terms(
         select(models.RoleTerm)
         .where(models.RoleTerm.membership_id == membership_id)
         .order_by(models.RoleTerm.started_at.desc(), models.RoleTerm.id.desc())
+        # One member's role history: a new row only when somebody's role actually
+        # changes, so this grows at the speed of chapter elections (c258).
+        .limit(MAX_HISTORY_PAGE)
     )
-    return [RoleTermOut.model_validate(term) for term in result.scalars().all()]
+    terms = [RoleTermOut.model_validate(term) for term in result.scalars().all()]
+    warn_if_capped(
+        logger, terms, MAX_HISTORY_PAGE,
+        "GET /chapters/{chapter_id}/members/{user_id}/role-terms",
+        chapter_id=str(chapter_id), user_id=str(user_id),
+    )
+    return terms
 
 
 @router.post(
@@ -697,8 +719,18 @@ async def list_invites(
         select(models.ChapterInvite)
         .where(models.ChapterInvite.chapter_id == chapter_id)
         .order_by(models.ChapterInvite.expires_at.desc())
+        # The one cap in this group a long-lived busy chapter could genuinely reach:
+        # invites accumulate with TIME, not with roster (c258). Generous for now; if
+        # warn_if_capped fires, this route graduates to a cursor and that log is the
+        # evidence deciding it rather than a guess.
+        .limit(MAX_HISTORY_PAGE)
     )
-    return [ChapterInviteOut.model_validate(row) for row in result.scalars().all()]
+    invites = [ChapterInviteOut.model_validate(row) for row in result.scalars().all()]
+    warn_if_capped(
+        logger, invites, MAX_HISTORY_PAGE, "GET /chapters/{chapter_id}/invites",
+        chapter_id=str(chapter_id),
+    )
+    return invites
 
 
 @router.post("/chapters/{chapter_id}/invites/revoke", status_code=200)
@@ -864,6 +896,10 @@ async def list_my_memberships(
             models.Membership.status == "active",
         )
         .order_by(models.Membership.joined_at)
+        # One row per chapter this person belongs to - single digits in practice
+        # (c258). Capped anyway, so the query is bounded by something other than
+        # trust in that assumption.
+        .limit(MAX_HISTORY_PAGE)
     )
     memberships: list[MembershipOut] = []
     for membership, org_name, chapter_name in result.all():
@@ -871,4 +907,8 @@ async def list_my_memberships(
         out.org_name = org_name
         out.chapter_name = chapter_name
         memberships.append(out)
+    warn_if_capped(
+        logger, memberships, MAX_HISTORY_PAGE, "GET /me/memberships",
+        user_id=str(user.id),
+    )
     return memberships
