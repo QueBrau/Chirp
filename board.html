@@ -2783,11 +2783,11 @@
     },
     {
       "id": "c268",
-      "col": "backlog",
+      "col": "progress",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c268 [FOLLOW-UP (renumbered off a third collision - branchless card yields) from c263, backend, small] campus_verification's send limiter is keyed per CALLER (campus_verify_send:{user.id}) - it bounds one account's sends but NOT N accounts all targeting ONE victim .edu inbox (mailbox-bombing a specific student; cost lands on the c240 Resend quota). Fix shape: add a SECOND allow() check keyed on the normalized target address, generous (a real student re-requesting a code a few times must never hit it; N strangers aiming at one inbox should). Both-ways proof. Uses c259's core/rate_limits.py pattern - do not hand-copy the check.",
+      "title": "c268 IN PROGRESS (chirps-23, branch court/c268-verify-target-limit) [FOLLOW-UP (renumbered off a third collision - branchless card yields) from c263, backend, small] campus_verification's send limiter is keyed per CALLER (campus_verify_send:{user.id}) - it bounds one account's sends but NOT N accounts all targeting ONE victim .edu inbox (mailbox-bombing a specific student; cost lands on the c240 Resend quota). Fix shape: add a SECOND allow() check keyed on the normalized target address, generous (a real student re-requesting a code a few times must never hit it; N strangers aiming at one inbox should). Both-ways proof. Uses c259's core/rate_limits.py pattern - do not hand-copy the check.",
       "detail": ""
     }
   ],
