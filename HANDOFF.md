@@ -1,6 +1,8 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Aug 28 2026 (launch-hardening batch: money sweep, WS split, telemetry, DB tier)._
+_Last updated: Sep 1 2026 (ops-doc sweep, board card c262 — two more deploy windows,
+migration 0029, and ARCHITECTURE.html landed since the Aug 28 launch-hardening batch
+below)._
 
 **This file deliberately contains almost no numbers.** The previous version rotted
 within a week because it hardcoded the prod revision, the open-PR list, the migration
@@ -16,6 +18,7 @@ this file points at the source instead of copying it.
 | What prod is serving | `gcloud run services describe chirp-api --region us-central1` |
 | Alpha readiness | the bar at the top of `board.html`, recomputed from the cards on every render |
 | Credentials, runbooks, live fixture ids | `INFRA-PRIVATE.html` at the repo root (gitignored, never commit it) |
+| System architecture — deployment topology, domain model, dues and message sequences | `ARCHITECTURE.html` at the repo root (UML reference, drawn from live prod) |
 
 What this file keeps is the part the board cannot hold: how to set the thing up, the
 rules that are load-bearing, and the lessons that cost us something to learn.
@@ -24,23 +27,30 @@ rules that are load-bearing, and the lessons that cost us something to learn.
 > board, or it belongs in a command someone can run. The one exception is the
 > verified-state snapshot below, which is explicitly dated and explicitly sourced.
 
-## State snapshot — Aug 28 2026, with its sourcing
+## State snapshot — Aug 28 2026, updated in place Sep 1 2026, with its sourcing
 
 Sourcing is split on purpose. "Verified" means someone ran the check this session.
 "Board-sourced" means it is the board's claim and nobody has re-run it against the live
 system. Do not promote a board-sourced line to verified without re-checking it. The
 Aug 23/24 snapshots that used to sit here were removed rather than stacked on: three
-dated tables in one file is how a reader ends up trusting the wrong row.
+dated tables in one file is how a reader ends up trusting the wrong row — this table
+gets edited in place instead, row by row, which is why some rows below still say
+Aug 28 and others say Sep 1.
+
+The Sep 1 pass (board card c262, an ops-doc sweep) is itself a docs check against the
+board, not a fresh live-system check — every row it touched is marked board-sourced,
+not verified, even where the Aug 28 version of that row had been verified directly.
+Re-verify before promoting any of them.
 
 | Thing | State | How we know |
 | --- | --- | --- |
-| Serving revisions | **two services now**: `chirp-api-00038-br5` and `chirp-ws-00003-zrp`, each 100%, both on the SAME image | **court-verified Aug 28** against Cloud Run |
+| Serving revisions | **two services**: `chirp-api-00043-7ts` and `chirp-ws-00008`, deploy-verify reported 4/4 on both | **board-sourced, not verified this pass** — c269, deploy window #3 (Aug 31, deploy-only, no migration); confirm live with `gcloud run services describe` |
 | Why two services | open WebSockets were consuming chirp-api's HTTP concurrency budget, capping concurrently-online users near 320 (c209/c213) | see `INFRA-PRIVATE.html#chirpws`; **every image update must deploy BOTH** |
-| Prod DB `alembic_version` | **0028**, and both c230 triggers confirmed present in the live catalog | **court-verified Aug 28** through the Auth Proxy |
-| Alembic head (repo) | matches prod as of this line — **but run `alembic heads` yourself**, see the migrations section | **verified Aug 28** |
+| Prod DB `alembic_version` | **0029** (adds the `user_blocks` self-block CHECK constraint; migration 0028→0029), and both c230 triggers still present per the same window | **board-sourced, not verified this pass** — c260/c237, deploy window #2 (Aug 30, migrate-then-redeploy, closed clean); confirm live with `alembic current` through the Auth Proxy |
+| Alembic head (repo) | matches prod as of this line (0029) — **but run `alembic heads` yourself**, see the migrations section | **board-sourced, not verified this pass** — c260/c237 |
 | DB tier | `db-custom-1-3840` (dedicated core, ~100 connections), ZONAL | **verified Aug 28**; regional HA is a separate priced call Jose has not taken |
 | Backups / restore | daily, 14 retained, 7-day PITR, deletion protection on — and the restore is **rehearsed**, not just configured (~15 min to data, ~25 min to full service) | **court-rehearsed Aug 27**, runbook at `INFRA-PRIVATE.html#restore` |
-| Local backend suite | 664+ passed, 5 skipped (the skips are Redis-gated WS tests; CI has Redis) | **verified Aug 28**, local PG14, run from `backend/` |
+| Local backend suite | growing every day — **do not trust a number here**, run it yourself: `cd backend && pytest -q` (full-suite runs go through `scripts/with-suite-lock`) | **board-sourced only, NOT verified** — last count seen on the board was 778 passed / 5 skipped / 0 failed (c265, Aug 31); it was already stale by the time this line was written |
 | Website | https://chirps-prod.web.app | live |
 | Stripe | test mode, armed | **NO MONEY HAS EVER MOVED — and no test-mode payment has ever cleared end to end (board c11). That is the launch gate.** |
 | Analytics | emitter live; Cloud Logging sink `chirp-analytics-bq` into BigQuery dataset `chirp_analytics` | **verified Aug 28**; chirp authorship is provably never linked (c227 rule, test-pinned) |
@@ -138,6 +148,15 @@ still unmerged.
   RUN, not of the PR: it only protects a merge if the check is newer than both the gate's
   existence and the base's last move. When branches move fast, re-check the merge result
   rather than trusting a green tick.
+- **`scripts/deploy-verify` defaults to `localhost:8000` and says so, but that has still
+  fooled someone.** Run it bare after a prod deploy and you get a TOTAL red — `0 passed,
+  4 failed`, four `000` status codes — because nothing at `localhost:8000` answered, not
+  because prod is down (c250). `000` across every probe means **wrong target**, not a
+  broken deploy: check the `target:` line the script prints as its second line before you
+  re-run or start diagnosing. Don't confuse this with a cold-start flake, which is a
+  PARTIAL red against a real URL (e.g. 3/1) — they look nothing alike. Correct invocation
+  after a prod deploy is `scripts/deploy-verify --base-url <service URL>`; see `DEPLOY.md`
+  for where that URL lives.
 
 ## Multi-session rules (these are enforced, not advisory)
 
@@ -179,14 +198,20 @@ Backend changes need a Cloud Run redeploy to go live. The command and credential
 are **not** a worker session's call — they run through Jose and the manager session.
 
 Order is always **migrate, then deploy**, and the post-deploy check must exercise a real
-authenticated route.
+authenticated route. Several coordinated deploy windows have run since this file's Aug 28
+snapshot — see the board for the full history of what shipped in each; the snapshot table
+above reflects only the most recent one.
 
 ## Known-bad things that are shipped
 
 These are live in front of users right now. Each has a card; the card is authoritative.
 
-- **Apple and Google sign-in are visual stubs** (c89) that skip authentication entirely.
-  Apple guideline 4.8 makes Sign in with Apple mandatory once Google ships.
+- **Apple and Google sign-in buttons are honest stubs, not a bypass** (c89, corrected
+  here — this line used to say they "skip authentication entirely," which was true until
+  c89 landed and is no longer): the buttons are disabled with an honest caption and create
+  no session, proven on the native sim. What is still missing is the real native provider
+  wiring, tracked as c169 (backlog). Apple guideline 4.8 makes Sign in with Apple
+  mandatory once Google ships.
 - **`/terms` and `/privacy` are not lawyer-reviewed** (c75), scoped to NC and UNCG on
   purpose. The liability sections are still placeholders.
 - **No test-mode payment has ever cleared end to end** (c11) — card or ACH. The money code
