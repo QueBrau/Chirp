@@ -2405,11 +2405,11 @@
     },
     {
       "id": "c226",
-      "col": "backlog",
+      "col": "progress",
       "owner": "court",
       "tag": "infra",
       "area": "orgs",
-      "title": "c226 PRE-LAUNCH LOAD TEST - the S1/S2/S3 ceilings are computed, never measured. Bounded scripted test (auth'd HTTP mix + WS connect storm) against prod at a quiet hour AFTER c213 lands; abort criteria + rate caps written before it runs; stays clear of Stripe and email. PARKED BY JOSE Aug 30 ('load test dont do yet we can wait'). Still needs his GO before synthetic load touches prod.",
+      "title": "c226 HARNESS IN PROGRESS Sep 1 (chirps-7b, new Fable session onboarded by manager) - RUNNING THE TEST STAYS PARKED BY JOSE; what is being built is everything short of firing: scripted auth'd HTTP mix + WS connect-storm with the target URL as a PARAMETER defaulting to localhost, abort criteria written before it can run (error %, p95 ceiling, connection-headroom floor from the c248 arithmetic), rate caps so the harness itself cannot exceed agreed bounds, and a quiet-hour runbook. Must decide and defend: test WITH the newly-live c259 limits or elevate test accounts. Proven end-to-end against a LOCAL stack only - not one synthetic request touches prod under the park. Deliverable: PR so Jose's go becomes a same-day action.",
       "detail": "Measures: p95 at 200 concurrent, pool-checkout 503 rate, WS capacity per ws instance, cold starts."
     },
     {
@@ -2688,7 +2688,7 @@
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c257 [Q - READ THIS FIRST, Aug 30 CATCH-UP] Where everything stands so you can pick up without reading the whole board. MERGED TODAY (11 PRs): c242 job-board authz + c243 blocking-stops-contact (both LIVE on chirp-api-00041-tjt), c245/c252 content+message length caps, c237 self-block guard (migration 0029 merged NOT yet applied - manager runs it), c248 pool guard, c239 DRY wave 2, c241 email docs, c246 socket config + CI guard, c247 socket timeout 3600s (was killing every WS at exactly 301s - measured). IN FLIGHT: chirps-ad on c251 (composer char counters, PR #164 held for a render pass), chirps-23 on c244 (rate limiting). DO NOT touch CommentsSheet/CreateSheet/chirps-index or backend routers/core until those land. YOURS RIGHT NOW, no waiting: c254 (messaging UI claims E2EE and must not - small copy+guard fix), c255 (dead updatePost, tiny). YOURS WHEN APPLE ENROLLMENT CLEARS: c39 build (pull main first - eas.json changed), then c71 (your own .edu inbox) and c11 (first real payment, card+ACH, double-tap must 409). HELD/PARKED: c174/#115 Expo 57 closed-not-merged (reopen after alpha device build), c226 load test (Jose parked), c240 email provider (Jose deciding, Resend caps at 100/day). NEW REFERENCE: ARCHITECTURE.html at repo root - UML deployment/class/sequence diagrams drawn from live prod. House rules unchanged: q/* lane self-merged, claim ids via scripts/board-check, migrate-first-then-deploy is manager-run.",
+      "title": "c257 [Q - CATCH-UP, updated Sep 1] Where everything stands so you can pick up without reading the whole board. MERGED TODAY (11 PRs): c242 job-board authz + c243 blocking-stops-contact (both LIVE on chirp-api-00041-tjt), c245/c252 content+message length caps, c237 self-block guard (migration 0029 merged NOT yet applied - manager runs it), c248 pool guard, c239 DRY wave 2, c241 email docs, c246 socket config + CI guard, c247 socket timeout 3600s (was killing every WS at exactly 301s - measured). IN FLIGHT Sep 1: chirps-ad on c258 Bucket A cursors (comments -> ledger -> meetings/polls -> alumni/jobs/mod, backend GET lists + mobile screens), chirps-23 on c268 then c262 (campus_verification + DEPLOY/HANDOFF docs), chirps-7b (new) on the c226 harness then c270 sweep. Prod is chirp-api-00043-7ts / chirp-ws-00008-xtg: rate limits, request-list caps and the installments cap are LIVE; your #167 is merged and live too. YOURS RIGHT NOW, no waiting: c254 (messaging UI claims E2EE and must not - small copy+guard fix), c255 (dead updatePost, tiny). YOURS WHEN APPLE ENROLLMENT CLEARS: c39 build (pull main first - eas.json changed), then c71 (your own .edu inbox) and c11 (first real payment, card+ACH, double-tap must 409). HELD/PARKED: c174/#115 Expo 57 closed-not-merged (reopen after alpha device build), c226 load test (Jose parked), c240 email provider (Jose deciding, Resend caps at 100/day). NEW REFERENCE: ARCHITECTURE.html at repo root - UML deployment/class/sequence diagrams drawn from live prod. House rules unchanged: q/* lane self-merged, claim ids via scripts/board-check, migrate-first-then-deploy is manager-run.",
       "detail": ""
     },
     {
@@ -2797,6 +2797,15 @@
       "tag": "",
       "area": "",
       "title": "c269 DEPLOY WINDOW #3 Aug 31 - CLOSED CLEAN, deploy-only (no migration; all three changes are pydantic/code). chirp-api-00043-7ts / chirp-ws-00008, deploy-verify 4/4 BOTH. NOW LIVE: the nine c259 rate limits (FIRST real run against shared Redis - watch for 429s in logs that a real student pattern should never produce), c264's five request-list caps, c265's installment cap. NOTE: #172 (c258 PR1 read caps) merged AFTER this window was cut - prod does NOT carry it yet; rides window #4 with c268.",
+      "detail": ""
+    },
+    {
+      "id": "c270",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c270 [QUEUED - chirps-7b after the c226 harness] SECURITY SWEEP PASS 2, read-only - the scope c263 honestly labeled unswept: response/timing leaks beyond the by-chirp constant-latency precedent, and the chirps/house/media write paths in detail. c263's method rules carry over: read before reporting (two near-false-criticals last pass came from heuristics - multi-line decorators, Depends(_require_any_eboard)), findings become cards with file:line evidence, a clean bill per router is a deliverable, MONEY PATHS EXCLUDED. Manager note: chirps-7b claims its own ids from board-check on takeup.",
       "detail": ""
     }
   ],
