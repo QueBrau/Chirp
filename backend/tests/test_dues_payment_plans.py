@@ -1006,3 +1006,51 @@ async def test_plans_mine_and_treasurer_list_reflect_corrections_via_effective_p
     for installment in treasurer_plan_b["installments"]:
         assert installment["paid_at"] is not None
         assert installment["effective_paid"] is True
+
+
+# ---- c265: the schedule length is capped (from the c263 abuse sweep) ----
+
+
+def _n_installments(n: int, total: int = 30_000) -> list[dict[str, Any]]:
+    """n installments summing exactly to `total`, so the ONLY possible 422 source in
+    the over-limit test is the length cap - not the sum rule, not the count rule.
+    (c264's lesson: an over-limit payload that also trips a route's own 422 proves
+    nothing about the cap.)"""
+    each = total // n
+    rows = [{"amount_cents": each, "due_date": "2027-09-01"} for _ in range(n - 1)]
+    rows.append({"amount_cents": total - each * (n - 1), "due_date": "2027-11-01"})
+    return rows
+
+
+async def test_an_oversized_installment_schedule_is_refused_by_the_cap(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    from app.schemas.finance import MAX_PLAN_INSTALLMENTS
+
+    setup = await make_chapter_with("treasurer")
+    cycle_id = await _create_dues_cycle(client, setup)
+    resp = await _create_plan(
+        client, setup, cycle_id, setup.member.id,
+        _n_installments(MAX_PLAN_INSTALLMENTS + 1),
+    )
+    assert resp.status_code == 422, resp.text
+    # Assert the SHAPE, not just the status: pydantic's too_long is the one error
+    # only the cap can produce (sum and count are both deliberately valid above).
+    assert any(e.get("type") == "too_long" for e in resp.json()["detail"]), resp.text
+
+
+async def test_a_three_year_monthly_schedule_still_fits(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """Boundary is inclusive and generous: exactly MAX_PLAN_INSTALLMENTS creates fine,
+    and a realistic 12-payment plan is nowhere near it."""
+    from app.schemas.finance import MAX_PLAN_INSTALLMENTS
+
+    setup = await make_chapter_with("treasurer")
+    cycle_id = await _create_dues_cycle(client, setup)
+    resp = await _create_plan(
+        client, setup, cycle_id, setup.member.id,
+        _n_installments(MAX_PLAN_INSTALLMENTS),
+    )
+    assert resp.status_code == 201, resp.text
+    assert len(resp.json()["installments"]) == MAX_PLAN_INSTALLMENTS

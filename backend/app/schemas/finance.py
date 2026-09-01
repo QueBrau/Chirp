@@ -111,6 +111,18 @@ class DuesPlanInstallmentCreate(_Schema):
     due_date: date
 
 
+# Cap on the installment schedule (board c265, from the c263 abuse sweep). The route
+# already forces the schedule to sum to EXACTLY the cycle's amount_cents - but that
+# bounds VALUE, not COUNT: every amount_cents is gt=0, i.e. >= 1 cent, so a $325
+# cycle legally accepted a 32,500-row schedule of one-cent slices from a single
+# request. Real plans are 2-12 payments; 36 is three years of monthly installments,
+# generous past any schedule a treasurer would actually offer while three orders of
+# magnitude under the degenerate one. installment_count needs no cap of its own:
+# the route 422s unless it equals len(installments) (routers/finance.py), so this
+# one bound covers both fields.
+MAX_PLAN_INSTALLMENTS = 36
+
+
 class DuesPaymentPlanCreate(_Schema):
     """Body for POST /chapters/{chapter_id}/dues-cycles/{cycle_id}/plans.
 
@@ -123,7 +135,9 @@ class DuesPaymentPlanCreate(_Schema):
     user_id: uuid.UUID
     installment_count: int = Field(gt=0)
     note: str | None = None
-    installments: list[DuesPlanInstallmentCreate] = Field(min_length=1)
+    installments: list[DuesPlanInstallmentCreate] = Field(
+        min_length=1, max_length=MAX_PLAN_INSTALLMENTS
+    )
 
 
 class DuesPlanInstallmentOut(_Schema):
