@@ -20,6 +20,10 @@ from app.core.permissions import DUES_ADMIN, Role, require_role
 from app.db import get_session
 from app.middleware.org_scope import get_current_membership
 from app.schemas.finance import (
+    LedgerBalancePoint,
+    LedgerCategoryTotal,
+    LedgerDuesSummary,
+    LedgerSummaryOut,
     DuesCycleCreate,
     DuesCycleOut,
     DuesInstallmentRecordPaymentRequest,
@@ -35,6 +39,12 @@ from app.schemas.finance import (
 
 router = APIRouter(tags=["finance"])
 logger = logging.getLogger(__name__)
+
+# When the summary aggregates at least this many entries, say so. Not a cap: the
+# aggregate has to stay COMPLETE or the balance is wrong, and a wrong balance is worse
+# than a slow one. This is the early warning that paginating the list (c258 PR B) is no
+# longer sufficient on its own for this chapter's size.
+LEDGER_AGGREGATE_WARN_AT = 5_000
 
 # NOTE: There is intentionally NO update or delete route for ledger entries anywhere
 # (SPEC §2.5, §8.2). Corrections are new entries with entry_type="correction".
@@ -100,6 +110,170 @@ async def list_ledger_entries(
         query = query.where(models.LedgerEntry.created_at <= to)
     result = await session.execute(query.order_by(models.LedgerEntry.created_at.desc()))
     return [LedgerEntryOut.model_validate(e) for e in result.scalars().all()]
+
+
+@router.get("/chapters/{chapter_id}/ledger/summary")
+async def ledger_summary(
+    chapter_id: uuid.UUID,
+    category: str | None = Query(default=None),
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = Query(default=None),
+    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> LedgerSummaryOut:
+    """Every number the treasurer dashboard renders, computed here (board card c258).
+
+    WHY THIS EXISTS. The dashboard used to derive its balance, its trend chart, its
+    category donut and its dues meter by reducing the FULL ledger list in the client.
+    That is safe only while the list is complete, so paginating GET /chapters/{id}/ledger
+    would have turned the first page into "the" balance - a confidently wrong number
+    about someone's money, which treasurer.tsx's own chart comment warned against
+    before any of this was written. This endpoint moves those numbers server-side FIRST,
+    so the list can become render-only and the cursor that follows cannot corrupt a total.
+
+    SIGNS AND CORRECTIONS, verified rather than assumed. LedgerEntry.amount_cents is
+    signed - "Positive = in, negative = out" on the model - and a correction is not an
+    edit but its own signed row pointing at the entry it corrects. So a plain SUM nets
+    corrections correctly, with no special-casing here. That safety has a guard: a
+    correction of a correction is REJECTED at write time in create_ledger_entry above
+    (board c191/c194), which is what stops a chain from double-netting. If that guard
+    is ever relaxed, this sum stops being correct - the two are linked.
+
+    DUES ARE NOT COMPUTED HERE. They come from core/dues_status.py's
+    dues_contributions_subquery, the single definition of "has this member paid",
+    which nets dues_payment + dues_installment + corrections together. The client's old
+    duesProgress read only entry_type="dues_payment", so it missed every payment-plan
+    installment (c195) and displayed refunded money as still collected - the exact
+    failure that module's docstring warns about. Correcting that is a deliberate,
+    recorded behaviour change, not a side effect of pagination.
+
+    Filters mirror the list route so the two can be asked the same question. The
+    dashboard calls both unfiltered, which is why the equality test does too.
+    """
+    where = [models.LedgerEntry.chapter_id == chapter_id]
+    if category is not None:
+        where.append(models.LedgerEntry.category == category)
+    if from_ is not None:
+        where.append(models.LedgerEntry.created_at >= from_)
+    if to is not None:
+        where.append(models.LedgerEntry.created_at <= to)
+
+    totals = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(models.LedgerEntry.amount_cents), 0),
+                func.count(models.LedgerEntry.id),
+            ).where(*where)
+        )
+    ).one()
+    balance_cents, entry_count = int(totals[0]), int(totals[1])
+
+    # Spending only, as positive cents, one row per category - the same rule the donut
+    # applies, moved to a GROUP BY. Ordering is the client's business (it ranks and
+    # folds into "Other"); this returns the complete set so that folding is done over
+    # every category rather than over a page of them.
+    category_rows = (
+        await session.execute(
+            select(
+                models.LedgerEntry.category,
+                func.sum(func.abs(models.LedgerEntry.amount_cents)),
+            )
+            .where(*where, models.LedgerEntry.amount_cents < 0)
+            .group_by(models.LedgerEntry.category)
+        )
+    ).all()
+    categories = [
+        LedgerCategoryTotal(category=row[0], cents=int(row[1])) for row in category_rows
+    ]
+
+    # Month buckets, then a cumulative fold: the query returns each month's DELTA and the
+    # running balance is accumulated here, because a window function would have to be
+    # re-derived per dialect and this list is bounded by the chapter's age.
+    month = func.date_trunc("month", models.LedgerEntry.created_at)
+    month_rows = (
+        await session.execute(
+            select(month, func.sum(models.LedgerEntry.amount_cents))
+            .where(*where)
+            .group_by(month)
+            .order_by(month)
+        )
+    ).all()
+    current_month = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    trend: list[LedgerBalancePoint] = []
+    running = 0
+    for period_start, delta in month_rows:
+        running += int(delta)
+        trend.append(
+            LedgerBalancePoint(
+                period_start=period_start,
+                balance_cents=running,
+                partial=period_start >= current_month,
+            )
+        )
+
+    dues = await _current_cycle_dues(session, chapter_id)
+
+    # Early warning that PR B's cursor is becoming urgent (c258): this endpoint reads
+    # every entry to aggregate, so an enormous ledger is a cost here even after the LIST
+    # is paginated. Logged rather than capped, because a wrong balance is worse than a
+    # slow one - the aggregate must stay complete.
+    if entry_count >= LEDGER_AGGREGATE_WARN_AT:
+        logger.warning(
+            "ledger summary aggregated %d entries for chapter %s (warn at %d) - "
+            "the list cursor is not enough on its own if this keeps growing",
+            entry_count,
+            chapter_id,
+            LEDGER_AGGREGATE_WARN_AT,
+        )
+
+    return LedgerSummaryOut(
+        balance_cents=balance_cents,
+        entry_count=entry_count,
+        categories=categories,
+        trend=trend,
+        dues=dues,
+    )
+
+
+async def _current_cycle_dues(
+    session: AsyncSession, chapter_id: uuid.UUID
+) -> LedgerDuesSummary | None:
+    """Dues collection for the newest cycle, netted through the house subquery.
+
+    Returns None when the chapter has never opened a cycle, which is a real state for a
+    new chapter rather than an error - the dashboard renders no meter at all then.
+    """
+    cycle = (
+        await session.execute(
+            select(models.DuesCycle)
+            .where(models.DuesCycle.chapter_id == chapter_id)
+            .order_by(models.DuesCycle.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if cycle is None:
+        return None
+
+    contributions = dues_contributions_subquery(chapter_id, cycle.id)
+    per_member = (
+        await session.execute(
+            select(contributions.c.user_id, func.sum(contributions.c.amount_cents))
+            .group_by(contributions.c.user_id)
+        )
+    ).all()
+    # Net per member, then fold. `collected_cents` is the NET total the chapter is
+    # holding for this cycle; `paid_members` counts members whose own net is positive,
+    # which is the same rule chapter_overview uses so the two screens cannot disagree.
+    collected = sum(int(net) for _, net in per_member)
+    paid_members = sum(1 for _, net in per_member if int(net) > 0)
+    return LedgerDuesSummary(
+        cycle_id=cycle.id,
+        amount_cents=cycle.amount_cents,
+        collected_cents=collected,
+        paid_members=paid_members,
+    )
 
 
 @router.post("/chapters/{chapter_id}/ledger", status_code=201)

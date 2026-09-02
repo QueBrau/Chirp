@@ -76,17 +76,21 @@ const UNCATEGORISED = "Uncategorised";
  * separable — so the tail is summed into one honest bucket rather than drawn as
  * slivers in colours the palette was never validated for.
  */
-export function spendByCategory(
-  entries: LedgerEntryOut[],
+/**
+ * Rank pre-aggregated category totals largest-first and fold the tail into "Other".
+ *
+ * Split out of spendByCategory in c258. The AGGREGATION now happens server-side - the
+ * treasurer screen reads GET /chapters/{id}/ledger/summary rather than reducing the
+ * ledger list, so a paginated list can never become a partial donut - but the RANKING
+ * and folding are presentation and stay here, where verify:charts already tests them.
+ *
+ * spendByCategory keeps its exact previous behaviour by aggregating and then calling
+ * this, so none of its tests changed: same ordering, same tie-break, same fold.
+ */
+export function categorySlicesFromTotals(
+  totals: Map<string, number>,
   maxSlices: number = MAX_CATEGORY_SLICES,
 ): CategorySlice[] {
-  const totals = new Map<string, number>();
-  for (const entry of entries) {
-    if (entry.amount_cents >= 0) continue;
-    const label = entry.category?.trim() ? entry.category.trim() : UNCATEGORISED;
-    totals.set(label, (totals.get(label) ?? 0) + Math.abs(entry.amount_cents));
-  }
-
   const ranked = [...totals.entries()]
     .map(([label, cents]) => ({ label, cents, isOther: false }))
     // Ties broken by label so the order — and therefore every slice's colour — is
@@ -99,6 +103,24 @@ export function spendByCategory(
   const tail = ranked.slice(maxSlices);
   const otherCents = tail.reduce((sum, slice) => sum + slice.cents, 0);
   return [...head, { label: `Other (${tail.length})`, cents: otherCents, isOther: true }];
+}
+
+export function spendByCategory(
+  entries: LedgerEntryOut[],
+  maxSlices: number = MAX_CATEGORY_SLICES,
+): CategorySlice[] {
+  const totals = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.amount_cents >= 0) continue;
+    const label = entry.category?.trim() ? entry.category.trim() : UNCATEGORISED;
+    totals.set(label, (totals.get(label) ?? 0) + Math.abs(entry.amount_cents));
+  }
+  return categorySlicesFromTotals(totals, maxSlices);
+}
+
+/** The label the server leaves to the client: a null/blank category is "Uncategorised". */
+export function categoryLabel(category: string | null): string {
+  return category?.trim() ? category.trim() : UNCATEGORISED;
 }
 
 export interface DuesProgress {

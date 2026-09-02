@@ -24,10 +24,12 @@ import {
   decideSpendApproval,
   exportLedgerCsv,
   listDuesCycles,
+  getLedgerSummary,
   listLedger,
   listSpendApprovals,
   type DuesCycleOut,
   type LedgerEntryOut,
+  type LedgerSummaryOut,
   type LedgerEntryType,
   type SpendApprovalOut,
 } from "@/api/finance";
@@ -53,7 +55,7 @@ import {
 } from "@/components";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { shareCsv } from "@/lib/export";
-import { duesProgress, runningBalance, spendByCategory } from "@/lib/treasury";
+import { categoryLabel, categorySlicesFromTotals } from "@/lib/treasury";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { inputField, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
@@ -151,6 +153,7 @@ export default function TreasurerScreen() {
   const [membership, setMembership] = useState<MyMembershipOut | null | undefined>(undefined);
   const [cycles, setCycles] = useState<DuesCycleOut[]>([]);
   const [ledger, setLedger] = useState<LedgerEntryOut[] | null>(null);
+  const [summary, setSummary] = useState<LedgerSummaryOut | null>(null);
   const [approvals, setApprovals] = useState<SpendApprovalOut[] | null>(null);
   const [decidingId, setDecidingId] = useState<string | null>(null);
   const [exportingCsv, setExportingCsv] = useState(false);
@@ -184,16 +187,19 @@ export default function TreasurerScreen() {
   const chapterId = membership?.chapter_id ?? null;
 
   const loadDashboard = useCallback(async (id: string) => {
-    const [duesCycles, entries, spendApprovals, members, paymentsStatus] = await Promise.all([
-      listDuesCycles(id),
-      listLedger(id),
-      listSpendApprovals(id),
-      listMembers(id),
-      // Connect status is informational; a Stripe hiccup shouldn't blank the ledger.
-      getChapterPaymentsStatus(id).catch(() => null),
-    ]);
+    const [duesCycles, entries, ledgerSummary, spendApprovals, members, paymentsStatus] =
+      await Promise.all([
+        listDuesCycles(id),
+        listLedger(id),
+        getLedgerSummary(id),
+        listSpendApprovals(id),
+        listMembers(id),
+        // Connect status is informational; a Stripe hiccup shouldn't blank the ledger.
+        getChapterPaymentsStatus(id).catch(() => null),
+      ]);
     setCycles(duesCycles);
     setLedger(entries);
+    setSummary(ledgerSummary);
     setApprovals(spendApprovals);
     setPayments(paymentsStatus);
     // user_id -> display name. GET /chapters/{id}/members joins the name in; there
@@ -220,9 +226,23 @@ export default function TreasurerScreen() {
   }, [loadDashboard]);
 
   const entries = ledger ?? [];
-  const balance = entries.reduce((sum, entry) => sum + entry.amount_cents, 0);
+  // c258: NOTHING here derives a number from `entries`. Every figure below comes from
+  // GET /chapters/{id}/ledger/summary, computed over the WHOLE ledger server-side, so
+  // that paginating the list cannot turn page one into "the" balance. The list is
+  // render-only from here on, and that invariant is what PR B depends on - if you are
+  // about to reduce `entries` into a number, you are reintroducing the bug.
+  const balance = summary?.balance_cents ?? 0;
+  // The COUNT is a server number too. `entries.length` would say "50 entries" about a
+  // 200-entry ledger the moment the list is paginated - the same claim-about-the-whole
+  // made from a part that the balance itself used to make.
+  const entryCount = summary?.entry_count ?? 0;
   // Entries that a correction points at, so both sides of a correction pair are labeled.
   const correctedIds = new Set(
+    // THE ONE REMAINING READ OF `entries`, and it is deliberately not a number: this is
+    // a label set, marking which of the RENDERED rows are corrected so both halves of a
+    // correction pair read as a pair. Being scoped to the loaded page is correct here -
+    // it labels what is on screen - which is exactly why it survives the c258 rule that
+    // no FIGURE may be derived from the list.
     entries.map((entry) => entry.corrects_entry_id).filter((id): id is string => id !== null),
   );
   // Newest first for the ledger list (balance still sums everything).
@@ -233,10 +253,33 @@ export default function TreasurerScreen() {
   // kept out of the screen so the numbers behind the pictures can be tested without
   // rendering anything — a chart drawn perfectly from a wrong total is worse than no
   // chart, because it is confidently wrong about someone's money.
-  const balancePoints = runningBalance(entries);
-  const categorySlices = spendByCategory(entries);
-  const dues = duesProgress(cycle, entries, memberNames.size);
-  const paidCount = dues?.paidCount ?? 0;
+  // Month-bucketed running balance from the server. The x axis is the bucket instant,
+  // same shape BalanceTrend already consumed; only the resolution changed.
+  const balancePoints = (summary?.trend ?? []).map((point) => ({
+    x: Date.parse(point.period_start),
+    y: point.balance_cents,
+  }));
+  const categorySlices = categorySlicesFromTotals(
+    new Map((summary?.categories ?? []).map((c) => [categoryLabel(c.category), c.cents])),
+  );
+  // Dues now come from the server's netting (dues_payment + dues_installment, minus
+  // corrections). The old local formula read only dues_payment with Math.abs, so it
+  // missed every payment-plan installment and showed refunded money as collected.
+  const duesSummary = summary?.dues ?? null;
+  const expectedCents = (duesSummary?.amount_cents ?? 0) * memberNames.size;
+  const collectedCents = duesSummary?.collected_cents ?? 0;
+  const dues =
+    duesSummary === null
+      ? null
+      : {
+          collectedCents,
+          expectedCents,
+          paidCount: duesSummary.paid_members,
+          memberCount: memberNames.size,
+          fraction: expectedCents > 0 ? Math.min(collectedCents / expectedCents, 1) : 0,
+          overCollected: expectedCents > 0 && collectedCents > expectedCents,
+        };
+  const paidCount = duesSummary?.paid_members ?? 0;
 
   const sortedApprovals = [...(approvals ?? [])].sort((a, b) =>
     b.created_at.localeCompare(a.created_at),
@@ -300,6 +343,17 @@ export default function TreasurerScreen() {
         description: description.trim().length > 0 ? description.trim() : null,
       });
       setLedger((current) => [created, ...(current ?? [])]);
+      // The totals live on the server now, so appending to the list no longer updates
+      // them - the balance, trend and donut would all sit one entry stale, which is
+      // the same class of wrong number this card exists to remove, just fresher. Refetch
+      // rather than adjusting locally: re-deriving a balance in the client is exactly
+      // the habit being retired here, and a treasurer adding an entry can afford one
+      // request. A failed refresh leaves the previous totals rather than blanking them.
+      try {
+        setSummary(await getLedgerSummary(chapterId));
+      } catch {
+        /* keep the last known totals; the next dashboard load corrects them */
+      }
       resetForm();
     } catch (error) {
       showApiError(error, "Couldn't add that ledger entry");
@@ -535,17 +589,17 @@ export default function TreasurerScreen() {
           bar, then a ring beside a list. Identical spacing on identical rectangles is
           the tell §10.3 is about.
         */}
-        {entries.length > 0 ? (
+        {entryCount > 0 ? (
           <View style={{ gap: spacing.md }}>
             <SectionHeader
               title="Where the money stands"
-              caption="All of it derived from the ledger below, not a separate report"
+              caption="Totalled across the whole ledger, not only the entries listed below"
             />
 
             <Card>
               <AppText variant="title">Balance over time</AppText>
               <AppText variant="caption" tone="secondary" style={{ marginTop: spacing.xs }}>
-                {`${entries.length} ${entries.length === 1 ? "entry" : "entries"} · running total, oldest to newest`}
+                {`${entryCount} ${entryCount === 1 ? "entry" : "entries"} · running total by month, oldest to newest`}
               </AppText>
               <View style={{ marginTop: spacing.md }}>
                 <BalanceTrend points={balancePoints} format={dollarsRounded} />

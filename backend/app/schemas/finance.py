@@ -57,6 +57,71 @@ class LedgerEntryCreate(_Schema):
     corrects_entry_id: uuid.UUID | None = None
 
 
+class LedgerCategoryTotal(_Schema):
+    """One category's total SPENDING for a chapter, as POSITIVE cents.
+
+    `category` is None for entries that carry no category, and stays None rather than
+    being labelled here: the display string ("Uncategorised") is the client's, and
+    inventing a second copy of it server-side is how two surfaces start disagreeing
+    about a label. Income is excluded entirely - this mirrors the client's
+    spendByCategory, which skips amount_cents >= 0, because the donut is "where the
+    money went" and an income slice would make the total meaningless.
+    """
+
+    category: str | None = None
+    cents: int
+
+
+class LedgerBalancePoint(_Schema):
+    """Running balance at the END of one calendar month (board c258).
+
+    NOT a per-month delta: the value is the chapter's cumulative balance as of that
+    month's end, which is what the client's runningBalance() plotted per-transaction.
+    Bucketing by month changes the RESOLUTION of the trend, not its meaning, and bounds
+    the series by the chapter's AGE rather than by its transaction count - a four-year-
+    old chapter is 48 points forever.
+
+    `partial` marks the bucket the chapter is currently inside. A trend line that dips
+    at the end because the month is half over is a confidently-wrong chart, so the
+    client is told which point is incomplete rather than having to infer it from a clock.
+    """
+
+    period_start: datetime
+    balance_cents: int
+    partial: bool = False
+
+
+class LedgerDuesSummary(_Schema):
+    """Dues collection for the chapter's current cycle, netted the ONE house way.
+
+    Computed through core/dues_status.py's dues_contributions_subquery, never by
+    filtering the ledger here. That module is the single definition of "has this member
+    paid" precisely because two surfaces once answered it differently; this is a third
+    reader, and it inherits rather than reimplements.
+    """
+
+    cycle_id: uuid.UUID
+    amount_cents: int
+    collected_cents: int
+    paid_members: int
+
+
+class LedgerSummaryOut(_Schema):
+    """Every number the treasurer dashboard renders, computed server-side (board c258).
+
+    Exists so that paginating GET /chapters/{id}/ledger cannot silently corrupt a total.
+    Before this, the screen reduced the full list client-side for the balance, the trend,
+    the category donut and the dues meter - so the first page of a cursor would have
+    become "the" balance. The list is now render-only.
+    """
+
+    balance_cents: int
+    entry_count: int
+    categories: list[LedgerCategoryTotal]
+    trend: list[LedgerBalancePoint]
+    dues: LedgerDuesSummary | None = None
+
+
 class LedgerEntryOut(_Schema):
     id: uuid.UUID
     chapter_id: uuid.UUID
