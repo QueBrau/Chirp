@@ -2409,7 +2409,7 @@
       "owner": "court",
       "tag": "infra",
       "area": "orgs",
-      "title": "c226 HARNESS IN PROGRESS Sep 1 (chirps-7b, new Fable session onboarded by manager) - RUNNING THE TEST STAYS PARKED BY JOSE; what is being built is everything short of firing: scripted auth'd HTTP mix + WS connect-storm with the target URL as a PARAMETER defaulting to localhost, abort criteria written before it can run (error %, p95 ceiling, connection-headroom floor from the c248 arithmetic), rate caps so the harness itself cannot exceed agreed bounds, and a quiet-hour runbook. Must decide and defend: test WITH the newly-live c259 limits or elevate test accounts. Proven end-to-end against a LOCAL stack only - not one synthetic request touches prod under the park. Deliverable: PR so Jose's go becomes a same-day action.",
+      "title": "c226 HARNESS BUILT+PROVEN LOCALLY Sep 1 (chirps-7b), PR pending suite - 16/16 unit tests each falsified by named mutation; live local run 1743 req/60s zero 5xx zero 429s; abort machinery proven BOTH ways (absurd ceiling aborted in 4.3s naming the criterion); THE PARK IS IN CODE (non-local target refuses without approval block + flag + firebase auth); limiter decision argued: test WITH c259 limits, paced under them. One real bug found+fixed during proving (recorder self-deadlock). - RUNNING THE TEST STAYS PARKED BY JOSE; what is being built is everything short of firing: scripted auth'd HTTP mix + WS connect-storm with the target URL as a PARAMETER defaulting to localhost, abort criteria written before it can run (error %, p95 ceiling, connection-headroom floor from the c248 arithmetic), rate caps so the harness itself cannot exceed agreed bounds, and a quiet-hour runbook. Must decide and defend: test WITH the newly-live c259 limits or elevate test accounts. Proven end-to-end against a LOCAL stack only - not one synthetic request touches prod under the park. Deliverable: PR so Jose's go becomes a same-day action.",
       "detail": "Measures: p95 at 200 concurrent, pool-checkout 503 rate, WS capacity per ws instance, cold starts."
     },
     {
@@ -2697,7 +2697,7 @@
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c258 IN PROGRESS Aug 31 (chirps-ad) - UNBOUNDED LIST RESPONSES, staged after their scope re-check found 18 bare-list endpoints + 2 wrapper shapes the card missed (event guests {invites,rsvps}, lineage {nodes,edges,families}). STAGING RULED: PR1 Bucket B cap-only (roster-bounded: memberships, role-terms, attendance-read - which cannot exceed c264's write cap - plans, members, invites) BUILDING NOW; PR2 Bucket A cursors screen-by-screen, comments FIRST then LEDGER (grows weekly from day one, money-adjacent read) then meetings/polls then alumni/jobs/moderation; Bucket C: lineage capped generously (truncated tree is VISIBLY wrong), event guests -> own card (wrapper reshape = contract change). HONEST FRAMING in every PR: at alpha scale nothing truncates - durability work, never blocks a launch-critical merge. Client paging exercised per screen like c251's render pass, else it is c246's dark-service shape again.",
+      "title": "c258 IN PROGRESS Sep 1 (chirps-ad) - PR1 MERGED #172, COMMENTS CURSOR MERGED b7090b9 (PR #173: newest-window default but oldest-first order preserved so short threads return byte-identical; (created_at,id) compound cursor after the worker proved their first tie-break test never contained a tie - HTTP rows get distinct microseconds, now seeds 6 same-timestamp rows straight to the DB; live pass caught a header rendering truncated length as fact AND a real React setState-during-render error pre-dating the card; verify-contract caught a query-building shape that silently un-checks a route). NEXT: ledger cursor (manager close look). - UNBOUNDED LIST RESPONSES, staged after their scope re-check found 18 bare-list endpoints + 2 wrapper shapes the card missed (event guests {invites,rsvps}, lineage {nodes,edges,families}). STAGING RULED: PR1 Bucket B cap-only (roster-bounded: memberships, role-terms, attendance-read - which cannot exceed c264's write cap - plans, members, invites) BUILDING NOW; PR2 Bucket A cursors screen-by-screen, comments FIRST then LEDGER (grows weekly from day one, money-adjacent read) then meetings/polls then alumni/jobs/moderation; Bucket C: lineage capped generously (truncated tree is VISIBLY wrong), event guests -> own card (wrapper reshape = contract change). HONEST FRAMING in every PR: at alpha scale nothing truncates - durability work, never blocks a launch-critical merge. Client paging exercised per screen like c251's render pass, else it is c246's dark-service shape again.",
       "detail": ""
     },
     {
@@ -2810,11 +2810,11 @@
     },
     {
       "id": "c268",
-      "col": "progress",
+      "col": "done",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c268 IN PROGRESS (chirps-23, branch court/c268-verify-target-limit) [FOLLOW-UP (renumbered off a third collision - branchless card yields) from c263, backend, small] campus_verification's send limiter is keyed per CALLER (campus_verify_send:{user.id}) - it bounds one account's sends but NOT N accounts all targeting ONE victim .edu inbox (mailbox-bombing a specific student; cost lands on the c240 Resend quota). Fix shape: add a SECOND allow() check keyed on the normalized target address, generous (a real student re-requesting a code a few times must never hit it; N strangers aiming at one inbox should). Both-ways proof. Uses c259's core/rate_limits.py pattern - do not hand-copy the check.",
+      "title": "c268 DONE Sep 1 - MERGED 3f7b4a8 (PR #174, CI 4/4 incl. pytest on the merge ref, suite 785/5/0 on the stated base). Verification sends now limited per TARGET mailbox (30/24h) alongside per-caller, closing the N-accounts-one-victim-inbox shape. Craft on record: ceiling has a documented FLOOR above the per-caller allowance (~12/hr legit owner) so a frustrated student never hits it; plus-addressing AND case folded in _mailbox_key ITSELF (manager's case check was right - folding lived upstream and a second caller would have reopened it); caller-check-first pinned by test because enforce_limit increments on raise. Worker caught their own vacuous case test - end-to-end variant passed with the fold REMOVED (upstream normalization masked it); the pinning test is a unit test on _mailbox_key, verified both directions. Denial-vector tradeoff documented; number coupled to c240.",
       "detail": ""
     },
     {
@@ -2842,6 +2842,24 @@
       "tag": "",
       "area": "",
       "title": "c271 DECISION Sep 1 (Jose) - CHIRP STAYS PROPRIETARY; AGPL rejected: 'we dont want this to be open source its a private app we are building for revenue'. Consequences: libsignal excluded from the E2EE plan permanently (no commercial license exists); the long-standing 'AGPL when E2EE starts' pending item is RESOLVED as rejected; any future dependency review must screen for AGPL/SSPL-class licenses BEFORE a spike builds on one - this decision was nearly made for us by a library choice. Backend prekey directory survives the swap (maps to vodozemac's identity/fallback/one-time key model). E2EE work overall remains parked pending the Jose+Q talk, which now only needs to settle timing.",
+      "detail": ""
+    },
+    {
+      "id": "c275",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c275 [DEFERRED BY DESIGN from c258 - needs a design pass, not a number] GET /events/{event_id}/guests returns unbounded invites+rsvps in one wrapper (EventGuestsOut, schemas/events.py:232-233). UNLIKE every other c258 list this is NOT roster-bounded: a public-tier event's RSVP list is open to the whole verified campus - the one true runaway. Cap-only is WRONG here for the reason it is right on lineage: a truncated guest list looks exactly like a short guest list, so a host silently plans for the wrong number. Fix = per-list cursors inside the wrapper (contract change every guest screen moves with) or split into two paginated endpoints. METHOD NOTE for future inventories: an unbounded list inside a wrapper object is invisible to a return-type scan - this was missed by exactly that.",
+      "detail": ""
+    },
+    {
+      "id": "c276",
+      "col": "done",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c276 MERGE-GO GIVEN Sep 1 (manager) for Q's #175 (c262 docs sweep - DEPLOY.md/HANDOFF.md only) and #176 (c273 start-a-conversation flow). #176 read against the honesty rules before the go: creates conversations ONLY, sendMessage has no caller, copy says 'Sending unlocks with E2EE' - c254's CI guard green. Q self-merges per lane rules. #169 also still green and awaiting his own merge.",
       "detail": ""
     }
   ],
