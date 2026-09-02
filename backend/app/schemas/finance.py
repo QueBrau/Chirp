@@ -104,6 +104,10 @@ class LedgerDuesSummary(_Schema):
     amount_cents: int
     collected_cents: int
     paid_members: int
+    # Reported alongside paid so the two surfaces answering "who has paid" are directly
+    # COMPARABLE, which is what the cross-endpoint test asserts. Splitting the roster the
+    # same way chapter_overview does is what makes drift detectable instead of arguable.
+    on_plan_members: int = 0
 
 
 class LedgerSummaryOut(_Schema):

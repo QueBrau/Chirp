@@ -263,16 +263,51 @@ async def _current_cycle_dues(
             .group_by(contributions.c.user_id)
         )
     ).all()
-    # Net per member, then fold. `collected_cents` is the NET total the chapter is
-    # holding for this cycle; `paid_members` counts members whose own net is positive,
-    # which is the same rule chapter_overview uses so the two screens cannot disagree.
-    collected = sum(int(net) for _, net in per_member)
-    paid_members = sum(1 for _, net in per_member if int(net) > 0)
+
+    # Which members have an ACTIVE plan right now - loaded exactly as chapter_overview
+    # loads it, and 'active' only: a COMPLETED plan must not make anyone read as paid,
+    # because a completed plan whose installments were later corrected away is a member
+    # who owes again (the latch bug c195's adversarial review removed).
+    active_plan_user_ids = {
+        row.user_id
+        for row in await session.execute(
+            select(models.DuesPaymentPlan.user_id).where(
+                models.DuesPaymentPlan.dues_cycle_id == cycle.id,
+                models.DuesPaymentPlan.status == "active",
+            )
+        )
+    }
+
+    # THE SAME THREE-WAY SPLIT chapter_overview applies, and that agreement is PINNED BY
+    # A TEST rather than by this sentence:
+    # tests/test_c281_dues_paid_agreement.py drives both endpoints against one seeded
+    # member and fails if the two counts drift.
+    #
+    # This function previously used a plain `net > 0` under a comment CLAIMING it matched
+    # chapter_overview. It did not, and the claim is what made the mismatch invisible in
+    # review: the two disagreed for exactly one member - on an active plan, partway paid,
+    # net positive but under the cycle total - whom the treasurer screen called paid while
+    # the president screen called on-plan. That is the same one-number-two-surfaces bug
+    # core/dues_status.py exists to end. A comment asserting two surfaces agree is a claim
+    # that needs a test, not a reading.
+    collected = 0
+    paid_members = 0
+    on_plan_members = 0
+    for user_id, raw_net in per_member:
+        net = int(raw_net)
+        collected += net
+        if net >= cycle.amount_cents:
+            paid_members += 1
+        elif user_id in active_plan_user_ids:
+            on_plan_members += 1
+        elif net > 0:
+            paid_members += 1
     return LedgerDuesSummary(
         cycle_id=cycle.id,
         amount_cents=cycle.amount_cents,
         collected_cents=collected,
         paid_members=paid_members,
+        on_plan_members=on_plan_members,
     )
 
 

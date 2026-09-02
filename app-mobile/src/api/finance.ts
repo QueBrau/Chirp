@@ -167,6 +167,10 @@ export interface LedgerDuesSummary {
   amount_cents: number;
   collected_cents: number;
   paid_members: number;
+  /** The other half of the same three-way split, reported so the treasurer and
+   * president surfaces are directly comparable - a cross-endpoint test asserts they
+   * agree, which is what stops the two drifting apart again. */
+  on_plan_members: number;
 }
 
 /**
