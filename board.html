@@ -2863,6 +2863,15 @@
       "detail": ""
     },
     {
+          "id": "c278",
+          "col": "backlog",
+          "owner": "",
+          "tag": "backend",
+          "area": "orgs",
+          "title": "c278 THE TREASURER CANNOT READ THE ENDPOINT THAT COMPUTES DUES CORRECTLY - GET /chapters/{id}/overview is gated require_role(MEMBERS_ADMIN), and MEMBERS_ADMIN is frozenset({president}). DuesOverview already carries collected_cents / paid_members / on_plan_members computed through core/dues_status.py's netting (installments + corrections), which is the authoritative definition. The treasurer - the primary owner of that number - cannot call it. THIS IS WHY the treasurer screen rolled its own duesProgress in the client, and that version missed installment payers entirely and displayed refunded money as collected (found and corrected in the c258 ledger-summary PR). The correction did NOT widen this gate: the summary endpoint recomputes via dues_contributions_subquery under DUES_ADMIN, deliberately, because widening a president-only endpoint is a product decision and not a pagination card's to make. THE QUESTION FOR JOSE: should a treasurer be able to read the chapter overview, or should the dues figures it carries be exposed on a treasurer-scoped endpoint instead? Either answer is defensible; what is not defensible is the current shape, where the person responsible for the money is refused the correctly-computed version of it and a second, wrong copy grew to fill the gap.",
+          "detail": "Found while building c258's ledger summary (manager-directed requirement that dues inputs come from the house logic rather than a fresh aggregate - the rule caught a live bug). Not urgent: with the c258 correction the treasurer screen now shows the right numbers via its own DUES_ADMIN-gated route, so nothing is broken today. The card is about the gate, not the numbers. Worth deciding before more surfaces need chapter-level aggregates, because the failure mode here was not 'a screen was wrong' - it was 'a screen could not reach the right answer, so it invented one', which is a shape that repeats."
+    },
+    {
       "id": "c277",
       "col": "done",
       "owner": "",
