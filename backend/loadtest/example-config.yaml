@@ -1,0 +1,54 @@
+# c226 load-test harness config — LOCAL PROVING SHAPE.
+# The prod-run shape (if Jose ever lifts the park) is derived in loadtest/RUNBOOK.md;
+# do not point this file at prod by editing base_url — the harness refuses a
+# non-local target without an approval block AND --confirm-park-lifted.
+
+base_url: "http://127.0.0.1:8010"
+ws_url: "ws://127.0.0.1:8010/ws"
+auth_mode: "emulated"
+
+duration_seconds: 60
+think_seconds: 2.0
+
+# Relative weights, read-heavy like a real campus feed app (~85/15 read/write).
+mix_weights:
+  feed_campus: 30
+  chirps_list: 18
+  posts_list: 15
+  comments_list: 12
+  me: 5
+  post_create: 4
+  comment_create: 8
+  chirp_create: 8
+
+caps:
+  # Hard self-limits, enforced by the harness regardless of server behavior.
+  max_rps: 40
+  max_concurrent_requests: 30
+  # Calls per minute per virtual user; the loader refuses anything above 50%
+  # of the corresponding c259 production limit.
+  per_user_writes_per_minute:
+    post_create: 3.0      # c259 limit: 60/10min = 6/min
+    comment_create: 3.0   # c259 limit: 60/10min = 6/min
+    chirp_create: 1.5     # c259 limit: 30/10min = 3/min
+
+abort:
+  # All fields required; the harness refuses to start without them.
+  max_error_rate_pct: 2.0
+  max_429_rate_pct: 1.0
+  read_p95_ceiling_ms: 800
+  write_p95_ceiling_ms: 1500
+  max_ws_failure_pct: 5.0
+  window_seconds: 30
+  min_samples: 50
+
+ws:
+  max_sockets: 40
+  connects_per_second: 5
+  hold_seconds: 15
+
+# For a NON-LOCAL run only (currently parked by Jose): uncomment and fill both
+# fields, then also pass --confirm-park-lifted on the command line.
+# approval:
+#   approved_by: ""
+#   date: ""
