@@ -899,10 +899,39 @@ async def unlike_post(
 @router.get("/posts/{post_id}/comments")
 async def list_comments(
     post_id: uuid.UUID,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[PostCommentOut]:
     """List a post's comments, oldest first, excluding soft-deleted and blocked ones.
+
+    PAGED NEWEST-PAGE-FIRST, RETURNED OLDEST-FIRST (c258), which is deliberately not
+    quite what messages.py does and the difference is the point:
+
+    - A thread is read top to bottom, and the conversation continues at the BOTTOM,
+      which is also where CommentsSheet puts its composer. So the page a reader needs
+      by default is the MOST RECENT one, not the oldest - paging forward from the
+      start of a 300-comment thread to reach today's replies is the wrong default.
+      The query therefore walks backwards (created_at DESC) from `before`.
+    - But the RESPONSE ORDER STAYS ASCENDING, unlike list_messages which returns
+      descending and leaves the reversal to every caller. Keeping it ascending means
+      the existing render path is untouched and the reversal happens once, here,
+      instead of in each client. A thread shorter than `limit` - which is every thread
+      today - returns exactly what it returned before this change.
+
+    To load older comments, pass the OLDEST comment you already hold (the first
+    element) as `before`/`before_id`, and prepend the result. Both together give the
+    exact (created_at, id) tie-break so comments sharing a timestamp at a page
+    boundary are never skipped; `before` alone still works but does not guarantee it.
+
+    NO warn_if_capped HERE, on purpose. On a cap-only endpoint a full response means
+    "probably truncated" and is worth a warning. On a cursor a full page is the NORMAL
+    case - it means "there may be more" - so warning per page would be pure noise. The
+    equivalent risk here is a client that stops paging early, which the server cannot
+    see; the guard against it is the client following the cursor until a short page,
+    which is exercised in the app rather than asserted here.
 
     c109: blocking was half-implemented. The block filter existed on the POST query
     (_post_counts_select's outerjoin on Post.author_id) and on chirps, but not here — so
@@ -926,7 +955,7 @@ async def list_comments(
     thread of twenty comments must cost one query, not twenty requests.
     """
     await _readable_post(post_id, user, session)
-    result = await session.execute(
+    stmt = (
         select(models.PostComment, models.User.display_name, models.User.avatar_url)
         # INNER JOIN, same call as _post_counts_select makes: display_name is non-null
         # on PostCommentOut, and every comment has an author row by FK.
@@ -941,11 +970,26 @@ async def list_comments(
             models.PostComment.deleted_at.is_(None),
             models.UserBlock.blocker_id.is_(None),
         )
-        .order_by(models.PostComment.created_at)
     )
+    # Built imperatively, same shape as list_messages and list_campus_feed, so the
+    # cursor branch reads the same way in all three.
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.PostComment.created_at, models.PostComment.id)
+            < (before, before_id)
+        )
+    elif before is not None:
+        stmt = stmt.where(models.PostComment.created_at < before)
+    stmt = stmt.order_by(
+        models.PostComment.created_at.desc(), models.PostComment.id.desc()
+    ).limit(limit)
+
+    result = await session.execute(stmt)
+    rows = list(result.all())
+    rows.reverse()  # newest page, handed back in reading order (see the docstring)
     return [
         _comment_out(comment, display_name, avatar_url)
-        for comment, display_name, avatar_url in result.all()
+        for comment, display_name, avatar_url in rows
     ]
 
 
