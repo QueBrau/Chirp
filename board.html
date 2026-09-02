@@ -2909,11 +2909,11 @@
     },
     {
       "id": "c282",
-      "col": "progress",
+      "col": "done",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c282 IN PROGRESS Sep 2 (chirps-ad) - MERGED MONEY BUG IN #179, author-caught by probe, fix ahead of PR B. ledger summary said paid_members=1 where overview says paid=0/on_plan=1 for the SAME member (active plan, partial payment): summary used net>0, the house rule is three-way (net>=total paid; else active plan on_plan; else net>0 paid). Third surface reintroducing the exact split dues_status.py exists to end. Prod impact ZERO (empty ledger, no plans) - the window to fix in. DECISIONS LOG + REVIEW STANDARD ADOPTED: a comment claiming two surfaces agree is a CLAIM THAT NEEDS A TEST, not a reading - blocking on money surface. The #179 comment asserted agreement the author had read off a docstring, not the branch; manager's line-read trusted it. Fix = identical three-way rule + a cross-endpoint equality test seeding the discriminating member (falsified by reverting to net>0), and the false comment REPLACED by a pointer to the test.",
+      "title": "c282 DONE Sep 2 - MERGED ce81ca3 (PR #180, CI 4/4, suite 819/5/0). The treasurer and president now answer 'who has paid' IDENTICALLY: three-way house rule (net>=total paid; else ACTIVE plan on_plan - completed plans excluded because corrected-away installments mean the member owes again; else net>0 paid), active-plan set loaded exactly as chapter_overview loads it, NO forced helper extraction - the TEST prevents drift. Cross-endpoint agreement test seeds the discriminating member and fails naming both screens ('treasurer and president disagree about who has PAID: 1 vs 0'); a SECOND test pins the SEED itself so the agreement assertion can never go quietly vacuous - the sixth vacuous-green defense this sprint, this one preemptive. False comment replaced by a pointer to the test. on_plan_members added to the summary so the surfaces are fully comparable. Author's habit-rule adopted alongside the manager's review rule.",
       "detail": ""
     }
   ],
