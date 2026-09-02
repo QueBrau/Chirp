@@ -224,7 +224,8 @@
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
-<script id="board-data" type="application/json">{
+<script id="board-data" type="application/json">
+{
   "updated": 1787623688303,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
@@ -2863,13 +2864,13 @@
       "detail": ""
     },
     {
-          "id": "c278",
-          "col": "backlog",
-          "owner": "",
-          "tag": "backend",
-          "area": "orgs",
-          "title": "c278 THE TREASURER CANNOT READ THE ENDPOINT THAT COMPUTES DUES CORRECTLY - GET /chapters/{id}/overview is gated require_role(MEMBERS_ADMIN), and MEMBERS_ADMIN is frozenset({president}). DuesOverview already carries collected_cents / paid_members / on_plan_members computed through core/dues_status.py's netting (installments + corrections), which is the authoritative definition. The treasurer - the primary owner of that number - cannot call it. THIS IS WHY the treasurer screen rolled its own duesProgress in the client, and that version missed installment payers entirely and displayed refunded money as collected (found and corrected in the c258 ledger-summary PR). The correction did NOT widen this gate: the summary endpoint recomputes via dues_contributions_subquery under DUES_ADMIN, deliberately, because widening a president-only endpoint is a product decision and not a pagination card's to make. THE QUESTION FOR JOSE: should a treasurer be able to read the chapter overview, or should the dues figures it carries be exposed on a treasurer-scoped endpoint instead? Either answer is defensible; what is not defensible is the current shape, where the person responsible for the money is refused the correctly-computed version of it and a second, wrong copy grew to fill the gap.",
-          "detail": "Found while building c258's ledger summary (manager-directed requirement that dues inputs come from the house logic rather than a fresh aggregate - the rule caught a live bug). Not urgent: with the c258 correction the treasurer screen now shows the right numbers via its own DUES_ADMIN-gated route, so nothing is broken today. The card is about the gate, not the numbers. Worth deciding before more surfaces need chapter-level aggregates, because the failure mode here was not 'a screen was wrong' - it was 'a screen could not reach the right answer, so it invented one', which is a shape that repeats."
+      "id": "c278",
+      "col": "backlog",
+      "owner": "",
+      "tag": "backend",
+      "area": "orgs",
+      "title": "c278 THE TREASURER CANNOT READ THE ENDPOINT THAT COMPUTES DUES CORRECTLY - GET /chapters/{id}/overview is gated require_role(MEMBERS_ADMIN), and MEMBERS_ADMIN is frozenset({president}). DuesOverview already carries collected_cents / paid_members / on_plan_members computed through core/dues_status.py's netting (installments + corrections), which is the authoritative definition. The treasurer - the primary owner of that number - cannot call it. THIS IS WHY the treasurer screen rolled its own duesProgress in the client, and that version missed installment payers entirely and displayed refunded money as collected (found and corrected in the c258 ledger-summary PR). The correction did NOT widen this gate: the summary endpoint recomputes via dues_contributions_subquery under DUES_ADMIN, deliberately, because widening a president-only endpoint is a product decision and not a pagination card's to make. THE QUESTION FOR JOSE: should a treasurer be able to read the chapter overview, or should the dues figures it carries be exposed on a treasurer-scoped endpoint instead? Either answer is defensible; what is not defensible is the current shape, where the person responsible for the money is refused the correctly-computed version of it and a second, wrong copy grew to fill the gap.",
+      "detail": "Found while building c258's ledger summary (manager-directed requirement that dues inputs come from the house logic rather than a fresh aggregate - the rule caught a live bug). Not urgent: with the c258 correction the treasurer screen now shows the right numbers via its own DUES_ADMIN-gated route, so nothing is broken today. The card is about the gate, not the numbers. Worth deciding before more surfaces need chapter-level aggregates, because the failure mode here was not 'a screen was wrong' - it was 'a screen could not reach the right answer, so it invented one', which is a shape that repeats."
     },
     {
       "id": "c277",
@@ -2879,6 +2880,15 @@
       "area": "",
       "title": "c277 DEPLOY WINDOW #4 Sep 1 - CLOSED CLEAN, deploy-only. chirp-api-00044-kqn / chirp-ws-00009-6jd, deploy-verify 4/4 BOTH. NOW LIVE: #172's seven read caps + warn_if_capped observability, #173's comments cursor (server side; client half ships in the next EAS build), #174's per-target verification limiter. Prod now carries every backend merge through 3f7b4a8. Still pending a window: nothing - backend is fully caught up. Mobile-only merges (counters, comments paging UI, Q's #176 flow when he merges) ride the c39 device build, not a deploy.",
       "detail": ""
+    },
+    {
+      "id": "c279",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c279 [JOSE - RULING NEEDED: safety vs anonymity] Block-by-chirp deanonymizes the anonymous author through NAMED surfaces (c270 sweep finding F1, manager-confirmed Sep 1). The by-chirp endpoint itself is airtight; the ROW it writes is the leak: a feed diff before/after one block names the chirp author, and an unblock then erases the evidence. Three fix shapes in detail - this is a product ruling, not a worker build, until Jose decides.",
+      "detail": "THE CHAIN, every line read (chirps-7b) and the two load-bearing cites cross-checked by the manager: POST /moderation/blocks/by-chirp/{chirp_id} (moderation.py:391-432) is deliberately 204-no-body, no 409 split, constant-work upsert - it never reveals the resolved author_id. But it inserts an ORDINARY UserBlock row, indistinguishable from a manual block, and that row filters the blocker's NAMED content everywhere: chapter/campus post lists drop the author's posts (feed.py:259-264; FeedPostOut carries author_id AND display_name, schemas/social.py:69,90), comment lists and counts drop them too (feed.py:934-942, 229-232, c228 display identity). ATTACK: snapshot feed -> block by-chirp -> re-fetch -> the named person who vanished IS the anonymous author, by display_name AND author_id (learned from the pre-block snapshot). ERASE-THE-EVIDENCE STEP, which is what makes this quiet in practice: DELETE /moderation/blocks?blocked_id=<learned author_id> (moderation.py:434-446) restores the feed; the victim is never notified and nothing durable marks that it happened. COROLLARY, same root: the campus chirp list filter (chirps.py:59-67) makes the author's OTHER chirps vanish - cross-chirp linkage, the exact bit by-chirp's own docstring closes elsewhere. CONTEXT: c243 already closed the DM-probe variant of this chain (asymmetric block direction + shared refusal string) and DEFERRED block provenance - the class is partially known; the read-path diff vector was written down nowhere until this card. FIX SHAPES: (a) block provenance column; by-chirp blocks filter ONLY chirp surfaces - this is the COMPLETION of c243's already-deferred migration, not a new invention; preserves both safety (that author's chirps stay hidden) and \u00a78.3 anonymity on named surfaces; cost: migration + filter changes at the cited sites. (b) by-chirp block hides only that ONE chirp; cheapest, but weakens the safety feature (the same author's next chirp is visible again). (c) accept and document: blocking is the stronger promise, anonymity yields to it; zero code, but SPEC \u00a78.3's cross-surface promise must be rewritten honestly. THE TRADE, plainly: (a) and (b) keep chirp authors anonymous from their blockers; (c) keeps blocking maximally protective. A student who blocks because they are being harassed wants (c); a student chirping about their own chapter needs (a) or (b) to speak safely. MONEY PATHS untouched; finding is read-path only."
     }
   ],
   "decisions": [
@@ -3031,7 +3041,8 @@
     "Aug 29 - GOTCHA WORTH KEEPING: scripts/deploy-verify run IMMEDIATELY after a deploy can report a spurious failure (seen once here: 3 passed / 1 failed, then 4/4 clean on two consecutive re-runs with no code change). Cause is a cold-start container on the brand-new revision, not a regression. RULE: never act on a single post-deploy verify failure - re-run it before believing it, and only investigate if it fails consistently. Do not 'fix' anything on one red run.",
     "Aug 30 - EMAIL: SELF-HOSTING EVALUATED AND REJECTED (Jose asked about dropping Resend for nodemailer to avoid paying; he chose 'leave Resend for alpha'). The blocker is structural, not effort: Gmail requires valid REVERSE DNS on the sending IP, and Google documents that PTR records cannot be set for Cloud NAT / non-VM IPs - so a Cloud Run service can get a static egress IP but can NEVER get valid reverse DNS. Self-hosting therefore means running an MTA on a Compute Engine VM, not a library swap. GCP also blocks outbound port 25 externally (587/465 are open, but those are submission-to-a-relay, i.e. still a third party). Two more corrections: nodemailer is a NODE library and our backend is Python (aiosmtplib/smtplib are the equivalents), and all of them are SMTP CLIENTS, not mail servers - so the swap would not remove a provider at all. Total prize was $0.50-20/month. Our mail is .edu verification codes = alpha gate c71, so risking inbox placement to save that is a bad trade. Escape hatch if cost ever bites: Amazon SES behind the existing abstraction, ~$0.50-0.80/mo at our volume."
   ]
-}</script>
+}
+</script>
 <script>
 (function () {
   var DATA = document.getElementById('board-data');
