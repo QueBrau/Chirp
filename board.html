@@ -224,8 +224,7 @@
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
-<script id="board-data" type="application/json">
-{
+<script id="board-data" type="application/json">{
   "updated": 1787623688303,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
@@ -2916,6 +2915,15 @@
       "area": "",
       "title": "c282 DONE Sep 2 - MERGED ce81ca3 (PR #180, CI 4/4, suite 819/5/0). The treasurer and president now answer 'who has paid' IDENTICALLY: three-way house rule (net>=total paid; else ACTIVE plan on_plan - completed plans excluded because corrected-away installments mean the member owes again; else net>0 paid), active-plan set loaded exactly as chapter_overview loads it, NO forced helper extraction - the TEST prevents drift. Cross-endpoint agreement test seeds the discriminating member and fails naming both screens ('treasurer and president disagree about who has PAID: 1 vs 0'); a SECOND test pins the SEED itself so the agreement assertion can never go quietly vacuous - the sixth vacuous-green defense this sprint, this one preemptive. False comment replaced by a pointer to the test. on_plan_members added to the summary so the surfaces are fully comparable. Author's habit-rule adopted alongside the manager's review rule.",
       "detail": ""
+    },
+    {
+      "id": "c283",
+      "col": "done",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c283 DEPLOY WINDOW #5 Sep 2 - CLOSED CLEAN, deploy-only. chirp-api-00045-2k2 / chirp-ws-00010-slw, deploy-verify 4/4 both, plus a direct probe of the NEW route: GET /chapters/{id}/ledger/summary answers 401 (mounted and gated) - first probe 404'd because the manager GUESSED the path (/ledger-summary), the c250 wrong-target shape again, resolved by reading the router before diagnosing. NOW LIVE: #179 treasurer summary endpoint + #180 paid/on-plan agreement fix. Backend fully caught up with main through ce81ca3. WHY THIS WINDOW RAN EARLY rather than batching: main's treasurer screen calls the summary endpoint, so any device build cut from main would have 404'd the treasurer tab against the old prod - prod must stay ahead of any client build until c39 fires.",
+      "detail": ""
     }
   ],
   "decisions": [
@@ -3068,8 +3076,7 @@
     "Aug 29 - GOTCHA WORTH KEEPING: scripts/deploy-verify run IMMEDIATELY after a deploy can report a spurious failure (seen once here: 3 passed / 1 failed, then 4/4 clean on two consecutive re-runs with no code change). Cause is a cold-start container on the brand-new revision, not a regression. RULE: never act on a single post-deploy verify failure - re-run it before believing it, and only investigate if it fails consistently. Do not 'fix' anything on one red run.",
     "Aug 30 - EMAIL: SELF-HOSTING EVALUATED AND REJECTED (Jose asked about dropping Resend for nodemailer to avoid paying; he chose 'leave Resend for alpha'). The blocker is structural, not effort: Gmail requires valid REVERSE DNS on the sending IP, and Google documents that PTR records cannot be set for Cloud NAT / non-VM IPs - so a Cloud Run service can get a static egress IP but can NEVER get valid reverse DNS. Self-hosting therefore means running an MTA on a Compute Engine VM, not a library swap. GCP also blocks outbound port 25 externally (587/465 are open, but those are submission-to-a-relay, i.e. still a third party). Two more corrections: nodemailer is a NODE library and our backend is Python (aiosmtplib/smtplib are the equivalents), and all of them are SMTP CLIENTS, not mail servers - so the swap would not remove a provider at all. Total prize was $0.50-20/month. Our mail is .edu verification codes = alpha gate c71, so risking inbox placement to save that is a bad trade. Escape hatch if cost ever bites: Amazon SES behind the existing abstraction, ~$0.50-0.80/mo at our volume."
   ]
-}
-</script>
+}</script>
 <script>
 (function () {
   var DATA = document.getElementById('board-data');
