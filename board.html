@@ -224,7 +224,8 @@
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
-<script id="board-data" type="application/json">{
+<script id="board-data" type="application/json">
+{
   "updated": 1787623688303,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
@@ -2891,11 +2892,11 @@
     },
     {
       "id": "c280",
-      "col": "backlog",
+      "col": "progress",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c280 [chirps-ad's c258 wave - now the HIGHEST-DAMAGE item left in the family] events-with-rsvps ships every event's FULL rsvps array unbounded THROUGH A LIVE CONSUMER: one public-tier party puts a campus's worth of RSVPs into every Events-segment load. Found in the c275 design pass (chirps-7b); outranks c275 itself, which has no live consumer at all.",
+      "title": "c280 [chirps-ad's c258 wave - now the HIGHEST-DAMAGE item left in the family] events-with-rsvps ships every event's FULL rsvps array unbounded THROUGH A LIVE CONSUMER: one public-tier party puts a campus's worth of RSVPs into every Events-segment load. IN PROGRESS Sep 2 (chirps-7b, branch court/c280-rsvp-summaries, stacked on c275 PR1's counts shape). Fix: same URL, response becomes {event, counts, going_preview (first 8), my_rsvp_status}; Events segment migrated in the SAME PR; SHARED-FILE NOTE: AvatarStack gains an optional total prop (additive) so the +N bubble reads the true count, not the preview length.",
       "detail": "GET /chapters/{chapter_id}/events-with-rsvps (events.py:197-240) cursors the EVENT page correctly ((starts_at, id) DESC, capped limit) but then fans an uncapped IN-query over the page and returns rsvps_by_event with NO per-event bound. Its own docstring says bounding the event page 'bounds the RSVP query as a consequence' and that the rsvps list 'does not need (and must not grow) a second cursor of its own' - TRUE for the NUMBER OF EVENTS queried, FALSE for rows per event, and that comment is exactly what convinces the next reader nothing is wrong (it read as a clean bill in a return-type scan; c275's method note - a list inside a wrapper is invisible to that scan - applies verbatim). GROWTH PATH: EventRsvp accrues campus-wide on public-tier events (PUT /events/{id}/rsvps is open to any verified camper who can read the event), so the LIVE consumer - the Events segment, app-mobile/src/api/events.ts:178 listEventsWithRsvps, the c43 1+N collapse - downloads every row on every load. FIX SHAPE (after c275's rsvp-counts exists): this wrapper carries counts per event (+ first-N rows only if the segment actually renders faces - check what it draws before deciding N), never full arrays; the full roster lives behind c275's paginated /events/{id}/rsvps. Owner: chirps-ad (their files, their wave)."
     },
     {
@@ -3076,7 +3077,8 @@
     "Aug 29 - GOTCHA WORTH KEEPING: scripts/deploy-verify run IMMEDIATELY after a deploy can report a spurious failure (seen once here: 3 passed / 1 failed, then 4/4 clean on two consecutive re-runs with no code change). Cause is a cold-start container on the brand-new revision, not a regression. RULE: never act on a single post-deploy verify failure - re-run it before believing it, and only investigate if it fails consistently. Do not 'fix' anything on one red run.",
     "Aug 30 - EMAIL: SELF-HOSTING EVALUATED AND REJECTED (Jose asked about dropping Resend for nodemailer to avoid paying; he chose 'leave Resend for alpha'). The blocker is structural, not effort: Gmail requires valid REVERSE DNS on the sending IP, and Google documents that PTR records cannot be set for Cloud NAT / non-VM IPs - so a Cloud Run service can get a static egress IP but can NEVER get valid reverse DNS. Self-hosting therefore means running an MTA on a Compute Engine VM, not a library swap. GCP also blocks outbound port 25 externally (587/465 are open, but those are submission-to-a-relay, i.e. still a third party). Two more corrections: nodemailer is a NODE library and our backend is Python (aiosmtplib/smtplib are the equivalents), and all of them are SMTP CLIENTS, not mail servers - so the swap would not remove a provider at all. Total prize was $0.50-20/month. Our mail is .edu verification codes = alpha gate c71, so risking inbox placement to save that is a bad trade. Escape hatch if cost ever bites: Amazon SES behind the existing abstraction, ~$0.50-0.80/mo at our volume."
   ]
-}</script>
+}
+</script>
 <script>
 (function () {
   var DATA = document.getElementById('board-data');
