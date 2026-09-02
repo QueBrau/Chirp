@@ -121,10 +121,10 @@ footer{padding:36px 0 0;color:var(--ink-3);font-size:.85rem}
   deployed system and the merged schema, not from intent — where the diagram and the code disagree, the code
   is right and this file is a bug.</p>
   <div class="meta">
-    <span>chirp-api-00041-tjt</span>
-    <span>chirp-ws-00006-vb8</span>
-    <span>schema 0029 (merged, not yet applied)</span>
-    <span>2026-08-30</span>
+    <span>chirp-api-00044-kqn</span>
+    <span>chirp-ws-00009-6jd</span>
+    <span>schema 0029 (applied to prod, window #2 Aug 30)</span>
+    <span>2026-09-01</span>
   </div>
 </header>
 
@@ -436,7 +436,7 @@ footer{padding:36px 0 0;color:var(--ink-3);font-size:.85rem}
     </svg>
     <figcaption><strong>Figure 2.</strong> Filled diamonds are composition — delete the whole and the parts go
     with it. Constraints in braces are enforced by the database, not by application code: the self-block
-    check arrives with migration 0029, and the one-dues-payment-per-cycle rule is a unique constraint backed
+    check arrived with migration 0029 (applied to prod Aug 30), and the one-dues-payment-per-cycle rule is a unique constraint backed
     by advisory-lock triggers across two tables.</figcaption>
   </figure>
 
@@ -613,10 +613,10 @@ footer{padding:36px 0 0;color:var(--ink-3);font-size:.85rem}
     <table>
       <thead><tr><th>Resource</th><th>Configured</th><th>Ceiling it implies</th><th>Evidence</th></tr></thead>
       <tbody>
-        <tr><td>chirp-api</td><td>maxScale 4 &times; concurrency 80</td><td>320 in-flight requests</td><td>Service description, live</td></tr>
-        <tr><td>chirp-ws</td><td>maxScale 2 &times; concurrency 200</td><td>400 concurrent sockets</td><td>Service description, live</td></tr>
-        <tr><td>Postgres</td><td>max_connections 100</td><td>Demand is 28 &mdash; 72 spare</td><td>Read through the proxy</td></tr>
-        <tr><td>Request timeout</td><td>3600 s, both services</td><td>Sockets survive an hour</td><td>Fixed 30 Aug; was 300 s</td></tr>
+        <tr><td>chirp-api</td><td>maxScale 4 &times; concurrency 80</td><td>320 in-flight requests</td><td>Service description, live &mdash; re-verified Sep 1 on 00044-kqn (window #4)</td></tr>
+        <tr><td>chirp-ws</td><td>maxScale 2 &times; concurrency 200</td><td>400 concurrent sockets</td><td>Service description, live &mdash; re-verified Sep 1 on 00009-6jd (window #4)</td></tr>
+        <tr><td>Postgres</td><td>max_connections 100</td><td>Demand is 28 &mdash; 72 spare</td><td>Read through the proxy, Aug 28</td></tr>
+        <tr><td>Request timeout</td><td>3600 s, both services</td><td>Sockets survive an hour</td><td>Fixed 30 Aug (was 300 s); still 3600 after windows #3/#4, re-read Sep 1</td></tr>
         <tr><td>Redis</td><td>Basic tier, 1 GB</td><td>No failover; realtime dies with it</td><td>Instance description</td></tr>
         <tr><td>Cloud SQL zone</td><td>ZONAL</td><td>No HA; restore rehearsed at ~25 min</td><td>Drill, 27 Aug</td></tr>
       </tbody>
@@ -626,7 +626,10 @@ footer{padding:36px 0 0;color:var(--ink-3);font-size:.85rem}
     <h3>Every ceiling here is computed, not measured</h3>
     <p>These follow from configuration that was read correctly, but no load has been driven against this
     system to confirm the arithmetic survives contact with real traffic. Treat them as upper bounds on
-    optimism until the load test runs.</p>
+    optimism until the load test runs. What changed on Sep 1: the harness to measure them now exists
+    (<code>backend/loadtest/</code>, board c226 &mdash; scripted HTTP mix, WS connect storm, mandatory abort
+    criteria, runbook), so when Jose lifts the park on running it, measurement is a same-day action. Until
+    that run, every number in this table stays computed.</p>
   </div>
 </section>
 
