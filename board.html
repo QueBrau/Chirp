@@ -2906,6 +2906,15 @@
       "area": "",
       "title": "c281 IN PROGRESS (chirps-7b, branch court/c281-architecture-refresh) ARCHITECTURE.html refresh: header meta (00041-tjt/00006-vb8, 'schema 0029 merged not applied', dated Aug 30) has drifted from live 00044-kqn/00009-6jd with 0029 applied; Fig-2 caption still says the self-block check 'arrives with' 0029; capacity evidence column pre-dates windows #2-#4; computed-ceilings callout pre-dates the c226 harness. Every number re-verified before edit (gcloud describe for revisions+maxScale/concurrency/timeout, board window cards for 0029). NOTE: the file contains NO security-gaps section and NO rate-limiting text - that assigned item does not exist in this file.",
       "detail": "Method per the file's own footer: verified against the live system where reachable (gcloud run describe, CLOUDSDK_PYTHON pointed at backend/.venv python3.12 - stock gcloud fails on the Mac's python3.9), board window cards (c260/c277) where prod-DB-gated. Ceilings stay labeled computed - the load test has NOT run; the callout gains one line: the harness now exists (c226, merged), so measuring is same-day once Jose lifts the park."
+    },
+    {
+      "id": "c282",
+      "col": "progress",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c282 IN PROGRESS Sep 2 (chirps-ad) - MERGED MONEY BUG IN #179, author-caught by probe, fix ahead of PR B. ledger summary said paid_members=1 where overview says paid=0/on_plan=1 for the SAME member (active plan, partial payment): summary used net>0, the house rule is three-way (net>=total paid; else active plan on_plan; else net>0 paid). Third surface reintroducing the exact split dues_status.py exists to end. Prod impact ZERO (empty ledger, no plans) - the window to fix in. DECISIONS LOG + REVIEW STANDARD ADOPTED: a comment claiming two surfaces agree is a CLAIM THAT NEEDS A TEST, not a reading - blocking on money surface. The #179 comment asserted agreement the author had read off a docstring, not the branch; manager's line-read trusted it. Fix = identical three-way rule + a cross-endpoint equality test seeding the discriminating member (falsified by reverting to net>0), and the false comment REPLACED by a pointer to the test.",
+      "detail": ""
     }
   ],
   "decisions": [
