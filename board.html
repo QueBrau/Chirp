@@ -2898,6 +2898,15 @@
       "area": "",
       "title": "c280 [chirps-ad's c258 wave - now the HIGHEST-DAMAGE item left in the family] events-with-rsvps ships every event's FULL rsvps array unbounded THROUGH A LIVE CONSUMER: one public-tier party puts a campus's worth of RSVPs into every Events-segment load. Found in the c275 design pass (chirps-7b); outranks c275 itself, which has no live consumer at all.",
       "detail": "GET /chapters/{chapter_id}/events-with-rsvps (events.py:197-240) cursors the EVENT page correctly ((starts_at, id) DESC, capped limit) but then fans an uncapped IN-query over the page and returns rsvps_by_event with NO per-event bound. Its own docstring says bounding the event page 'bounds the RSVP query as a consequence' and that the rsvps list 'does not need (and must not grow) a second cursor of its own' - TRUE for the NUMBER OF EVENTS queried, FALSE for rows per event, and that comment is exactly what convinces the next reader nothing is wrong (it read as a clean bill in a return-type scan; c275's method note - a list inside a wrapper is invisible to that scan - applies verbatim). GROWTH PATH: EventRsvp accrues campus-wide on public-tier events (PUT /events/{id}/rsvps is open to any verified camper who can read the event), so the LIVE consumer - the Events segment, app-mobile/src/api/events.ts:178 listEventsWithRsvps, the c43 1+N collapse - downloads every row on every load. FIX SHAPE (after c275's rsvp-counts exists): this wrapper carries counts per event (+ first-N rows only if the segment actually renders faces - check what it draws before deciding N), never full arrays; the full roster lives behind c275's paginated /events/{id}/rsvps. Owner: chirps-ad (their files, their wave)."
+    },
+    {
+      "id": "c281",
+      "col": "progress",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c281 IN PROGRESS (chirps-7b, branch court/c281-architecture-refresh) ARCHITECTURE.html refresh: header meta (00041-tjt/00006-vb8, 'schema 0029 merged not applied', dated Aug 30) has drifted from live 00044-kqn/00009-6jd with 0029 applied; Fig-2 caption still says the self-block check 'arrives with' 0029; capacity evidence column pre-dates windows #2-#4; computed-ceilings callout pre-dates the c226 harness. Every number re-verified before edit (gcloud describe for revisions+maxScale/concurrency/timeout, board window cards for 0029). NOTE: the file contains NO security-gaps section and NO rate-limiting text - that assigned item does not exist in this file.",
+      "detail": "Method per the file's own footer: verified against the live system where reachable (gcloud run describe, CLOUDSDK_PYTHON pointed at backend/.venv python3.12 - stock gcloud fails on the Mac's python3.9), board window cards (c260/c277) where prod-DB-gated. Ceilings stay labeled computed - the load test has NOT run; the callout gains one line: the harness now exists (c226, merged), so measuring is same-day once Jose lifts the park."
     }
   ],
   "decisions": [
