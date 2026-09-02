@@ -148,3 +148,14 @@ Redis — the handshake, auth, and DB-lookup path is exercised; the post-accept
 close is the documented no-Redis behavior from app/ws/gateway.py, not a failure.
 The abort machinery is proven live by a second run with an absurd ceiling
 (read_p95_ceiling_ms: 1) that must exit 2 with `RESULT: ABORTED`.
+
+**What local proving does NOT cover: delivery.** With no local Redis the
+subscribe-and-forward half of the gateway has never run under this harness.
+Phase A of the prod procedure is the first time the WS leg meets a live Redis —
+treat its first minutes as an experiment, not a formality. To close the gap
+before prod: on Q's Docker Mac, run the same recipe plus
+`docker run -d --name chirp-loadtest-redis -p 6379:6379 redis:7` and
+`REDIS_URL=redis://localhost:6379/0` on the uvicorn line, hold sockets open
+(`hold_seconds: 30`), and `docker exec chirp-loadtest-redis redis-cli PUBLISH
+user:<a-held-user-uuid> '{"type":"probe"}'` — a delivered frame proves the
+forward loop under storm.
