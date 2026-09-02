@@ -148,6 +148,51 @@ export async function getMyPlan(
   }
 }
 
+/** One category's total SPENDING, positive cents. `category` is null when unset. */
+export interface LedgerCategoryTotal {
+  category: string | null;
+  cents: number;
+}
+
+/** Running balance at the end of one calendar MONTH; `partial` marks the current one. */
+export interface LedgerBalancePoint {
+  period_start: string;
+  balance_cents: number;
+  partial: boolean;
+}
+
+/** Dues for the current cycle, netted server-side through the house definition. */
+export interface LedgerDuesSummary {
+  cycle_id: string;
+  amount_cents: number;
+  collected_cents: number;
+  paid_members: number;
+}
+
+/**
+ * Every number the treasurer dashboard renders, computed server-side (c258).
+ *
+ * The screen used to derive these by reducing the ledger LIST. That is only safe while
+ * the list is complete, so it had to stop before the list could be paginated - a total
+ * over page one, rendered as the total, is the worst kind of wrong on a money screen.
+ */
+export interface LedgerSummaryOut {
+  balance_cents: number;
+  entry_count: number;
+  categories: LedgerCategoryTotal[];
+  trend: LedgerBalancePoint[];
+  dues: LedgerDuesSummary | null;
+}
+
+export async function getLedgerSummary(
+  chapterId: string,
+  filters: { category?: string; from?: string; to?: string } = {},
+): Promise<LedgerSummaryOut> {
+  return request<LedgerSummaryOut>(`/chapters/${chapterId}/ledger/summary`, {
+    query: filters,
+  });
+}
+
 /** Treasurer ledger view with optional filters. */
 export async function listLedger(
   chapterId: string,
