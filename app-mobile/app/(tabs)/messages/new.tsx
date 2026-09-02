@@ -20,7 +20,7 @@
  */
 
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TextInput, View } from "react-native";
 
 import { Feather } from "@expo/vector-icons";
@@ -93,6 +93,10 @@ export default function NewConversationScreen() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [groupTitle, setGroupTitle] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // A ref, not the state above: two taps in the same frame both run against
+  // the SAME render's closure, where `submitting` is still false, so the state
+  // check cannot see the first tap. The ref mutates synchronously and can.
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     if (chapterId === null) {
@@ -127,9 +131,11 @@ export default function NewConversationScreen() {
 
   const submit = async () => {
     // Re-checked here, not just via the Button's disabled prop: a fast
-    // double-tap can queue a second onPress before the first setSubmitting(true)
-    // has re-rendered, and this is what actually stops the second POST.
-    if (selected.size === 0 || submitting) return;
+    // double-tap queues the second onPress before the first setSubmitting(true)
+    // has re-rendered, so both would see `disabled={false}` AND a stale
+    // `submitting === false`. Only the synchronous ref stops the second POST.
+    if (selected.size === 0 || submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       const conversation = await createConversation({
@@ -143,6 +149,7 @@ export default function NewConversationScreen() {
       router.replace(`/messages/${conversation.id}`);
     } catch (error) {
       showAlert("Couldn't start that conversation", createConversationErrorMessage(error));
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
