@@ -128,9 +128,15 @@ class Recorder:
 
     def ws_failure_pct(self) -> float:
         with self._lock:
-            if self.ws_attempts == 0:
-                return 0.0
-            return 100.0 * (self.ws_attempts - self.ws_connected) / self.ws_attempts
+            return self._ws_failure_pct_unlocked()
+
+    def _ws_failure_pct_unlocked(self) -> float:
+        # Callers already holding self._lock (summary) use this directly: the
+        # lock is a plain threading.Lock, so re-taking it self-deadlocks — that
+        # exact hang cost this harness its first proving run.
+        if self.ws_attempts == 0:
+            return 0.0
+        return 100.0 * (self.ws_attempts - self.ws_connected) / self.ws_attempts
 
     # ---- Whole-run summary (report) ----
 
@@ -165,7 +171,7 @@ class Recorder:
                 "ws": {
                     "attempts": self.ws_attempts,
                     "connected": self.ws_connected,
-                    "failure_pct": round(self.ws_failure_pct(), 2),
+                    "failure_pct": round(self._ws_failure_pct_unlocked(), 2),
                     "close_codes": {str(k): v for k, v in sorted(self.ws_close_codes.items())},
                     "connect_p50_ms": round(quantile(ws_ordered, 0.50), 1),
                     "connect_p95_ms": round(quantile(ws_ordered, 0.95), 1),

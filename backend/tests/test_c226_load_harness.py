@@ -7,6 +7,7 @@ c245/c252/c259 house standard.
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -32,7 +33,7 @@ class FakeClock:
 
 
 def test_quantile_nearest_rank() -> None:
-    """Falsified by: rank = floor instead of ceil (p95 of 1..100 became 94)."""
+    """Falsified by: off-by-one in the rank index (rank-2 instead of rank-1)."""
     values = [float(v) for v in range(1, 101)]
     assert quantile(values, 0.95) == 95.0
     assert quantile(values, 0.50) == 50.0
@@ -46,6 +47,21 @@ def test_quantile_rejects_bad_q() -> None:
         quantile([1.0], 0.0)
     with pytest.raises(ValueError):
         quantile([1.0], 1.5)
+
+
+def test_summary_does_not_self_deadlock_with_ws_data() -> None:
+    """Regression for the first proving run, which hung at report time: summary()
+    held the recorder lock and called ws_failure_pct(), which re-takes the same
+    non-reentrant lock. Falsified by: reverting summary() to the locked call."""
+    recorder = Recorder(30.0)
+    recorder.record_ws_attempt()
+    recorder.record_ws_connected(12.0)
+    result: list = []
+    worker = threading.Thread(target=lambda: result.append(recorder.summary()), daemon=True)
+    worker.start()
+    worker.join(timeout=5.0)
+    assert result, "summary() deadlocked"
+    assert result[0]["ws"]["attempts"] == 1
 
 
 # ---- token bucket, both ways ----
@@ -123,8 +139,7 @@ def _fill(recorder: Recorder, count: int, status: int, route_class: str = "feed_
 
 
 def test_abort_trips_on_error_rate_and_not_on_clean_traffic() -> None:
-    """Falsified by: flipping > to >= is not enough to go red, so the real
-    mutation used was comparing error rate against max_429_rate_pct."""
+    """Falsified by: deleting the error-rate check from AbortMonitor.check."""
     criteria = _criteria()
     clean = Recorder(criteria.window_seconds)
     _fill(clean, 100, 200)
@@ -208,14 +223,14 @@ def _write(tmp_path, data: dict) -> str:
 
 
 def test_config_valid_local_loads(tmp_path) -> None:
-    """Falsified by: renaming a required abort field in the fixture dict."""
+    """Falsified by: making _is_local() never match, so a good local config was refused."""
     config = load_config(_write(tmp_path, _config_dict()))
     assert config.base_url == "http://127.0.0.1:8010"
 
 
 def test_config_refuses_missing_abort_criteria(tmp_path) -> None:
-    """The c226 rule itself: no abort criteria, no run. Falsified by: giving
-    AbortCriteria fields defaults."""
+    """The c226 rule itself: no abort criteria, no run. Falsified by: letting
+    load_config's require() fall back to a default instead of raising."""
     data = _config_dict()
     del data["abort"]
     with pytest.raises(ConfigError):
