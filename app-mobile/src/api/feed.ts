@@ -201,8 +201,36 @@ export async function unlikePost(postId: string): Promise<void> {
   return request<void>(`/posts/${postId}/likes`, { method: "DELETE" });
 }
 
-export async function listComments(postId: string): Promise<PostCommentOut[]> {
-  return request<PostCommentOut[]>(`/posts/${postId}/comments`);
+/** One page of a comment thread. `before`/`beforeId` are the OLDEST comment you
+ * already hold; the result is the page immediately before it, still oldest-first,
+ * ready to prepend. Omit them for the newest page (c258). */
+export interface CommentPageQuery {
+  before?: string;
+  beforeId?: string;
+  limit?: number;
+}
+
+export async function listComments(
+  postId: string,
+  options: CommentPageQuery = {},
+): Promise<PostCommentOut[]> {
+  // Params go through request()'s `query` option, same as listMessages, rather than
+  // being interpolated into the path. Two reasons, and the second one bit: the path
+  // stays a literal that scripts/verify-contract.mjs can match against the backend
+  // route table, and a hand-built `?${suffix}` made that checker report the route as
+  // missing entirely.
+  //
+  // BOTH cursor halves or NEITHER. The server accepts `before` alone for legacy
+  // callers, but that form cannot tie-break comments sharing a timestamp and drops
+  // them at a page boundary, so this client never sends the half-cursor.
+  const paired = options.before !== undefined && options.beforeId !== undefined;
+  return request<PostCommentOut[]>(`/posts/${postId}/comments`, {
+    query: {
+      before: paired ? options.before : undefined,
+      before_id: paired ? options.beforeId : undefined,
+      limit: options.limit,
+    },
+  });
 }
 
 export async function createComment(

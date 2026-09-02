@@ -50,6 +50,9 @@ import { GradientAvatar } from "./GradientAvatar";
  * own LoadState comment records: a silent [] hid a broken fetch for a week). */
 type LoadState = "loading" | "loaded" | "error";
 
+/** One page of thread. Matches the server's default; the server caps it at 200 (c258). */
+const COMMENT_PAGE_SIZE = 50;
+
 function CommentRow({ comment }: { comment: PostCommentOut }) {
   return (
     <View style={{ flexDirection: "row", gap: spacing.md }}>
@@ -75,14 +78,19 @@ export interface CommentsSheetProps {
   postId: string;
   onClose: () => void;
   /**
-   * The thread's length, reported on every load and after every successful send.
+   * The thread's length, reported ONLY while this sheet holds the WHOLE thread.
    *
-   * This is what keeps the card's chip and this sheet from ever disagreeing. Both
-   * numbers come from the same server-side rule: _post_counts_select's comment_count
-   * and list_comments apply the identical blocked-author filter (c109), and
-   * list_comments is unpaginated, so the rows rendered here ARE the count. The card
-   * shows this number instead of its own stale prop once it has one, rather than
-   * incrementing a local counter and hoping the two stay in step.
+   * This keeps the card's chip and this sheet from ever disagreeing. Both numbers come
+   * from the same server-side rule: _post_counts_select's comment_count and
+   * list_comments apply the identical blocked-author filter (c109).
+   *
+   * c258 MADE THE OLD INVARIANT FALSE, and this is the correction rather than a
+   * softening of it. list_comments used to be unpaginated, so the rows rendered here
+   * WERE the count; now the first page is only the newest slice, and reporting its
+   * length would tell the card that a long thread is short - a truncation dressed up
+   * as a fact. So the count is reported only once `hasOlder` is false, meaning every
+   * page has been loaded. Until then the card keeps the number the feed query gave it,
+   * which is the authoritative count anyway.
    */
   onCountChange: (count: number) => void;
 }
@@ -92,6 +100,9 @@ export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetP
   const insets = useSafeAreaInsets();
   const [comments, setComments] = useState<PostCommentOut[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  /** A full page means there may be older comments behind it (c258). */
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   // Same hard guard CreateSheet's submit uses: a ref is read and written
@@ -102,12 +113,43 @@ export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetP
   const load = async () => {
     setLoadState("loading");
     try {
-      const rows = await listComments(postId);
+      const rows = await listComments(postId, { limit: COMMENT_PAGE_SIZE });
       setComments(rows);
+      const more = rows.length === COMMENT_PAGE_SIZE;
+      setHasOlder(more);
       setLoadState("loaded");
-      onCountChange(rows.length);
+      // Only when this IS the whole thread - see onCountChange's docstring.
+      if (!more) onCountChange(rows.length);
     } catch {
       setLoadState("error");
+    }
+  };
+
+  /** Fetch the page immediately before the oldest comment held, and prepend it. */
+  const loadOlder = async () => {
+    const oldest = comments[0];
+    if (oldest === undefined || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const rows = await listComments(postId, {
+        before: oldest.created_at,
+        beforeId: oldest.id,
+        limit: COMMENT_PAGE_SIZE,
+      });
+      const more = rows.length === COMMENT_PAGE_SIZE;
+      const next = [...rows, ...comments];
+      setHasOlder(more);
+      setComments(next);
+      // NOT inside a setComments updater. An updater runs during render, and calling
+      // the parent's onCountChange from there is a setState-while-rendering - React
+      // logs "Cannot update a component while rendering a different component" and
+      // the live QA pass caught exactly that. Safe to read `comments` directly here:
+      // this is an async handler, not a render, and loadingOlder gates re-entry.
+      if (!more) onCountChange(next.length);
+    } catch (error) {
+      showApiError(error, "Couldn't load earlier comments");
+    } finally {
+      setLoadingOlder(false);
     }
   };
 
@@ -130,11 +172,14 @@ export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetP
       // Appended rather than refetched: list_comments orders oldest-first, so a new
       // comment belongs exactly here, and the POST response is the same shape the
       // list returns (pinned by a backend test) including the author's name.
-      setComments((current) => {
-        const next = [...current, created];
-        onCountChange(next.length);
-        return next;
-      });
+      // Same shape as loadOlder, and for the same reason: the count is reported
+      // OUTSIDE the state updater. This call site pre-dates c258 and had the
+      // side-effect-in-updater bug already; it is fixed here rather than left in
+      // place, because c258 adds a second path that makes it fire.
+      const next = [...comments, created];
+      setComments(next);
+      // Only claim a total when the whole thread is held (see onCountChange).
+      if (!hasOlder) onCountChange(next.length);
       setDraft("");
       // A thread that failed to load and then got a comment sent into it is no longer
       // in an error state - the send proves the post is readable and the one row we
@@ -203,7 +248,14 @@ export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetP
           </Pressable>
 
           <AppText variant="title">
-            {loadState === "loaded" && comments.length > 0 ? `Comments (${comments.length})` : "Comments"}
+            {/* The number is claimed ONLY when the whole thread is held. With older
+                pages outstanding, comments.length is the size of the page, not of the
+                thread - a live check on a 60-comment thread showed this header reading
+                "Comments (50)", which is the same truncation-as-fact bug that
+                onCountChange guards against, one component over (c258). */}
+            {loadState === "loaded" && comments.length > 0 && !hasOlder
+              ? `Comments (${comments.length})`
+              : "Comments"}
           </AppText>
 
           {loadState === "loading" ? (
@@ -230,6 +282,36 @@ export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetP
               showsVerticalScrollIndicator={false}
               contentContainerStyle={{ gap: spacing.lg, paddingBottom: spacing.xs }}
             >
+              {/* Older comments live ABOVE, so the control that fetches them sits at
+                  the top of the thread where the missing rows will appear - not at the
+                  bottom by the composer, which is where NEW comments go. It disappears
+                  entirely once the top of the thread is loaded, rather than going
+                  disabled, so it never implies there is more to read (c258). */}
+              {hasOlder ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Load earlier comments"
+                  accessibilityState={{ disabled: loadingOlder, busy: loadingOlder }}
+                  disabled={loadingOlder}
+                  onPress={() => void loadOlder()}
+                  style={({ pressed }) => ({
+                    alignSelf: "center",
+                    paddingVertical: spacing.sm,
+                    paddingHorizontal: spacing.lg,
+                    borderRadius: radii.pill,
+                    backgroundColor: palette.surfaceAlt,
+                    opacity: loadingOlder ? 0.6 : pressed ? 0.8 : 1,
+                  })}
+                >
+                  {loadingOlder ? (
+                    <ActivityIndicator size="small" color={palette.inkSecondary} />
+                  ) : (
+                    <AppText variant="micro" tone="secondary">
+                      Load earlier comments
+                    </AppText>
+                  )}
+                </Pressable>
+              ) : null}
               {comments.map((comment) => (
                 <CommentRow key={comment.id} comment={comment} />
               ))}
