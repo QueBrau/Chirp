@@ -3,8 +3,8 @@ import logging
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import and_, delete, func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import and_, delete, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,14 +44,30 @@ async def _get_chapter_meeting(
 @router.get("/chapters/{chapter_id}/meetings")
 async def list_meetings(
     chapter_id: uuid.UUID,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     _membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
 ) -> list[MeetingOut]:
-    """List the chapter's meetings, most recent meeting date first; any member."""
+    """List the chapter's meetings, most recent meeting date first; any member.
+
+    Cursored on (meeting_date, id) because meetings grow with TIME - a chapter running
+    one a week accumulates them forever, so a cap alone would only move the truncation
+    later (board c258). Pass both `before` and `before_id`, the last row's values, so
+    two meetings held at the same timestamp are never skipped at a page boundary.
+    """
+    query = select(models.Meeting).where(models.Meeting.chapter_id == chapter_id)
+    if before is not None and before_id is not None:
+        query = query.where(
+            tuple_(models.Meeting.meeting_date, models.Meeting.id) < (before, before_id)
+        )
+    elif before is not None:
+        query = query.where(models.Meeting.meeting_date < before)
     result = await session.execute(
-        select(models.Meeting)
-        .where(models.Meeting.chapter_id == chapter_id)
-        .order_by(models.Meeting.meeting_date.desc())
+        query.order_by(
+            models.Meeting.meeting_date.desc(), models.Meeting.id.desc()
+        ).limit(limit)
     )
     return [MeetingOut.model_validate(m) for m in result.scalars().all()]
 
@@ -100,6 +116,9 @@ async def list_meetings_with_attendance(
     chapter_id: uuid.UUID,
     start: datetime | None = None,
     end: datetime | None = None,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> list[MeetingWithAttendanceOut]:
@@ -131,35 +150,73 @@ async def list_meetings_with_attendance(
     returns, for several meetings at once, so it cannot be gated more loosely.
     """
     window = meeting_window(chapter_id, start, end)
-    result = await session.execute(
-        select(models.Meeting, models.MeetingAttendance)
-        .outerjoin(
-            models.MeetingAttendance,
-            models.MeetingAttendance.meeting_id == models.Meeting.id,
-        )
-        .where(*window)
-        # Most recent meeting first, matching list_meetings so the two reads cannot
-        # disagree about order. id breaks ties: two meetings can share a date, and
-        # without it their relative order changes between calls.
-        .order_by(
-            models.Meeting.meeting_date.desc(),
-            models.Meeting.id,
-            models.MeetingAttendance.user_id,
-        )
-    )
 
-    bundles: dict[uuid.UUID, MeetingWithAttendanceOut] = {}
-    for meeting, attendance in result.all():
-        bundle = bundles.get(meeting.id)
-        if bundle is None:
-            bundle = MeetingWithAttendanceOut(
-                meeting=MeetingOut.model_validate(meeting), attendance=[]
+    # THE PAGE OF MEETINGS FIRST, THEN THEIR ATTENDANCE. Cursoring the joined query
+    # directly would be wrong, not merely awkward: a LIMIT over (meeting x attendance)
+    # rows cuts wherever the row count lands, so one meeting's sheet would be split
+    # across two pages and the first page would show a partial sheet as if it were the
+    # whole one. Selecting the meetings, then their rows, keeps every sheet intact.
+    #
+    # Still TWO queries regardless of page size - not one per meeting, which is the
+    # N+1 c156 removed and which this route exists to prevent.
+    page_query = select(models.Meeting).where(*window)
+    if before is not None and before_id is not None:
+        page_query = page_query.where(
+            tuple_(models.Meeting.meeting_date, models.Meeting.id) < (before, before_id)
+        )
+    elif before is not None:
+        page_query = page_query.where(models.Meeting.meeting_date < before)
+    meetings = list(
+        (
+            await session.execute(
+                page_query.order_by(
+                    models.Meeting.meeting_date.desc(), models.Meeting.id.desc()
+                ).limit(limit)
             )
-            bundles[meeting.id] = bundle
-        if attendance is not None:
-            bundle.attendance.append(MeetingAttendanceOut.model_validate(attendance))
-    # dicts preserve insertion order, so this is still the ORDER BY above.
-    return list(bundles.values())
+        ).scalars().all()
+    )
+    if not meetings:
+        return []
+
+    # EACH SHEET COMES BACK WHOLE, deliberately unlike the events family's
+    # going_preview (c280), and the divergence is chosen rather than missed.
+    #
+    # An event's RSVP list is genuinely unbounded - a public event is open to the whole
+    # verified campus - so events cap a preview and report counts alongside it. An
+    # attendance sheet cannot run away like that: c264 caps the WRITE at
+    # MAX_ROSTER_PAGE entries per request, and c151 requires every entry to name an
+    # ACTIVE member of this chapter, so the sheet is roster-shaped by construction.
+    #
+    # The precise bound is EVERY MEMBER WHO WAS EVER ACTIVE AT WRITE TIME, not the
+    # current roster: rows survive a membership going inactive (verified - the row
+    # stays readable while a NEW write naming that member is refused 422). So it can
+    # exceed today's roster in a long-lived chapter, and still cannot grow with time
+    # the way meetings themselves do.
+    #
+    # Returning a preview here would also break the caller: the secretary screen counts
+    # present/absent/excused straight off this array, so a preview would silently turn
+    # those into counts over a sample - the truncation-as-fact bug this whole card
+    # exists to remove, reintroduced on attendance.
+    attendance_rows = (
+        await session.execute(
+            select(models.MeetingAttendance)
+            .where(models.MeetingAttendance.meeting_id.in_([m.id for m in meetings]))
+            .order_by(models.MeetingAttendance.user_id)
+        )
+    ).scalars().all()
+    by_meeting: dict[uuid.UUID, list[MeetingAttendanceOut]] = {}
+    for row in attendance_rows:
+        by_meeting.setdefault(row.meeting_id, []).append(
+            MeetingAttendanceOut.model_validate(row)
+        )
+
+    return [
+        MeetingWithAttendanceOut(
+            meeting=MeetingOut.model_validate(meeting),
+            attendance=by_meeting.get(meeting.id, []),
+        )
+        for meeting in meetings
+    ]
 
 
 @router.get("/chapters/{chapter_id}/meetings/attendance-summary")
