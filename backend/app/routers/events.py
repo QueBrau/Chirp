@@ -39,6 +39,7 @@ from sqlalchemy import func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app import models
 from app.core.analytics import emit
@@ -51,7 +52,6 @@ from app.middleware.auth import get_current_user
 from app.middleware.org_scope import get_current_membership
 from app.schemas.events import (
     EventCreate,
-    EventGuestsOut,
     EventInviteCreate,
     EventInviteOut,
     EventInviteWithRsvpOut,
@@ -60,11 +60,15 @@ from app.schemas.events import (
     EventRsvpOut,
     EventRsvpUpdate,
     EventUpdate,
-    EventWithRsvpsOut,
+    EventWithRsvpSummaryOut,
     PublicEventOut,
 )
 
 router = APIRouter(tags=["events"])
+
+# Rows of 'going' preview per event on the summary route: the card renders a 4-face
+# avatar stack, so 8 is display size with headroom for a design tweak, not a page.
+GOING_PREVIEW_LIMIT = 8
 
 
 async def _membership_in(
@@ -201,18 +205,25 @@ async def list_events_with_rsvps(
     before: datetime | None = None,
     before_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
-    _membership: models.Membership = Depends(get_current_membership),
+    membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
-) -> list[EventWithRsvpsOut]:
-    """The chapter's events with all their RSVPs (c43).
+) -> list[EventWithRsvpSummaryOut]:
+    """The chapter's events, each with an RSVP SUMMARY (c43 shape, re-cut by c280).
 
-    Collapses the Events segment's 1+N (listEvents + listRsvps per event) into two
-    queries total: one for the events, one IN-clause for their RSVPs.
+    The pre-c280 version returned each event's FULL rsvps array and claimed the event
+    cursor "bounds the RSVP query as a consequence" - true for the NUMBER OF EVENTS
+    queried, false for rows per event. RSVPs accrue campus-wide on public-tier events
+    (PUT /events/{id}/rsvps is open to any account that can read the event), so one
+    popular party shipped an unbounded list through this route on every Events-segment
+    load. Now every per-event payload is bounded by construction: counts, a
+    GOING_PREVIEW_LIMIT-row preview for the avatar stack, and the caller's own answer.
+    The full roster lives behind the guest-list routes (c275), which page.
 
-    Same (starts_at, id) cursor as list_events (c201) - `before` + `before_id`, capped
-    `limit`. The RSVP IN-query below fans out over whatever page of events comes back
-    from THIS query, so bounding the event page bounds the RSVP query as a
-    consequence; it does not need (and must not grow) a second cursor of its own.
+    Same (starts_at, id) cursor as list_events (c201) for the events themselves.
+    The preview is ordered (created_at, user_id) ASC BEFORE it is limited - earliest
+    responders show, deterministically; user_id is the tie-break because rsvp rows
+    have a composite PK and no row uuid. It is a deliberate preview, not a truncated
+    list - counts carry the truth - so it takes no warn_if_capped.
     """
     stmt = select(models.Event).where(models.Event.chapter_id == chapter_id)
     if before is not None and before_id is not None:
@@ -225,19 +236,80 @@ async def list_events_with_rsvps(
 
     result = await session.execute(stmt)
     events = result.scalars().all()
-    rsvps_by_event: dict[uuid.UUID, list[EventRsvpOut]] = {}
-    if events:
-        rsvp_rows = await session.execute(
-            select(models.EventRsvp)
-            .where(models.EventRsvp.event_id.in_([event.id for event in events]))
-            .order_by(models.EventRsvp.created_at)
+    if not events:
+        return []
+    event_ids = [event.id for event in events]
+
+    status_rows = await session.execute(
+        select(models.EventRsvp.event_id, models.EventRsvp.status, func.count())
+        .where(models.EventRsvp.event_id.in_(event_ids))
+        .group_by(models.EventRsvp.event_id, models.EventRsvp.status)
+    )
+    counts_by_event: dict[uuid.UUID, dict[str, int]] = {}
+    for event_id, status, count in status_rows.all():
+        counts_by_event.setdefault(event_id, {})[status] = count
+
+    unanswered_rows = await session.execute(
+        select(models.EventInvite.event_id, func.count())
+        .select_from(models.EventInvite)
+        .outerjoin(
+            models.EventRsvp,
+            (models.EventRsvp.event_id == models.EventInvite.event_id)
+            & (models.EventRsvp.user_id == models.EventInvite.invited_user_id),
         )
-        for rsvp in rsvp_rows.scalars().all():
-            rsvps_by_event.setdefault(rsvp.event_id, []).append(EventRsvpOut.model_validate(rsvp))
+        .where(
+            models.EventInvite.event_id.in_(event_ids),
+            models.EventRsvp.user_id.is_(None),
+        )
+        .group_by(models.EventInvite.event_id)
+    )
+    unanswered_by_event = dict(unanswered_rows.all())
+
+    ranked = (
+        select(
+            models.EventRsvp,
+            func.row_number()
+            .over(
+                partition_by=models.EventRsvp.event_id,
+                order_by=(models.EventRsvp.created_at, models.EventRsvp.user_id),
+            )
+            .label("rank"),
+        )
+        .where(
+            models.EventRsvp.event_id.in_(event_ids),
+            models.EventRsvp.status == "going",
+        )
+        .subquery()
+    )
+    ranked_rsvp = aliased(models.EventRsvp, ranked)
+    preview_rows = await session.execute(
+        select(ranked_rsvp)
+        .where(ranked.c.rank <= GOING_PREVIEW_LIMIT)
+        .order_by(ranked.c.event_id, ranked.c.rank)
+    )
+    preview_by_event: dict[uuid.UUID, list[EventRsvpOut]] = {}
+    for rsvp in preview_rows.scalars().all():
+        preview_by_event.setdefault(rsvp.event_id, []).append(EventRsvpOut.model_validate(rsvp))
+
+    mine_rows = await session.execute(
+        select(models.EventRsvp.event_id, models.EventRsvp.status).where(
+            models.EventRsvp.event_id.in_(event_ids),
+            models.EventRsvp.user_id == membership.user_id,
+        )
+    )
+    mine_by_event = dict(mine_rows.all())
+
     return [
-        EventWithRsvpsOut(
+        EventWithRsvpSummaryOut(
             event=EventOut.model_validate(event),
-            rsvps=rsvps_by_event.get(event.id, []),
+            counts=EventRsvpCountsOut(
+                going=counts_by_event.get(event.id, {}).get("going", 0),
+                maybe=counts_by_event.get(event.id, {}).get("maybe", 0),
+                cant=counts_by_event.get(event.id, {}).get("cant", 0),
+                invited_unanswered=unanswered_by_event.get(event.id, 0),
+            ),
+            going_preview=preview_by_event.get(event.id, []),
+            my_rsvp_status=mine_by_event.get(event.id),
         )
         for event in events
     ]
@@ -422,7 +494,8 @@ async def _require_guest_list_access(
     you to its guest list: a campus-wide or public party would otherwise publish who is
     attending it to anyone who opened the link. Membership, an invite, or an RSVP of
     your own - one of the three ways of actually being part of this event. Extracted
-    from list_guests (c275) so the counts route cannot drift to a looser rule.
+    from the retired /guests wrapper (c275) so no guest-tier route can drift to a
+    looser rule.
     """
     event = await _readable_event(event_id, user, session)
 
@@ -487,29 +560,10 @@ async def rsvp_counts(
     )
 
 
-@router.get("/events/{event_id}/guests")
-async def list_guests(
-    event_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> EventGuestsOut:
-    """Who was invited and how everyone answered. Gate: see _require_guest_list_access."""
-    await _require_guest_list_access(event_id, user, session)
-
-    invite_rows = await session.execute(
-        select(models.EventInvite)
-        .where(models.EventInvite.event_id == event_id)
-        .order_by(models.EventInvite.created_at)
-    )
-    rsvp_rows = await session.execute(
-        select(models.EventRsvp)
-        .where(models.EventRsvp.event_id == event_id)
-        .order_by(models.EventRsvp.created_at)
-    )
-    return EventGuestsOut(
-        invites=[EventInviteOut.model_validate(i) for i in invite_rows.scalars().all()],
-        rsvps=[EventRsvpOut.model_validate(r) for r in rsvp_rows.scalars().all()],
-    )
+# GET /events/{event_id}/guests is GONE (c275): it returned both lists unbounded in
+# one wrapper. Its two halves are the paginated list_rsvps / list_event_invites
+# routes; its gate lives on in _require_guest_list_access; headcounts live at
+# /events/{id}/rsvp-counts.
 
 
 @router.get("/me/event-invites")
@@ -619,12 +673,71 @@ async def list_my_invites_with_rsvps(
 @router.get("/events/{event_id}/rsvps")
 async def list_rsvps(
     event_id: uuid.UUID,
+    after: datetime | None = None,
+    after_user_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[EventRsvpOut]:
-    """List an event's RSVPs. Same gate as the guest list - this IS the guest list."""
-    guests = await list_guests(event_id, user, session)
-    return guests.rsvps
+    """One page of an event's RSVPs, earliest answers first. Gate: the guest list's.
+
+    c275: this route used to delegate to the /guests wrapper and return its whole
+    rsvps array - unbounded, because a public-tier event accrues RSVPs campus-wide.
+    Now it pages. ASC with `after` + `after_user_id` (the my-invites direction:
+    continuing past a page means a LATER created_at, so the comparison is `>`).
+
+    THE TIE-BREAK IS user_id, NOT id, AND THAT IS DELIBERATE - do not "fix" it back
+    to the (created_at, id) shape the comments cursor uses: rsvp rows have a
+    composite (event_id, user_id) primary key and no row uuid, so user_id is the
+    only unique second key available. Counts live at /events/{id}/rsvp-counts; a
+    caller wanting a headcount should read that, never sum pages.
+    """
+    await _require_guest_list_access(event_id, user, session)
+    stmt = select(models.EventRsvp).where(models.EventRsvp.event_id == event_id)
+    if after is not None and after_user_id is not None:
+        stmt = stmt.where(
+            tuple_(models.EventRsvp.created_at, models.EventRsvp.user_id)
+            > (after, after_user_id)
+        )
+    elif after is not None:
+        stmt = stmt.where(models.EventRsvp.created_at > after)
+    stmt = stmt.order_by(
+        models.EventRsvp.created_at, models.EventRsvp.user_id
+    ).limit(limit)
+    rows = await session.execute(stmt)
+    return [EventRsvpOut.model_validate(r) for r in rows.scalars().all()]
+
+
+@router.get("/events/{event_id}/invites")
+async def list_event_invites(
+    event_id: uuid.UUID,
+    after: datetime | None = None,
+    after_user_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[EventInviteOut]:
+    """One page of an event's invites, earliest first. Gate: the guest list's.
+
+    The read twin of POST /events/{id}/invites, split out of the deleted /guests
+    wrapper (c275). Same cursor shape and same deliberate user_id tie-break as
+    list_rsvps above (composite PK, no row uuid) - here the second key is
+    invited_user_id. The unanswered count lives at /events/{id}/rsvp-counts.
+    """
+    await _require_guest_list_access(event_id, user, session)
+    stmt = select(models.EventInvite).where(models.EventInvite.event_id == event_id)
+    if after is not None and after_user_id is not None:
+        stmt = stmt.where(
+            tuple_(models.EventInvite.created_at, models.EventInvite.invited_user_id)
+            > (after, after_user_id)
+        )
+    elif after is not None:
+        stmt = stmt.where(models.EventInvite.created_at > after)
+    stmt = stmt.order_by(
+        models.EventInvite.created_at, models.EventInvite.invited_user_id
+    ).limit(limit)
+    rows = await session.execute(stmt)
+    return [EventInviteOut.model_validate(i) for i in rows.scalars().all()]
 
 
 @router.put("/events/{event_id}/rsvps")

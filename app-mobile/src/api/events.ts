@@ -79,13 +79,14 @@ export interface EventRsvpOut {
 }
 
 /**
- * The guest list. Invites and RSVPs come back SEPARATELY rather than merged, because
- * the screen has to tell "invited, has not answered" from "said no" - and because a
- * campus or public event routinely produces RSVPs from people nobody invited.
+ * Cursor options for the split guest-list routes (c275). The tie-break key is a
+ * USER id, not a row id - rsvp/invite rows have composite primary keys - so the
+ * second cursor param carries the last row's user_id / invited_user_id.
  */
-export interface EventGuestsOut {
-  invites: EventInviteOut[];
-  rsvps: EventRsvpOut[];
+export interface GuestListPage {
+  after?: string;
+  afterUserId?: string;
+  limit?: number;
 }
 
 /** All events for a chapter (Events segment, §8.7), soonest-first by start time. */
@@ -125,9 +126,23 @@ export async function inviteToEvent(
   });
 }
 
-/** Who was invited and how everyone answered. Never public - see routers/events.py. */
-export async function listGuests(eventId: string): Promise<EventGuestsOut> {
-  return request<EventGuestsOut>(`/events/${eventId}/guests`);
+// listGuests / EventGuestsOut are GONE (c275): the wrapper returned both guest
+// lists unbounded. Its halves are listRsvps + listEventInvites below; headcounts
+// come from getRsvpCounts, never from summing pages.
+
+/** One page of an event's invites, earliest first. Guest-list gated. */
+export async function listEventInvites(
+  eventId: string,
+  page: GuestListPage = {},
+): Promise<EventInviteOut[]> {
+  return request<EventInviteOut[]>(`/events/${eventId}/invites`, {
+    query: { after: page.after, after_user_id: page.afterUserId, limit: page.limit },
+  });
+}
+
+/** Headcounts by answer plus silent invitees - the planning number (c275). */
+export async function getRsvpCounts(eventId: string): Promise<EventRsvpCountsOut> {
+  return request<EventRsvpCountsOut>(`/events/${eventId}/rsvp-counts`);
 }
 
 /** Events the signed-in user was invited to. Cancelled ones are included on purpose. */
@@ -159,20 +174,41 @@ export async function listMyInvitesWithRsvps(): Promise<EventInviteWithRsvpOut[]
   return request<EventInviteWithRsvpOut[]>("/me/event-invites-with-rsvps");
 }
 
-export async function listRsvps(eventId: string): Promise<EventRsvpOut[]> {
-  return request<EventRsvpOut[]>(`/events/${eventId}/rsvps`);
+/** One page of an event's RSVPs, earliest answers first. Guest-list gated. */
+export async function listRsvps(
+  eventId: string,
+  page: GuestListPage = {},
+): Promise<EventRsvpOut[]> {
+  return request<EventRsvpOut[]>(`/events/${eventId}/rsvps`, {
+    query: { after: page.after, after_user_id: page.afterUserId, limit: page.limit },
+  });
 }
 
-/** One row of listEventsWithRsvps() - mirrors backend EventWithRsvpsOut (c43). */
-export interface EventWithRsvpsOut {
+/** Headcounts for one event - mirrors backend EventRsvpCountsOut (c275). */
+export interface EventRsvpCountsOut {
+  going: number;
+  maybe: number;
+  cant: number;
+  invited_unanswered: number;
+}
+
+/** One row of listEventsWithRsvps() - mirrors backend EventWithRsvpSummaryOut (c280).
+ * counts is the truth; going_preview is the first few going answers, display-sized
+ * for the avatar stack and never claimed complete. */
+export interface EventWithRsvpSummaryOut {
   event: EventOut;
-  rsvps: EventRsvpOut[];
+  counts: EventRsvpCountsOut;
+  going_preview: EventRsvpOut[];
+  my_rsvp_status: RsvpStatus | null;
 }
 
-/** The chapter's events with all their RSVPs in ONE round trip (c43) - replaces the
- * Events segment's listEvents + listRsvps-per-event 1+N. */
-export async function listEventsWithRsvps(chapterId: string): Promise<EventWithRsvpsOut[]> {
-  return request<EventWithRsvpsOut[]>(`/chapters/${chapterId}/events-with-rsvps`);
+/** The chapter's events with their RSVP summaries in ONE round trip (c43 shape,
+ * re-cut by c280) - replaces the Events segment's listEvents + listRsvps-per-event
+ * 1+N, without shipping a campus of rows per popular event. */
+export async function listEventsWithRsvps(
+  chapterId: string,
+): Promise<EventWithRsvpSummaryOut[]> {
+  return request<EventWithRsvpSummaryOut[]>(`/chapters/${chapterId}/events-with-rsvps`);
 }
 
 /** Upserts the current user's RSVP for an event (Going / Maybe / Can't, §8.7). */

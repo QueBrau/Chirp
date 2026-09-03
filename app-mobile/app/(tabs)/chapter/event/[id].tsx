@@ -27,12 +27,15 @@ import { listMembers, type MemberOut } from "@/api/chapters";
 import {
   cancelEvent,
   getEvent,
+  getRsvpCounts,
   inviteToEvent,
-  listGuests,
+  listEventInvites,
+  listRsvps,
   setRsvp,
   updateEvent,
   type EventInviteOut,
   type EventOut,
+  type EventRsvpCountsOut,
   type EventRsvpOut,
   type RsvpStatus,
 } from "@/api/events";
@@ -89,8 +92,9 @@ export default function EventDetailScreen() {
   const { sessionStatus, membership, chapterLoading } = useOwnChapter();
 
   const [event, setEvent] = useState<EventOut | null | undefined>(undefined);
-  const [rsvps, setRsvps] = useState<EventRsvpOut[]>([]);
+  const [rsvps, setRsvpsState] = useState<EventRsvpOut[]>([]);
   const [invites, setInvites] = useState<EventInviteOut[]>([]);
+  const [counts, setCounts] = useState<EventRsvpCountsOut | null>(null);
   const [members, setMembers] = useState<MemberOut[]>([]);
   const [inviting, setInviting] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -104,12 +108,21 @@ export default function EventDetailScreen() {
 
     // Membership in THIS event's chapter, not merely having a chapter of your own.
     const isMember = membership?.chapter_id === found.chapter_id;
-    const [guests, roster] = await Promise.all([
-      listGuests(found.id).catch(() => ({ invites: [], rsvps: [] })),
+    // c275: the /guests wrapper split into paged routes plus a counts endpoint.
+    // Each call fails soft INDEPENDENTLY - a guest-list failure must not blank the
+    // event header, and a counts failure falls back to list-derived numbers below.
+    // limit 200 is the route cap; the chips read TRUE numbers from counts, so a
+    // 200-row page under a bigger event shows a complete-enough roster while the
+    // headcount stays exact.
+    const [rsvpPage, invitePage, headcounts, roster] = await Promise.all([
+      listRsvps(found.id, { limit: 200 }).catch(() => [] as EventRsvpOut[]),
+      listEventInvites(found.id, { limit: 200 }).catch(() => [] as EventInviteOut[]),
+      getRsvpCounts(found.id).catch(() => null),
       isMember ? listMembers(found.chapter_id) : Promise.resolve<MemberOut[]>([]),
     ]);
-    setRsvps(guests.rsvps);
-    setInvites(guests.invites);
+    setRsvpsState(rsvpPage);
+    setInvites(invitePage);
+    setCounts(headcounts);
     setMembers(roster);
   }, [id, membership]);
 
@@ -344,7 +357,11 @@ export default function EventDetailScreen() {
               <View style={{ flexDirection: "row", gap: spacing.sm }}>
                 {RSVP_OPTIONS.map((option) => {
                   const selected = myStatus === option.key;
-                  const count = rsvps.filter((rsvp) => rsvp.status === option.key).length;
+                  // True headcount from the counts endpoint (c275); list-derived
+                  // only when that call failed soft.
+                  const count =
+                    counts?.[option.key] ??
+                    rsvps.filter((rsvp) => rsvp.status === option.key).length;
                   // Going count gets the "one gold moment" per §10 rule 4 - the org's
                   // own accentGradient secondary stop (Sigma Chi's old gold, e.g.).
                   const countColor =

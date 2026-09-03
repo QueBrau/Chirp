@@ -199,8 +199,11 @@ async def test_unknown_event_id_is_404(
 async def test_events_with_rsvps_batches_correctly(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
-    """The c43 batch route returns every event by start time with exactly its own RSVPs —
-    no cross-event bleed, and an RSVP-less event still appears with an empty list."""
+    """The c43 batch route returns every event by start time with exactly its own RSVP
+    summary — no cross-event bleed, and an RSVP-less event still appears with zeros.
+    Shape migrated by c280 (full rsvps array -> counts + going_preview + my_rsvp_status);
+    the properties pinned here (batching, per-event scoping, empty-event presence) are
+    unchanged and asserted at least as strongly against the new shape."""
     setup = await make_chapter_with("member")
 
     first = await client.post(
@@ -228,9 +231,12 @@ async def test_events_with_rsvps_batches_correctly(
     assert response.status_code == 200, response.text
     rows = response.json()
     assert [row["event"]["title"] for row in rows] == ["Second Mixer", "First Mixer"]
-    assert rows[0]["rsvps"] == []
-    first_rsvps = {(r["user_id"], r["status"]) for r in rows[1]["rsvps"]}
-    assert first_rsvps == {(setup.member.id, "going"), (setup.president.id, "maybe")}
+    assert rows[0]["counts"] == {"going": 0, "maybe": 0, "cant": 0, "invited_unanswered": 0}
+    assert rows[0]["going_preview"] == []
+    assert rows[0]["my_rsvp_status"] is None
+    assert rows[1]["counts"] == {"going": 1, "maybe": 1, "cant": 0, "invited_unanswered": 0}
+    assert [r["user_id"] for r in rows[1]["going_preview"]] == [setup.member.id]
+    assert rows[1]["my_rsvp_status"] == "going"  # the caller (member) said going
 
 
 async def test_events_with_rsvps_is_org_scoped(
@@ -492,8 +498,10 @@ async def test_public_event_is_readable_unauthenticated_and_leaks_no_guest_list(
     for leaked in ("host_id", "chapter_id", "rsvps", "invites", "visibility"):
         assert leaked not in body, f"public serializer leaked {leaked}"
 
-    # The guest list is never reachable without an account, at any tier.
-    assert (await client.get(f"/events/{event_id}/guests")).status_code == 401
+    # The guest list is never reachable without an account, at any tier - both
+    # halves of it (c275 split the old /guests wrapper into these two routes).
+    assert (await client.get(f"/events/{event_id}/rsvps")).status_code == 401
+    assert (await client.get(f"/events/{event_id}/invites")).status_code == 401
 
 
 async def test_public_route_404s_for_a_non_public_event(
@@ -528,17 +536,22 @@ async def test_guest_list_needs_membership_an_invite_or_your_own_rsvp(
     stranger = await _outsider(client, make_user, None, verified=False)
     assert (await client.get(f"/events/{event_id}", headers=stranger.headers)).status_code == 200
 
-    refused = await client.get(f"/events/{event_id}/guests", headers=stranger.headers)
-    assert refused.status_code == 403, refused.text
-    assert refused.json() == {"detail": "not_on_the_guest_list"}
+    # Both halves of the split guest list (c275) refuse with the same string.
+    for path in ("rsvps", "invites"):
+        refused = await client.get(f"/events/{event_id}/{path}", headers=stranger.headers)
+        assert refused.status_code == 403, refused.text
+        assert refused.json() == {"detail": "not_on_the_guest_list"}
 
     # Answering the invitation makes you part of the event, and the list opens.
     await client.put(
         f"/events/{event_id}/rsvps", json={"status": "going"}, headers=stranger.headers
     )
-    allowed = await client.get(f"/events/{event_id}/guests", headers=stranger.headers)
+    allowed = await client.get(f"/events/{event_id}/rsvps", headers=stranger.headers)
     assert allowed.status_code == 200, allowed.text
-    assert [r["user_id"] for r in allowed.json()["rsvps"]] == [stranger.id]
+    assert [r["user_id"] for r in allowed.json()] == [stranger.id]
+    assert (
+        await client.get(f"/events/{event_id}/invites", headers=stranger.headers)
+    ).status_code == 200
 
 
 async def test_edit_is_host_or_eboard_only(
@@ -613,9 +626,9 @@ async def test_cancel_is_idempotent_and_stops_new_rsvps(
     assert edit.json() == {"detail": "event_canceled"}
 
     # The guest list survives - the people who need telling are still on it.
-    guests = await client.get(f"/events/{event_id}/guests", headers=setup.member.headers)
-    assert guests.status_code == 200, guests.text
-    assert [r["user_id"] for r in guests.json()["rsvps"]] == [setup.member.id]
+    rsvps = await client.get(f"/events/{event_id}/rsvps", headers=setup.member.headers)
+    assert rsvps.status_code == 200, rsvps.text
+    assert [r["user_id"] for r in rsvps.json()] == [setup.member.id]
 
 
 async def test_end_before_start_is_422_on_create_and_on_edit(
@@ -883,7 +896,9 @@ async def test_events_with_rsvps_page_only_includes_rsvps_for_returned_events(
     rows = page.json()
     assert [row["event"]["title"] for row in rows] == ["Third", "Second"]
     for row in rows:
-        assert row["rsvps"], "each returned event kept its own RSVP"
+        # c280 shape: the summary plays the old rsvps-array role here.
+        assert row["counts"]["going"] == 1, "each returned event kept its own RSVP"
+        assert [r["user_id"] for r in row["going_preview"]] == [setup.member.id]
     returned_event_ids = {row["event"]["id"] for row in rows}
     assert first.json()["id"] not in returned_event_ids
 
@@ -899,7 +914,10 @@ async def test_events_with_rsvps_page_only_includes_rsvps_for_returned_events(
     assert second_page.status_code == 200, second_page.text
     remaining = second_page.json()
     assert [row["event"]["title"] for row in remaining] == ["First"]
-    assert remaining[0]["rsvps"], "the leftover event's own RSVP came back on page two"
+    assert remaining[0]["counts"]["going"] == 1, (
+        "the leftover event's own RSVP came back on page two"
+    )
+    assert [r["user_id"] for r in remaining[0]["going_preview"]] == [setup.member.id]
 
 
 async def test_my_invites_lists_soonest_first_and_pages_forward_without_loss(
