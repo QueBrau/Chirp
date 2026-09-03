@@ -160,24 +160,42 @@ Run `alembic current` and read the revision it prints. **Do not read "no errors"
 This is the **initial** deploy only — it is the one time the env block is empty and
 `--set-env-vars` is the right flag. Replace `YOUR_APP_ORIGIN` with the real web
 origin before running it. **For every deploy after this one, use section 7 instead.**
+
+`--timeout=3600` below is load-bearing, on this service and on `chirp-ws` alike
+(this file only carries the `chirp-api` deploy; `chirp-ws`'s lives in
+`INFRA-PRIVATE.html`). Cloud Run's default request timeout is 300s, and it
+silently severs every open WebSocket at exactly that mark — invisible until you
+measure it, because nothing about a healthy-looking deploy tells you sockets are
+dying five minutes in. c247 measured it directly: 17 of 30 upgrades across 14 days
+cut at 301.001919s / 301.001959s / 301.000626s, identical to the millisecond
+across different days and revisions, and confirmed the fix live afterward
+(`chirp-api-00041-tjt` and `chirp-ws-00006-vb8` both report `timeoutSeconds=3600`).
 ```bash
 cd backend
 gcloud run deploy chirp-api --source . --region=$REGION --allow-unauthenticated \
   --add-cloudsql-instances=$PROJECT:$REGION:chirp-db \
   --vpc-connector=chirp-vpc \
+  --timeout=3600 \
   --set-secrets=DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest \
   --set-env-vars=ENV=production,AUTH_MODE=firebase,FIREBASE_PROJECT_ID=$PROJECT,CORS_ORIGINS='["https://YOUR_APP_ORIGIN"]'
 ```
 
 ## 7. Redeploying (the everyday command)
 
-Migrate first (section 5). Then ship code with **no env flags at all**:
+Migrate first (section 5). Then ship code with **no env flags at all**, but do
+carry `--timeout=3600`:
 ```bash
 cd backend
-gcloud run deploy chirp-api --source . --region=$REGION
+gcloud run deploy chirp-api --source . --region=$REGION --timeout=3600
 ```
 Env vars, secrets, Cloud SQL instances and the VPC connector **all persist** across
-a `--source` deploy. Carrying them again buys nothing and risks everything.
+a `--source` deploy — c247 re-confirmed this live, not just from gcloud's docs: all
+15 env vars, including `EMAIL_FROM` and `EMAIL_PROVIDER`, survived an everyday
+`--source` redeploy untouched. Carrying them again buys nothing and risks
+everything. `--timeout=3600` is the one flag worth pasting explicitly anyway: it is
+the setting c247 had to restore after a real production incident (every WebSocket
+silently cut at 301s, see section 6), so it stays in the command text rather than
+resting on persistence alone.
 
 > **GOTCHA #3 — `--set-env-vars` REPLACES the whole env block; it does not merge.**
 > Pasting section 6's line as a redeploy resets `CORS_ORIGINS` to the literal string
@@ -213,9 +231,16 @@ code still reads breaks that assumption: old code cannot read the new names, new
 code cannot read the old ones, and there is no ordering of "migrate" then "wait"
 then "redeploy" that avoids an error gap in between. c179's migration 0022
 (`yaks`/`yak_votes` → `chirps`/`chirp_votes`, plus the `content_reports` /
-`moderation_actions` target_type backfill) is the current example, and it is not
-alone on the chain — 0019, 0020 and 0021 are also unapplied to prod, so this
-window applies to all four (0019 → 0022), not just the rename at the tip.
+`moderation_actions` target_type backfill) is the worked example below, and it was
+not alone on the chain — 0019, 0020 and 0021 rode the same window (0019 → 0022),
+not just the rename at the tip.
+
+**This specific window has since closed** — prod's `alembic_version` was verified
+at `0028` by Aug 28 and moved to `0029` on Aug 30 (c260/c237), and alembic only
+reaches a revision by applying every ancestor in its chain, so 0019-0022 are long
+applied. The steps and abort criteria below remain the playbook for the *next*
+rename-shaped migration — read the 0022 references as a worked example, not a live
+TODO.
 
 Treat migrate + redeploy as **one window**, at a quiet hour, run start-to-finish
 without gaps between the steps below. Do not migrate and then walk away.
@@ -232,8 +257,9 @@ without gaps between the steps below. Do not migrate and then walk away.
 2. **(Jose → manager) Signal.** Say the migration landed and `alembic current`
    read back `0022`. This is what starts the clock on the error gap below —
    step 3 should follow within minutes, not whenever the manager gets to it.
-3. **(manager) Redeploy the API.** Section 7's everyday command, no env flags:
-   `cd backend && gcloud run deploy chirp-api --source . --region=$REGION`.
+3. **(manager) Redeploy the API.** Section 7's everyday command, no env flags but
+   with `--timeout=3600`:
+   `cd backend && gcloud run deploy chirp-api --source . --region=$REGION --timeout=3600`.
    Between step 1 finishing and this step finishing, the live backend is old
    code serving against renamed tables — every request that touches
    yaks/chirps, content_reports, moderation_actions, house_ballots or
@@ -298,6 +324,16 @@ stack; pass `--base-url` (or `DEPLOY_VERIFY_BASE_URL`) for the prod service URL,
 which lives in `INFRA-PRIVATE.html#cloudrun` and is deliberately not hardcoded
 here.
 
+**c250: running it bare after a prod deploy produces a total red that looks like a
+prod failure and is not.** A manager did exactly that and got `0 passed, 4 failed`
+with four `000` status codes — every probe reaching nothing, because the script was
+still quietly checking `localhost:8000`. A total red across every probe (`000`
+everywhere) means **wrong target**, not a broken deploy — check the `target:` line
+the script prints as its second line before you re-run it or start diagnosing.
+That is different from a cold-start flake (a partial red against a real URL, e.g.
+3/1) — don't conflate the two. The correct invocation after any prod deploy is
+`scripts/deploy-verify --base-url <service URL>`.
+
 ## Env var reference (Settings → env)
 | env var | required | example |
 |---|---|---|
@@ -309,18 +345,33 @@ here.
 | `CORS_ORIGINS` | prod | `["https://app.chirp..."]` (JSON array) |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | milestone 8 | — |
 
-## Media privacy cutover gate (pending)
+## Media privacy cutover gate (closed)
 
-The signed-media route and `MEDIA_SIGNING_SECRET` are deployed and survived the c63
-revision update, but `chirps-prod-media` intentionally remains publicly readable.
-Do not enforce Public Access Prevention or remove the `allUsers` grant yet. The
-cutover has two independent gates: a signed-media capability URL must render a real
-uploaded photo through the shared EAS app on a physical device, and Jose must approve
-the exact privacy mutation after seeing that proof.
+**This gate is closed. If you find an older copy of this file, or a paste buffer,
+telling you to leave `chirps-prod-media` public — ignore it. That instruction is
+stale and is exactly the paste-trap this section now exists to stop.**
 
-Redis readiness does not close this gate. After approval, use the private runbook in
-`INFRA-PRIVATE.html`, then prove both sides: the capability route still renders and a
-direct unauthenticated object URL no longer does.
+What the gate was: the signed-media route and `MEDIA_SIGNING_SECRET` were deployed
+and survived the c63 revision update, but `chirps-prod-media` intentionally stayed
+publicly readable until two independent conditions were met — a signed-media
+capability URL had to render a real uploaded photo through the shared EAS app on a
+physical device, and Jose had to approve the exact privacy mutation after seeing
+that proof.
+
+What is proven, per the board (this file has not independently re-verified the live
+bucket ACLs — treat the following as the board's record, not a fresh check):
+Public Access Prevention is enforced and the `allUsers` grant is removed, with a
+`posts/`-conditioned read grant added for the runtime service account (Jose applied
+the flip; c140, Aug 24). It was verified propagation-safe at the time: a capability
+URL served the exact bytes, re-checked 60s later; a direct GCS URL 403s; the app
+renders through the capability route. c244 (Aug 31) closes what remained of the
+original "unbounded media storage" concern this gate was guarding against: `tmp/`
+objects auto-delete at 1 day, upload-URL minting is rate-limited to 60/10min per
+user, and the object size range is enforced in the signed URL itself (c133).
+
+If you need current-moment proof rather than the board's record, re-run c140's two
+checks: a capability URL still renders, and a direct unauthenticated object URL
+still does not.
 
 ## 8. Permanent-media reconciliation job
 
