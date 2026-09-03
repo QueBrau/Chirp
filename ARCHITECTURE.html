@@ -121,10 +121,10 @@ footer{padding:36px 0 0;color:var(--ink-3);font-size:.85rem}
   deployed system and the merged schema, not from intent — where the diagram and the code disagree, the code
   is right and this file is a bug.</p>
   <div class="meta">
-    <span>chirp-api-00044-kqn</span>
-    <span>chirp-ws-00009-6jd</span>
+    <span>chirp-api-00047-5c6</span>
+    <span>chirp-ws-00012-kkd</span>
     <span>schema 0029 (applied to prod, window #2 Aug 30)</span>
-    <span>2026-09-01</span>
+    <span>2026-09-03</span>
   </div>
 </header>
 
@@ -613,23 +613,31 @@ footer{padding:36px 0 0;color:var(--ink-3);font-size:.85rem}
     <table>
       <thead><tr><th>Resource</th><th>Configured</th><th>Ceiling it implies</th><th>Evidence</th></tr></thead>
       <tbody>
-        <tr><td>chirp-api</td><td>maxScale 4 &times; concurrency 80</td><td>320 in-flight requests</td><td>Service description, live &mdash; re-verified Sep 1 on 00044-kqn (window #4)</td></tr>
-        <tr><td>chirp-ws</td><td>maxScale 2 &times; concurrency 200</td><td>400 concurrent sockets</td><td>Service description, live &mdash; re-verified Sep 1 on 00009-6jd (window #4)</td></tr>
-        <tr><td>Postgres</td><td>max_connections 100</td><td>Demand is 28 &mdash; 72 spare</td><td>Read through the proxy, Aug 28</td></tr>
-        <tr><td>Request timeout</td><td>3600 s, both services</td><td>Sockets survive an hour</td><td>Fixed 30 Aug (was 300 s); still 3600 after windows #3/#4, re-read Sep 1</td></tr>
+        <tr><td>chirp-api</td><td>maxScale 8 &times; concurrency 80, minScale 1, cpu 2</td><td>640 in-flight (paper)</td><td><strong>MEASURED Sep 3</strong>: 176 users / 44,441 requests / zero errors / read p95 ~830&nbsp;ms (edge-quoted), served from 1&ndash;2 instances &mdash; scale-out never triggered; see the callout. Config re-verified on 00047-5c6 (window #6)</td></tr>
+        <tr><td>chirp-ws</td><td>maxScale 2 &times; concurrency 200, minScale 1</td><td>400 concurrent sockets (paper)</td><td><strong>MEASURED Sep 3</strong>: 100 sockets held 60&nbsp;s clean on warm instances; the 300-socket storm died at the COLD door (33.7% handshake failures, 99 post-accept 4503s) &mdash; measured BEFORE minScale&nbsp;1, which is live specifically because of it. Capacity past 300 unmeasured; storm re-test filed. Config re-verified on 00012-kkd (window #6)</td></tr>
+        <tr><td>Postgres</td><td>max_connections 100</td><td>Demand is 48 &mdash; 52 spare</td><td>Pool guard (#189), code-enforced: api 8&times;(3+2)=40 + ws 4 + 3 reserved + 1 proxy; ~15 connections observed during the Sep 3 runs</td></tr>
+        <tr><td>Request timeout</td><td>3600 s, both services</td><td>Sockets survive an hour</td><td>Fixed 30 Aug (was 300 s); still 3600 on both window-#6 revisions, re-read Sep 3</td></tr>
         <tr><td>Redis</td><td>Basic tier, 1 GB</td><td>No failover; realtime dies with it</td><td>Instance description</td></tr>
         <tr><td>Cloud SQL zone</td><td>ZONAL</td><td>No HA; restore rehearsed at ~25 min</td><td>Drill, 27 Aug</td></tr>
       </tbody>
     </table>
   </div>
   <div class="callout">
-    <h3>Every ceiling here is computed, not measured</h3>
-    <p>These follow from configuration that was read correctly, but no load has been driven against this
-    system to confirm the arithmetic survives contact with real traffic. Treat them as upper bounds on
-    optimism until the load test runs. What changed on Sep 1: the harness to measure them now exists
-    (<code>backend/loadtest/</code>, board c226 &mdash; scripted HTTP mix, WS connect storm, mandatory abort
-    criteria, runbook), so when Jose lifts the park on running it, measurement is a same-day action. Until
-    that run, every number in this table stays computed.</p>
+    <h3>Measured Sep 3 2026 &mdash; re-measure after any knob turn</h3>
+    <p>The load test ran (board c289, from a cloud VM in-region; run artifacts in
+    <code>backend/loadtest/results-2026-09-02/</code>). What it established, honestly bounded:
+    <strong>no cliff exists</strong> &mdash; the Sep 2 &ldquo;4&ndash;5&nbsp;s at 176 users&rdquo; reading was
+    the driver machine saturating, not the server (c285; the harness now audits its own saturation and
+    says so in every report). At 176 users the API is solid: zero errors, zero 429s, read p95 ~830&nbsp;ms.
+    The honest partials: the combined phase&rsquo;s HTTP leg aborted at 571&nbsp;s when the rolling p95
+    crossed 1500&nbsp;ms during a 2&rarr;1 instance flap, and WS capacity past 300 sockets is unmeasured.</p>
+    <p><strong>The tuning lever on record, because it is counterintuitive:</strong> at cpu&nbsp;2 an
+    instance is fast enough that utilization never crosses the scale-out threshold at concurrency&nbsp;80,
+    so load rides 1&ndash;2 instances with queueing instead of spreading across 8. More CPU moves this the
+    WRONG way; the lever is <em>lower concurrency</em> (decision pending, ~80&rarr;40 &mdash; total slots
+    8&times;40=320 unchanged, per-instance pool math unchanged). And for latency claims:
+    <strong>Cloud Run&rsquo;s request_latencies are the quoted truth</strong>; harness numbers are
+    client-experienced from a named driver and must say so.</p>
   </div>
 </section>
 
