@@ -32,7 +32,7 @@ import {
   type MembershipOut,
   type RoleName,
 } from "@/api/chapters";
-import { createEvent, listEventsWithRsvps, type EventOut, type EventRsvpOut, type EventWithRsvpsOut } from "@/api/events";
+import { createEvent, listEventsWithRsvps, type EventOut, type EventRsvpCountsOut, type EventRsvpOut, type EventWithRsvpSummaryOut } from "@/api/events";
 import { likePost, listPosts, unlikePost, type FeedPostOut } from "@/api/feed";
 import { blockUser, createReport } from "@/api/moderation";
 import { inviteShareUrl, useCampus, useSession } from "@/auth";
@@ -370,19 +370,22 @@ function ActivesOnlyHiddenNotice() {
 /** Event card (§8.7 "the Partiful corner"): cover, title, date Chip, location, host row, RSVP stack. */
 function EventCard({
   event,
-  rsvps,
+  counts,
+  goingPreview,
   members,
   onPress,
 }: {
   event: EventOut;
-  rsvps: EventRsvpOut[];
+  counts: EventRsvpCountsOut;
+  goingPreview: EventRsvpOut[];
   members: MemberOut[];
   onPress: () => void;
 }) {
   const palette = useTheme();
   const host = findMember(members, event.host_id);
-  const going = rsvps.filter((rsvp) => rsvp.status === "going");
-  const goingPeople = going.map((rsvp) => {
+  // c280: the server sends a display-sized preview of the earliest going answers;
+  // counts.going is the real number and drives both the text and the +N pill.
+  const goingPeople = goingPreview.map((rsvp) => {
     const user = findMember(members, rsvp.user_id);
     return { name: user?.display_name ?? "Guest", photoUrl: user?.avatar_url };
   });
@@ -425,8 +428,8 @@ function EventCard({
           </AppText>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.xs }}>
-          <AvatarStack people={goingPeople} size={24} />
-          <AppText variant="bodyBold">{going.length} going</AppText>
+          <AvatarStack people={goingPeople} size={24} total={counts.going} />
+          <AppText variant="bodyBold">{counts.going} going</AppText>
         </View>
       </View>
     </Pressable>
@@ -437,7 +440,7 @@ function EventCard({
 function OrgEventsSegment({ chapterId }: { chapterId: string }) {
   const router = useRouter();
   const palette = useTheme();
-  const [events, setEvents] = useState<EventWithRsvpsOut[] | null>(null);
+  const [events, setEvents] = useState<EventWithRsvpSummaryOut[] | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   // Fetched once here, not per card: the roster is the only way to turn a
   // host_id/rsvp.user_id into a name (no GET /users/{id} exists).
@@ -506,11 +509,12 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
         />
       ) : (
         <View style={{ gap: spacing.md }}>
-          {(events ?? []).map(({ event, rsvps }) => (
+          {(events ?? []).map(({ event, counts, going_preview }) => (
             <EventCard
               key={event.id}
               event={event}
-              rsvps={rsvps}
+              counts={counts}
+              goingPreview={going_preview}
               members={members}
               onPress={() => router.push(`/chapter/event/${event.id}`)}
             />

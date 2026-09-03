@@ -23,12 +23,17 @@ export interface AvatarStackProps {
   size?: number;
   /** Max avatars shown before collapsing the rest into a "+N" pill. Default 4. */
   max?: number;
+  /** True crowd size when `people` is only a preview (c280); drives the "+N" pill.
+   * Defaults to people.length, i.e. the pre-c280 behavior. */
+  total?: number;
 }
 
-export function AvatarStack({ people, size = 24, max = 4 }: AvatarStackProps) {
+export function AvatarStack({ people, size = 24, max = 4, total }: AvatarStackProps) {
   const palette = useTheme();
   const shown = people.slice(0, max);
-  const overflow = people.length - shown.length;
+  // total lets a caller pass a PREVIEW of a larger crowd (c280): the +N bubble then
+  // reads the true count, not the preview's length. Omitted, behavior is unchanged.
+  const overflow = Math.max(0, (total ?? people.length) - shown.length);
   const overlap = size * 0.4;
 
   return (

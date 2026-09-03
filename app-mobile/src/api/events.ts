@@ -163,16 +163,31 @@ export async function listRsvps(eventId: string): Promise<EventRsvpOut[]> {
   return request<EventRsvpOut[]>(`/events/${eventId}/rsvps`);
 }
 
-/** One row of listEventsWithRsvps() - mirrors backend EventWithRsvpsOut (c43). */
-export interface EventWithRsvpsOut {
-  event: EventOut;
-  rsvps: EventRsvpOut[];
+/** Headcounts for one event - mirrors backend EventRsvpCountsOut (c275). */
+export interface EventRsvpCountsOut {
+  going: number;
+  maybe: number;
+  cant: number;
+  invited_unanswered: number;
 }
 
-/** The chapter's events with all their RSVPs in ONE round trip (c43) - replaces the
- * Events segment's listEvents + listRsvps-per-event 1+N. */
-export async function listEventsWithRsvps(chapterId: string): Promise<EventWithRsvpsOut[]> {
-  return request<EventWithRsvpsOut[]>(`/chapters/${chapterId}/events-with-rsvps`);
+/** One row of listEventsWithRsvps() - mirrors backend EventWithRsvpSummaryOut (c280).
+ * counts is the truth; going_preview is the first few going answers, display-sized
+ * for the avatar stack and never claimed complete. */
+export interface EventWithRsvpSummaryOut {
+  event: EventOut;
+  counts: EventRsvpCountsOut;
+  going_preview: EventRsvpOut[];
+  my_rsvp_status: RsvpStatus | null;
+}
+
+/** The chapter's events with their RSVP summaries in ONE round trip (c43 shape,
+ * re-cut by c280) - replaces the Events segment's listEvents + listRsvps-per-event
+ * 1+N, without shipping a campus of rows per popular event. */
+export async function listEventsWithRsvps(
+  chapterId: string,
+): Promise<EventWithRsvpSummaryOut[]> {
+  return request<EventWithRsvpSummaryOut[]>(`/chapters/${chapterId}/events-with-rsvps`);
 }
 
 /** Upserts the current user's RSVP for an event (Going / Maybe / Can't, §8.7). */
