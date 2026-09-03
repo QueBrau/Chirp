@@ -138,6 +138,11 @@ function FieldLabel({ children }: { children: string }) {
   );
 }
 
+/** One page of meetings, and of polls. Both grow with time; the server caps at 200.
+ * Each meeting's attendance sheet still arrives WHOLE - only the lists page (c258). */
+const MEETING_PAGE_SIZE = 50;
+const POLL_PAGE_SIZE = 50;
+
 export default function SecretaryScreen() {
   const palette = useTheme();
 
@@ -166,6 +171,11 @@ export default function SecretaryScreen() {
 
   // Live polls (c162).
   const [polls, setPolls] = useState<PollOut[] | null>(null);
+  /** A full page means older rows exist behind it (c258). */
+  const [hasOlderMeetings, setHasOlderMeetings] = useState(false);
+  const [hasOlderPolls, setHasOlderPolls] = useState(false);
+  const [loadingOlderMeetings, setLoadingOlderMeetings] = useState(false);
+  const [loadingOlderPolls, setLoadingOlderPolls] = useState(false);
   const [newQuestion, setNewQuestion] = useState("");
   const [newOptions, setNewOptions] = useState<string[]>(
     Array.from({ length: POLL_OPTION_SLOTS }, () => ""),
@@ -210,14 +220,58 @@ export default function SecretaryScreen() {
    */
   const loadDashboard = useCallback(async (id: string) => {
     const [withAttendance, members, chapterPolls] = await Promise.all([
-      listMeetingsWithAttendance(id),
+      listMeetingsWithAttendance(id, { limit: MEETING_PAGE_SIZE }),
       listMembers(id),
-      listPolls(id),
+      listPolls(id, { limit: POLL_PAGE_SIZE }),
     ]);
     setRoster(members.filter((m) => m.status === "active"));
     setItems(withAttendance);
+    setHasOlderMeetings(withAttendance.length === MEETING_PAGE_SIZE);
     setPolls(chapterPolls);
+    setHasOlderPolls(chapterPolls.length === POLL_PAGE_SIZE);
   }, []);
+
+  /** Append the page of meetings after the oldest held. Each sheet still arrives whole,
+   * so the present/absent/excused counts below stay counts of the real sheet (c258). */
+  const loadOlderMeetings = async () => {
+    const current = items ?? [];
+    const oldest = current[current.length - 1];
+    if (chapterId === null || oldest === undefined || loadingOlderMeetings) return;
+    setLoadingOlderMeetings(true);
+    try {
+      const older = await listMeetingsWithAttendance(chapterId, {
+        before: oldest.meeting.meeting_date,
+        beforeId: oldest.meeting.id,
+        limit: MEETING_PAGE_SIZE,
+      });
+      setHasOlderMeetings(older.length === MEETING_PAGE_SIZE);
+      setItems([...current, ...older]);
+    } catch (error) {
+      showApiError(error, "Couldn't load earlier meetings");
+    } finally {
+      setLoadingOlderMeetings(false);
+    }
+  };
+
+  const loadOlderPolls = async () => {
+    const current = polls ?? [];
+    const oldest = current[current.length - 1];
+    if (chapterId === null || oldest === undefined || loadingOlderPolls) return;
+    setLoadingOlderPolls(true);
+    try {
+      const older = await listPolls(chapterId, {
+        before: oldest.created_at,
+        beforeId: oldest.id,
+        limit: POLL_PAGE_SIZE,
+      });
+      setHasOlderPolls(older.length === POLL_PAGE_SIZE);
+      setPolls([...current, ...older]);
+    } catch (error) {
+      showApiError(error, "Couldn't load earlier polls");
+    } finally {
+      setLoadingOlderPolls(false);
+    }
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -646,6 +700,28 @@ export default function SecretaryScreen() {
               />
             ))
           )}
+          {hasOlderPolls ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Load earlier polls"
+              accessibilityState={{ disabled: loadingOlderPolls, busy: loadingOlderPolls }}
+              disabled={loadingOlderPolls}
+              onPress={() => void loadOlderPolls()}
+              style={({ pressed }) => ({
+                alignSelf: "center",
+                marginTop: spacing.md,
+                paddingVertical: spacing.sm,
+                paddingHorizontal: spacing.lg,
+                borderRadius: radii.pill,
+                backgroundColor: palette.surfaceAlt,
+                opacity: loadingOlderPolls ? 0.6 : pressed ? 0.8 : 1,
+              })}
+            >
+              <AppText variant="micro" tone="secondary">
+                {loadingOlderPolls ? "Loading…" : "Load earlier polls"}
+              </AppText>
+            </Pressable>
+          ) : null}
         </View>
 
         <View>
@@ -947,6 +1023,28 @@ export default function SecretaryScreen() {
                   </Card>
                 );
               })}
+              {hasOlderMeetings ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Load earlier meetings"
+                  accessibilityState={{ disabled: loadingOlderMeetings, busy: loadingOlderMeetings }}
+                  disabled={loadingOlderMeetings}
+                  onPress={() => void loadOlderMeetings()}
+                  style={({ pressed }) => ({
+                    alignSelf: "center",
+                    marginTop: spacing.md,
+                    paddingVertical: spacing.sm,
+                    paddingHorizontal: spacing.lg,
+                    borderRadius: radii.pill,
+                    backgroundColor: palette.surfaceAlt,
+                    opacity: loadingOlderMeetings ? 0.6 : pressed ? 0.8 : 1,
+                  })}
+                >
+                  <AppText variant="micro" tone="secondary">
+                    {loadingOlderMeetings ? "Loading…" : "Load earlier meetings"}
+                  </AppText>
+                </Pressable>
+              ) : null}
             </View>
           )}
         </View>

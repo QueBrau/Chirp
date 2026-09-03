@@ -38,9 +38,27 @@ export interface PollOut {
   my_option_id: string | null;
 }
 
-export async function listPolls(chapterId: string, meetingId?: string): Promise<PollOut[]> {
+/** One page of polls, newest first. `before`/`beforeId` are the OLDEST poll held (c258). */
+export interface PollPageQuery {
+  meetingId?: string;
+  before?: string;
+  beforeId?: string;
+  limit?: number;
+}
+
+export async function listPolls(
+  chapterId: string,
+  options: PollPageQuery = {},
+): Promise<PollOut[]> {
+  // BOTH cursor halves or NEITHER - see listMeetingsWithAttendance for why.
+  const paired = options.before !== undefined && options.beforeId !== undefined;
   return request<PollOut[]>(`/chapters/${chapterId}/polls`, {
-    query: { meeting_id: meetingId },
+    query: {
+      meeting_id: options.meetingId,
+      before: paired ? options.before : undefined,
+      before_id: paired ? options.beforeId : undefined,
+      limit: options.limit,
+    },
   });
 }
 

@@ -16,8 +16,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -190,10 +190,19 @@ async def create_poll(
 async def list_polls(
     chapter_id: uuid.UUID,
     meeting_id: uuid.UUID | None = None,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
 ) -> list[PollOut]:
     """List the chapter's polls, newest first; any member.
+
+    Cursored on (created_at, id): polls grow with TIME - the docstring below already
+    notes a chapter running one at every meeting "accumulates these forever" - so a cap
+    alone would only move the truncation later (board c258). The three-queries-total
+    property is preserved: the tallies and the caller's ballots are fetched once for the
+    PAGE, which is the same shape at a bounded size.
 
     Three queries total regardless of how many polls come back -- the tallies and
     the caller's own ballots are each fetched once for the whole page. Doing it per
@@ -204,11 +213,19 @@ async def list_polls(
     if meeting_id is not None:
         filters.append(models.Poll.meeting_id == meeting_id)
 
+    if before is not None and before_id is not None:
+        filters.append(
+            tuple_(models.Poll.created_at, models.Poll.id) < (before, before_id)
+        )
+    elif before is not None:
+        filters.append(models.Poll.created_at < before)
+
     result = await session.execute(
         select(models.Poll)
         .options(selectinload(models.Poll.options))
         .where(*filters)
-        .order_by(models.Poll.created_at.desc())
+        .order_by(models.Poll.created_at.desc(), models.Poll.id.desc())
+        .limit(limit)
     )
     polls = list(result.scalars().all())
     if not polls:

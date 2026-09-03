@@ -138,12 +138,29 @@ export async function getAttendanceSummary(
  * dashboard load and grew with chapter history (board c156). Most recent first, same
  * order as listMeetings.
  */
+/** One page of meetings with their sheets. `before`/`beforeId` are the OLDEST meeting
+ * you already hold. The SHEETS come back whole - only the meetings list pages (c258). */
+export interface MeetingPageQuery extends AttendanceWindow {
+  before?: string;
+  beforeId?: string;
+  limit?: number;
+}
+
 export async function listMeetingsWithAttendance(
   chapterId: string,
-  window: AttendanceWindow = {},
+  window: MeetingPageQuery = {},
 ): Promise<MeetingWithAttendance[]> {
+  // BOTH cursor halves or NEITHER: `before` alone cannot tie-break meetings sharing a
+  // date and drops them at a page boundary, so this client never sends the half-cursor.
+  const paired = window.before !== undefined && window.beforeId !== undefined;
   return request<MeetingWithAttendance[]>(`/chapters/${chapterId}/meetings/with-attendance`, {
-    query: { start: window.start, end: window.end },
+    query: {
+      start: window.start,
+      end: window.end,
+      before: paired ? window.before : undefined,
+      before_id: paired ? window.beforeId : undefined,
+      limit: window.limit,
+    },
   });
 }
 
