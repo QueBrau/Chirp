@@ -11,6 +11,17 @@ from dataclasses import dataclass
 # agree on the classification by construction.
 WRITE_CLASSES = frozenset({"post_create", "comment_create", "chirp_create"})
 
+# The self-audit probe (c285): one dedicated low-rate requester that bypasses
+# every cap and shares no connection with the mix. Its latencies approximate the
+# SERVER's truth; the gap between them and the mix's read p95 measures the
+# DRIVER's own saturation. Excluded from the abort criteria's read set so the
+# probe can never mask or dilute a real violation.
+REFERENCE_CLASS = "reference_probe"
+
+# Read p95 exceeding the probe's p95 by this factor means the driver is
+# inflating measurements (B3's post-mortem ratio was 6-9x on a clean server).
+SATURATION_RATIO = 3.0
+
 TIMELINE_BUCKET_SECONDS = 10.0
 
 
@@ -27,6 +38,24 @@ def quantile(sorted_values: list[float], q: float) -> float:
         raise ValueError(f"quantile q must be in (0, 1], got {q}")
     rank = math.ceil(q * len(sorted_values))
     return sorted_values[rank - 1]
+
+
+def instrument_verdict(mix_read_p95: float, probe_p95: float) -> dict:
+    """The self-audit (c285): compare the mix's read p95 against the probe's.
+
+    A ratio above SATURATION_RATIO means the numbers in this report describe the
+    DRIVER, not the server - exactly the failure that produced B3's false cliff.
+    Verdict states: 'saturated', 'clean', or 'no_probe' when the probe never ran
+    (0.0 p95) - a missing probe must never read as a clean instrument.
+    """
+    if probe_p95 <= 0:
+        return {"verdict": "no_probe", "ratio": None, "probe_p95_ms": 0.0}
+    ratio = mix_read_p95 / probe_p95
+    return {
+        "verdict": "saturated" if ratio > SATURATION_RATIO else "clean",
+        "ratio": round(ratio, 2),
+        "probe_p95_ms": round(probe_p95, 1),
+    }
 
 
 @dataclass(frozen=True)
@@ -116,7 +145,11 @@ class Recorder:
             }
         errors = sum(1 for s in samples if s.status == 0 or s.status >= 500)
         s429 = sum(1 for s in samples if s.status == 429)
-        reads = sorted(s.latency_ms for s in samples if s.route_class not in WRITE_CLASSES)
+        reads = sorted(
+            s.latency_ms
+            for s in samples
+            if s.route_class not in WRITE_CLASSES and s.route_class != REFERENCE_CLASS
+        )
         writes = sorted(s.latency_ms for s in samples if s.route_class in WRITE_CLASSES)
         return {
             "samples": float(total),
@@ -164,9 +197,18 @@ class Recorder:
                 for bucket, counts in sorted(self._timeline.items())
             ]
             ws_ordered = sorted(self.ws_connect_ms)
+            mix_reads = sorted(
+                v
+                for route_class, values in self._latencies.items()
+                if route_class not in WRITE_CLASSES and route_class != REFERENCE_CLASS
+                for v in values
+            )
+            probe = sorted(self._latencies.get(REFERENCE_CLASS, []))
+            instrument = instrument_verdict(quantile(mix_reads, 0.95), quantile(probe, 0.95))
             return {
                 "http": classes,
                 "substituted_writes": self._substituted_writes,
+                "instrument": instrument,
                 "timeline": timeline,
                 "ws": {
                     "attempts": self.ws_attempts,

@@ -70,6 +70,22 @@ def print_summary(report: dict) -> None:
             )
         substituted = report["results"]["substituted_writes"]
         print(f"writes substituted by pacing: {substituted}")
+    instrument = report["results"].get("instrument", {})
+    verdict = instrument.get("verdict")
+    if verdict == "saturated":
+        print(
+            f"INSTRUMENT SATURATED: mix read p95 is {instrument['ratio']}x the reference "
+            f"probe's {instrument['probe_p95_ms']}ms - these numbers describe the DRIVER, "
+            "not the server. Re-run with a longer ramp, fewer users per driver, or a "
+            "bigger driver machine (loadtest/RUNBOOK.md, c285)."
+        )
+    elif verdict == "clean":
+        print(
+            f"instrument self-audit: clean (mix read p95 = {instrument['ratio']}x the "
+            f"probe's {instrument['probe_p95_ms']}ms)"
+        )
+    elif verdict == "no_probe":
+        print("instrument self-audit: NO PROBE SAMPLES - treat every latency above with suspicion")
     ws = report["results"]["ws"]
     if ws["attempts"]:
         named = ws.get("close_codes_named", ws["close_codes"])

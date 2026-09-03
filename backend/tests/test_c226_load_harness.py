@@ -128,6 +128,7 @@ def _criteria(**overrides) -> AbortCriteria:
         max_ws_failure_pct=5.0,
         window_seconds=30.0,
         min_samples=10,
+        grace_seconds=0.0,
     )
     base.update(overrides)
     return AbortCriteria(**base)
@@ -190,6 +191,7 @@ def _config_dict() -> dict:
         "ws_url": "ws://127.0.0.1:8010/ws",
         "auth_mode": "emulated",
         "duration_seconds": 60,
+        "ramp_in_seconds": 10,
         "think_seconds": 2.0,
         "mix_weights": {"feed_campus": 30, "chirp_create": 8},
         "caps": {
@@ -209,6 +211,7 @@ def _config_dict() -> dict:
             "max_ws_failure_pct": 5.0,
             "window_seconds": 30,
             "min_samples": 50,
+            "grace_seconds": 15,
         },
         "ws": {"max_sockets": 40, "connects_per_second": 5, "hold_seconds": 15},
     }
