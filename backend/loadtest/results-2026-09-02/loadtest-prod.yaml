@@ -1,0 +1,43 @@
+# c226 PROD RUN - park lifted by Jose Sep 2 ("do load test when you can"), board c226.
+base_url: "https://chirp-api-593616178468.us-central1.run.app"
+ws_url: "wss://chirp-ws-593616178468.us-central1.run.app/ws"
+auth_mode: "firebase"
+
+approval:
+  approved_by: "Jose (board c226, Sep 2 2026)"
+  date: "2026-09-02"
+
+duration_seconds: 600
+think_seconds: 2.0
+
+mix_weights:
+  feed_campus: 30
+  chirps_list: 18
+  posts_list: 15
+  comments_list: 12
+  me: 5
+  post_create: 4
+  comment_create: 8
+  chirp_create: 8
+
+caps:
+  max_rps: 120
+  max_concurrent_requests: 80
+  per_user_writes_per_minute:
+    post_create: 3.0
+    comment_create: 3.0
+    chirp_create: 1.5
+
+abort:
+  max_error_rate_pct: 2.0
+  max_429_rate_pct: 1.0
+  read_p95_ceiling_ms: 1500
+  write_p95_ceiling_ms: 2500
+  max_ws_failure_pct: 5.0
+  window_seconds: 30
+  min_samples: 50
+
+ws:
+  max_sockets: 100
+  connects_per_second: 10
+  hold_seconds: 60
