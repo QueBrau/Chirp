@@ -35,6 +35,13 @@ dev = [
     "pytest-asyncio",
     "httpx",
     "aiosqlite",
+    # SIGNING ORACLE ONLY (c284), never imported at runtime. app.services.email_service
+    # signs SES requests by hand — boto3 is synchronous and would block the single event
+    # loop this process serves every request from (c211/c223), so the SDK is not in the
+    # image. botocore is here so test_c284_ses_provider.py can sign the same request with
+    # AWS's OWN SigV4Auth and assert byte equality: the signature is proven against the
+    # reference implementation instead of being trusted because it looks right.
+    "botocore",
 ]
 firebase = [
     "firebase-admin",

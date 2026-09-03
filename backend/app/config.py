@@ -63,9 +63,26 @@ class Settings(BaseSettings):
     # Transactional email (board c87). "log" records the send and delivers nothing,
     # which is the correct default for local dev and the whole test suite: no key is
     # required and no test can accidentally mail a real person. Production sets
-    # "resend" and supplies resend_api_key from Secret Manager.
-    email_provider: Literal["log", "resend"] = "log"
+    # "resend" or "ses" and supplies that provider's credentials from Secret Manager.
+    #
+    # "ses" is the launch target (c240: Jose chose SES over Resend Pro, cheaper by orders
+    # of magnitude at our volume, and Resend's free tier caps at 100/DAY not 3,000/month).
+    # The switch is a config change alone — env flip plus secret mount — which is the
+    # whole reason app.services.email_service put the provider behind this Literal.
+    email_provider: Literal["log", "resend", "ses"] = "log"
     resend_api_key: str | None = None
+    # SES credentials (c284). All three are None until Jose's AWS account exists (his half
+    # of c240: domain DNS plus the sandbox-exit request), and email_service fails CLOSED
+    # with 503 email_not_configured rather than half-sending — same shape as the Resend
+    # key and stripe_service's _secret_key, so an unconfigured integration reads as the
+    # deployment state it is rather than as a user error.
+    #
+    # The region is not guessable from anything else and a wrong one produces a signature
+    # that fails against the right host, so it is explicit rather than defaulted to
+    # whatever us-east-1 happens to be.
+    aws_region: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
     # Sender identity. josedev.app has been verified in Resend since Aug 24 (board c134),
     # so this default is our real sender now, not Resend's shared onboarding address —
     # the old "we own no domain" note here was true only before that date. Prod does not
