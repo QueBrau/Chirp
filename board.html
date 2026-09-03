@@ -2738,11 +2738,11 @@
     },
     {
       "id": "c274",
-      "col": "backlog",
+      "col": "progress",
       "owner": "",
       "tag": "",
       "area": "mobile",
-      "title": "c274 [NEW Sep 1, filed while reviewing c273 - small, mechanical] THE E2EE CLAIMS GUARD DOES NOT COVER THE NEW MESSAGES SCREEN. scripts/verify-e2ee-claims.mjs hardcodes exactly two files at lines 29-30 (messages/index.tsx and messages/[id].tsx) and iterates just those two at line 113. c273 adds a THIRD messages screen, app/(tabs)/messages/new.tsx, which carries the encryption disclosure 'Sending unlocks with E2EE (milestone 4)' - repeated verbatim from the thread composer so it currently passes the allowlist by construction, but nothing stops it drifting into a false claim tomorrow. That guard exists because this repo shipped an encryption claim the client did not honor (c254). FIX: make the screen list a glob over app/(tabs)/messages/*.tsx rather than adding a third hardcoded URL, so the NEXT messages screen is covered without anyone remembering to add it - the hardcoded pair is the actual bug here. Found by the c273 worker, which is worth noting: it flagged a gap in its own coverage rather than leaving it silent.",
+      "title": "c274 [CLAIMED court Sep 3 - in progress] THE E2EE CLAIMS GUARD DOES NOT COVER THE NEW MESSAGES SCREEN. scripts/verify-e2ee-claims.mjs hardcodes exactly two files at lines 29-30 (messages/index.tsx and messages/[id].tsx) and iterates just those two at line 113. c273 adds a THIRD messages screen, app/(tabs)/messages/new.tsx, which carries the encryption disclosure 'Sending unlocks with E2EE (milestone 4)' - repeated verbatim from the thread composer so it currently passes the allowlist by construction, but nothing stops it drifting into a false claim tomorrow. That guard exists because this repo shipped an encryption claim the client did not honor (c254). FIX: make the screen list a glob over app/(tabs)/messages/*.tsx rather than adding a third hardcoded URL, so the NEXT messages screen is covered without anyone remembering to add it - the hardcoded pair is the actual bug here. Found by the c273 worker, which is worth noting: it flagged a gap in its own coverage rather than leaving it silent.",
       "detail": ""
     },
     {
