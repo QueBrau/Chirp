@@ -12,6 +12,9 @@ import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { AppText, Avatar, Badge, Button, Card, Chip, EmptyState, Screen } from "@/components";
 import { radii, spacing, useTheme } from "@/theme";
 
+/** One page of directory entries, and of postings. The server caps both at 200 (c258). */
+const PAGE_SIZE = 50;
+
 type Segment = "directory" | "jobs";
 
 /**
@@ -191,11 +194,53 @@ export default function AlumniScreen() {
   const [segment, setSegment] = useState<Segment>("directory");
   const [alumni, setAlumni] = useState<AlumniProfileOut[] | null>(null);
   const [jobs, setJobs] = useState<JobPostOut[] | null>(null);
+  /** A full page means older rows exist behind it (c258). */
+  const [hasOlderAlumni, setHasOlderAlumni] = useState(false);
+  const [hasOlderJobs, setHasOlderJobs] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+
+  /** Append the next page of whichever list asked. Both lists are render-only - the
+   * screen's only reads of them are empty-state checks, which stay correct when paged. */
+  const loadOlderAlumni = async () => {
+    const oldest = (alumni ?? [])[(alumni ?? []).length - 1];
+    if (oldest === undefined || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const older = await getAlumniDirectory({ beforeId: oldest.user_id, limit: PAGE_SIZE });
+      setHasOlderAlumni(older.length === PAGE_SIZE);
+      setAlumni((current) => [...(current ?? []), ...older]);
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  const loadOlderJobs = async () => {
+    const oldest = (jobs ?? [])[(jobs ?? []).length - 1];
+    if (oldest === undefined || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const older = await listJobs({
+        before: oldest.created_at,
+        beforeId: oldest.id,
+        limit: PAGE_SIZE,
+      });
+      setHasOlderJobs(older.length === PAGE_SIZE);
+      setJobs((current) => [...(current ?? []), ...older]);
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   useFocusEffect(
     useCallback(() => {
-      void getAlumniDirectory().then(setAlumni);
-      void listJobs().then(setJobs);
+      void getAlumniDirectory({ limit: PAGE_SIZE }).then((page) => {
+        setAlumni(page);
+        setHasOlderAlumni(page.length === PAGE_SIZE);
+      });
+      void listJobs({ limit: PAGE_SIZE }).then((page) => {
+        setJobs(page);
+        setHasOlderJobs(page.length === PAGE_SIZE);
+      });
     }, []),
   );
 
@@ -251,6 +296,27 @@ export default function AlumniScreen() {
                   eboard={eboard}
                 />
               ))}
+              {hasOlderAlumni ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Load more alumni"
+                  accessibilityState={{ disabled: loadingOlder, busy: loadingOlder }}
+                  disabled={loadingOlder}
+                  onPress={() => void loadOlderAlumni()}
+                  style={({ pressed }) => ({
+                    alignSelf: "center",
+                    paddingVertical: spacing.sm,
+                    paddingHorizontal: spacing.lg,
+                    borderRadius: radii.pill,
+                    backgroundColor: palette.surfaceAlt,
+                    opacity: loadingOlder ? 0.6 : pressed ? 0.8 : 1,
+                  })}
+                >
+                  <AppText variant="micro" tone="secondary">
+                    {loadingOlder ? "Loading…" : "Load more alumni"}
+                  </AppText>
+                </Pressable>
+              ) : null}
             </View>
           )
         ) : (
@@ -267,7 +333,32 @@ export default function AlumniScreen() {
                 message="Alumni and e-board can post openings for the chapter."
               />
             ) : (
-              jobs.map((job) => <JobCard key={job.id} job={job} />)
+              <>
+                {jobs.map((job) => (
+                  <JobCard key={job.id} job={job} />
+                ))}
+                {hasOlderJobs ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Load older postings"
+                  accessibilityState={{ disabled: loadingOlder, busy: loadingOlder }}
+                  disabled={loadingOlder}
+                  onPress={() => void loadOlderJobs()}
+                  style={({ pressed }) => ({
+                    alignSelf: "center",
+                    paddingVertical: spacing.sm,
+                    paddingHorizontal: spacing.lg,
+                    borderRadius: radii.pill,
+                    backgroundColor: palette.surfaceAlt,
+                    opacity: loadingOlder ? 0.6 : pressed ? 0.8 : 1,
+                  })}
+                >
+                  <AppText variant="micro" tone="secondary">
+                    {loadingOlder ? "Loading…" : "Load older postings"}
+                  </AppText>
+                </Pressable>
+              ) : null}
+              </>
             )}
           </View>
         )}

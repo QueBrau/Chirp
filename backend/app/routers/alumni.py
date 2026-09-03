@@ -2,8 +2,8 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import Select, and_, or_, select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import Select, and_, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -88,6 +88,8 @@ async def upsert_own_profile(
 
 @router.get("/alumni/directory")
 async def list_directory(
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[AlumniProfileOut]:
@@ -97,7 +99,7 @@ async def list_directory(
     including alumni) in at least one common chapter. No campus-wide or
     network-wide discovery yet, and no pagination — chapters are small.
     """
-    result = await session.execute(
+    directory = (
         select(models.AlumniProfile, models.User)
         .join(models.User, models.User.id == models.AlumniProfile.user_id)
         .join(
@@ -110,6 +112,23 @@ async def list_directory(
             models.AlumniProfile.user_id != user.id,
         )
         .distinct()
+    )
+    # ORDER BY ADDED WITH THE CURSOR, and it is not incidental: this query had no
+    # ordering at all, so row order was whatever the planner returned. A cursor over an
+    # unordered query is meaningless - "everything before X" needs an X that is always
+    # in the same place - and an unordered LIMIT truncates arbitrary rows, which is
+    # worse than no cap because it is nondeterministic (c258).
+    #
+    # SINGLE-COLUMN CURSOR ON PURPOSE, unlike every other list in this card.
+    # alumni_profiles has NO created_at - the row is a profile, not an event, so there
+    # is nothing time-shaped to sort by. user_id is the primary key, so it is unique
+    # and total on its own: the (created_at, id) tie-break that every other cursor here
+    # needs exists precisely BECAUSE timestamps collide, and a unique sort key cannot.
+    # Adding a second column would be ceremony, not safety.
+    if before_id is not None:
+        directory = directory.where(models.AlumniProfile.user_id < before_id)
+    result = await session.execute(
+        directory.order_by(models.AlumniProfile.user_id.desc()).limit(limit)
     )
     entries: list[AlumniProfileOut] = []
     for profile, profile_user in result.all():
@@ -186,6 +205,9 @@ async def create_job_post(
 
 @router.get("/jobs")
 async def list_job_posts(
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[JobPostOut]:
@@ -224,7 +246,7 @@ async def list_job_posts(
     """
     now = datetime.now(timezone.utc)
     peers = _chapter_peer_ids(user.id)
-    result = await session.execute(
+    jobs = (
         select(models.JobPost, models.User.display_name)
         .join(models.User, models.User.id == models.JobPost.posted_by)
         .where(
@@ -240,7 +262,20 @@ async def list_job_posts(
                 models.JobPost.expires_at > now,
             ),
         )
-        .order_by(models.JobPost.created_at.desc())
+    )
+    # Cursored on (created_at, id) like every other time-ordered list in c258. Postings
+    # accumulate: an expired one drops out of the window, but the board still grows with
+    # every season of hiring, so a cap alone would only move the truncation later.
+    if before is not None and before_id is not None:
+        jobs = jobs.where(
+            tuple_(models.JobPost.created_at, models.JobPost.id) < (before, before_id)
+        )
+    elif before is not None:
+        jobs = jobs.where(models.JobPost.created_at < before)
+    result = await session.execute(
+        jobs.order_by(
+            models.JobPost.created_at.desc(), models.JobPost.id.desc()
+        ).limit(limit)
     )
     entries: list[JobPostOut] = []
     for job, display_name in result.all():

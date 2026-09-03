@@ -3,8 +3,8 @@ removal (chirps, posts, comments) — all with an audit trail (board card c76)."
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import select, update
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -239,10 +239,21 @@ async def create_report(
 
 @router.get("/moderation/reports")
 async def list_reports(
+    status: str | None = Query(default=None),
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     moderator: models.User = Depends(_require_any_eboard),
     session: AsyncSession = Depends(get_session),
 ) -> list[ContentReportOut]:
     """List reports newest first, scoped to campuses where the caller is active e-board.
+
+    FILTER SERVER-SIDE, THEN PAGE - the order matters (board c258). The moderation
+    screen used to fetch every report and keep the open ones in the client. Cursoring
+    under that would have been the worst outcome in this wave: a page full of already-
+    resolved reports would render an EMPTY queue while real open reports sat on later
+    pages, so a moderator would see "nothing to do" with work outstanding. Filtering
+    before the cursor means a page of open reports is a page of open reports.
 
     SECURITY-REVIEW finding 1: previously returned every report platform-wide
     (including forwarded_plaintext of reported E2EE messages) to any e-board member
@@ -262,10 +273,22 @@ async def list_reports(
     campus_ids = list(campus_ids_result.scalars().all())
     if not campus_ids:
         return []
+    query = select(models.ContentReport).where(
+        models.ContentReport.campus_id.in_(campus_ids)
+    )
+    if status is not None:
+        query = query.where(models.ContentReport.status == status)
+    if before is not None and before_id is not None:
+        query = query.where(
+            tuple_(models.ContentReport.created_at, models.ContentReport.id)
+            < (before, before_id)
+        )
+    elif before is not None:
+        query = query.where(models.ContentReport.created_at < before)
     result = await session.execute(
-        select(models.ContentReport)
-        .where(models.ContentReport.campus_id.in_(campus_ids))
-        .order_by(models.ContentReport.created_at.desc())
+        query.order_by(
+            models.ContentReport.created_at.desc(), models.ContentReport.id.desc()
+        ).limit(limit)
     )
     return [ContentReportOut.model_validate(r) for r in result.scalars().all()]
 
