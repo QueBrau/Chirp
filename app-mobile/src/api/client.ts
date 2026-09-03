@@ -2,13 +2,26 @@
 
 import { getIdToken, hasFirebaseConfig } from "@/auth";
 
+/** The live Cloud Run API, used whenever EXPO_PUBLIC_API_URL is not set. */
+const DEFAULT_API_BASE_URL = "https://chirp-api-593616178468.us-central1.run.app";
+
+/**
+ * The realtime service that PAIRS with DEFAULT_API_BASE_URL (board c272).
+ *
+ * Not decoration and not a duplicate of eas.json: this is what an unconfigured
+ * build must use, and scripts/verify-ws-url.mjs asserts it stays byte-identical
+ * to the value eas.json ships for preview/production, so the two cannot drift
+ * apart silently.
+ */
+const DEFAULT_WS_URL = "wss://chirp-ws-593616178468.us-central1.run.app/ws";
+
 /**
  * Backend origin. Defaults to the live Cloud Run backend; override with
  * EXPO_PUBLIC_API_URL (e.g. "http://localhost:8000") to point at a local
  * FastAPI dev server instead.
  */
 export const API_BASE_URL: string =
-  process.env.EXPO_PUBLIC_API_URL ?? "https://chirp-api-593616178468.us-central1.run.app";
+  process.env.EXPO_PUBLIC_API_URL ?? DEFAULT_API_BASE_URL;
 
 let authToken: string | null = null;
 let debugFirebaseUid: string | null = null;
@@ -159,16 +172,33 @@ export async function requestWithHeaders<T>(
  * RN CAN set that.
  *
  * c213: independently configurable via EXPO_PUBLIC_WS_URL, same read pattern
- * as API_BASE_URL above (`??` against process.env, so only a truly unset var
- * falls through — an explicit empty string is honored, same as
- * EXPO_PUBLIC_API_URL). When set, that value is returned verbatim as the full
- * endpoint (path included) — this is what lets realtime move to its own
- * Cloud Run service (chirp-ws) independently of EXPO_PUBLIC_API_URL, with no
- * client rebuild. When unset, behavior is unchanged: derived from
- * API_BASE_URL by swapping the http(s) scheme for ws(s) and appending `/ws`.
+ * as API_BASE_URL above (only a truly unset var falls through — an explicit
+ * empty string is honored, same as EXPO_PUBLIC_API_URL). When set, that value
+ * is returned verbatim as the full endpoint (path included) — this is what lets
+ * realtime move to its own Cloud Run service (chirp-ws) independently of
+ * EXPO_PUBLIC_API_URL, with no client rebuild.
+ *
+ * c272: WHEN UNSET, THE HOST DECIDES, and scheme-swapping alone was wrong.
+ * Deriving `wss://<api-host>/ws` is right for a LOCAL api — a developer pointing
+ * EXPO_PUBLIC_API_URL at localhost must get a localhost socket, never prod
+ * realtime — but it is wrong for the default, because the default api host is
+ * chirp-api and realtime lives on chirp-ws. eas.json leaves both development
+ * profiles unset on purpose (correct, and it stays that way), so a CLOUD dev
+ * build sets no api url either, falls back to the prod api, and used to derive
+ * wss://chirp-api/ws: prod api paired with a socket on the wrong service. That
+ * is the c209/c213 split undone, and it is SILENT because both services run the
+ * same image, so chirp-api answers /ws and messaging looks fine while chirp-ws
+ * logs zero upgrades — the c246 shape exactly.
+ *
+ * So: explicit override wins; otherwise the DEFAULT api pairs with the DEFAULT
+ * socket; otherwise (a custom/local host) derive from it as before. Each branch
+ * is a case in scripts/verify-ws-url.mjs.
  */
 export function wsUrl(): string {
-  return process.env.EXPO_PUBLIC_WS_URL ?? `${API_BASE_URL.replace(/^http/, "ws")}/ws`;
+  const configured = process.env.EXPO_PUBLIC_WS_URL;
+  if (configured !== undefined) return configured;
+  if (API_BASE_URL === DEFAULT_API_BASE_URL) return DEFAULT_WS_URL;
+  return `${API_BASE_URL.replace(/^http/, "ws")}/ws`;
 }
 
 /**
