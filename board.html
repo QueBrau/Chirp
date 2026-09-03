@@ -224,7 +224,8 @@
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
-<script id="board-data" type="application/json">{
+<script id="board-data" type="application/json">
+{
   "updated": 1787623688303,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
@@ -2977,7 +2978,7 @@
       "tag": "",
       "area": "",
       "title": "c289 IN PROGRESS (chirps-7b) - THE REAL LOAD RE-TEST FROM A CLOUD VM (their own c285 plan (c)). e2-small/e2-medium in us-central1 (~pennies for an hour, delete after), harness + self-audit from main (ramp_in_seconds ~30, grace ~40), fresh tokens (accounts still provisioned; refresh via securetoken flow in results dir notes), phases: B3-redo 176 users, then C combined HTTP+WS if clean. The instrument verdict line is the first thing read - if it says saturated even on the VM, stop and diagnose, do not shop for a bigger VM blindly. Abort criteria as before; quiet-hour irrelevant (zero real users); cleanup queries after; board gets the TRUE ceiling numbers. VM creation may permission-prompt in-session - if blocked, come back and manager creates it.",
-      "detail": ""
+      "detail": " RESULTS Sep 3 (chirps-7b, VM run, reports filed in backend/loadtest/results-2026-09-02/ as report-b3redo.json / report-phasec.json): B3-REDO CLEAN - instrument 1.12x (real server numbers at last): 176 users, 600s, 44,441 requests ALL 2xx, zero errors, zero 429s; read p95 795-842ms, write p95 908-955ms, p50 212-312ms, p99 1.26-1.55s. No cliff - the Sep 2 4-5s was pure instrument, as c285 diagnosed. PHASE C: HTTP leg ran 571.7s then ABORTED on rolling read p95 1567 vs 1500 (a 4.5% breach, zero errors, instrument still clean 1.11x - genuine late-run server creep), so the WS storm was correctly WITHHELD: SOCKET DELIVERY REMAINS UNMEASURED. PLATFORM FINDING under both runs: chirp-api served everything from 1-2 instances of maxScale 8 and FLAPPED 2->1->2 mid-run (12:48, 12:57, 12:59Z) - cpu 2 made instances fast enough that utilization stays under the scale-out threshold at concurrency 80, so ~830ms p95 is the measured 1-2-instance operating point and the ceiling breach lines up with a 1-instance dip. The lever is CONCURRENCY (lower it so scale-out happens earlier), not more CPU - manager/Jose call, re-runs c248 arithmetic. VM deleted same hour as promised."
     },
     {
       "id": "c290",
@@ -3139,7 +3140,8 @@
     "Aug 29 - GOTCHA WORTH KEEPING: scripts/deploy-verify run IMMEDIATELY after a deploy can report a spurious failure (seen once here: 3 passed / 1 failed, then 4/4 clean on two consecutive re-runs with no code change). Cause is a cold-start container on the brand-new revision, not a regression. RULE: never act on a single post-deploy verify failure - re-run it before believing it, and only investigate if it fails consistently. Do not 'fix' anything on one red run.",
     "Aug 30 - EMAIL: SELF-HOSTING EVALUATED AND REJECTED (Jose asked about dropping Resend for nodemailer to avoid paying; he chose 'leave Resend for alpha'). The blocker is structural, not effort: Gmail requires valid REVERSE DNS on the sending IP, and Google documents that PTR records cannot be set for Cloud NAT / non-VM IPs - so a Cloud Run service can get a static egress IP but can NEVER get valid reverse DNS. Self-hosting therefore means running an MTA on a Compute Engine VM, not a library swap. GCP also blocks outbound port 25 externally (587/465 are open, but those are submission-to-a-relay, i.e. still a third party). Two more corrections: nodemailer is a NODE library and our backend is Python (aiosmtplib/smtplib are the equivalents), and all of them are SMTP CLIENTS, not mail servers - so the swap would not remove a provider at all. Total prize was $0.50-20/month. Our mail is .edu verification codes = alpha gate c71, so risking inbox placement to save that is a bad trade. Escape hatch if cost ever bites: Amazon SES behind the existing abstraction, ~$0.50-0.80/mo at our volume."
   ]
-}</script>
+}
+</script>
 <script>
 (function () {
   var DATA = document.getElementById('board-data');

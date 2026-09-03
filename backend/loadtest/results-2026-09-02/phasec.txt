@@ -1,0 +1,17 @@
+target: https://chirp-api-593616178468.us-central1.run.app (auth firebase)
+phases: http_mix; wall 571.7s
+RESULT: ABORTED by criteria:
+  read_p95_ms: observed 1567.3, limit 1500.0
+route class       count   p50ms   p95ms   p99ms statuses
+chirp_create       1491   262.0   825.9  1400.1 201:1491
+chirps_list        8573   204.3   739.9  1312.1 200:8573
+comment_create     2081   277.2   806.2  1511.2 201:2081
+comments_list      5542   220.3   764.9  1334.5 200:5542
+feed_campus       14276   197.3   729.1  1283.6 200:14276
+me                 2377   203.1   750.7  1343.2 200:2377
+post_create        1263   275.3   831.6  1497.1 201:1263
+posts_list         7166   215.0   738.3  1282.6 200:7166
+reference_probe     455   178.2   665.1  1374.7 200:455
+writes substituted by pacing: 3796
+instrument self-audit: clean (mix read p95 = 1.11x the probe's 665.1ms)
+report written to report-phasec.json

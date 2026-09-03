@@ -1,0 +1,16 @@
+target: https://chirp-api-593616178468.us-central1.run.app (auth firebase)
+phases: http_mix; wall 602.1s
+RESULT: completed without tripping any abort criterion
+route class       count   p50ms   p95ms   p99ms statuses
+chirp_create       1556   285.9   954.7  1547.4 201:1556
+chirps_list        8870   224.4   824.4  1371.1 200:8870
+comment_create     2182   312.5   908.1  1518.1 201:2182
+comments_list      5959   240.8   835.9  1367.2 200:5959
+feed_campus       14675   220.4   835.8  1347.8 200:14675
+me                 2414   212.1   795.1  1376.0 200:2414
+post_create        1369   306.2   923.4  1476.9 201:1369
+posts_list         7416   234.5   841.7  1361.0 200:7416
+reference_probe     471   189.4   741.9  1260.6 200:471
+writes substituted by pacing: 3934
+instrument self-audit: clean (mix read p95 = 1.12x the probe's 741.9ms)
+report written to report-b3redo.json
