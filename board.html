@@ -2738,11 +2738,11 @@
     },
     {
       "id": "c274",
-      "col": "progress",
+      "col": "done",
       "owner": "",
       "tag": "",
       "area": "mobile",
-      "title": "c274 [court Sep 3 - BUILT+FALSIFIED, PR #197 up, CI running] glob fix live on branch: guard now scans all 4 messages screens (was 2, new.tsx never read); scratch false claim passes OLD guard exit 0 / fails NEW exit 1 naming the file; anchor check stops zero-match vacuous pass. THE E2EE CLAIMS GUARD DOES NOT COVER THE NEW MESSAGES SCREEN. scripts/verify-e2ee-claims.mjs hardcodes exactly two files at lines 29-30 (messages/index.tsx and messages/[id].tsx) and iterates just those two at line 113. c273 adds a THIRD messages screen, app/(tabs)/messages/new.tsx, which carries the encryption disclosure 'Sending unlocks with E2EE (milestone 4)' - repeated verbatim from the thread composer so it currently passes the allowlist by construction, but nothing stops it drifting into a false claim tomorrow. That guard exists because this repo shipped an encryption claim the client did not honor (c254). FIX: make the screen list a glob over app/(tabs)/messages/*.tsx rather than adding a third hardcoded URL, so the NEXT messages screen is covered without anyone remembering to add it - the hardcoded pair is the actual bug here. Found by the c273 worker, which is worth noting: it flagged a gap in its own coverage rather than leaving it silent.",
+      "title": "c274 [DONE Sep 3, court, PR #197 merged 23f1305, CI 4/4] E2EE-CLAIMS GUARD NOW GLOBS app/(tabs)/messages/*.tsx (was 2 hardcoded files; new.tsx was never scanned). Falsified: scratch false claim in new.tsx passed OLD guard exit 0, failed NEW exit 1 naming the file. Anchor check (index.tsx + [id].tsx must exist) stops a dir move becoming a zero-match vacuous pass. Guard re-run green on merged main: 4 screens scanned. Branch swept remote+local.",
       "detail": ""
     },
     {
