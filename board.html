@@ -2999,11 +2999,11 @@
     },
     {
       "id": "c292",
-      "col": "backlog",
+      "col": "done",
       "owner": "",
       "tag": "",
       "area": "",
-      "title": "c292 [SMALL, FOUND CLOSING c290's CAVEAT] THE LIMITER'S REDIS-FAILURE FALLBACK IS SILENT: rate_limit.allow's `except Exception: return _allow_local(...)` carries NO log line, so a prod Redis outage quietly degrades the shared window to per-instance forever with zero evidence in logs - and it is also why the c290 probe cannot prove which path served it. Fix: one rate-limited logger.warning in the except branch (once per window per process, not per request - a Redis outage under load must not become a log flood). Plus the cheap shared-window proof this enables: run the probe, grep for the warning's ABSENCE while >=2 instances serve, and the Redis path is demonstrated by elimination.",
+      "title": "c292 DONE Sep 3 + LIVE (window #8: chirp-api-00049-mnl / chirp-ws-00014-6qr, verify 4/4 both). The limiter's Redis fallback now leaves evidence: one flood-guarded warning per process per 600s (an outage under load is ONE fact, not one per request), logging exception TYPE and scope - NEVER str(exc) (redis-py errors can carry the secret connection URL) and NEVER the key (subjects include user ids, IPs, and student emails). All three properties pinned by tests, falsified individually. Builder's own first draft was vacuous - allow() re-imports settings inside the function so a module-namespace patch never touched the Redis path - caught because the tests assert on the WARNING, not a return value. Third first-run-green-for-the-wrong-reason this sprint; the pattern is now in the manager's permanent memory. ELIMINATION-PROOF PROCEDURE (for the c290 shared-window caveat, future window): probe on a FRESH revision while >=2 instances serve; grep the window for 'fell back to the in-process window' - ABSENCE proves Redis carried the count, and freshness matters because the 600s suppression makes absence ambiguous on a warm process. Window #8's new revisions are fresh now.",
       "detail": ""
     },
     {
@@ -3013,6 +3013,15 @@
       "tag": "",
       "area": "",
       "title": "c293 DEPLOY WINDOW #7 Sep 3 - CLOSED CLEAN. chirp-api-00048-xld / chirp-ws-00013-wsv, migration 0030 FIRST then deploy, verify 4/4 both. NOW LIVE: c279's block provenance (both deanonymization oracles dead). Prod = main through fe20abb. THIS CLOSES THE LAST IN-FLIGHT CODE. Remaining open board = the Q funnel (c39 login -> build -> c11/c71/c5/c246/c273; #169 tap; c240 AWS) + Jose-parked items + c274/c292 (two small unassigned bits).",
+      "detail": ""
+    },
+    {
+      "id": "c294",
+      "col": "done",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c294 DEPLOY WINDOW #8 Sep 3 - CLOSED CLEAN, deploy-only. chirp-api-00049-mnl / chirp-ws-00014-6qr, verify 4/4 both. NOW LIVE: c292's fallback warning. Prod = main through 4605766. SPRINT COMPLETE: no code in flight anywhere. All four worker sessions released with clean sign-offs. Open board = Q funnel (c39 login -> build -> c11/c71/c5/c246/c273 + #169 tap + c240 AWS) + Jose-parked items + c274 (tiny, unassigned) + the c290 elimination run (procedure documented, any future window). Eight windows this sprint, every one verified 4/4, zero rollbacks.",
       "detail": ""
     }
   ],
