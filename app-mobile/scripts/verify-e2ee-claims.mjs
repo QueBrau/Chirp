@@ -23,11 +23,20 @@
  * No jest/vitest exists in this repo - see the sibling verify-*.mjs scripts -
  * so this reads the real source files rather than importing them.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 
 const SIGNAL_TS = new URL("../src/crypto/signal.ts", import.meta.url);
-const LIST_SCREEN = new URL("../app/(tabs)/messages/index.tsx", import.meta.url);
-const THREAD_SCREEN = new URL("../app/(tabs)/messages/[id].tsx", import.meta.url);
+const MESSAGES_DIR = new URL("../app/(tabs)/messages/", import.meta.url);
+
+/**
+ * Every screen in the messages directory, discovered at run time (c274). This
+ * was a hardcoded pair of files, which meant the THIRD messages screen shipped
+ * outside the guard entirely - a screen this script never reads can carry any
+ * claim it likes. Globbing makes the next screen covered by existence.
+ */
+const SCREEN_FILES = readdirSync(MESSAGES_DIR)
+  .filter((f) => f.endsWith(".tsx"))
+  .sort();
 
 const failures = [];
 const fail = (msg, detail) => failures.push(detail ? `${msg}\n      ${detail}` : msg);
@@ -85,8 +94,20 @@ if (exportedFns.length === 0) {
 }
 const cryptoIsStubbed = exportedFns.length > 0 && todoThrows.length === exportedFns.length;
 
-const listSource = readFileSync(LIST_SCREEN, "utf8");
-const threadSource = readFileSync(THREAD_SCREEN, "utf8");
+// The glob must still see the two screens this guard was written around - a
+// directory move would otherwise turn the whole scan into a vacuous zero-match
+// pass (same anchor discipline as the exported-functions check above).
+for (const anchor of ["index.tsx", "[id].tsx"]) {
+  if (!SCREEN_FILES.includes(anchor)) {
+    fail(`app/(tabs)/messages/${anchor} not found by the screen glob`,
+         "(screens moved? update this script's anchors before trusting it)");
+  }
+}
+
+const screenSources = new Map(
+  SCREEN_FILES.map((f) => [f, readFileSync(new URL(f, MESSAGES_DIR), "utf8")]),
+);
+const threadSource = screenSources.get("[id].tsx") ?? "";
 
 if (cryptoIsStubbed) {
   // -------------------------------------------------------------------------
@@ -110,7 +131,8 @@ if (cryptoIsStubbed) {
   // -------------------------------------------------------------------------
   // 3. Stubbed crypto: every encryption claim must be on the allowlist.
   // -------------------------------------------------------------------------
-  for (const [label, source] of [["messages/index.tsx", listSource], ["messages/[id].tsx", threadSource]]) {
+  for (const [file, source] of screenSources) {
+    const label = `messages/${file}`;
     for (const text of userVisibleStrings(source)) {
       if (!MENTIONS_CRYPTO.test(text)) continue;
       if (ALLOWED_CLAIMS.has(text)) continue;
@@ -144,6 +166,6 @@ if (failures.length > 0) {
 
 console.log(
   `OK  verify:e2ee-claims - client crypto is still a stub (${todoThrows.length}/${exportedFns.length} ` +
-    "functions throw), the composer is disabled, and every encryption string in the Messages " +
-    `screens is on the allowlist (${ALLOWED_CLAIMS.size}).`,
+    "functions throw), the composer is disabled, and every encryption string in the " +
+    `${SCREEN_FILES.length} Messages screens is on the allowlist (${ALLOWED_CLAIMS.size}).`,
 );
