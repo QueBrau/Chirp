@@ -2951,6 +2951,33 @@
       "area": "",
       "title": "c286 INCIDENT CLOSED Sep 3 - MAIN WAS RED FOR 4 COMMITS (~9h overnight), fixed by 2d7ce0f (#188), main's own CI green again. TWO GATES FAILED AT ONCE: (1) c284 declared botocore in pyproject dev extras but CI installs from the HASH-LOCKED requirements-dev.lock, never regenerated - the SigV4 oracle test ModuleNotFoundError'd on every subsequent run; worker's local suite passed because they had installed botocore into the shared venv by hand (and disclosed it). (2) MANAGER MERGED #185 WITH PYTEST STILL RUNNING - the check list read [\"\",\"SUCCESS\"] and no-failures-yet was read as green. RULES TIGHTENED: (a) merge only when EVERY check reads COMPLETED, an empty conclusion is a RUNNING check not a passing one; (b) any pyproject dependency change regenerates requirements-dev.lock in the SAME commit (the lock's header carries the exact uv command) - a declared-but-unlocked dep is invisible locally and fatal in CI. No prod impact: deployed revisions predate the breakage, verify 4/4 throughout.",
       "detail": ""
+    },
+    {
+      "id": "c287",
+      "col": "progress",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c287 STAGE 1 CHEAP HALF - GO from Jose Sep 3 ('lets do your recommendation and split it up'). MANAGER EXECUTING: (1) pool-guard PR first - CLOUD_RUN_MAX_INSTANCES 4->8 in test_db_pool_config.py + config.py comment, new arithmetic 8x(3+2)=40 api + 2x(1+1)=4 ws + 3 reserved + 1 proxy = 48 of 100; (2) then gcloud: chirp-api --cpu=2 --min-instances=1 --max-instances=8 (~$10-15/mo idle, kills the 2-5s cold start, CPU headroom past the measured 59%@100users); (3) deploy-verify + board close. HA PAIR EXPLICITLY DEFERRED by the split: flip trigger = first invites beyond the home chapter OR ~100 real users - HA DB (+$50, 1-min failover vs 25-min manual restore) + Redis Standard (+$35, Basic's maintenance can FLUSH AND RESTART on schedule). Trigger recorded here so it is a plan, not a vibe.",
+      "detail": ""
+    },
+    {
+      "id": "c288",
+      "col": "progress",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c288 IN PROGRESS (chirps-23) - MEDIA THROUGH THE CDN, investigate-then-implement. The cheap path is NOT Cloud CDN (run.app backends need a load balancer, ~$18/mo forwarding rule minimum - breaks the pennies claim): Firebase Hosting ALREADY fronts a CDN and already rewrites /media/** to Cloud Run for web (web/firebase.json). QUESTIONS TO ANSWER FROM CODE FIRST: (a) which host do the capability URLs the API returns point at - run.app (mobile bypasses CDN today) or web.app? (b) does c218's Cache-Control on the media route make Hosting actually cache it (check header + a real second-fetch through web.app)? (c) what breaks if media URLs switch host - CORS, token verify, RN Image caching (the 6h-quantized expiry exists FOR cache stability)? THEN: if safe, point served media URLs at chirps-prod.web.app/media/** behind config, both-ways tests, and prove a cache HIT header on a real object. If anything smells, report before building - this touches every photo in the product.",
+      "detail": ""
+    },
+    {
+      "id": "c289",
+      "col": "progress",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c289 IN PROGRESS (chirps-7b) - THE REAL LOAD RE-TEST FROM A CLOUD VM (their own c285 plan (c)). e2-small/e2-medium in us-central1 (~pennies for an hour, delete after), harness + self-audit from main (ramp_in_seconds ~30, grace ~40), fresh tokens (accounts still provisioned; refresh via securetoken flow in results dir notes), phases: B3-redo 176 users, then C combined HTTP+WS if clean. The instrument verdict line is the first thing read - if it says saturated even on the VM, stop and diagnose, do not shop for a bigger VM blindly. Abort criteria as before; quiet-hour irrelevant (zero real users); cleanup queries after; board gets the TRUE ceiling numbers. VM creation may permission-prompt in-session - if blocked, come back and manager creates it.",
+      "detail": ""
     }
   ],
   "decisions": [
