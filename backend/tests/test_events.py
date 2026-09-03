@@ -498,8 +498,10 @@ async def test_public_event_is_readable_unauthenticated_and_leaks_no_guest_list(
     for leaked in ("host_id", "chapter_id", "rsvps", "invites", "visibility"):
         assert leaked not in body, f"public serializer leaked {leaked}"
 
-    # The guest list is never reachable without an account, at any tier.
-    assert (await client.get(f"/events/{event_id}/guests")).status_code == 401
+    # The guest list is never reachable without an account, at any tier - both
+    # halves of it (c275 split the old /guests wrapper into these two routes).
+    assert (await client.get(f"/events/{event_id}/rsvps")).status_code == 401
+    assert (await client.get(f"/events/{event_id}/invites")).status_code == 401
 
 
 async def test_public_route_404s_for_a_non_public_event(
@@ -534,17 +536,22 @@ async def test_guest_list_needs_membership_an_invite_or_your_own_rsvp(
     stranger = await _outsider(client, make_user, None, verified=False)
     assert (await client.get(f"/events/{event_id}", headers=stranger.headers)).status_code == 200
 
-    refused = await client.get(f"/events/{event_id}/guests", headers=stranger.headers)
-    assert refused.status_code == 403, refused.text
-    assert refused.json() == {"detail": "not_on_the_guest_list"}
+    # Both halves of the split guest list (c275) refuse with the same string.
+    for path in ("rsvps", "invites"):
+        refused = await client.get(f"/events/{event_id}/{path}", headers=stranger.headers)
+        assert refused.status_code == 403, refused.text
+        assert refused.json() == {"detail": "not_on_the_guest_list"}
 
     # Answering the invitation makes you part of the event, and the list opens.
     await client.put(
         f"/events/{event_id}/rsvps", json={"status": "going"}, headers=stranger.headers
     )
-    allowed = await client.get(f"/events/{event_id}/guests", headers=stranger.headers)
+    allowed = await client.get(f"/events/{event_id}/rsvps", headers=stranger.headers)
     assert allowed.status_code == 200, allowed.text
-    assert [r["user_id"] for r in allowed.json()["rsvps"]] == [stranger.id]
+    assert [r["user_id"] for r in allowed.json()] == [stranger.id]
+    assert (
+        await client.get(f"/events/{event_id}/invites", headers=stranger.headers)
+    ).status_code == 200
 
 
 async def test_edit_is_host_or_eboard_only(
@@ -619,9 +626,9 @@ async def test_cancel_is_idempotent_and_stops_new_rsvps(
     assert edit.json() == {"detail": "event_canceled"}
 
     # The guest list survives - the people who need telling are still on it.
-    guests = await client.get(f"/events/{event_id}/guests", headers=setup.member.headers)
-    assert guests.status_code == 200, guests.text
-    assert [r["user_id"] for r in guests.json()["rsvps"]] == [setup.member.id]
+    rsvps = await client.get(f"/events/{event_id}/rsvps", headers=setup.member.headers)
+    assert rsvps.status_code == 200, rsvps.text
+    assert [r["user_id"] for r in rsvps.json()] == [setup.member.id]
 
 
 async def test_end_before_start_is_422_on_create_and_on_edit(

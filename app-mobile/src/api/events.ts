@@ -79,13 +79,14 @@ export interface EventRsvpOut {
 }
 
 /**
- * The guest list. Invites and RSVPs come back SEPARATELY rather than merged, because
- * the screen has to tell "invited, has not answered" from "said no" - and because a
- * campus or public event routinely produces RSVPs from people nobody invited.
+ * Cursor options for the split guest-list routes (c275). The tie-break key is a
+ * USER id, not a row id - rsvp/invite rows have composite primary keys - so the
+ * second cursor param carries the last row's user_id / invited_user_id.
  */
-export interface EventGuestsOut {
-  invites: EventInviteOut[];
-  rsvps: EventRsvpOut[];
+export interface GuestListPage {
+  after?: string;
+  afterUserId?: string;
+  limit?: number;
 }
 
 /** All events for a chapter (Events segment, §8.7), soonest-first by start time. */
@@ -125,9 +126,23 @@ export async function inviteToEvent(
   });
 }
 
-/** Who was invited and how everyone answered. Never public - see routers/events.py. */
-export async function listGuests(eventId: string): Promise<EventGuestsOut> {
-  return request<EventGuestsOut>(`/events/${eventId}/guests`);
+// listGuests / EventGuestsOut are GONE (c275): the wrapper returned both guest
+// lists unbounded. Its halves are listRsvps + listEventInvites below; headcounts
+// come from getRsvpCounts, never from summing pages.
+
+/** One page of an event's invites, earliest first. Guest-list gated. */
+export async function listEventInvites(
+  eventId: string,
+  page: GuestListPage = {},
+): Promise<EventInviteOut[]> {
+  return request<EventInviteOut[]>(`/events/${eventId}/invites`, {
+    query: { after: page.after, after_user_id: page.afterUserId, limit: page.limit },
+  });
+}
+
+/** Headcounts by answer plus silent invitees - the planning number (c275). */
+export async function getRsvpCounts(eventId: string): Promise<EventRsvpCountsOut> {
+  return request<EventRsvpCountsOut>(`/events/${eventId}/rsvp-counts`);
 }
 
 /** Events the signed-in user was invited to. Cancelled ones are included on purpose. */
@@ -159,8 +174,14 @@ export async function listMyInvitesWithRsvps(): Promise<EventInviteWithRsvpOut[]
   return request<EventInviteWithRsvpOut[]>("/me/event-invites-with-rsvps");
 }
 
-export async function listRsvps(eventId: string): Promise<EventRsvpOut[]> {
-  return request<EventRsvpOut[]>(`/events/${eventId}/rsvps`);
+/** One page of an event's RSVPs, earliest answers first. Guest-list gated. */
+export async function listRsvps(
+  eventId: string,
+  page: GuestListPage = {},
+): Promise<EventRsvpOut[]> {
+  return request<EventRsvpOut[]>(`/events/${eventId}/rsvps`, {
+    query: { after: page.after, after_user_id: page.afterUserId, limit: page.limit },
+  });
 }
 
 /** Headcounts for one event - mirrors backend EventRsvpCountsOut (c275). */

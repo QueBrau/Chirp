@@ -248,14 +248,7 @@ class EventInviteWithRsvpOut(_Schema):
     hosted_by: str
 
 
-class EventGuestsOut(_Schema):
-    """The guest list: who was invited, and how everyone answered.
-
-    Invites and RSVPs are returned side by side rather than merged, because the screen
-    has to tell them apart - "invited, has not answered" is a different row from "said
-    no", and a merged list cannot express someone who RSVPd without an invite (which a
-    public or campus-wide event produces constantly).
-    """
-
-    invites: list[EventInviteOut]
-    rsvps: list[EventRsvpOut]
+# EventGuestsOut is GONE (c275): the wrapper it shaped returned both guest lists
+# unbounded. Invites and RSVPs stay SEPARATE routes rather than ever merging -
+# "invited, has not answered" is a different row from "said no", and a merged list
+# cannot express someone who RSVPd without an invite (constant on public tiers).

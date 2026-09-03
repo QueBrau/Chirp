@@ -84,7 +84,7 @@ async def test_counts_are_scoped_to_the_one_event(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
     """A sibling event's rsvps must not bleed into this event's counts, and the counts
-    must agree with what /guests actually returns (the c109 rule).
+    must agree with what the rsvps list route actually returns (the c109 rule).
 
     Falsified by: dropping the event_id filter from the status GROUP BY (sibling's
     going leaked in; 2 != 1)."""
@@ -104,18 +104,18 @@ async def test_counts_are_scoped_to_the_one_event(
     counts = (
         await client.get(f"/events/{event_id}/rsvp-counts", headers=setup.member.headers)
     ).json()
-    guests = (
-        await client.get(f"/events/{event_id}/guests", headers=setup.member.headers)
+    rsvps = (
+        await client.get(f"/events/{event_id}/rsvps", headers=setup.member.headers)
     ).json()
     assert counts["going"] == 1
-    assert counts["going"] + counts["maybe"] + counts["cant"] == len(guests["rsvps"])
+    assert counts["going"] + counts["maybe"] + counts["cant"] == len(rsvps)
 
 
 async def test_counts_gate_matches_the_guest_list_both_ways(
     client: AsyncClient, make_chapter_with: MakeChapterWith, make_user
 ) -> None:
     """Reading a public event does not entitle you to its headcount; being part of it
-    does. Same rule, same refusal string as /guests; anonymous is 401.
+    does. Same rule, same refusal string as the guest-list routes; anonymous is 401.
 
     Falsified by: removing the _require_guest_list_access call from the route
     (stranger got a 200 headcount)."""
