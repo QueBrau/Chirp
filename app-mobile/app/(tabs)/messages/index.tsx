@@ -4,17 +4,52 @@
  * on-device decrypted store lands (milestone 4); an unread indicator would need
  * a real read-receipt signal this build doesn't have, so it's omitted rather
  * than faked.
+ *
+ * c273: entry point into messages/new.tsx. Not a FAB — DESIGN §7 is explicit
+ * ("One FAB, Home only") — and Screen has no header-action slot to add one to
+ * (it's a shared component, see CLAUDE.md). NewConversationButton instead
+ * follows the precedent profile/index.tsx already set for a header-adjacent
+ * action: a small ghost pill defined locally in the screen file and rendered
+ * inside `children`, right under the header.
  */
 
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
+import { Pressable, View } from "react-native";
 
 import { Feather } from "@expo/vector-icons";
 
 import { listConversations, listMessages, type ConversationOut } from "@/api/messages";
 import { AppText, Card, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
 import { chirpSocket, isMessageEvent } from "@/realtime/socket";
-import { useTheme } from "@/theme";
+import { radii, spacing, typography, useTheme } from "@/theme";
+
+/** Header-adjacent ghost pill, same shape as profile/index.tsx's EditLayoutToggle. */
+function NewConversationButton({ onPress }: { onPress: () => void }) {
+  const palette = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Start a new conversation"
+      onPress={onPress}
+      hitSlop={spacing.sm}
+      style={({ pressed }) => ({
+        flexDirection: "row",
+        alignItems: "center",
+        gap: spacing.xs,
+        paddingHorizontal: spacing.lg,
+        paddingVertical: spacing.sm,
+        borderRadius: radii.pill,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <Feather name="edit" size={typography.caption.fontSize} color={palette.inkSecondary} />
+      <AppText variant="bodyBold" tone="secondary">
+        New
+      </AppText>
+    </Pressable>
+  );
+}
 
 interface ConversationItem {
   conversation: ConversationOut;
@@ -76,11 +111,16 @@ export default function MessagesScreen() {
   }, []);
 
   return (
-    <Screen title="Messages" subtitle="Read only for now">
+    <Screen title="Messages" subtitle="Start conversations. Sending isn't available yet.">
+      <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
+        <NewConversationButton onPress={() => router.push("/messages/new")} />
+      </View>
       {items !== null && items.length === 0 ? (
         <EmptyState
           title="No conversations"
           message="Start a DM or group with your chapter."
+          actionLabel="Start a conversation"
+          onAction={() => router.push("/messages/new")}
         />
       ) : (
         <Card>
