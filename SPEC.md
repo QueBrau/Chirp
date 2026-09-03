@@ -237,6 +237,11 @@ CREATE TABLE user_blocks (
     blocker_id UUID NOT NULL REFERENCES users(id),
     blocked_id UUID NOT NULL REFERENCES users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- c279: WHY the block was made, because it decides WHAT it hides. 'named' hides
+    -- everything; 'by_chirp' hides chirp surfaces only, so blocking an anonymous
+    -- author cannot be detected by diffing the named feed before and after (which
+    -- would name them, defeating principle 6). Contact refusal enforces both.
+    source     TEXT NOT NULL DEFAULT 'named' CHECK (source IN ('named','by_chirp')),
     PRIMARY KEY (blocker_id, blocked_id)
 );
 

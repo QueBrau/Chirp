@@ -396,17 +396,49 @@ async def create_block(
     # one act, one status, one detail string.
     if body.blocked_id == user.id:
         raise forbidden("cannot_block_self")
+    # c279: a by-chirp block on this same pair is UPGRADED to 'named' rather than
+    # refused, and the upgrade answers 201 exactly as a fresh block does.
+    #
+    # THAT STATUS IS A SECURITY PROPERTY, NOT A CONVENIENCE. Before provenance existed
+    # this endpoint 409'd whenever any row was present, which handed back the identity
+    # the by-chirp endpoint refuses to give: block an anonymous chirp's author, then
+    # named-block roster members one at a time - the one that 409s is the author. Same
+    # oracle shape c243 closed on the DM path. With the upgrade in place, "no row" and
+    # "a by-chirp row" are indistinguishable from outside (both 201) and only a block
+    # the caller made BY NAME - which they already know about - still 409s.
+    #
+    # Never the other direction: a named block is not downgraded by a later by-chirp
+    # block (see block_chirp_author's on_conflict_do_nothing). Someone who blocked a
+    # person by name is asking for everything hidden, and a chirp they happen to block
+    # afterwards must not quietly give some of it back.
     existing = await session.get(models.UserBlock, (user.id, body.blocked_id))
     if existing is not None:
-        raise conflict("already_blocked")
-    block = models.UserBlock(blocker_id=user.id, blocked_id=body.blocked_id)
+        if existing.source == "named":
+            raise conflict("already_blocked")
+        existing.source = "named"
+        await session.commit()
+        await session.refresh(existing)
+        return UserBlockOut.model_validate(existing)
+
+    block = models.UserBlock(
+        blocker_id=user.id, blocked_id=body.blocked_id, source="named"
+    )
     session.add(block)
     try:
         await session.commit()
     except IntegrityError:
-        # Concurrent duplicate insert race on the (blocker_id, blocked_id) PK.
+        # Concurrent duplicate insert race on the (blocker_id, blocked_id) PK. The row
+        # that won may be a by-chirp block, so this re-reads and upgrades rather than
+        # 409ing - otherwise the race would reopen the oracle described above for
+        # exactly the callers unlucky enough to hit it.
         await session.rollback()
-        raise conflict("already_blocked") from None
+        raced = await session.get(models.UserBlock, (user.id, body.blocked_id))
+        if raced is None or raced.source == "named":
+            raise conflict("already_blocked") from None
+        raced.source = "named"
+        await session.commit()
+        await session.refresh(raced)
+        return UserBlockOut.model_validate(raced)
     await session.refresh(block)
     return UserBlockOut.model_validate(block)
 
@@ -447,7 +479,11 @@ async def block_chirp_author(
     # answered "do these two chirps share an author". Every call now does the same work.
     await session.execute(
         pg_insert(models.UserBlock)
-        .values(blocker_id=user.id, blocked_id=chirp.author_id)
+        # c279: provenance. do-nothing on conflict is what makes "never downgrade" true
+        # - if a named block is already here, it stays named. It also keeps this
+        # statement exactly as constant-work as it was: one insert, one outcome, no
+        # branch whose cost depends on whether these two are already linked.
+        .values(blocker_id=user.id, blocked_id=chirp.author_id, source="by_chirp")
         .on_conflict_do_nothing(index_elements=["blocker_id", "blocked_id"])
     )
     await session.commit()
