@@ -199,8 +199,11 @@ async def test_unknown_event_id_is_404(
 async def test_events_with_rsvps_batches_correctly(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
-    """The c43 batch route returns every event by start time with exactly its own RSVPs —
-    no cross-event bleed, and an RSVP-less event still appears with an empty list."""
+    """The c43 batch route returns every event by start time with exactly its own RSVP
+    summary — no cross-event bleed, and an RSVP-less event still appears with zeros.
+    Shape migrated by c280 (full rsvps array -> counts + going_preview + my_rsvp_status);
+    the properties pinned here (batching, per-event scoping, empty-event presence) are
+    unchanged and asserted at least as strongly against the new shape."""
     setup = await make_chapter_with("member")
 
     first = await client.post(
@@ -228,9 +231,12 @@ async def test_events_with_rsvps_batches_correctly(
     assert response.status_code == 200, response.text
     rows = response.json()
     assert [row["event"]["title"] for row in rows] == ["Second Mixer", "First Mixer"]
-    assert rows[0]["rsvps"] == []
-    first_rsvps = {(r["user_id"], r["status"]) for r in rows[1]["rsvps"]}
-    assert first_rsvps == {(setup.member.id, "going"), (setup.president.id, "maybe")}
+    assert rows[0]["counts"] == {"going": 0, "maybe": 0, "cant": 0, "invited_unanswered": 0}
+    assert rows[0]["going_preview"] == []
+    assert rows[0]["my_rsvp_status"] is None
+    assert rows[1]["counts"] == {"going": 1, "maybe": 1, "cant": 0, "invited_unanswered": 0}
+    assert [r["user_id"] for r in rows[1]["going_preview"]] == [setup.member.id]
+    assert rows[1]["my_rsvp_status"] == "going"  # the caller (member) said going
 
 
 async def test_events_with_rsvps_is_org_scoped(
@@ -883,7 +889,9 @@ async def test_events_with_rsvps_page_only_includes_rsvps_for_returned_events(
     rows = page.json()
     assert [row["event"]["title"] for row in rows] == ["Third", "Second"]
     for row in rows:
-        assert row["rsvps"], "each returned event kept its own RSVP"
+        # c280 shape: the summary plays the old rsvps-array role here.
+        assert row["counts"]["going"] == 1, "each returned event kept its own RSVP"
+        assert [r["user_id"] for r in row["going_preview"]] == [setup.member.id]
     returned_event_ids = {row["event"]["id"] for row in rows}
     assert first.json()["id"] not in returned_event_ids
 
@@ -899,7 +907,10 @@ async def test_events_with_rsvps_page_only_includes_rsvps_for_returned_events(
     assert second_page.status_code == 200, second_page.text
     remaining = second_page.json()
     assert [row["event"]["title"] for row in remaining] == ["First"]
-    assert remaining[0]["rsvps"], "the leftover event's own RSVP came back on page two"
+    assert remaining[0]["counts"]["going"] == 1, (
+        "the leftover event's own RSVP came back on page two"
+    )
+    assert [r["user_id"] for r in remaining[0]["going_preview"]] == [setup.member.id]
 
 
 async def test_my_invites_lists_soonest_first_and_pages_forward_without_loss(

@@ -193,33 +193,6 @@ class EventRsvpOut(_Schema):
     created_at: datetime
 
 
-class EventWithRsvpsOut(_Schema):
-    """One row of GET /chapters/{id}/events-with-rsvps (c43): an event plus all its
-    RSVPs, so the Events segment renders in one round trip instead of 1+N."""
-
-    event: EventOut
-    rsvps: list[EventRsvpOut]
-
-
-class EventInviteWithRsvpOut(_Schema):
-    """One row of GET /me/event-invites-with-rsvps (c204): an invited event, plus the
-    two things the mobile client used to fetch per-invite - the same shape of fix c43's
-    EventWithRsvpsOut applied to a chapter's own events, applied here to a cross-chapter
-    invite list.
-
-    my_rsvp_status is the CALLER'S OWN answer, never anyone else's - null means they
-    have not answered. hosted_by is the hosting chapter's display name ("{org_name}
-    {chapter_name}"), safe to show a non-member because an invite already admits them
-    to the event, which shows who is hosting it. It is never a placeholder like the
-    client's old "Another chapter" fallback: chapter_id is a NOT NULL FK on events, so
-    a joined query always resolves a real chapter.
-    """
-
-    event: EventOut
-    my_rsvp_status: RsvpStatus | None
-    hosted_by: str
-
-
 class EventRsvpCountsOut(_Schema):
     """Headcounts for one event: the host's planning number (c275).
 
@@ -232,6 +205,47 @@ class EventRsvpCountsOut(_Schema):
     maybe: int
     cant: int
     invited_unanswered: int
+
+
+class EventWithRsvpSummaryOut(_Schema):
+    """One row of GET /chapters/{id}/events-with-rsvps: c43's one-round-trip shape,
+    re-cut by c280 to carry a SUMMARY instead of every RSVP row.
+
+    The old shape returned each event's full rsvps array, unbounded - the event page
+    was cursored but rows-per-event were not, and a public-tier party accrues RSVPs
+    campus-wide, so one popular event shipped a campus of rows into every Events
+    segment load. What the segment actually renders is a 4-face avatar stack and a
+    headcount, so that is what this carries: counts (the truth, from c275's
+    EventRsvpCountsOut), a bounded going_preview for the faces, and the caller's own
+    answer. The full roster lives behind the paginated guest-list routes (c275).
+    """
+
+    event: EventOut
+    counts: EventRsvpCountsOut
+    # First GOING_PREVIEW_LIMIT 'going' rows by (created_at, user_id) ASC - enough for
+    # the avatar stack with headroom. NOT claimed complete; counts carry the truth,
+    # which is why this deliberate preview needs no warn_if_capped.
+    going_preview: list[EventRsvpOut]
+    my_rsvp_status: RsvpStatus | None
+
+
+class EventInviteWithRsvpOut(_Schema):
+    """One row of GET /me/event-invites-with-rsvps (c204): an invited event, plus the
+    two things the mobile client used to fetch per-invite - the same shape of fix c43
+    gave a chapter's own events (now EventWithRsvpSummaryOut), applied here to a
+    cross-chapter invite list.
+
+    my_rsvp_status is the CALLER'S OWN answer, never anyone else's - null means they
+    have not answered. hosted_by is the hosting chapter's display name ("{org_name}
+    {chapter_name}"), safe to show a non-member because an invite already admits them
+    to the event, which shows who is hosting it. It is never a placeholder like the
+    client's old "Another chapter" fallback: chapter_id is a NOT NULL FK on events, so
+    a joined query always resolves a real chapter.
+    """
+
+    event: EventOut
+    my_rsvp_status: RsvpStatus | None
+    hosted_by: str
 
 
 class EventGuestsOut(_Schema):
