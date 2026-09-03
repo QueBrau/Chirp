@@ -28,9 +28,10 @@ if (startIdx === -1) {
   process.exit(1);
 }
 // Non-greedy up to the first "\n}" after the opener. Safe as long as wsUrl's
-// body is a single statement with no nested top-level brace of its own — true
-// today (one `return ... ?? ...;` line) and worth re-reading this comment
-// before trusting the extraction if that ever changes.
+// body contains no brace at column 0 of its own — true today (c272 made the body
+// several single-line statements, none of them a block that opens a brace onto
+// its own line) and worth re-reading this comment before trusting the extraction
+// if that ever changes.
 const endIdx = source.indexOf("\n}", startIdx);
 if (endIdx === -1) {
   console.error("FAIL  could not find wsUrl()'s closing brace");
@@ -45,16 +46,34 @@ if (!rawFn.includes("EXPO_PUBLIC_WS_URL")) {
   process.exit(1);
 }
 
+// c272: wsUrl() now closes over two module constants, so they have to reach the
+// harness. Read them OUT OF client.ts for the same reason the function itself is
+// extracted rather than hand-copied — a copy here would only prove this file
+// agrees with itself. If either disappears or is renamed, this fails loudly
+// instead of injecting undefined and quietly changing what the cases mean.
+const constFromClient = (name) => {
+  const match = source.match(new RegExp(`const ${name} = "([^"]+)"`));
+  if (!match) {
+    console.error(`FAIL  could not read ${name} out of client.ts`);
+    process.exit(1);
+  }
+  return match[1];
+};
+const DEFAULT_API_BASE_URL = constFromClient("DEFAULT_API_BASE_URL");
+const DEFAULT_WS_URL = constFromClient("DEFAULT_WS_URL");
+
 /** Build and call the REAL extracted wsUrl() against injected process.env / API_BASE_URL. */
 function callRealWsUrl({ wsUrlEnv, apiBaseUrl }) {
   const harness = new Function(
     "process",
     "API_BASE_URL",
+    "DEFAULT_API_BASE_URL",
+    "DEFAULT_WS_URL",
     `${runnableFn}\nreturn wsUrl();`,
   );
   const env = {};
   if (wsUrlEnv !== undefined) env.EXPO_PUBLIC_WS_URL = wsUrlEnv;
-  return harness({ env }, apiBaseUrl);
+  return harness({ env }, apiBaseUrl, DEFAULT_API_BASE_URL, DEFAULT_WS_URL);
 }
 
 let failures = 0;
@@ -71,16 +90,33 @@ const check = (name, actual, expected) => {
 
 // --- unset: byte-for-byte today's behavior, derived from API_BASE_URL ---
 
+// THIS CASE USED TO ASSERT THE BUG (c272). It expected the default api host to
+// derive wss://chirp-api/ws and called that "today's real default" - which it was,
+// and which was exactly the defect: chirp-api is the API service, realtime lives on
+// chirp-ws. A cloud development build sets no api url, so it fell through to here
+// and put every socket on the wrong service, silently, because both services run
+// the same image. Changed deliberately, not relaxed: the expectation is now the
+// paired socket.
 check(
-  "unset + prod API_BASE_URL -> derived wss:// + /ws (today's real default)",
-  callRealWsUrl({ wsUrlEnv: undefined, apiBaseUrl: "https://chirp-api-593616178468.us-central1.run.app" }),
-  "wss://chirp-api-593616178468.us-central1.run.app/ws",
+  "unset + DEFAULT api host -> the paired chirp-ws socket, NOT scheme-swapped chirp-api (c272)",
+  callRealWsUrl({ wsUrlEnv: undefined, apiBaseUrl: DEFAULT_API_BASE_URL }),
+  DEFAULT_WS_URL,
+);
+
+// The invariant the development profiles exist to protect, and the reason the fix
+// went in wsUrl() rather than into eas.json: a local api must still yield a LOCAL
+// socket. Pinning EXPO_PUBLIC_WS_URL on the dev profiles would have fixed the cloud
+// build by breaking this, pairing a local backend with PROD realtime.
+check(
+  "unset + local http API_BASE_URL -> derived ws:// + /ws (local dev stays local)",
+  callRealWsUrl({ wsUrlEnv: undefined, apiBaseUrl: "http://localhost:8000" }),
+  "ws://localhost:8000/ws",
 );
 
 check(
-  "unset + local http API_BASE_URL -> derived ws:// + /ws (dev override case)",
-  callRealWsUrl({ wsUrlEnv: undefined, apiBaseUrl: "http://localhost:8000" }),
-  "ws://localhost:8000/ws",
+  "unset + a custom non-default https host -> still derived, not forced to chirp-ws",
+  callRealWsUrl({ wsUrlEnv: undefined, apiBaseUrl: "https://staging.example.com" }),
+  "wss://staging.example.com/ws",
 );
 
 // --- set: override wins verbatim, API_BASE_URL is not consulted at all ---
@@ -135,8 +171,29 @@ for (const profile of ["preview", "production"]) {
 // misconfiguration. "Finishing the job" by adding these two is the mistake this
 // case exists to catch. development-simulator inherits via `extends`, so leaving
 // development unset covers both.
+//
+// c272 CORRECTED THE REST OF THIS COMMENT, which was the most convincing wrong
+// thing in the file. It argued the profiles are unset because the derivation
+// handles them - true for `expo start` against localhost, FALSE for a cloud
+// development build, which sets no api url at all, falls back to the prod api and
+// used to derive a socket on chirp-api. Leaving these unset is still right; it is
+// right because wsUrl() now pairs the default api with the default socket, not
+// because scheme-swapping was ever sufficient on its own.
 for (const profile of ["development", "development-simulator"]) {
   check(`eas.json "${profile}" deliberately leaves EXPO_PUBLIC_WS_URL unset`, profileWsUrl(profile), undefined);
+}
+
+// The drift guard c272 adds: client.ts's fallback socket and the value eas.json
+// ships must be the SAME string. They are two independent copies of one host, and
+// nothing else would notice them diverging - a build would simply start using a
+// socket url that no profile agrees with, which is how this family of bug keeps
+// arriving in the first place.
+for (const profile of ["preview", "production"]) {
+  check(
+    `client.ts DEFAULT_WS_URL matches eas.json "${profile}" - no silent drift`,
+    DEFAULT_WS_URL,
+    profileWsUrl(profile),
+  );
 }
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
