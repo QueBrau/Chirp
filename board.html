@@ -2978,6 +2978,15 @@
       "area": "",
       "title": "c289 IN PROGRESS (chirps-7b) - THE REAL LOAD RE-TEST FROM A CLOUD VM (their own c285 plan (c)). e2-small/e2-medium in us-central1 (~pennies for an hour, delete after), harness + self-audit from main (ramp_in_seconds ~30, grace ~40), fresh tokens (accounts still provisioned; refresh via securetoken flow in results dir notes), phases: B3-redo 176 users, then C combined HTTP+WS if clean. The instrument verdict line is the first thing read - if it says saturated even on the VM, stop and diagnose, do not shop for a bigger VM blindly. Abort criteria as before; quiet-hour irrelevant (zero real users); cleanup queries after; board gets the TRUE ceiling numbers. VM creation may permission-prompt in-session - if blocked, come back and manager creates it.",
       "detail": ""
+    },
+    {
+      "id": "c290",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "qa",
+      "area": "api",
+      "title": "c290 IN PROGRESS (chirps-23) - GATED PROD PROBE: prove the rate limiters actually REFUSE in prod. The c226 load runs recorded 0 429s across 41,439 requests, but that proves only that the limiters do not fire SPURIOUSLY on paced traffic - the harness paced at 50% of the ceilings AND substituted a read whenever a write's pacing bucket was empty (44-45% of intended writes never happened, metrics.py record_substituted_write). So the ENFORCEMENT branch has never executed against real Redis: every 429 this code has produced came from the in-process fallback in the suite. Design (manager-approved): one existing loadtest manifest account, POST /media/upload-url 61 times inside one 10-minute window, expect 200s then a 429 carrying detail media_upload_url_rate_limited on #61. Cheapest possible endpoint - mints signed URLs only, uploads nothing, tmp/ lifecycle eats any objects, writes no rows, needs no cleanup. HARD GATE: does not fire until the manager confirms chirps-7b's VM traffic has ENDED - one instrument at a time on prod.",
+      "detail": "Written before any branch per the id rule. Reading the c226 reports rather than the headline is what produced this card: the raw JSONs at backend/loadtest/results-2026-09-02/ show 0 429s, and reading the harness showed why - that zero is by construction, not evidence. The refusal half is the half a rate limiter exists for and it is the half still unproven outside the suite. WHAT THE PROBE PROVES IF IT PASSES: the Redis fixed-window path increments and refuses on the real stack, and the machine-readable detail string reaches a real client. WHAT IT DOES NOT PROVE: anything about the other eight limits' numbers, which stay as argued on c259. WHAT A FAILURE WOULD MEAN: either the shared window is not counting across instances (limit never trips) or it trips early (a real student would too) - both are things to learn before launch rather than after. Expected side effects, stated so nobody has to guess: 61 signed-URL mints, 61 IAM signBlob calls, and that one account's media budget spent for the remainder of its window. No rows, no objects, no cleanup."
     }
   ],
   "decisions": [
