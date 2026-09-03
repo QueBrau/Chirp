@@ -224,8 +224,7 @@
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
-<script id="board-data" type="application/json">
-{
+<script id="board-data" type="application/json">{
   "updated": 1787623688303,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
@@ -2988,6 +2987,15 @@
       "area": "api",
       "title": "c290 IN PROGRESS (chirps-23) - GATED PROD PROBE: prove the rate limiters actually REFUSE in prod. The c226 load runs recorded 0 429s across 41,439 requests, but that proves only that the limiters do not fire SPURIOUSLY on paced traffic - the harness paced at 50% of the ceilings AND substituted a read whenever a write's pacing bucket was empty (44-45% of intended writes never happened, metrics.py record_substituted_write). So the ENFORCEMENT branch has never executed against real Redis: every 429 this code has produced came from the in-process fallback in the suite. Design (manager-approved): one existing loadtest manifest account, POST /media/upload-url 61 times inside one 10-minute window, expect 200s then a 429 carrying detail media_upload_url_rate_limited on #61. Cheapest possible endpoint - mints signed URLs only, uploads nothing, tmp/ lifecycle eats any objects, writes no rows, needs no cleanup. HARD GATE: does not fire until the manager confirms chirps-7b's VM traffic has ENDED - one instrument at a time on prod.",
       "detail": "Written before any branch per the id rule. Reading the c226 reports rather than the headline is what produced this card: the raw JSONs at backend/loadtest/results-2026-09-02/ show 0 429s, and reading the harness showed why - that zero is by construction, not evidence. The refusal half is the half a rate limiter exists for and it is the half still unproven outside the suite. WHAT THE PROBE PROVES IF IT PASSES: the Redis fixed-window path increments and refuses on the real stack, and the machine-readable detail string reaches a real client. WHAT IT DOES NOT PROVE: anything about the other eight limits' numbers, which stay as argued on c259. WHAT A FAILURE WOULD MEAN: either the shared window is not counting across instances (limit never trips) or it trips early (a real student would too) - both are things to learn before launch rather than after. Expected side effects, stated so nobody has to guess: 61 signed-URL mints, 61 IAM signBlob calls, and that one account's media budget spent for the remainder of its window. No rows, no objects, no cleanup."
+    },
+    {
+      "id": "c291",
+      "col": "done",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c291 DEPLOY WINDOW #6 Sep 3 - CLOSED CLEAN. chirp-api-00047-5c6 / chirp-ws-00012-kkd, deploy-verify 4/4 both. NOW LIVE: the ENTIRE c258 wave finale (#191 meetings/polls, #193 alumni/jobs/moderation incl. the server-side status filter that un-blinds the moderator queue), the committed enforcement probe (#192, loadtest-only). ALSO IN THIS WINDOW'S HOUR: chirp-ws minScale 1 (the cold-door fix, acted on same-hour as the finding), enforcement probe PASS on real Redis (60 created, refused at 61, unstraddled), WS-only storm measured (199/300 vs the cold start; warm sockets healthy). Prod = main through 9f8027b. Pending merges to ride window #7: c279a provenance fix, the capacity-flip docs PR (no deploy needed for docs).",
+      "detail": ""
     }
   ],
   "decisions": [
@@ -3140,8 +3148,7 @@
     "Aug 29 - GOTCHA WORTH KEEPING: scripts/deploy-verify run IMMEDIATELY after a deploy can report a spurious failure (seen once here: 3 passed / 1 failed, then 4/4 clean on two consecutive re-runs with no code change). Cause is a cold-start container on the brand-new revision, not a regression. RULE: never act on a single post-deploy verify failure - re-run it before believing it, and only investigate if it fails consistently. Do not 'fix' anything on one red run.",
     "Aug 30 - EMAIL: SELF-HOSTING EVALUATED AND REJECTED (Jose asked about dropping Resend for nodemailer to avoid paying; he chose 'leave Resend for alpha'). The blocker is structural, not effort: Gmail requires valid REVERSE DNS on the sending IP, and Google documents that PTR records cannot be set for Cloud NAT / non-VM IPs - so a Cloud Run service can get a static egress IP but can NEVER get valid reverse DNS. Self-hosting therefore means running an MTA on a Compute Engine VM, not a library swap. GCP also blocks outbound port 25 externally (587/465 are open, but those are submission-to-a-relay, i.e. still a third party). Two more corrections: nodemailer is a NODE library and our backend is Python (aiosmtplib/smtplib are the equivalents), and all of them are SMTP CLIENTS, not mail servers - so the swap would not remove a provider at all. Total prize was $0.50-20/month. Our mail is .edu verification codes = alpha gate c71, so risking inbox placement to save that is a bad trade. Escape hatch if cost ever bites: Amazon SES behind the existing abstraction, ~$0.50-0.80/mo at our volume."
   ]
-}
-</script>
+}</script>
 <script>
 (function () {
   var DATA = document.getElementById('board-data');
