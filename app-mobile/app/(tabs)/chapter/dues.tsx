@@ -1,10 +1,20 @@
 /**
  * Member dues: what you owe this chapter, and the PaymentSheet flow to settle it.
  *
- * A cycle counts as paid when a dues_payment ledger entry exists for (cycle, member).
- * That entry is written by the Stripe webhook, never by the client — so on the ACH
- * rail a cycle stays unpaid here until the transfer actually clears, which is the
- * honest thing to show.
+ * A cycle counts as paid when the SERVER says so: DuesCycleOut.viewer_paid, decided by
+ * core/dues_status.py's netting and the same three-way split the president and treasurer
+ * screens use (c258). This screen deliberately does not work it out itself.
+ *
+ * It used to, by scanning the ledger for a dues_payment row per (cycle, member). That
+ * broke two ways: it could not survive the ledger list being paginated, where a payment
+ * row falling off a page reads as unpaid and the app appears to have lost the money; and
+ * it treated a COMPLETED plan as permanent proof of payment, a latch c195 had already
+ * removed from the server, which kept saying "settled" after the installments behind it
+ * were corrected away.
+ *
+ * Payments are still written by the Stripe webhook, never by the client — so on the ACH
+ * rail a cycle stays unpaid here until the transfer actually clears, which is the honest
+ * thing to show.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -14,7 +24,6 @@ import { myMemberships, type MyMembershipOut } from "@/api/chapters";
 import {
   getMyPlan,
   listDuesCycles,
-  listLedger,
   type DuesCycleOut,
   type DuesPaymentPlanOut,
 } from "@/api/finance";
@@ -39,19 +48,17 @@ export default function DuesScreen() {
   const [membership, setMembership] = useState<MyMembershipOut | null | undefined>(undefined);
   const [cycles, setCycles] = useState<DuesCycleOut[]>([]);
   const [cyclesFailed, setCyclesFailed] = useState(false);
-  const [paidCycleIds, setPaidCycleIds] = useState<Set<string>>(new Set());
+
   const [acceptsPayments, setAcceptsPayments] = useState(false);
   // Keyed by dues_cycle_id. Only ever holds a plan when one exists (c197) — a
-  // cycle with no plan at all just has no entry, same "absence over sentinel"
-  // shape as paidCycleIds above.
+  // cycle with no plan at all just has no entry, an "absence over sentinel" shape.
   const [planByCycle, setPlanByCycle] = useState<Map<string, DuesPaymentPlanOut>>(new Map());
 
   const load = useCallback(async (chapterId: string, userId: string) => {
-    const [duesCycles, ledger, status] = await Promise.all([
+    const [duesCycles, status] = await Promise.all([
       // null, not [] — a failed load must stay distinguishable from a genuinely
       // empty cycle list, or a member who owes money is told "Nothing due".
       listDuesCycles(chapterId).catch(() => null),
-      listLedger(chapterId).catch(() => []),
       getChapterPaymentsStatus(chapterId).catch(() => ({
         onboarded: false,
         charges_enabled: false,
@@ -62,19 +69,6 @@ export default function DuesScreen() {
     const cyclesList = duesCycles ?? [];
     setCycles(cyclesList);
     setAcceptsPayments(status.onboarded);
-    setPaidCycleIds(
-      new Set(
-        ledger
-          .filter(
-            (entry) =>
-              entry.entry_type === "dues_payment" &&
-              entry.related_user_id === userId &&
-              entry.dues_cycle_id !== null,
-          )
-          .map((entry) => entry.dues_cycle_id as string),
-      ),
-    );
-
     // One request per cycle (not per member — this is always "my" plans), so no
     // N+1 growth with roster size the way c181's directory warning was about.
     // A per-cycle failure (e.g. a transient network blip) just leaves that cycle
@@ -119,18 +113,21 @@ export default function DuesScreen() {
     );
   }
 
-  // A completed plan has no single dues_payment ledger row to key paidCycleIds
-  // off of — record_dues_installment_payment appends one dues_installment entry
-  // per installment instead (see @/api/finance getMyPlan's doc comment) — so a
-  // plan reaching "completed" is a second, independent way a cycle counts as
-  // settled here.
-  const completedPlanCycleIds = new Set(
-    [...planByCycle.entries()]
-      .filter(([, plan]) => plan.status === "completed")
-      .map(([cycleId]) => cycleId),
-  );
-  const isSettled = (cycle: DuesCycleOut) =>
-    paidCycleIds.has(cycle.id) || completedPlanCycleIds.has(cycle.id);
+  // SETTLED IS THE SERVER'S ANSWER NOW (c258), not something worked out here.
+  //
+  // This used to be `paidCycleIds.has(id) || completedPlanCycleIds.has(id)`, and both
+  // halves were wrong in their own way. paidCycleIds came from scanning the ledger this
+  // screen had fetched, which stops being true the moment that list is paginated - a
+  // payment row falling off a page would read as unpaid, so the app would appear to have
+  // lost someone's money. And treating a COMPLETED plan as independent proof of payment
+  // was a LATCH: c195's adversarial review deleted exactly that from the server, because
+  // a completed plan whose installments are later corrected away leaves the member owing
+  // again, and the latch kept saying otherwise forever.
+  //
+  // viewer_paid is decided by the one house rule, the same one the president and
+  // treasurer screens use, and all three are pinned to agree by
+  // backend/tests/test_c281_dues_paid_agreement.py.
+  const isSettled = (cycle: DuesCycleOut) => cycle.viewer_paid;
   const outstanding = cycles.filter((cycle) => !isSettled(cycle));
   const settled = cycles.filter(isSettled);
 
@@ -205,7 +202,7 @@ export default function DuesScreen() {
                   // "complete" when the plan's own installments no longer agree.
                   const settledPlan = planByCycle.get(cycle.id) ?? null;
                   const planRefunded =
-                    !paidCycleIds.has(cycle.id) &&
+                    !cycle.viewer_paid &&
                     settledPlan !== null &&
                     settledPlan.installments.some((i) => i.paid_at !== null && !i.effective_paid);
                   return (
@@ -231,13 +228,13 @@ export default function DuesScreen() {
                         ) : null}
                       </View>
                       <Chip
-                        // paidCycleIds takes precedence per the backend's own guard
+                        // viewer_paid takes precedence per the backend's own guard
                         // (create_dues_payment_intent / create_dues_payment_plan
                         // enforce a member never has both a ledger dues_payment AND
                         // a plan for the same cycle) — this is a label choice for
                         // the rare edge case, not a claim that both are expected.
                         label={
-                          paidCycleIds.has(cycle.id)
+                          cycle.viewer_paid
                             ? "Paid"
                             : planRefunded
                               ? "Refunded"

@@ -28,6 +28,12 @@ export interface DuesCycleOut {
   amount_cents: number;
   due_date: string;
   created_at: string;
+  /** Where THE CALLER stands on this cycle, decided server-side by the one house rule
+   * (c258). The member's screen used to work this out by scanning ledger rows, which
+   * breaks the moment that list is paginated and had grown a completed-plan latch the
+   * server had already removed. */
+  viewer_paid: boolean;
+  viewer_on_plan: boolean;
 }
 
 /** Status of a member's installment plan for one dues cycle (c197). */
@@ -198,11 +204,35 @@ export async function getLedgerSummary(
 }
 
 /** Treasurer ledger view with optional filters. */
+/** One page of the ledger, newest-first. `before`/`beforeId` are the OLDEST entry you
+ * already hold; the result is the page after it, ready to append (c258). */
+export interface LedgerPageQuery {
+  category?: string;
+  from?: string;
+  to?: string;
+  before?: string;
+  beforeId?: string;
+  limit?: number;
+}
+
 export async function listLedger(
   chapterId: string,
-  filters: { category?: string; from?: string; to?: string } = {},
+  filters: LedgerPageQuery = {},
 ): Promise<LedgerEntryOut[]> {
-  return request<LedgerEntryOut[]>(`/chapters/${chapterId}/ledger`, { query: filters });
+  // BOTH cursor halves or NEITHER: the server accepts `before` alone for legacy callers,
+  // but that form cannot tie-break entries sharing a timestamp and drops them at a page
+  // boundary, so this client never sends the half-cursor.
+  const paired = filters.before !== undefined && filters.beforeId !== undefined;
+  return request<LedgerEntryOut[]>(`/chapters/${chapterId}/ledger`, {
+    query: {
+      category: filters.category,
+      from: filters.from,
+      to: filters.to,
+      before: paired ? filters.before : undefined,
+      before_id: paired ? filters.beforeId : undefined,
+      limit: filters.limit,
+    },
+  });
 }
 
 /**

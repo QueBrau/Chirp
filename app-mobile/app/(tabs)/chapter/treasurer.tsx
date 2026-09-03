@@ -83,6 +83,11 @@ const SPEND_STATUS_VARIANT: Record<SpendApprovalOut["status"], ChipVariant> = {
   rejected: "danger",
 };
 
+/** One page of ledger rows. The server caps this at 200 (c258); the FIGURES above the
+ * list come from /ledger/summary over the whole ledger, so a page here is only ever a
+ * page of rows - never a page standing in for a total. */
+const LEDGER_PAGE_SIZE = 50;
+
 function dollars(cents: number): string {
   return (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
@@ -154,6 +159,9 @@ export default function TreasurerScreen() {
   const [cycles, setCycles] = useState<DuesCycleOut[]>([]);
   const [ledger, setLedger] = useState<LedgerEntryOut[] | null>(null);
   const [summary, setSummary] = useState<LedgerSummaryOut | null>(null);
+  /** A full page means there are older entries behind it (c258). */
+  const [hasOlderEntries, setHasOlderEntries] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [approvals, setApprovals] = useState<SpendApprovalOut[] | null>(null);
   const [decidingId, setDecidingId] = useState<string | null>(null);
   const [exportingCsv, setExportingCsv] = useState(false);
@@ -190,7 +198,7 @@ export default function TreasurerScreen() {
     const [duesCycles, entries, ledgerSummary, spendApprovals, members, paymentsStatus] =
       await Promise.all([
         listDuesCycles(id),
-        listLedger(id),
+        listLedger(id, { limit: LEDGER_PAGE_SIZE }),
         getLedgerSummary(id),
         listSpendApprovals(id),
         listMembers(id),
@@ -199,6 +207,7 @@ export default function TreasurerScreen() {
       ]);
     setCycles(duesCycles);
     setLedger(entries);
+    setHasOlderEntries(entries.length === LEDGER_PAGE_SIZE);
     setSummary(ledgerSummary);
     setApprovals(spendApprovals);
     setPayments(paymentsStatus);
@@ -207,6 +216,26 @@ export default function TreasurerScreen() {
     // spend on real data.
     setMemberNames(new Map(members.map((m) => [m.user_id, m.display_name])));
   }, []);
+
+  /** Append the page after the oldest entry held. Render-only: no figure moves. */
+  const loadOlderEntries = async () => {
+    const oldest = (ledger ?? [])[(ledger ?? []).length - 1];
+    if (chapterId === null || oldest === undefined || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const older = await listLedger(chapterId, {
+        before: oldest.created_at,
+        beforeId: oldest.id,
+        limit: LEDGER_PAGE_SIZE,
+      });
+      setHasOlderEntries(older.length === LEDGER_PAGE_SIZE);
+      setLedger((current) => [...(current ?? []), ...older]);
+    } catch (error) {
+      showApiError(error, "Couldn't load older entries");
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -942,6 +971,34 @@ export default function TreasurerScreen() {
                 />
               ))
             )}
+            {/* Older rows live BELOW, newest-first, so the control that fetches them
+                sits at the bottom of the list where they will appear. Absent rather
+                than disabled once the ledger is fully loaded, so it never implies
+                there is more to read. Purely a LIST control: every figure on this
+                screen comes from /ledger/summary over the whole ledger, so paging
+                here moves rows and nothing else (c258). */}
+            {hasOlderEntries ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Load older entries"
+                accessibilityState={{ disabled: loadingOlder, busy: loadingOlder }}
+                disabled={loadingOlder}
+                onPress={() => void loadOlderEntries()}
+                style={({ pressed }) => ({
+                  alignSelf: "center",
+                  marginTop: spacing.md,
+                  paddingVertical: spacing.sm,
+                  paddingHorizontal: spacing.lg,
+                  borderRadius: radii.pill,
+                  backgroundColor: palette.surfaceAlt,
+                  opacity: loadingOlder ? 0.6 : pressed ? 0.8 : 1,
+                })}
+              >
+                <AppText variant="micro" tone="secondary">
+                  {loadingOlder ? "Loading…" : "Load older entries"}
+                </AppText>
+              </Pressable>
+            ) : null}
           </Card>
         </View>
       </View>
