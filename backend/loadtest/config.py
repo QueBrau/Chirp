@@ -58,6 +58,11 @@ class AbortCriteria:
     # Evaluation only starts once the window holds this many samples, so the
     # first request of the run cannot trip a percentage criterion by itself.
     min_samples: int
+    # No criterion is evaluated before this many seconds have elapsed (c285): a
+    # herd of fresh users opening connections inflates the first window with the
+    # DRIVER's own costs, and B3 aborted on exactly that. Required, no default -
+    # write down how long your ramp needs, like every other criterion here.
+    grace_seconds: float
 
     def validate(self) -> None:
         for name in ("max_error_rate_pct", "max_429_rate_pct", "max_ws_failure_pct"):
@@ -70,6 +75,8 @@ class AbortCriteria:
             raise ConfigError("abort.window_seconds under 5s would flap on noise")
         if self.min_samples < 1:
             raise ConfigError("abort.min_samples must be at least 1")
+        if self.grace_seconds < 0:
+            raise ConfigError("abort.grace_seconds must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -131,6 +138,10 @@ class HarnessConfig:
     ws_url: str
     auth_mode: str  # "emulated" | "firebase", mirroring the server's setting
     duration_seconds: float
+    # Stagger virtual-user starts across this many seconds (c285). 0 = the old
+    # everyone-at-once behavior, which at 176 users is a connection storm that
+    # measures the driver, not the server.
+    ramp_in_seconds: float
     # Route-class weights for the HTTP mix; relative, not percentages.
     mix_weights: dict[str, float]
     # Mean per-user think time between actions; jittered ±50% at runtime.
@@ -147,6 +158,10 @@ class HarnessConfig:
             raise ConfigError(f"auth_mode must be emulated|firebase, got {self.auth_mode!r}")
         if self.duration_seconds <= 0:
             raise ConfigError("duration_seconds must be positive")
+        if self.ramp_in_seconds < 0:
+            raise ConfigError("ramp_in_seconds must be non-negative")
+        if self.ramp_in_seconds >= self.duration_seconds:
+            raise ConfigError("ramp_in_seconds must be shorter than duration_seconds")
         if self.think_seconds < 0:
             raise ConfigError("think_seconds must be non-negative")
         if not self.mix_weights:
@@ -209,6 +224,7 @@ def load_config(path: str, *, confirm_park_lifted: bool = False) -> HarnessConfi
         max_ws_failure_pct=float(require(abort_raw, "max_ws_failure_pct", "abort")),
         window_seconds=float(require(abort_raw, "window_seconds", "abort")),
         min_samples=int(require(abort_raw, "min_samples", "abort")),
+        grace_seconds=float(require(abort_raw, "grace_seconds", "abort")),
     )
     caps_raw = section("caps")
     caps = RateCaps(
@@ -233,6 +249,7 @@ def load_config(path: str, *, confirm_park_lifted: bool = False) -> HarnessConfi
         ws_url=str(require(raw, "ws_url", "config")),
         auth_mode=str(require(raw, "auth_mode", "config")),
         duration_seconds=float(require(raw, "duration_seconds", "config")),
+        ramp_in_seconds=float(require(raw, "ramp_in_seconds", "config")),
         mix_weights={str(k): float(v) for k, v in dict(require(raw, "mix_weights", "config")).items()},  # type: ignore[arg-type]
         think_seconds=float(require(raw, "think_seconds", "config")),
         caps=caps,

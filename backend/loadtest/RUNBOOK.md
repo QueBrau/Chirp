@@ -86,6 +86,30 @@ Operator-enforced (the watcher aborts the run by telling the driver to Ctrl-C):
   share it).
 - **Anything at all from a real user report channel.**
 
+## The instrument audits itself (c285) — read this line of the report first
+
+B3 of the Sep 2 run aborted on p95s of 4-5 seconds that the SERVER never
+produced: Cloud Run's own request_latencies stayed at 172-390ms through the
+window while 176 unramped users saturated the driver Mac (proven offline: an
+independent probe read 11.5ms p50 through the same server while the harness
+recorded 437-664ms p95). Three changes keep that from recurring:
+
+- **`ramp_in_seconds`** staggers virtual-user starts. Size it so connections
+  open at a rate the driver absorbs (~10-20/s on the old Intel Mac).
+- **`abort.grace_seconds`** holds every criterion until the ramp settles.
+  Cover `ramp_in_seconds` plus a few seconds.
+- **The reference probe** runs automatically: one request per second on its own
+  connection, outside every cap. The report's `instrument` verdict compares the
+  mix's read p95 against the probe's. **`saturated` (>3x) means the numbers
+  describe the driver, not the server — stop drawing conclusions from them.**
+  `no_probe` means the audit itself failed; distrust the run.
+
+Two standing rules from the c285 post-mortem: **Cloud Run's request_latencies
+are the quoted truth** for prod latency (harness numbers are client-experienced
+from one machine, and say so when quoted); and **runs above ~150 users need a
+cloud VM driver near us-central1** — the ramp and probe make the instrument
+honest about saturating, they do not make one Intel core faster.
+
 ## Procedure
 
 1. T-30: confirm prerequisites; capture baseline: deploy-verify 4/4 against BOTH

@@ -10,7 +10,7 @@ import httpx
 from loadtest.abort import AbortMonitor, Violation
 from loadtest.accounts import Manifest, VirtualUser, auth_headers
 from loadtest.config import HarnessConfig
-from loadtest.metrics import WRITE_CLASSES, Recorder, Sample
+from loadtest.metrics import REFERENCE_CLASS, WRITE_CLASSES, Recorder, Sample
 from loadtest.pacing import Pacer
 
 # Enough comment targets that random picks spread; small enough that warmup
@@ -18,6 +18,18 @@ from loadtest.pacing import Pacer
 MIN_WARMUP_POSTS = 5
 ABORT_CHECK_INTERVAL_SECONDS = 2.0
 REQUEST_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+PROBE_INTERVAL_SECONDS = 1.0
+
+
+def ramp_delay(index: int, total: int, ramp_seconds: float) -> float:
+    """When user `index` of `total` starts, spread evenly across the ramp (c285).
+
+    User 0 starts immediately; the last user starts at ramp_seconds. With one
+    user or no ramp, everyone starts at 0 - the pre-c285 behavior.
+    """
+    if total <= 1 or ramp_seconds <= 0:
+        return 0.0
+    return ramp_seconds * index / (total - 1)
 
 
 class TargetPool:
@@ -168,7 +180,15 @@ class Runner:
 
     # ---- virtual user loop ----
 
-    async def _user_loop(self, client: httpx.AsyncClient, user: VirtualUser) -> None:
+    async def _user_loop(
+        self, client: httpx.AsyncClient, user: VirtualUser, start_delay: float = 0.0
+    ) -> None:
+        if start_delay > 0:
+            try:
+                await asyncio.wait_for(self.stop.wait(), timeout=start_delay)
+                return
+            except asyncio.TimeoutError:
+                pass
         classes = list(self.config.mix_weights.keys())
         weights = list(self.config.mix_weights.values())
         read_classes = [c for c in classes if c not in WRITE_CLASSES]
@@ -245,9 +265,17 @@ class Runner:
         ) as client:
             await self._warmup(client)
             watch = asyncio.create_task(self._abort_watch())
+            probe = asyncio.create_task(self._reference_probe())
+            total = len(self.manifest.users)
             users = [
-                asyncio.create_task(self._user_loop(client, user))
-                for user in self.manifest.users
+                asyncio.create_task(
+                    self._user_loop(
+                        client,
+                        user,
+                        ramp_delay(index, total, self.config.ramp_in_seconds),
+                    )
+                )
+                for index, user in enumerate(self.manifest.users)
             ]
             try:
                 await asyncio.wait_for(self.stop.wait(), timeout=self.config.duration_seconds)
@@ -256,7 +284,46 @@ class Runner:
             self.stop.set()
             await asyncio.gather(*users, return_exceptions=True)
             watch.cancel()
-            await asyncio.gather(watch, return_exceptions=True)
+            probe.cancel()
+            await asyncio.gather(watch, probe, return_exceptions=True)
+
+    async def _reference_probe(self) -> None:
+        """The instrument's self-audit (c285): one request per second on its OWN
+        client and connection, outside every cap and semaphore, recorded under
+        REFERENCE_CLASS. Its p95 approximates what the server actually did; the
+        report compares the mix against it and calls out driver saturation.
+
+        Deliberately outside the pacer: queueing the probe behind the mix would
+        make it measure the same contention it exists to expose. Cost: 1 rps.
+        """
+        user = self.manifest.users[0]
+        async with httpx.AsyncClient(
+            base_url=self.config.base_url,
+            timeout=REQUEST_TIMEOUT,
+            limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+        ) as probe_client:
+            while not self.stop.is_set():
+                start = time.monotonic()
+                try:
+                    response = await probe_client.get(
+                        "/auth/me", headers=auth_headers(user, self.config.auth_mode)
+                    )
+                    status = response.status_code
+                except httpx.HTTPError:
+                    status = 0
+                self.recorder.record(
+                    Sample(
+                        at=self._now(),
+                        route_class=REFERENCE_CLASS,
+                        status=status,
+                        latency_ms=(time.monotonic() - start) * 1000,
+                    )
+                )
+                try:
+                    await asyncio.wait_for(self.stop.wait(), timeout=PROBE_INTERVAL_SECONDS)
+                    return
+                except asyncio.TimeoutError:
+                    continue
 
 
 def _text(kind: str, uid: str) -> str:

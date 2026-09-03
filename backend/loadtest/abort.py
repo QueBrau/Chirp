@@ -26,6 +26,12 @@ class AbortMonitor:
         self._recorder = recorder
 
     def check(self, now: float) -> list[Violation]:
+        # Grace period (c285): the first seconds of a run measure the driver's
+        # connection storm, not the server. Nothing is evaluated until it ends;
+        # the rolling window still fills, so a real disaster is caught at the
+        # first post-grace check rather than never.
+        if now < self._criteria.grace_seconds:
+            return []
         stats = self._recorder.window_stats(now)
         violations: list[Violation] = []
         if stats["samples"] >= self._criteria.min_samples:
