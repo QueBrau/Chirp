@@ -84,16 +84,18 @@ def test_instrument_verdict_three_states() -> None:
 
 
 def test_probe_samples_never_dilute_the_abort_read_p95() -> None:
-    """A fast probe must not drag the abort criteria's read p95 down below a
-    ceiling the mix is genuinely violating.
+    """The dangerous window is a HUNG mix: stalled requests record nothing until
+    they time out, so the rolling window fills with probe rows - and a healthy
+    probe must not let the abort read that as a healthy system.
 
     Falsified by: removing the REFERENCE_CLASS exclusion from
-    Recorder.window_stats (49 fast probe rows pulled the p95 under the ceiling
-    and the violation vanished)."""
+    Recorder.window_stats (96 fast probe rows swallowed the read p95 - nearest-
+    rank needs >95% of the window fast - and the violation vanished exactly when
+    it mattered most)."""
     criteria = _criteria(read_p95_ceiling_ms=1000.0, grace_seconds=0.0, min_samples=10)
     recorder = Recorder(criteria.window_seconds)
-    _fill(recorder, 51, 200, latency_ms=2000.0)  # the mix: violating
-    for i in range(49):
+    _fill(recorder, 4, 200, latency_ms=2000.0)  # the few mix rows that finished: violating
+    for i in range(96):
         recorder.record(
             Sample(at=float(i) * 0.01, route_class=REFERENCE_CLASS, status=200, latency_ms=10.0)
         )
