@@ -34,8 +34,28 @@ export async function createReport(body: ContentReportCreate): Promise<ContentRe
   return request<ContentReportOut>("/moderation/reports", { method: "POST", body });
 }
 
-export async function listReports(): Promise<ContentReportOut[]> {
-  return request<ContentReportOut[]>("/moderation/reports");
+/** One page of reports. `status` filters SERVER-SIDE, which matters: filtering after
+ * paging would let a page of resolved reports render an empty queue while open ones
+ * sat on later pages (c258). */
+export interface ReportPageQuery {
+  status?: "open" | "actioned" | "dismissed";
+  before?: string;
+  beforeId?: string;
+  limit?: number;
+}
+
+export async function listReports(
+  options: ReportPageQuery = {},
+): Promise<ContentReportOut[]> {
+  const paired = options.before !== undefined && options.beforeId !== undefined;
+  return request<ContentReportOut[]>("/moderation/reports", {
+    query: {
+      status: options.status,
+      before: paired ? options.before : undefined,
+      before_id: paired ? options.beforeId : undefined,
+      limit: options.limit,
+    },
+  });
 }
 
 export type ReportResolution = "actioned" | "dismissed";

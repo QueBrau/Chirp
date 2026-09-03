@@ -30,7 +30,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { View } from "react-native";
+import { Pressable, View } from "react-native";
 
 import {
   listReports,
@@ -42,7 +42,7 @@ import {
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { AppText, Button, Card, Chip, EmptyState, Screen, SectionHeader } from "@/components";
 import { confirmAction, showApiError } from "@/lib/alert";
-import { spacing } from "@/theme";
+import { radii, spacing, useTheme } from "@/theme";
 
 type LoadState = "loading" | "loaded" | "error";
 
@@ -68,6 +68,9 @@ function removableChirpId(report: ContentReportOut): string | null {
   return report.target_type === "chirp" ? report.target_id : null;
 }
 
+/** One page of the queue. The server caps at 200 (c258). */
+const REPORT_PAGE_SIZE = 50;
+
 export default function ModerationScreen() {
   // Single-org world (useOwnChapter's own note): membership/roleMeta describe
   // the caller's one chapter. roleMeta is null while loading OR on a failed
@@ -79,22 +82,52 @@ export default function ModerationScreen() {
   const isEboard = membership !== null && (roleMeta?.eboard ?? []).includes(membership.role);
 
   const [state, setState] = useState<LoadState>("loading");
+  const palette = useTheme();
   const [reports, setReports] = useState<ContentReportOut[]>([]);
   // One id in flight at a time, covers both "removing" and "dismissing" — a report
   // can only be leaving the open queue one way, never both.
   const [workingReportId, setWorkingReportId] = useState<string | null>(null);
+  /** A full page means older reports exist behind it (c258). */
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   const load = useCallback(async () => {
     setState("loading");
     try {
-      const all = await listReports();
-      setReports(all.filter((r) => r.status === "open"));
+      // status=open is asked of the SERVER now, not filtered here. Filtering after
+      // paging would let a page of resolved reports render an empty queue while real
+      // open reports sat on later pages - a moderator told there is nothing to do while
+      // work is outstanding (c258).
+      const page = await listReports({ status: "open", limit: REPORT_PAGE_SIZE });
+      setReports(page);
+      setHasOlder(page.length === REPORT_PAGE_SIZE);
       setState("loaded");
     } catch (error) {
       setState("error");
       showApiError(error, "Couldn't load reports");
     }
   }, []);
+
+  /** Append the page after the oldest report held. */
+  const loadOlderReports = async () => {
+    const oldest = reports[reports.length - 1];
+    if (oldest === undefined || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const older = await listReports({
+        status: "open",
+        before: oldest.created_at,
+        beforeId: oldest.id,
+        limit: REPORT_PAGE_SIZE,
+      });
+      setHasOlder(older.length === REPORT_PAGE_SIZE);
+      setReports((current) => [...current, ...older]);
+    } catch (error) {
+      showApiError(error, "Couldn't load earlier reports");
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   useEffect(() => {
     if (!isEboard) return; // role-gated: no /moderation/reports call otherwise
@@ -192,7 +225,14 @@ export default function ModerationScreen() {
         <EmptyState title="All clear" message="No open reports right now." />
       ) : (
         <View style={{ gap: spacing.md }}>
-          <SectionHeader title="Open reports" caption={`${reports.length} waiting`} />
+          {/* "N+" while more pages exist, because reports.length is then the size of
+              the PAGE, not of the queue. Claiming the page count as the queue count is
+              the truncation-as-fact bug this card exists to remove - the same shape as
+              the comments header and the ledger balance before it. */}
+          <SectionHeader
+            title="Open reports"
+            caption={`${reports.length}${hasOlder ? "+" : ""} waiting`}
+          />
           {reports.map((report) => {
             const chirpId = removableChirpId(report);
             const working = workingReportId === report.id;
@@ -244,6 +284,28 @@ export default function ModerationScreen() {
               </Card>
             );
           })}
+          {hasOlder ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Load earlier reports"
+              accessibilityState={{ disabled: loadingOlder, busy: loadingOlder }}
+              disabled={loadingOlder}
+              onPress={() => void loadOlderReports()}
+              style={({ pressed }) => ({
+                alignSelf: "center",
+                marginTop: spacing.md,
+                paddingVertical: spacing.sm,
+                paddingHorizontal: spacing.lg,
+                borderRadius: radii.pill,
+                backgroundColor: palette.surfaceAlt,
+                opacity: loadingOlder ? 0.6 : pressed ? 0.8 : 1,
+              })}
+            >
+              <AppText variant="micro" tone="secondary">
+                {loadingOlder ? "Loading…" : "Load earlier reports"}
+              </AppText>
+            </Pressable>
+          ) : null}
         </View>
       )}
     </Screen>
