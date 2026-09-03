@@ -1,0 +1,83 @@
+{
+  "generated_at": "2026-09-03T15:03:53.461700+00:00",
+  "target": {
+    "base_url": "https://chirp-api-593616178468.us-central1.run.app",
+    "ws_url": "wss://chirp-ws-593616178468.us-central1.run.app/ws",
+    "auth_mode": "firebase"
+  },
+  "phases_run": [
+    "ws_storm"
+  ],
+  "wall_seconds": 81.6,
+  "aborted": true,
+  "abort_violations": [
+    {
+      "criterion": "ws_failure_pct",
+      "observed": 33.666666666666664,
+      "limit": 5.0
+    }
+  ],
+  "config": {
+    "duration_seconds": 600.0,
+    "mix_weights": {
+      "feed_campus": 30.0,
+      "chirps_list": 18.0,
+      "posts_list": 15.0,
+      "comments_list": 12.0,
+      "me": 5.0,
+      "post_create": 4.0,
+      "comment_create": 8.0,
+      "chirp_create": 8.0
+    },
+    "think_seconds": 2.0,
+    "caps": {
+      "max_rps": 120.0,
+      "max_concurrent_requests": 80,
+      "per_user_writes_per_minute": {
+        "post_create": 3.0,
+        "comment_create": 3.0,
+        "chirp_create": 1.5
+      }
+    },
+    "abort": {
+      "max_error_rate_pct": 2.0,
+      "max_429_rate_pct": 1.0,
+      "read_p95_ceiling_ms": 1500.0,
+      "write_p95_ceiling_ms": 2500.0,
+      "max_ws_failure_pct": 5.0,
+      "window_seconds": 30.0,
+      "min_samples": 50,
+      "grace_seconds": 40.0
+    },
+    "ws": {
+      "max_sockets": 300,
+      "connects_per_second": 10.0,
+      "hold_seconds": 60.0
+    }
+  },
+  "results": {
+    "http": {},
+    "substituted_writes": 0,
+    "instrument": {
+      "verdict": "no_probe",
+      "ratio": null,
+      "probe_p95_ms": 0.0
+    },
+    "timeline": [],
+    "ws": {
+      "attempts": 300,
+      "connected": 199,
+      "failure_pct": 33.67,
+      "close_codes": {
+        "1000": 100,
+        "4503": 99
+      },
+      "connect_p50_ms": 1257.8,
+      "connect_p95_ms": 9242.9,
+      "close_codes_named": {
+        "normal_close": 100,
+        "realtime_unavailable": 99
+      }
+    }
+  }
+}

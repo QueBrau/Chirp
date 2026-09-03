@@ -1,0 +1,7 @@
+target: https://chirp-api-593616178468.us-central1.run.app (auth firebase)
+phases: ws_storm; wall 81.6s
+RESULT: ABORTED by criteria:
+  ws_failure_pct: observed 33.7, limit 5.0
+instrument self-audit: NO PROBE SAMPLES - treat every latency above with suspicion
+ws: 199/300 connected (failure 33.67%), connect p95 9242.9ms, closes {'normal_close': 100, 'realtime_unavailable': 99}
+report written to report-wsonly.json
