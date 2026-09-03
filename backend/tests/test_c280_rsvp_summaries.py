@@ -38,21 +38,22 @@ async def test_going_preview_is_bounded_and_counts_carry_the_truth(
     ways: under the limit, the preview is complete.
 
     Falsified by: (1) dropping the rank <= GOING_PREVIEW_LIMIT filter (preview came
-    back with all 10), and (2) dropping the status == 'going' filter (the maybe
-    answer appeared in the preview)."""
+    back with all 10), and (2) dropping the status == 'going' filter - which only a
+    FIRST-created maybe can catch: created last it ranks past the cap and the dropped
+    filter is invisible, so the fence-sitter answers before anyone else here."""
     setup = await make_chapter_with("member")
     event_id = await _public_event(client, setup)
 
+    fence_sitter = await _outsider(client, make_user, None, verified=False)
+    await client.put(
+        f"/events/{event_id}/rsvps", json={"status": "maybe"}, headers=fence_sitter.headers
+    )
     guests = [await _outsider(client, make_user, None, verified=False) for _ in range(10)]
     for guest in guests:
         rsvp = await client.put(
             f"/events/{event_id}/rsvps", json={"status": "going"}, headers=guest.headers
         )
         assert rsvp.status_code == 200, rsvp.text
-    fence_sitter = await _outsider(client, make_user, None, verified=False)
-    await client.put(
-        f"/events/{event_id}/rsvps", json={"status": "maybe"}, headers=fence_sitter.headers
-    )
 
     row = (await _rows(client, setup))[0]
     assert row["counts"]["going"] == 10
@@ -133,8 +134,9 @@ async def test_invited_unanswered_is_scoped_per_event(
     """Each event counts only its own silent invitees; answering one event's invite
     does not answer another's.
 
-    Falsified by: dropping the group_by from the unanswered query (both events
-    reported the same global count)."""
+    Falsified by: pairing the unanswered join on user alone (dropping the event half
+    of the ON clause), so invitee_1's answer on A also 'answered' B and B wrongly
+    reported zero silent invitees."""
     setup = await make_chapter_with("member")
     event_a = await _public_event(client, setup, "A")
     event_b = await _public_event(client, setup, "B")
