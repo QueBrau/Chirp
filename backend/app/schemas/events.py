@@ -220,6 +220,20 @@ class EventInviteWithRsvpOut(_Schema):
     hosted_by: str
 
 
+class EventRsvpCountsOut(_Schema):
+    """Headcounts for one event: the host's planning number (c275).
+
+    invited_unanswered is invite rows with no rsvp row at all - an invitee who
+    answered 'cant' has answered and sits in cant. Kept alongside the three status
+    buckets because "invited 40, heard back from 12" is the other half of planning.
+    """
+
+    going: int
+    maybe: int
+    cant: int
+    invited_unanswered: int
+
+
 class EventGuestsOut(_Schema):
     """The guest list: who was invited, and how everyone answered.
 

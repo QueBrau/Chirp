@@ -56,6 +56,7 @@ from app.schemas.events import (
     EventInviteOut,
     EventInviteWithRsvpOut,
     EventOut,
+    EventRsvpCountsOut,
     EventRsvpOut,
     EventRsvpUpdate,
     EventUpdate,
@@ -412,18 +413,16 @@ async def invite_to_event(
     return [EventInviteOut.model_validate(i) for i in rows.scalars().all()]
 
 
-@router.get("/events/{event_id}/guests")
-async def list_guests(
-    event_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> EventGuestsOut:
-    """Who was invited and how everyone answered.
+async def _require_guest_list_access(
+    event_id: uuid.UUID, user: models.User, session: AsyncSession
+) -> models.Event:
+    """The one gate for guest-list-tier data (the list itself, and its counts).
 
     NEVER PUBLIC, at any visibility tier. Being able to read an event does not entitle
     you to its guest list: a campus-wide or public party would otherwise publish who is
     attending it to anyone who opened the link. Membership, an invite, or an RSVP of
-    your own - one of the three ways of actually being part of this event.
+    your own - one of the three ways of actually being part of this event. Extracted
+    from list_guests (c275) so the counts route cannot drift to a looser rule.
     """
     event = await _readable_event(event_id, user, session)
 
@@ -432,6 +431,70 @@ async def list_guests(
         mine = await session.get(models.EventRsvp, (event_id, user.id))
         if invited is None and mine is None:
             raise forbidden("not_on_the_guest_list")
+    return event
+
+
+@router.get("/events/{event_id}/rsvp-counts")
+async def rsvp_counts(
+    event_id: uuid.UUID,
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> EventRsvpCountsOut:
+    """Headcounts by answer, plus how many invitees have not answered at all.
+
+    THE COUNT IS THE PLANNING NUMBER (c275). The paged guest list is for names; a host
+    planning food reads a number, and no list shape can protect them from planning off
+    a truncated page. Same precedent as /chapters/{id}/posts/count (c109's rule that a
+    count must agree with what the list returns).
+
+    SAME GATE AS THE GUEST LIST, deliberately: a headcount still publishes that N named
+    people are attending a private thing - scale is guest-list-tier information even
+    with the names removed. Loosening this (say, public headcounts on public events) is
+    a product decision for a card, not a route edit.
+
+    invited_unanswered counts invite rows with NO rsvp row - an invitee who answered
+    'cant' has answered, so they are in cant, not here. An RSVP without an invite (the
+    normal case on campus/public tiers) counts in its status bucket like any other.
+    """
+    await _require_guest_list_access(event_id, user, session)
+
+    status_rows = await session.execute(
+        select(models.EventRsvp.status, func.count())
+        .where(models.EventRsvp.event_id == event_id)
+        .group_by(models.EventRsvp.status)
+    )
+    by_status = dict(status_rows.all())
+
+    unanswered = await session.execute(
+        select(func.count())
+        .select_from(models.EventInvite)
+        .outerjoin(
+            models.EventRsvp,
+            (models.EventRsvp.event_id == models.EventInvite.event_id)
+            & (models.EventRsvp.user_id == models.EventInvite.invited_user_id),
+        )
+        .where(
+            models.EventInvite.event_id == event_id,
+            models.EventRsvp.user_id.is_(None),
+        )
+    )
+
+    return EventRsvpCountsOut(
+        going=by_status.get("going", 0),
+        maybe=by_status.get("maybe", 0),
+        cant=by_status.get("cant", 0),
+        invited_unanswered=unanswered.scalar_one(),
+    )
+
+
+@router.get("/events/{event_id}/guests")
+async def list_guests(
+    event_id: uuid.UUID,
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> EventGuestsOut:
+    """Who was invited and how everyone answered. Gate: see _require_guest_list_access."""
+    await _require_guest_list_access(event_id, user, session)
 
     invite_rows = await session.execute(
         select(models.EventInvite)
