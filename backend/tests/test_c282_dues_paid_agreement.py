@@ -1,4 +1,9 @@
-"""The treasurer and the president must answer "who has paid" identically (c258 follow-up).
+"""The treasurer and the president must answer "who has paid" identically (board c282).
+
+ID NOTE: the merged commit and PR that introduced this file (ce81ca3, PR #180) carry
+"c281" in their titles, which was wrong - c281 is chirps-7b's ARCHITECTURE refresh, and
+this work's card has always been c282. Commit titles cannot be rewritten, so this file
+and the comments pointing at it are the corrected, greppable truth.
 
 THIS TEST IS THE DELIVERABLE; the code change only makes it pass.
 

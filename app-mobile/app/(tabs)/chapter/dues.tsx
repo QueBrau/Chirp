@@ -126,7 +126,7 @@ export default function DuesScreen() {
   //
   // viewer_paid is decided by the one house rule, the same one the president and
   // treasurer screens use, and all three are pinned to agree by
-  // backend/tests/test_c281_dues_paid_agreement.py.
+  // backend/tests/test_c282_dues_paid_agreement.py.
   const isSettled = (cycle: DuesCycleOut) => cycle.viewer_paid;
   const outstanding = cycles.filter((cycle) => !isSettled(cycle));
   const settled = cycles.filter(isSettled);

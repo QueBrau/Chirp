@@ -106,7 +106,7 @@ async def _viewer_standing_by_cycle(
     flat instead of growing with a chapter's history.
 
     The three-way split is the same one chapter_overview and the ledger summary apply,
-    and tests/test_c281_dues_paid_agreement.py asserts all THREE surfaces agree. That
+    and tests/test_c282_dues_paid_agreement.py asserts all THREE surfaces agree. That
     file is the guard; this comment is not.
     """
     if not cycles:
@@ -393,7 +393,7 @@ async def _current_cycle_dues(
 
     # THE SAME THREE-WAY SPLIT chapter_overview applies, and that agreement is PINNED BY
     # A TEST rather than by this sentence:
-    # tests/test_c281_dues_paid_agreement.py drives both endpoints against one seeded
+    # tests/test_c282_dues_paid_agreement.py drives both endpoints against one seeded
     # member and fails if the two counts drift.
     #
     # This function previously used a plain `net > 0` under a comment CLAIMING it matched
