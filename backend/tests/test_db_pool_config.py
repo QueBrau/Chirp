@@ -20,7 +20,12 @@ import app.db as db
 from app.config import Settings, get_settings
 
 # --- chirp-api: these Settings defaults, at its own maxScale ---
-CLOUD_RUN_MAX_INSTANCES = 4
+# 4 -> 8 on Sep 3 (board c287, stage-1 scale-up, Jose's go): raised alongside
+# --cpu=2 and --min-instances=1. The conscious arithmetic this test exists to
+# force: 8 x (3+2) = 40 api + 2 x (1+1) = 4 ws + 3 reserved + 1 proxy = 48 of
+# max_connections=100 - 52 spare. Raising maxScale past 19 without touching pool
+# sizes is what would finally break this bound; the assertion below is the fence.
+CLOUD_RUN_MAX_INSTANCES = 8
 
 # --- chirp-ws: a SECOND service on the same database ---
 # It does NOT use the code defaults - its deploy command passes

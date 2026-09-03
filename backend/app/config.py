@@ -18,16 +18,16 @@ class Settings(BaseSettings):
     # max-instances x (pool_size + max_overflow), plus Postgres's superuser-reserved
     # slots (3) and one proxy/migration session, must stay <= max_connections.
     # LIVE TOPOLOGY (Aug 30, c248) - TWO services share this database now:
-    #   chirp-api  maxScale 4 x (3 + 2) = 20   <- these defaults
+    #   chirp-api  maxScale 8 x (3 + 2) = 40   <- these defaults (4->8 Sep 3, c287)
     #   chirp-ws   maxScale 2 x (1 + 1) =  4   <- passes DB_POOL_SIZE=1 and
     #                                             DB_MAX_OVERFLOW=1 as Cloud Run env,
     #                                             so it does NOT use these defaults
-    #   24 demanded + 3 reserved + 1 proxy = 28, against max_connections 100.
+    #   44 demanded + 3 reserved + 1 proxy = 48, against max_connections 100.
     # That 100 is db-custom-1-3840 since the c225 tier bump, NOT db-f1-micro's default
     # 25 that this comment used to name - read off the live instance through the Cloud
     # SQL proxy. Both facts had drifted at once: the tier changed under the number, and
     # chirp-ws arrived as a second consumer that the arithmetic did not model at all.
-    # maxScale=4 was read from the live service (gcloud run services describe, Aug 27);
+    # maxScale=8 set deliberately Sep 3 (c287, with --cpu=2 and --min-instances=1);
     # it was set at first deploy and the annotation persists across --source redeploys,
     # which is why DEPLOY.md's everyday command never passes it. chirp-ws passes
     # --max-instances=2 explicitly in its own deploy command. The c153 media reconciler
