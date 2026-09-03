@@ -33,9 +33,23 @@ blocks are never consulted when THEY are the one making contact. The residual ga
 that A, having blocked B, can still open a conversation with B; that is self-healing,
 because B blocking back is exactly the case this module does enforce.
 
-Recording WHY a block was created (by-chirp vs. an ordinary named block) would let the
-symmetric rule apply safely to named blocks only, but user_blocks has no such column and
-adding one is a migration — deliberately not taken here (see the c243 PR).
+PROVENANCE NOW EXISTS, AND THIS MODULE STILL IGNORES IT ON PURPOSE (c279, migration
+0030). user_blocks.source records whether a block was made by name or through an
+anonymous chirp, and the READ filters use it: feed posts, comments and counts hide only
+on 'named', so a by-chirp block no longer moves a named surface and the feed diff that
+used to name the anonymous author has nothing to show.
+
+CONTACT ENFORCEMENT DELIBERATELY DOES NOT MAKE THAT DISTINCTION. blockers_of matches on
+the pair alone, so both kinds still refuse contact, and that is load-bearing: the whole
+point of by-chirp blocking is a student shutting out someone who is harassing them
+anonymously. If a by-chirp block stopped refusing DMs, the harasser could keep messaging
+the person who blocked them, which is the exact failure this module was written to end.
+
+It is safe to keep enforcing both here for the reason the direction note above already
+gives: the asymmetry means the blocker's OWN outbound is never filtered by their own
+blocks, so a blocker cannot use contact refusal as a probe at all. Provenance would only
+matter here if the rule were symmetric, and it is not. The migration this docstring used
+to call deferred has landed; the deferral it described is resolved, not still open.
 """
 from __future__ import annotations
 

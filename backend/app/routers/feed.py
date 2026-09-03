@@ -230,6 +230,12 @@ def _post_counts_select(caller_id: uuid.UUID):
             .where(
                 models.UserBlock.blocker_id == caller_id,
                 models.UserBlock.blocked_id == models.PostComment.author_id,
+                # c279: NAMED blocks only. A by-chirp block must not move a named
+                # surface, or the before/after diff names the anonymous author it was
+                # created to hide. This one predicate, repeated at every named-surface
+                # filter in this file, IS the fix - chirps.py deliberately does not
+                # carry it, because hiding that author's chirps is the point.
+                models.UserBlock.source == "named",
             )
             .exists(),
         )
@@ -259,7 +265,9 @@ def _post_counts_select(caller_id: uuid.UUID):
         .outerjoin(
             models.UserBlock,
             (models.UserBlock.blocked_id == models.Post.author_id)
-            & (models.UserBlock.blocker_id == caller_id),
+            & (models.UserBlock.blocker_id == caller_id)
+            # c279: named blocks only - see the note at the comment-count filter above.
+            & (models.UserBlock.source == "named"),
         )
         .where(models.UserBlock.blocker_id.is_(None))
     )
@@ -574,6 +582,12 @@ async def count_my_posts(
             .where(
                 models.UserBlock.blocker_id == caller_id,
                 models.UserBlock.blocked_id == models.Post.author_id,
+                # c279: named only, for uniformity with every other named-surface
+                # filter here. This particular query is self-referential (author is the
+                # caller) and the c237 CHECK forbids self-blocks, so it changes no
+                # behavior today - it is written this way so a reader never has to work
+                # out whether this site was missed.
+                models.UserBlock.source == "named",
             )
             .exists(),
         )
@@ -963,7 +977,9 @@ async def list_comments(
         .outerjoin(
             models.UserBlock,
             (models.UserBlock.blocked_id == models.PostComment.author_id)
-            & (models.UserBlock.blocker_id == user.id),
+            & (models.UserBlock.blocker_id == user.id)
+            # c279: named blocks only - see the note at the comment-count filter above.
+            & (models.UserBlock.source == "named"),
         )
         .where(
             models.PostComment.post_id == post_id,
