@@ -3023,6 +3023,11 @@
       "area": "",
       "title": "c294 DEPLOY WINDOW #8 Sep 3 - CLOSED CLEAN, deploy-only. chirp-api-00049-mnl / chirp-ws-00014-6qr, verify 4/4 both. NOW LIVE: c292's fallback warning. Prod = main through 4605766. SPRINT COMPLETE: no code in flight anywhere. All four worker sessions released with clean sign-offs. Open board = Q funnel (c39 login -> build -> c11/c71/c5/c246/c273 + #169 tap + c240 AWS) + Jose-parked items + c274 (tiny, unassigned) + the c290 elimination run (procedure documented, any future window). Eight windows this sprint, every one verified 4/4, zero rollbacks.",
       "detail": ""
+    },
+    {
+      "id": "c295",
+      "col": "progress",
+      "title": "c295 [CLAIMED court Sep 3 - Jose's GO 'do 290'] C290 ELIMINATION RUN: prove the rate-limit window is SHARED ACROSS INSTANCES. Method: fresh chirp-api revision with concurrency temporarily 5 (pre-alpha, zero real users), ~70 PARALLEL upload-url mints from one loadtest account (>5 in-flight MUST spill to a 2nd instance), unstraddled bucket. Proof = exactly 60 created + refusals across >=2 instance ids + ZERO c292 fallback warnings on the fresh revision. Then concurrency reverted to 80 + deploy-verify + timeout=3600 recheck."
     }
   ],
   "decisions": [
