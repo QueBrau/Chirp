@@ -729,6 +729,10 @@ export const MOCK_DUES_CYCLES: DuesCycleOut[] = [
     amount_cents: 45000,
     due_date: "2026-09-15",
     created_at: "2026-08-01T12:00:00Z",
+    // The caller's own standing, server-decided since c258. Unpaid here so the mock
+    // shows a cycle in the state this screen actually exists for: one still to settle.
+    viewer_paid: false,
+    viewer_on_plan: false,
   },
 ];
 

@@ -34,12 +34,30 @@ class DuesCycleCreate(_Schema):
 
 
 class DuesCycleOut(_Schema):
+    """A dues cycle, plus where THE CALLER stands on it (board c258).
+
+    `viewer_paid` / `viewer_on_plan` are the caller's own bucket under the one house
+    rule - core/dues_status.py's netting, then the same three-way split
+    chapter_overview and the ledger summary apply. They exist so the member's dues
+    screen does not have to work its own standing out of the ledger: it used to derive
+    "have I paid" by scanning ledger rows, which breaks the moment that list is
+    paginated (a payment row falling off a page reads as unpaid - the app appearing to
+    lose someone's money) and which had also grown a latch the server had already
+    removed, where a COMPLETED plan counted as permanent proof of payment even after
+    its installments were corrected away.
+
+    Both are False on cycles for a caller with no contributions, which is the honest
+    default for a cycle nobody has paid into yet.
+    """
+
     id: uuid.UUID
     chapter_id: uuid.UUID
     name: str
     amount_cents: int
     due_date: date
     created_at: datetime
+    viewer_paid: bool = False
+    viewer_on_plan: bool = False
 
 
 # ---- ledger (append-only) ----

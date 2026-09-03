@@ -136,3 +136,118 @@ async def test_the_seed_actually_exercises_the_disagreeing_case(
     assert dues["collected_cents"] < dues["amount_cents"], "and under the cycle total"
     assert dues["on_plan_members"] == 1, "the discriminating member must land ON PLAN"
     assert dues["paid_members"] == 0, "and must NOT be counted as paid"
+
+
+async def test_the_members_own_dues_screen_agrees_with_both_officer_surfaces(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """THE THIRD SURFACE (c258 PR B). The member's own dues list carries `viewer_paid`,
+    and it must land in the same bucket the officers see for that same member.
+
+    Extended here rather than in a parallel file on purpose: three surfaces answering
+    one question belong in one test, so adding a fourth has an obvious home and cannot
+    quietly grow its own rule the way this one did.
+    """
+    setup = await make_chapter_with("member")
+    cycle_id = await _seed_active_plan_partial_payer(client, setup)
+
+    cycles = await client.get(
+        f"/chapters/{setup.chapter_id}/dues-cycles", headers=setup.member.headers
+    )
+    assert cycles.status_code == 200, cycles.text
+    mine = next(c for c in cycles.json() if c["id"] == str(cycle_id))
+
+    overview = (
+        await client.get(
+            f"/chapters/{setup.chapter_id}/overview", headers=setup.president.headers
+        )
+    ).json()["dues"]
+    summary = (
+        await client.get(
+            f"/chapters/{setup.chapter_id}/ledger/summary", headers=setup.president.headers
+        )
+    ).json()["dues"]
+
+    # One member in the chapter has contributed, and all three must place them the same.
+    assert mine["viewer_paid"] is False, "the member must not read as paid to themselves"
+    assert mine["viewer_on_plan"] is True, "they are on an active plan, partway paid"
+    assert overview["paid_members"] == 0 and overview["on_plan_members"] == 1
+    assert summary["paid_members"] == 0 and summary["on_plan_members"] == 1
+
+
+async def test_a_completed_plan_corrected_away_is_not_latched_as_paid(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
+) -> None:
+    """The latch the member's screen used to have, now impossible to express.
+
+    dues.tsx counted a COMPLETED plan as independent, permanent proof that a cycle was
+    settled - the exact latch c195's adversarial review removed from chapter_overview,
+    grown back in the client. A plan whose installments are corrected away leaves the
+    member owing again, and every surface must say so.
+    """
+    setup = await make_chapter_with("member")
+    from app.db import get_session_factory
+
+    chapter_id = uuid.UUID(setup.chapter_id)
+    member = uuid.UUID(setup.member.id)
+    cycle_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            sa_text(
+                "INSERT INTO dues_cycles (id, chapter_id, name, amount_cents, due_date)"
+                " VALUES (:id, :cid, 'Refunded cycle', :total, :due)"
+            ),
+            {"id": cycle_id, "cid": chapter_id, "total": CYCLE_TOTAL, "due": date(2027, 5, 1)},
+        )
+        await session.execute(
+            sa_text(
+                "INSERT INTO dues_payment_plans (id, chapter_id, dues_cycle_id, user_id,"
+                " status, total_cents, installment_count, created_by, created_at)"
+                " VALUES (:id, :cid, :cy, :u, 'completed', :total, 1, :u, :now)"
+            ),
+            {
+                "id": uuid.uuid4(), "cid": chapter_id, "cy": cycle_id, "u": member,
+                "total": CYCLE_TOTAL, "now": now,
+            },
+        )
+        paid_id = uuid.uuid4()
+        await session.execute(
+            sa_text(
+                "INSERT INTO ledger_entries (id, chapter_id, entry_type, amount_cents,"
+                " related_user_id, dues_cycle_id, created_by, created_at)"
+                " VALUES (:id, :cid, 'dues_installment', :amt, :u, :cy, :u, :now)"
+            ),
+            {
+                "id": paid_id, "cid": chapter_id, "amt": CYCLE_TOTAL,
+                "u": member, "cy": cycle_id, "now": now,
+            },
+        )
+        # ...then corrected away in full. Net is zero: the member owes again.
+        await session.execute(
+            sa_text(
+                "INSERT INTO ledger_entries (id, chapter_id, entry_type, amount_cents,"
+                " dues_cycle_id, corrects_entry_id, created_by, created_at)"
+                " VALUES (:id, :cid, 'correction', :amt, :cy, :target, :u, :now)"
+            ),
+            {
+                "id": uuid.uuid4(), "cid": chapter_id, "amt": -CYCLE_TOTAL,
+                "cy": cycle_id, "target": paid_id, "u": member, "now": now,
+            },
+        )
+        await session.commit()
+
+    mine = next(
+        c
+        for c in (
+            await client.get(
+                f"/chapters/{setup.chapter_id}/dues-cycles", headers=setup.member.headers
+            )
+        ).json()
+        if c["id"] == str(cycle_id)
+    )
+    assert mine["viewer_paid"] is False, (
+        "a completed plan whose installments were corrected away must NOT latch as paid"
+    )
+    assert mine["viewer_on_plan"] is False, "the plan is completed, not active"

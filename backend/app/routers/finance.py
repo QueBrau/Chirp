@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func, select, update
+from sqlalchemy import func, literal, select, tuple_, union_all, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -56,16 +56,103 @@ LEDGER_AGGREGATE_WARN_AT = 5_000
 @router.get("/chapters/{chapter_id}/dues-cycles")
 async def list_dues_cycles(
     chapter_id: uuid.UUID,
-    _membership: models.Membership = Depends(get_current_membership),
+    membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
 ) -> list[DuesCycleOut]:
-    """List the chapter's dues cycles, newest first; any active member."""
-    result = await session.execute(
-        select(models.DuesCycle)
-        .where(models.DuesCycle.chapter_id == chapter_id)
-        .order_by(models.DuesCycle.created_at.desc())
+    """List the chapter's dues cycles, newest first; any active member.
+
+    Each cycle carries THE CALLER'S OWN standing (board c258): `viewer_paid` and
+    `viewer_on_plan`, decided by the one house rule rather than by the client scanning
+    the ledger. The member's dues screen used to answer "have I paid this cycle" by
+    filtering ledger rows it had fetched, which fails two ways: it breaks outright once
+    that list is paginated - a payment row falling off a page makes the app look like it
+    lost the money - and it had independently grown the completed-plan LATCH that c195's
+    adversarial review deleted from chapter_overview, where a finished plan counted as
+    permanent proof of payment even after its installments were corrected away.
+    """
+    cycles = list(
+        (
+            await session.execute(
+                select(models.DuesCycle)
+                .where(models.DuesCycle.chapter_id == chapter_id)
+                .order_by(models.DuesCycle.created_at.desc())
+            )
+        ).scalars().all()
     )
-    return [DuesCycleOut.model_validate(c) for c in result.scalars().all()]
+    standing = await _viewer_standing_by_cycle(
+        session, chapter_id, membership.user_id, cycles
+    )
+    out: list[DuesCycleOut] = []
+    for cycle in cycles:
+        paid, on_plan = standing.get(cycle.id, (False, False))
+        model = DuesCycleOut.model_validate(cycle)
+        model.viewer_paid = paid
+        model.viewer_on_plan = on_plan
+        out.append(model)
+    return out
+
+
+async def _viewer_standing_by_cycle(
+    session: AsyncSession,
+    chapter_id: uuid.UUID,
+    user_id: uuid.UUID,
+    cycles: list[models.DuesCycle],
+) -> dict[uuid.UUID, tuple[bool, bool]]:
+    """(paid, on_plan) per cycle for ONE member, under the one house rule.
+
+    ONE round trip, not one per cycle. dues_contributions_subquery is per-cycle by
+    signature, so each cycle's subquery is composed into a single UNION ALL rather than
+    executed in a loop - the house netting is reused verbatim, and the query count stays
+    flat instead of growing with a chapter's history.
+
+    The three-way split is the same one chapter_overview and the ledger summary apply,
+    and tests/test_c281_dues_paid_agreement.py asserts all THREE surfaces agree. That
+    file is the guard; this comment is not.
+    """
+    if not cycles:
+        return {}
+
+    nets = union_all(
+        *[
+            select(
+                literal(str(cycle.id)).label("cycle_id"),
+                func.coalesce(func.sum(sub.c.amount_cents), 0).label("net"),
+            ).where(sub.c.user_id == user_id)
+            for cycle in cycles
+            for sub in [dues_contributions_subquery(chapter_id, cycle.id)]
+        ]
+    )
+    net_by_cycle = {
+        uuid.UUID(row.cycle_id): int(row.net)
+        for row in (await session.execute(nets)).all()
+    }
+
+    active_plan_cycle_ids = {
+        row.dues_cycle_id
+        for row in await session.execute(
+            select(models.DuesPaymentPlan.dues_cycle_id).where(
+                models.DuesPaymentPlan.user_id == user_id,
+                models.DuesPaymentPlan.dues_cycle_id.in_([c.id for c in cycles]),
+                # 'active' ONLY - a COMPLETED plan is not independent proof of payment.
+                # That latch is precisely what c195's review removed server-side, and
+                # what the client had grown its own copy of.
+                models.DuesPaymentPlan.status == "active",
+            )
+        )
+    }
+
+    standing: dict[uuid.UUID, tuple[bool, bool]] = {}
+    for cycle in cycles:
+        net = net_by_cycle.get(cycle.id, 0)
+        if net >= cycle.amount_cents:
+            standing[cycle.id] = (True, False)
+        elif cycle.id in active_plan_cycle_ids:
+            standing[cycle.id] = (False, True)
+        elif net > 0:
+            standing[cycle.id] = (True, False)
+        else:
+            standing[cycle.id] = (False, False)
+    return standing
 
 
 @router.post("/chapters/{chapter_id}/dues-cycles", status_code=201)
@@ -97,10 +184,27 @@ async def list_ledger_entries(
     category: str | None = Query(default=None),
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = Query(default=None),
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
     _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> list[LedgerEntryOut]:
-    """List ledger entries newest-first, optionally filtered; treasurer/president only."""
+    """List ledger entries newest-first, cursor-paginated; treasurer/president only.
+
+    Pass both `before` and `before_id` - the last row's values from the previous page -
+    for an exact tie-break, so entries sharing a timestamp at a page boundary are never
+    skipped or repeated. `before` alone still works for legacy callers but cannot
+    guarantee that. Same compound-cursor shape as list_messages and the comment thread.
+
+    THIS LIST IS RENDER-ONLY, and that is what made paginating it safe. Every FIGURE the
+    treasurer dashboard shows - balance, trend, category totals, dues - comes from
+    /ledger/summary, computed over the whole ledger server-side (c258 PR A), and the
+    member's dues screen reads its own standing from DuesCycleOut.viewer_paid rather than
+    scanning these rows. Before that, a page of this list WAS the balance, and a payment
+    row falling off a page made the app look like it had lost someone's money. If a new
+    caller ever needs a total from here, it needs a server-side aggregate instead.
+    """
     query = select(models.LedgerEntry).where(models.LedgerEntry.chapter_id == chapter_id)
     if category is not None:
         query = query.where(models.LedgerEntry.category == category)
@@ -108,7 +212,16 @@ async def list_ledger_entries(
         query = query.where(models.LedgerEntry.created_at >= from_)
     if to is not None:
         query = query.where(models.LedgerEntry.created_at <= to)
-    result = await session.execute(query.order_by(models.LedgerEntry.created_at.desc()))
+    if before is not None and before_id is not None:
+        query = query.where(
+            tuple_(models.LedgerEntry.created_at, models.LedgerEntry.id) < (before, before_id)
+        )
+    elif before is not None:
+        query = query.where(models.LedgerEntry.created_at < before)
+    query = query.order_by(
+        models.LedgerEntry.created_at.desc(), models.LedgerEntry.id.desc()
+    ).limit(limit)
+    result = await session.execute(query)
     return [LedgerEntryOut.model_validate(e) for e in result.scalars().all()]
 
 
