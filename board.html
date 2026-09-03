@@ -2531,11 +2531,11 @@
     },
     {
       "id": "c240",
-      "col": "backlog",
+      "col": "progress",
       "owner": "J",
       "tag": "infra",
       "area": "orgs",
-      "title": "c240 [JOSE - DECISION CARD, priced. THE top launch-week risk] Resend free tier caps at 100 emails/DAY; verification codes ARE the signup gate, so signup #101 on launch day fails SILENTLY (no error anywhere - the app looks broken, students walk). THREE OPTIONS: (A) RESEND PRO ~$20/mo, 50k emails/mo, daily cap lifted. Zero code, zero risk, ~10 minutes: upgrade in the dashboard, done. The safe default if launch is truly next week. (B) AMAZON SES ~$0.10 per 1,000 emails (launch week = cents). Needs: AWS account, domain verification (josedev.app DNS again), a small provider class behind the existing email_service switch (~half-day of code+tests), AND a sandbox-exit request Amazon reviews in ~24h - START THAT EARLY if chosen. Cheapest forever, most moving parts this week. (C) BOTH: pay Resend $20 for launch month (zero-risk launch), build SES behind the config flag at leisure, switch when proven, cancel Resend. Costs one $20 and buys zero launch-week risk plus the cheap steady state. MANAGER RECOMMENDS (C). Pricing from model knowledge - verify the exact figures on the dashboards before paying; magnitudes are right. Blocked on nobody but Jose; every option lands before launch if decided in the next couple of days.",
+      "title": "c240 DECIDED Sep 2 (Jose): SES - 'we want to use ses since its cheaper and we can make it ourselves'. Option B, not C: no Resend upgrade. CODE HALF (c284, chirps-23): 'ses' provider in email_service behind the existing config switch, secrets via env, tests with the API mocked, falsified. JOSE'S HALF, START EARLY - the sandbox-exit review is ~24h and launch is days away: (1) create the AWS account (or use an existing one), (2) SES console -> verified identities -> verify domain josedev.app (DNS records at the registrar, same place the Resend records went), (3) request PRODUCTION ACCESS (sandbox exit) in the SES console - use-case 'transactional verification codes for a campus app', (4) mint an IAM user with ses:SendEmail only and hand the manager the key pair for Secret Manager. UNTIL the switch: Resend keeps serving at 100/day - the cap risk STANDS during launch week if SES is not live in time; that is now the schedule pressure on this card.",
       "detail": "Verified against Resend's pricing page by a peer session. One conflict flagged: pricing page says 3 domains on free, a secondary source said 1 - confirm in the dashboard. This is a billing decision, not code: the sender is already swappable behind email_service.send_email."
     },
     {
@@ -2923,6 +2923,15 @@
       "tag": "",
       "area": "",
       "title": "c283 DEPLOY WINDOW #5 Sep 2 - CLOSED CLEAN, deploy-only. chirp-api-00045-2k2 / chirp-ws-00010-slw, deploy-verify 4/4 both, plus a direct probe of the NEW route: GET /chapters/{id}/ledger/summary answers 401 (mounted and gated) - first probe 404'd because the manager GUESSED the path (/ledger-summary), the c250 wrong-target shape again, resolved by reading the router before diagnosing. NOW LIVE: #179 treasurer summary endpoint + #180 paid/on-plan agreement fix. Backend fully caught up with main through ce81ca3. WHY THIS WINDOW RAN EARLY rather than batching: main's treasurer screen calls the summary endpoint, so any device build cut from main would have 404'd the treasurer tab against the old prod - prod must stay ahead of any client build until c39 fires.",
+      "detail": ""
+    },
+    {
+      "id": "c284",
+      "col": "progress",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c284 IN PROGRESS Sep 2 (chirps-23) - SES EMAIL PROVIDER (the code half of c240). Add provider 'ses' to email_service behind the existing Literal switch: SES v2 SendEmail via HTTPS (SigV4 signing; boto3 acceptable if the dependency is justified, else a thin signed client - argue the choice), config keys aws_region + credentials via env/Secret Manager, same raise-on-failure contract as the Resend path (send_email raises so the route 502s - c134's acceptance semantics preserved), provider stays 'log' by default and in the suite. Tests mocked at the transport, falsified; NO real send (Jose's AWS account does not exist yet - his half is on c240). Full suite under the lock. The switch itself (env flip + secret mount + redeploy) is manager+Jose, not this card.",
       "detail": ""
     }
   ],
