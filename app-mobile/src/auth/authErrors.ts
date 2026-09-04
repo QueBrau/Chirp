@@ -21,13 +21,22 @@ import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from "@/lib/passwordPolicy";
 export type AuthErrorMode = "signin" | "signup";
 
 /**
- * Unchanged from the pre-c311 bare-catch behavior: this is what every failure
- * showed, recognised or not, on either form. Kept as the literal fallback so an
- * error this module does not recognise - a future Firebase SDK bump adds a code,
- * or something that is not a FirebaseError at all makes it into the catch -
- * degrades to exactly what shipped before, not a new, unreviewed sentence.
+ * The fallback for anything this module does not recognise - a future Firebase
+ * SDK bump adds a code, or something that is not a FirebaseError at all reaches
+ * the catch. The SIGN-IN wording is preserved verbatim from what shipped before
+ * c311, so an unrecognised error on that form degrades to exactly the sentence
+ * that was already reviewed rather than a new, unreviewed one.
+ *
+ * MODE-AWARE on purpose. The single shared string was wrong half the time: a
+ * failed ACCOUNT CREATION told the user we "couldn't sign you in", which is not
+ * what they were doing. That is the same class of imprecision c311 exists to
+ * fix, so the fallback has to get it right too.
  */
-const GENERIC_MESSAGE = "Couldn't sign you in. Check your email and password and try again.";
+function genericMessage(mode: AuthErrorMode): string {
+  return mode === "signup"
+    ? "Couldn't create your account. Check your email and password and try again."
+    : "Couldn't sign you in. Check your email and password and try again.";
+}
 
 /**
  * auth/user-not-found, auth/wrong-password and auth/invalid-credential all mean
@@ -66,7 +75,7 @@ function readErrorCode(error: unknown): string | null {
 /**
  * Maps a caught sign-in/sign-up error to human copy. Never throws: reading the
  * code is wrapped so a hostile or unusual error shape (e.g. a getter that itself
- * throws) degrades to GENERIC_MESSAGE instead of taking down the catch block that
+ * throws) degrades to genericMessage(mode) instead of taking down the catch block that
  * called this.
  *
  * `mode` matters for exactly the two codes above - it decides whether the
@@ -79,7 +88,7 @@ export function getAuthErrorMessage(error: unknown, mode: AuthErrorMode): string
   try {
     code = readErrorCode(error);
   } catch {
-    return GENERIC_MESSAGE;
+    return genericMessage(mode);
   }
 
   switch (code) {
@@ -95,14 +104,14 @@ export function getAuthErrorMessage(error: unknown, mode: AuthErrorMode): string
     case "auth/email-already-in-use":
       // Only reachable from createUserWithEmailAndPassword, but gate on mode
       // anyway rather than trust that - see the comment on the constant above.
-      return mode === "signup" ? SIGNUP_EMAIL_IN_USE_MESSAGE : GENERIC_MESSAGE;
+      return mode === "signup" ? SIGNUP_EMAIL_IN_USE_MESSAGE : genericMessage(mode);
 
     case "auth/user-not-found":
     case "auth/wrong-password":
     case "auth/invalid-credential":
       // Only reachable from signInWithEmailAndPassword, but gate on mode anyway
       // rather than trust that - see the comment on the constant above.
-      return mode === "signin" ? SIGNIN_INVALID_CREDENTIAL_MESSAGE : GENERIC_MESSAGE;
+      return mode === "signin" ? SIGNIN_INVALID_CREDENTIAL_MESSAGE : genericMessage(mode);
 
     case "auth/user-disabled":
       return "This account has been disabled. Contact support if you think that's a mistake.";
@@ -117,7 +126,7 @@ export function getAuthErrorMessage(error: unknown, mode: AuthErrorMode): string
       return "Email sign-in isn't available right now. Try again later.";
 
     default:
-      return GENERIC_MESSAGE;
+      return genericMessage(mode);
   }
 }
 
