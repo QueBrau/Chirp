@@ -80,7 +80,11 @@ export function PollCard({ poll, onVote, onClose, busy = false }: PollCardProps)
             disabled={!votable}
             accessibilityRole="radio"
             accessibilityState={{ selected: mine, disabled: !votable }}
-            accessibilityLabel={`${option.text}, ${option.votes} votes, ${Math.round(share * 100)} percent`}
+            // c312: the visible caption prints a bare number, but this reads aloud -
+            // and it said "1 votes" on every single-vote option.
+            accessibilityLabel={`${option.text}, ${
+              option.votes === 1 ? "1 vote" : `${option.votes} votes`
+            }, ${Math.round(share * 100)} percent`}
             style={{
               borderRadius: radii.card,
               borderWidth: 1,

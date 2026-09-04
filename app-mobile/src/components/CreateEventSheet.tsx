@@ -19,7 +19,16 @@
 
 import { Feather } from "@expo/vector-icons";
 import { useState } from "react";
-import { Image, Modal, Pressable, ScrollView, TextInput, View } from "react-native";
+import {
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  TextInput,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { EventVisibility } from "@/api/events";
@@ -211,10 +220,18 @@ export function CreateEventSheet({
           and this backdrop wraps every real control in the form, each ALSO
           accessibilityRole="button" - a <button> nested inside a <button>. onPress
           alone keeps it tappable without the semantic role. */}
-      <Pressable
-        onPress={close}
-        style={{ flex: 1, backgroundColor: withAlpha(light.ink, 0.4), justifyContent: "flex-end" }}
+      {/* c312: same wrapper and same reasoning as CreateSheet (c307) - OUTSIDE the
+          backdrop, because the backdrop is the flex:1 element the sheet is laid out
+          against and nesting it inside lifts nothing. padding on iOS / height on
+          Android: the platforms measure the keyboard differently. */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
+        <Pressable
+          onPress={close}
+          style={{ flex: 1, backgroundColor: withAlpha(light.ink, 0.4), justifyContent: "flex-end" }}
+        >
         {/* Inner Pressable with no onPress: swallows taps so they don't bubble to the backdrop close. */}
         <Pressable
           style={{
@@ -262,8 +279,15 @@ export function CreateEventSheet({
             <Feather name="x" size={16} color={palette.inkSecondary} />
           </Pressable>
 
+          {/* c312: the ScrollView makes the lower fields REACHABLE, which is why this
+              was never as broken as c307's CreateSheet - but React Native does not
+              inset a ScrollView for the keyboard on its own, so with six inputs the
+              focused one can still sit under it and the submit button usually does.
+              keyboardShouldPersistTaps keeps a tap on Create from being eaten by the
+              dismiss that a first tap would otherwise trigger. */}
           <ScrollView
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ gap: spacing.lg, paddingBottom: spacing.lg }}
           >
             <AppText variant="title">{heading}</AppText>
@@ -387,13 +411,19 @@ export function CreateEventSheet({
             <View>
               <FieldLabel>Cover</FieldLabel>
               <View style={{ flexDirection: "row", gap: spacing.sm }}>
-                {COVER_SEEDS.map((seed) => {
+                {COVER_SEEDS.map((seed, index) => {
                   const selected = seed === cover;
                   return (
                     <Pressable
                       key={seed}
                       accessibilityRole="button"
                       accessibilityState={{ selected }}
+                      // c312: these contain ONLY an Image, so without a name a screen
+                      // reader announces four identical unlabelled buttons and the
+                      // selected one is indistinguishable from the rest. The visibility
+                      // chips above need no label because their text content supplies
+                      // one; an image cannot. Same class as c297's VoteGlyph.
+                      accessibilityLabel={`Cover option ${index + 1} of ${COVER_SEEDS.length}`}
                       onPress={() => setCover(seed)}
                       style={{
                         width: 56,
@@ -405,6 +435,8 @@ export function CreateEventSheet({
                       }}
                     >
                       <Image
+                        accessibilityElementsHidden
+                        importantForAccessibility="no"
                         source={{ uri: coverUrl(seed) }}
                         style={{ width: "100%", height: "100%" }}
                       />
@@ -416,8 +448,9 @@ export function CreateEventSheet({
 
             <Button label={submitLabel} onPress={submit} disabled={!canSubmit} />
           </ScrollView>
+          </Pressable>
         </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

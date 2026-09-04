@@ -52,6 +52,7 @@ import {
   SectionHeader,
   type CreateEventInput,
 } from "@/components";
+import { ApiError } from "@/api/client";
 import { confirmAction, showApiError } from "@/lib/alert";
 import { eventWhen } from "@/lib/dates";
 import { findMember } from "@/lib/roster";
@@ -73,6 +74,11 @@ const GUEST_GROUP_TITLES: Record<RsvpStatus, string> = {
 };
 
 /** Roles that may edit or cancel somebody else's event. Mirrors backend EBOARD. */
+/** Loading: the fetch is in flight. Loaded: it settled - `event` is the event, or null
+ * because it is genuinely gone or not shared with this viewer. Error: the fetch itself
+ * failed, which must never be presented as either of those (c312). */
+type LoadState = "loading" | "loaded" | "error";
+
 const EBOARD_ROLES = ["president", "vice_president", "treasurer", "secretary", "historian"];
 
 /** Plain-language label for who can see this. Matches CreateEventSheet's tier names. */
@@ -92,6 +98,7 @@ export default function EventDetailScreen() {
   const { sessionStatus, membership, chapterLoading } = useOwnChapter();
 
   const [event, setEvent] = useState<EventOut | null | undefined>(undefined);
+  const [loadState, setLoadState] = useState<LoadState>("loading");
   const [rsvps, setRsvpsState] = useState<EventRsvpOut[]>([]);
   const [invites, setInvites] = useState<EventInviteOut[]>([]);
   const [counts, setCounts] = useState<EventRsvpCountsOut | null>(null);
@@ -124,6 +131,7 @@ export default function EventDetailScreen() {
     setInvites(invitePage);
     setCounts(headcounts);
     setMembers(roster);
+    setLoadState("loaded");
   }, [id, membership]);
 
   useEffect(() => {
@@ -131,7 +139,20 @@ export default function EventDetailScreen() {
     // to "Event not found" - while the session/chapter are still resolving.
     if (sessionStatus === "loading" || (membership !== null && chapterLoading)) return;
     // Fail soft: an errored fetch never leaves the screen hanging.
-    load().catch(() => setEvent(null));
+    //
+    // c312: it used to fail soft into a LIE. Every failure set event=null, and null
+    // renders "This event may have been removed, or it may not be shared with you" - so
+    // a dropped connection told a legitimately invited guest they had been excluded.
+    // That is the c299 class at its worst: not merely unhelpful, but affirmatively
+    // wrong about the one thing the reader cares about.
+    //
+    // 404/403 ARE that message - gone, or genuinely not yours to see. Anything else is
+    // our problem, not theirs, and says so with a retry.
+    load().catch((error: unknown) => {
+      setEvent(null);
+      const denied = error instanceof ApiError && (error.status === 404 || error.status === 403);
+      setLoadState(denied ? "loaded" : "error");
+    });
   }, [load, sessionStatus, membership, chapterLoading]);
 
   const handleRsvp = async (status: RsvpStatus) => {
@@ -202,8 +223,49 @@ export default function EventDetailScreen() {
     });
   };
 
-  if (event === undefined) {
-    return <View style={{ flex: 1, backgroundColor: palette.bg }} />;
+  // c312: this used to be a bare empty View - a blank screen with no indicator, which
+  // reads as a broken app rather than as a wait (the c298 shape).
+  if (loadState === "loading" || event === undefined) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: palette.bg,
+          paddingTop: insets.top + spacing.xl,
+          paddingHorizontal: spacing.gutter,
+        }}
+      >
+        <EmptyState title="Loading this event..." />
+      </View>
+    );
+  }
+
+  if (loadState === "error") {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: palette.bg,
+          paddingTop: insets.top + spacing.xl,
+          paddingHorizontal: spacing.gutter,
+        }}
+      >
+        <EmptyState
+          title="Couldn't load this event"
+          message="Something went wrong reaching the server."
+          actionLabel="Try again"
+          onAction={() => {
+            setLoadState("loading");
+            void load().catch((error: unknown) => {
+              setEvent(null);
+              const denied =
+                error instanceof ApiError && (error.status === 404 || error.status === 403);
+              setLoadState(denied ? "loaded" : "error");
+            });
+          }}
+        />
+      </View>
+    );
   }
 
   if (event === null) {

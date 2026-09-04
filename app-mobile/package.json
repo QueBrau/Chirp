@@ -18,7 +18,8 @@
     "verify:content-limits": "node scripts/verify-content-limits.mjs",
     "verify:e2ee-claims": "node scripts/verify-e2ee-claims.mjs",
     "verify:chirps-board": "node scripts/verify-chirps-board.mjs",
-    "verify:a11y-touch": "node scripts/verify-a11y-touch.mjs"
+    "verify:a11y-touch": "node scripts/verify-a11y-touch.mjs",
+    "verify:events-polls": "node scripts/verify-events-polls.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/muli": "^0.1.0",
