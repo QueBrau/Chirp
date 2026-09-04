@@ -3161,6 +3161,16 @@
       "id": "c315",
       "col": "backlog",
       "title": "c315 [FILED Sep 4 from c300's own finding, not started] 67 OF 69 BACKEND ERROR CODES STILL REACH USERS RAW. apiErrorMessage (src/lib/alert.ts) now maps campus_unverified and not_your_campus to human copy (c300); every other server detail code still falls through verbatim to whoever hits it - already_registered, invite_expired, not_a_member, little_already_has_big, etc, across 58 client call sites. NOT a mechanical fix: writing 67 pieces of user-facing copy is a product decision (tone, what to tell someone vs what to hide, whether some codes should just collapse to a generic line) - Jose's call on priority/scope, not a session's to invent unilaterally. The DETAIL_COPY map already exists in lib/alert.ts; adding an entry per code is what closes each one. Good filler work in small batches once scoped."
+    },
+    {
+      "id": "c316",
+      "col": "progress",
+      "title": "c316 [LAUNCH-BLOCKING - claimed chirps-ad Sep 4, found in their own c299 widen-triage] A NETWORK FAILURE MAKES A FALSE STATEMENT ABOUT A NAMED PERSON. app/(tabs)/chapter/member/[id].tsx:55 `load().catch(() => setMember(null))` and member===null renders 'Member not found - This member may have left the chapter.' Every c299 site said 'there is nothing here'; this one says a specific person LEFT, to whoever opened their profile, on a dropped request. Manager verified verbatim against current main - including that the file ALREADY has session-status gating with a comment about not falling through to 'Member not found' too early: the author closed the timing hole and left the network hole open on the line below it. FIX: same 404/403-vs-transport classification as c312's event/[id].tsx fix (ApiError.status) - only a real 404 gets the may-have-left copy, transport failures get their own state with retry."
+    },
+    {
+      "id": "c317",
+      "col": "progress",
+      "title": "c317 [claimed chirps-ad Sep 4, same triage] THREE MORE FAILURE-AS-FACT SITES, messaging + invites. (1) messages/[id].tsx:68 `load().catch(() => setMessages([]))` - a failed thread fetch renders the DM as empty, reading as 'the other person never wrote anything' - a quiet claim about a person. (2) messages/new.tsx:109 `.catch(() => setMembers([]))` - the pick-someone-to-message roster; failure reads 'nobody to message'. (3) feed/index.tsx:96-98 `.catch(() => setInvites([]))` - a failed invites fetch silently removes the pending-invite banner: c301's exact failure mode (an invite that exists with nothing on screen saying so), reached through the network instead of routing. Manager verified all three verbatim against current main. FIX: c299 LoadState pattern each. DELIBERATELY LEFT AS-IS, documented so future sweeps do not re-report (chirps-ad checked each rather than assuming): tree.tsx:86 + historian.tsx:78 (edit-picker only, canEdit-gated, no false claim to a reader), president.tsx:300/314 (null renders as nothing, asserts nothing), profile/index.tsx:176/188 + alumni/index.tsx:57 (section/label degradation), chapter/index.tsx:504 (RSVP avatar roster, reasoned soft in c299 - the rule is 'never present a failure as an answer', not 'every fetch needs an error screen')."
     }
   ],
   "decisions": [
