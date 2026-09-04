@@ -35,25 +35,38 @@ router = APIRouter(tags=["moderation"])
 _EBOARD_ROLES: list[str] = [role.value for role in EBOARD]
 
 
-async def _require_any_eboard(
+async def _require_any_moderator(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> models.User:
-    """v1 scaffolding simplification: moderator = e-board member of ANY active chapter.
+    """Moderator = e-board member of any active chapter that is MODERATION-APPROVED.
 
     This only proves "is a moderator somewhere" — it is NOT sufficient authorization
     on its own. Callers MUST additionally scope to the specific campus/chapter of the
     target (see list_reports, remove_chirp) so an e-board member of chapter A cannot see
-    or act on chapter B's reports/chirps (SECURITY-REVIEW finding 1). Gating chapter
-    creation itself (self-serve presidency) is a separate product decision, carded
-    on the board — out of scope here.
+    or act on chapter B's reports/chirps (SECURITY-REVIEW finding 1).
+
+    c308 ADDED THE APPROVAL JOIN, and the reason is sequencing rather than a bug being
+    exploited today. This used to read "e-board of ANY active chapter", which was exact
+    while chapter creation was admin-gated (c28): becoming e-board required a platform
+    admin to put you there. braul asked for self-serve creation, and POST /chapters
+    makes its creator a president — so under self-serve, "e-board anywhere" becomes
+    "anyone who typed an org name", and this dependency would hand them the moderation
+    surface, whose reports carry forwarded_plaintext of reported E2EE messages. That is
+    SECURITY-REVIEW finding 1 reachable again through a new door.
+
+    The renamed function is deliberate: a helper still called _require_any_eboard would
+    be a name asserting something the body no longer checks, and this is the file where
+    that kind of drift is most expensive.
     """
     result = await session.execute(
         select(models.Membership.id)
+        .join(models.Chapter, models.Chapter.id == models.Membership.chapter_id)
         .where(
             models.Membership.user_id == user.id,
             models.Membership.status == "active",
             models.Membership.role.in_(_EBOARD_ROLES),
+            models.Chapter.moderation_approved.is_(True),
         )
         .limit(1)
     )
@@ -106,7 +119,7 @@ def _content_campus_tier(source_post: models.Post | None) -> bool:
     silently disagree. They used to: remove_content defaulted to False when a
     comment's parent post could not be resolved, the OPPOSITE of this function's
     True. That was safe only by accident of evaluation order — campus_id is also
-    None whenever source_post is, and _require_eboard_for_campus 403s on campus_id
+    None whenever source_post is, and _require_moderator_for_campus 403s on campus_id
     being None BEFORE campus_content is ever read, so the wrong default was never
     actually reachable. It would have become reachable the moment anyone changed
     that ordering, with nothing here to say the two defaults were coupled.
@@ -151,14 +164,14 @@ async def _report_campus_content(
     return True
 
 
-async def _require_eboard_for_campus(
+async def _require_moderator_for_campus(
     session: AsyncSession,
     moderator: models.User,
     campus_id: uuid.UUID | None,
     *,
     campus_content: bool,
 ) -> None:
-    """403 unless moderator is active e-board in a chapter of campus_id AND verified there.
+    """403 unless moderator is active e-board in an APPROVED chapter of campus_id AND verified there.
 
     Factored out of remove_chirp (SECURITY-REVIEW finding 1's fix) so remove_content
     enforces the identical per-campus scoping instead of a second hand-rolled check.
@@ -184,6 +197,15 @@ async def _require_eboard_for_campus(
 
     So: a president who never verified keeps every chapter power, including removing a
     member's post, and cannot touch the campus Chirp board.
+
+    c308: the chapter must also be moderation-approved. Note what this does NOT take
+    away, because it is the reason the approval check can sit here unconditionally
+    rather than being split per tier: a president of an unapproved chapter still
+    administers their own chapter's content in full, because that power is not in this
+    router at all — feed.py's DELETE /chapters/{chapter_id}/posts/{post_id} is
+    author-or-president gated on membership alone. What an unapproved chapter loses is
+    campus reach, which is precisely the privilege that must not be mintable by typing
+    an org name into a form.
     """
     if campus_id is None:
         raise forbidden("insufficient_role")
@@ -195,6 +217,7 @@ async def _require_eboard_for_campus(
             models.Membership.status == "active",
             models.Membership.role.in_(_EBOARD_ROLES),
             models.Chapter.campus_id == campus_id,
+            models.Chapter.moderation_approved.is_(True),
         )
         .limit(1)
     )
@@ -243,7 +266,7 @@ async def list_reports(
     before: datetime | None = None,
     before_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
-    moderator: models.User = Depends(_require_any_eboard),
+    moderator: models.User = Depends(_require_any_moderator),
     session: AsyncSession = Depends(get_session),
 ) -> list[ContentReportOut]:
     """List reports newest first, scoped to campuses where the caller is active e-board.
@@ -260,6 +283,11 @@ async def list_reports(
     of any chapter. Now restricted to reports whose campus_id is one the caller
     actually moderates.
     """
+    # c308: APPROVED chapters only. This is the query the whole card exists to change —
+    # it is the one that turns "I am e-board somewhere" into "I can read this campus's
+    # reports", and reports carry forwarded_plaintext of reported E2EE messages. Under
+    # self-serve creation without this filter, minting a throwaway chapter on a campus
+    # would be enough to read that campus's queue.
     campus_ids_result = await session.execute(
         select(models.Chapter.campus_id)
         .join(models.Membership, models.Membership.chapter_id == models.Chapter.id)
@@ -267,6 +295,7 @@ async def list_reports(
             models.Membership.user_id == moderator.id,
             models.Membership.status == "active",
             models.Membership.role.in_(_EBOARD_ROLES),
+            models.Chapter.moderation_approved.is_(True),
         )
         .distinct()
     )
@@ -297,7 +326,7 @@ async def list_reports(
 async def resolve_report(
     report_id: uuid.UUID,
     body: ReportResolveRequest,
-    moderator: models.User = Depends(_require_any_eboard),
+    moderator: models.User = Depends(_require_any_moderator),
     session: AsyncSession = Depends(get_session),
 ) -> ContentReportOut:
     """Close a report as actioned or dismissed (board card c91).
@@ -309,12 +338,12 @@ async def resolve_report(
     every handled item came back as open on the next reload. A queue that cannot be
     emptied is not a workflow, and this is the route that makes it one.
 
-    SCOPING IS THE WHOLE RISK HERE, so it reuses _require_eboard_for_campus rather than
+    SCOPING IS THE WHOLE RISK HERE, so it reuses _require_moderator_for_campus rather than
     rolling its own: reports carry campus_id, and SECURITY-REVIEW finding 1 was exactly
     an e-board member of one chapter being able to see reports from every campus. Being
     able to CLOSE another campus's report is the same defect with a write attached —
     worse, because dismissing a report is how a bad actor makes a complaint disappear.
-    _require_any_eboard only proves the caller is e-board SOMEWHERE; the per-campus
+    _require_any_moderator only proves the caller is e-board SOMEWHERE; the per-campus
     check below is what proves they moderate THIS report's campus.
 
     Idempotency: re-resolving an already-closed report is a 409, not a silent success.
@@ -335,7 +364,7 @@ async def resolve_report(
     # campus_id and target_type/target_id are set once when it is filed and never
     # change, so there is nothing to race on here.
     campus_content = await _report_campus_content(session, report.target_type, report.target_id)
-    await _require_eboard_for_campus(
+    await _require_moderator_for_campus(
         session, moderator, report.campus_id, campus_content=campus_content
     )
 
@@ -508,7 +537,7 @@ async def delete_block(
 async def remove_chirp(
     chirp_id: uuid.UUID,
     body: ChirpRemoveRequest,
-    moderator: models.User = Depends(_require_any_eboard),
+    moderator: models.User = Depends(_require_any_moderator),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Admin removal: sets removed_at + removed_reason, and writes a moderation_actions
@@ -524,7 +553,7 @@ async def remove_chirp(
     if chirp.removed_at is not None:
         raise conflict("already_removed")
     # Chirps are the campus-wide surface by definition (c108).
-    await _require_eboard_for_campus(session, moderator, chirp.campus_id, campus_content=True)
+    await _require_moderator_for_campus(session, moderator, chirp.campus_id, campus_content=True)
     chirp.removed_at = datetime.now(timezone.utc)
     chirp.removed_reason = body.reason
     session.add(
@@ -542,7 +571,7 @@ async def remove_chirp(
 @router.post("/moderation/content/remove", status_code=204)
 async def remove_content(
     body: ContentRemoveRequest,
-    moderator: models.User = Depends(_require_any_eboard),
+    moderator: models.User = Depends(_require_any_moderator),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Admin removal of a post or comment (board card c76: the Terms claims we can
@@ -587,7 +616,7 @@ async def remove_content(
     #
     # (2) Chapter.campus_id is unreachable for a chapter-less campus post
     #     (chapter_id NULL, allowed by ck_posts_org_requires_chapter since c71) - the
-    #     hop silently produced campus_id=None, which _require_eboard_for_campus
+    #     hop silently produced campus_id=None, which _require_moderator_for_campus
     #     treats as "no campus matches" and 403s EVERY officer, verified or not.
     #     Post.campus_id is a first-class, non-nullable column set unconditionally by
     #     both create routes in feed.py, so reading it directly fixes both bugs with
@@ -600,7 +629,7 @@ async def remove_content(
     # that was silent and how it agrees with _report_campus_content now.
     campus_id = source_post.campus_id if source_post is not None else None
     campus_content = _content_campus_tier(source_post)
-    await _require_eboard_for_campus(session, moderator, campus_id, campus_content=campus_content)
+    await _require_moderator_for_campus(session, moderator, campus_id, campus_content=campus_content)
 
     target.deleted_at = datetime.now(timezone.utc)
     target.removed_reason = body.reason

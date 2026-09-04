@@ -107,6 +107,15 @@ class Chapter(Base):
     chapter_name: Mapped[str | None] = mapped_column(Text)  # e.g. "Epsilon Mu"
     # Stripe Connect connected account.
     stripe_account_id: Mapped[str | None] = mapped_column(Text)
+    # Whether this chapter's e-board carries CAMPUS moderation rights (c308). False for
+    # every newly created chapter, including admin-created ones: founding a chapter must
+    # not mint the privilege, which is what makes self-serve creation safe to ungate
+    # later. Backfilled true for every chapter that existed at migration 0031, so no
+    # sitting officer lost anything. Chapter-level power does not depend on this — see
+    # the migration's docstring.
+    moderation_approved: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

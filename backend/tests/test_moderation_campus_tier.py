@@ -29,6 +29,7 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import (
+    approve_chapter_moderation,
     ApiUser,
     ChapterSetup,
     MakeCampus,
@@ -60,7 +61,13 @@ async def _make_chapter_on_campus(
         headers=president.headers,
     )
     assert created.status_code == 201, created.text
-    return ChapterSetup(chapter_id=created.json()["id"], member=president, president=president)
+    chapter_id = created.json()["id"]
+    # c308: a chapter created through the API is unapproved for moderation, so without
+    # this every test in this file would 403 at the door and stop testing the campus
+    # TIER it exists to test. These two chapters stand for established orgs, exactly
+    # like conftest's make_chapter_with does.
+    await approve_chapter_moderation(chapter_id)
+    return ChapterSetup(chapter_id=chapter_id, member=president, president=president)
 
 
 @pytest.fixture

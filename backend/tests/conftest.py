@@ -457,6 +457,25 @@ async def _grant_platform_admin(user_id: str) -> None:
         await session.commit()
 
 
+async def approve_chapter_moderation(chapter_id: str, *, approved: bool = True) -> None:
+    """Set chapters.moderation_approved directly in the DB (board card c308).
+
+    Same shape as _grant_platform_admin above and for the same reason: no API sets this
+    today (c325 will decide whether one should). A chapter created through POST /chapters
+    is UNAPPROVED, which is the whole point of c308 — founding a chapter must not mint
+    campus moderation — so the factory below calls this to make its chapters resemble the
+    established, backfilled orgs that every pre-c308 test was written against.
+    """
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text("UPDATE chapters SET moderation_approved = :approved WHERE id = :id"),
+            {"id": chapter_id, "approved": approved},
+        )
+        await session.commit()
+
+
 async def set_campus(user_id: str, campus_id: str, *, verified: bool = True) -> None:
     """Pin a user to a campus directly in the DB, verified by default.
 
@@ -561,9 +580,19 @@ def make_chapter_with(
     The creator becomes president; other roles join via an e-board invite code
     (POST /chapters/{id}/invites then POST /chapters/join). The creator is granted
     is_platform_admin directly in the DB first, since POST /chapters is admin-only.
+
+    APPROVED FOR MODERATION BY DEFAULT (c308). Every chapter this factory built before
+    c308 conferred campus moderation on its e-board, because every chapter did; after
+    c308 only approved ones do, and a chapter made through the API starts unapproved.
+    Defaulting to approved here is what makes the c308 backfill provably like-for-like:
+    the entire pre-existing moderation suite passes UNCHANGED against an approved
+    chapter, and fails against an unapproved one. Pass approve_moderation=False to build
+    the freshly-founded chapter that c308 exists to render harmless.
     """
 
-    async def _make_chapter_with(role: str = "member") -> ChapterSetup:
+    async def _make_chapter_with(
+        role: str = "member", *, approve_moderation: bool = True
+    ) -> ChapterSetup:
         president = await make_user("Chapter President")
         await _grant_platform_admin(president.id)
         campus_id = await make_campus()
@@ -578,6 +607,8 @@ def make_chapter_with(
         )
         assert created.status_code == 201, created.text
         chapter_id = created.json()["id"]
+        if approve_moderation:
+            await approve_chapter_moderation(chapter_id)
 
         if role == "president":
             return ChapterSetup(chapter_id=chapter_id, member=president, president=president)
