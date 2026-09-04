@@ -23,7 +23,7 @@
  * mode. And every anchor is SYNTAX, never prose - c312's order check matched a comment
  * containing the phrase it was looking for and failed on correct code.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 const read = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 
@@ -31,12 +31,18 @@ const DUES = "app/(tabs)/chapter/dues.tsx";
 const PLANS = "app/(tabs)/chapter/dues-plans.tsx";
 const SECRETARY = "app/(tabs)/chapter/secretary.tsx";
 const MEMBER = "app/(tabs)/chapter/member/[id].tsx";
+const NEW_DM = "app/(tabs)/messages/new.tsx";
+const THREAD = "app/(tabs)/messages/[id].tsx";
+const PROFILE = "app/(tabs)/profile/index.tsx";
 
 const sources = {
   [DUES]: read(DUES),
   [PLANS]: read(PLANS),
   [SECRETARY]: read(SECRETARY),
   [MEMBER]: read(MEMBER),
+  [NEW_DM]: read(NEW_DM),
+  [THREAD]: read(THREAD),
+  [PROFILE]: read(PROFILE),
 };
 
 let failures = 0;
@@ -243,6 +249,177 @@ if (sources[MEMBER].includes("setLoadFailed(!notAMember)")) {
     "member/[id].tsx: loadFailed must be set to !notAMember",
     "a 404 raising loadFailed would show the server-error copy for a genuine departure, and vice versa",
   );
+}
+
+console.log("\n-- messages/new.tsx: the roster (c317) --");
+
+gateOrder(
+  NEW_DM,
+  "loadFailed ? (",
+  "roster.length === 0 ? (",
+  '"No one to add yet" must never be shown because the roster fetch failed',
+);
+
+// `!loadFailed &&` in the loading expression LOOKS deletable - it reads like a
+// redundant guard next to the membership/members checks. It is not: on failure
+// `members` stays null, so without that term the condition stays true forever and the
+// screen spins on "Loading roster..." instead of ever reaching the error branch below
+// it. Executed rather than matched, because its absence is invisible in a diff.
+{
+  const src = sources[NEW_DM];
+  const start = src.indexOf("const loading =");
+  const end = src.indexOf(";", start);
+  if (start === -1) {
+    fail(`${NEW_DM}: could not find the loading expression`);
+  } else {
+    const expression = src.slice(start + "const loading =".length, end);
+    const evaluate = (loadFailed, sessionStatus, membership, members) =>
+      new Function(
+        "loadFailed",
+        "sessionStatus",
+        "membership",
+        "members",
+        `return (${expression});`,
+      )(loadFailed, sessionStatus, membership, members);
+
+    const stuck = evaluate(true, "loaded", { chapter_id: "c" }, null);
+    if (stuck === false) {
+      pass("messages/new.tsx: a FAILED roster load leaves the loading gate (no infinite spinner)");
+    } else {
+      fail(
+        "messages/new.tsx: a failed roster load must exit the loading gate",
+        `loadFailed=true still computed loading=${JSON.stringify(stuck)} - the screen spins forever and the error branch is unreachable`,
+      );
+    }
+    // The other direction, so the guard cannot be satisfied by never loading at all.
+    const genuinely = evaluate(false, "loaded", { chapter_id: "c" }, null);
+    if (genuinely === true) pass("messages/new.tsx: a genuinely in-flight roster still shows loading");
+    else fail("messages/new.tsx: an in-flight roster must still show loading", `got ${JSON.stringify(genuinely)}`);
+  }
+}
+
+console.log("\n-- messages/[id].tsx: a DIFFERENT shape, asserted differently --");
+
+// HEADS-UP FROM THE AUTHOR, AND THE REASON THIS SECTION EXISTS SEPARATELY: this screen
+// is NOT an if-chain. The error renders ALONGSIDE the bubble list so the composer stays
+// reachable while it is showing. Reusing the gate-order form here would have passed
+// vacuously - the anchors simply would not be found in that shape, and a check that
+// cannot fail is worse than no check, because it reports coverage it does not have.
+{
+  const src = sources[THREAD];
+  const blockAt = src.indexOf("{loadFailed ? (");
+  const listAt = src.indexOf("messages.map(");
+  if (blockAt === -1) {
+    fail(`${THREAD}: the inline loadFailed block is gone`);
+  } else {
+    pass("messages/[id].tsx: the error renders inline, not as an early return");
+  }
+  if (blockAt !== -1 && listAt !== -1 && blockAt < listAt) {
+    pass("messages/[id].tsx: it renders ALONGSIDE the bubble list (composer stays reachable)");
+  } else {
+    fail(
+      "messages/[id].tsx: the error must render alongside the list, not replace it",
+      `loadFailed block at ${blockAt}, message list at ${listAt}`,
+    );
+  }
+  // An early return would be the regression that turns this into the other shape.
+  if (/if \(loadFailed\)\s*\{?\s*return/.test(src)) {
+    fail(
+      "messages/[id].tsx: an early return on loadFailed hides the composer",
+      "this screen must keep the composer reachable while the error shows",
+    );
+  } else {
+    pass("messages/[id].tsx: no early return on loadFailed");
+  }
+}
+
+// The catch must live INSIDE load(), not at the call site: the retry action invokes
+// load() directly, so a catch attached only to the mount effect leaves a failed RETRY
+// unhandled - silently, and exactly when the user is already failing.
+{
+  const src = sources[THREAD];
+  const start = src.indexOf("const load = useCallback(");
+  const end = src.indexOf("\n  }, [", start);
+  const body = start === -1 || end === -1 ? "" : src.slice(start, end);
+  if (body.includes("setLoadFailed(true)")) {
+    pass("messages/[id].tsx: the catch lives inside load(), so a failed RETRY is handled too");
+  } else {
+    fail(
+      "messages/[id].tsx: setLoadFailed(true) must be inside load()'s own catch",
+      "a catch at the call site leaves the retry path unhandled",
+    );
+  }
+  if (/onAction=\{\(\) => void load\(\)\}/.test(src)) {
+    pass("messages/[id].tsx: the retry actually re-runs load()");
+  } else {
+    fail("messages/[id].tsx: the error state must offer a working retry");
+  }
+}
+
+console.log("\n-- profile/index.tsx: the third instance (c319) --");
+
+{
+  const src = sources[PROFILE];
+  const gateAt = src.indexOf("alumniLoadFailed ? (");
+  const addAt = src.indexOf('"Add your company"');
+  if (gateAt !== -1 && addAt !== -1 && gateAt < addAt) {
+    pass('profile: a failed alumni load is reached before "Add your company"');
+  } else {
+    fail(
+      'profile: a failed alumni load must not render "Add your company"',
+      "an alum who filled this in months ago would be told they never had, and invited to retype it",
+    );
+  }
+  const start = src.indexOf("const loadAlumniProfile = useCallback(");
+  const end = src.indexOf("\n  }, [", start);
+  const body = start === -1 || end === -1 ? "" : src.slice(start, end);
+  if (body.includes("setAlumniLoadFailed(true)")) {
+    pass("profile: the catch lives inside loadAlumniProfile(), so the retry is handled");
+  } else {
+    fail("profile: setAlumniLoadFailed(true) must be inside loadAlumniProfile()'s own catch");
+  }
+}
+
+console.log("\n-- the phrase trap --");
+
+// "matches the repo pattern elsewhere in this stack" is 3-for-3 as a marker for this
+// defect class, because it cites the bug's OWN SPREAD as its justification. Cheaper and
+// faster than any AST rule at catching the next copy-paste.
+//
+// QUOTED OCCURRENCES ARE ALLOWED, AND THE DISTINCTION IS THE POINT. Two files now quote
+// the sentence in comments that name it as the anti-pattern it is - that is institutional
+// memory doing its job, and banning it outright would delete the record of why. An
+// UNQUOTED occurrence is the sentence being USED as a warrant, which is the defect. The
+// three real instances split cleanly along exactly that line.
+{
+  const PHRASE = "matches the repo pattern elsewhere in this stack";
+  const roots = ["app", "src"];
+  const offenders = [];
+  for (const root of roots) {
+    const entries = readdirSync(new URL(`../${root}`, import.meta.url), {
+      recursive: true,
+      withFileTypes: true,
+    });
+    for (const entry of entries) {
+      if (!entry.isFile() || !/\.(ts|tsx)$/.test(entry.name)) continue;
+      const full = `${entry.parentPath ?? entry.path}/${entry.name}`;
+      const text = readFileSync(full, "utf8");
+      if (!text.includes(PHRASE)) continue;
+      for (const [i, line] of text.split("\n").entries()) {
+        if (!line.includes(PHRASE)) continue;
+        const quoted = line.includes(`"${PHRASE}"`) || line.includes(`\u201c${PHRASE}\u201d`);
+        if (!quoted) offenders.push(`${full.split("/app-mobile/")[1] ?? full}:${i + 1}`);
+      }
+    }
+  }
+  if (offenders.length === 0) {
+    pass("no file under app/ or src/ USES the phrase as a justification (quoted citations are fine)");
+  } else {
+    fail(
+      "the phrase is being used as a justification again",
+      `${offenders.join(", ")} - it cites the defect's own spread as its warrant; fix the fail-soft, do not delete the comment`,
+    );
+  }
 }
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
