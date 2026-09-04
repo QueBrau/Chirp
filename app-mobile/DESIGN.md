@@ -89,9 +89,24 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
 - **HeroCard** — accentGradient bg, white text, radius 20. For org identity header
   and treasurer balance. Max one per screen.
 - **Floating tab bar** — surface pill container, radius 28, inset 12 horizontal /
-  8 bottom, border + shadow per card spec. Active tab: accentSoft pill behind
-  icon+label in accent; inactive: inkFaint icon only. 5 tabs: Home, Chirps, Messages,
-  Orgs, Profile.
+  8 bottom, border + shadow per card spec. Active tab: SOLID accent pill behind
+  icon+label in the CAMPUS SECONDARY (the gold moment token, read from
+  `useAppearance().campusColors`, never a hardcoded hex); inactive: inkSecondary
+  icon only. 5 tabs: Home, Chirps, Messages, Orgs, Profile.
+  - Was accentSoft-pill + accent icon + inkFaint inactive until Sep 4 (braul,
+    board c310). Two reasons it changed, and both constrain any future edit.
+    (1) The inactive icon was inkFaint — the faintest ink token in the system,
+    on a floating bar over live content. That was the real legibility complaint.
+    (2) The pill MUST stay solid if the icon is gold: campus secondary on the
+    pale accentSoft pill is LOWER contrast than the navy it replaced, so
+    recolouring the icon alone makes the bar worse, not better. Solid
+    accent + gold is also UNCG's own pairing.
+  - **This is a deliberate exception to §10.4 rule 4** ("one gold moment per
+    screen"). The bar is persistent chrome, so gold now appears on every screen
+    alongside that screen's own moment — Home and Chirps both spend theirs on
+    the header accent bar. Taken knowingly at braul's request; if it reads as
+    too much gold, the cheap revert is gold on the icon with the label left on
+    a tone token.
 - **Screen header** — display title + caption subtitle, no nav chrome, 24 top pad.
 - **EmptyState** — small geometric mark (outlined circle or squircle drawn with
   Views in accentSoft/accent — NEVER an emoji), headline, one-line caption,
