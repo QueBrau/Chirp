@@ -4,7 +4,7 @@ import { usePageMeta } from "../components/usePageMeta";
 
 export function NotFound() {
   usePageMeta(
-    "Page not found — Chirp",
+    "Page not found · Chirp",
     "This page doesn't exist, or it moved. Here's the way back to Chirp.",
   );
 

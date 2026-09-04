@@ -14,7 +14,7 @@
  */
 
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { Feather } from "@expo/vector-icons";
@@ -73,8 +73,9 @@ export default function MessagesScreen() {
    * conversations. Same rule feed/index.tsx's LoadState comment sets out. */
   const [loadFailed, setLoadFailed] = useState(false);
 
-  useEffect(() => {
-    const load = async () => {
+  // Hoisted from the mount effect (c304) so pull-to-refresh can invoke it too.
+  const load = useCallback(async () => {
+    try {
       const conversations = await listConversations();
       const withPreviews = await Promise.all(
         conversations.map(async (conversation) => {
@@ -91,11 +92,20 @@ export default function MessagesScreen() {
       );
       setItems(withPreviews);
       setLoadFailed(false);
-    };
-    // NOT `.catch(() => setItems([]))` (c299): an empty array is the server's answer
-    // "you have no conversations", and a failed fetch has no answer at all. Rendering
-    // them the same is the bug this rollout removes - the failure gets its own state.
-    load().catch(() => setLoadFailed(true));
+    } catch {
+      // NOT `.catch(() => setItems([]))` (c299): an empty array is the server's answer
+      // "you have no conversations", and a failed fetch has no answer at all. Rendering
+      // them the same is the bug this rollout removes — the failure gets its own state.
+      //
+      // Handled INSIDE load rather than at the call site, because c304 hoisted this
+      // into a useCallback that pull-to-refresh also invokes directly (onRefresh={load}).
+      // A catch on only the mount effect would leave a failed PULL unhandled.
+      setLoadFailed(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
 
     // c63: flip a row from "No messages yet" to "Message" the moment
     // something arrives, rather than only on the next full mount of this
@@ -115,10 +125,14 @@ export default function MessagesScreen() {
     });
 
     return unsubEvent;
-  }, []);
+  }, [load]);
 
   return (
-    <Screen title="Messages" subtitle="Start conversations. Sending isn't available yet.">
+    <Screen
+      title="Messages"
+      subtitle="Start conversations. Sending isn't available yet."
+      onRefresh={load}
+    >
       <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
         <NewConversationButton onPress={() => router.push("/messages/new")} />
       </View>

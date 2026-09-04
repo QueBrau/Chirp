@@ -3,8 +3,8 @@ import { CtaSection } from "../components/CtaSection";
 
 export function About() {
   usePageMeta(
-    "About Chirp — Chirp",
-    "What Chirp is, who it's for, and the product decisions behind it — campus-first, org content stays private, and your chapter owns its own books.",
+    "About Chirp · Chirp",
+    "What Chirp is, who it's for, and the product decisions behind it: campus-first, org content stays private, and your chapter owns its own books.",
   );
 
   return (
@@ -16,7 +16,7 @@ export function About() {
           <div className="accent-bar" aria-hidden="true"></div>
           <p className="lede">
             Chirp is a campus app that fraternities, sororities, clubs, and
-            intramural teams use to run themselves &mdash; not a Greek app that
+            intramural teams use to run themselves, not a Greek app that
             happens to let other students in.
           </p>
         </div>
@@ -36,7 +36,7 @@ export function About() {
             <p>
               Every student gets the same Home feed and the same campus-wide Chirp
               board. Fraternities, sororities, clubs, and intramural teams are
-              orgs you can join on top of that, by invite code &mdash; never a
+              orgs you can join on top of that, by invite code, never a
               requirement to use the app.
             </p>
 
@@ -57,10 +57,14 @@ export function About() {
             </p>
 
             <h2>Who&rsquo;s behind it</h2>
-            {/* JOSE: replace this paragraph with real company/team details before launch */}
+            {/* c306: honest, no fabricated bios/claims. JOSE: swap in named team
+                details whenever you want them public - nothing below blocks that. */}
             <p>
-              Team and company details aren&rsquo;t public yet. This paragraph is a
-              placeholder for that information before Chirp launches.
+              Chirp is built by a small independent team that works directly with the
+              first chapters using it. It&rsquo;s early: the app is in testing with
+              invited orgs, and the people building it read every piece of feedback
+              and ship fixes as members find the rough edges. Want to know more, or
+              want your org in early? Reach out below and a real person will answer.
             </p>
           </div>
         </div>

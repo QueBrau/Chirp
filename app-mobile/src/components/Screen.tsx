@@ -22,8 +22,8 @@
 
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import { useEffect, type ReactNode } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Pressable, RefreshControl, ScrollView, View } from "react-native";
 import Animated, { useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -71,6 +71,12 @@ export interface ScreenProps {
   /** Custom back behaviour; defaults to `router.back()`. */
   onBack?: () => void;
   /**
+   * Pull-to-refresh (c304). Pass the screen's existing load/reload callback and
+   * the scroll view gains a RefreshControl that spins until the returned promise
+   * settles. Only meaningful with `scroll` (the default); ignored otherwise.
+   */
+  onRefresh?: () => Promise<void>;
+  /**
    * Icon color for the back control. Defaults to the theme's ink. Screens that
    * override `backgroundColor` with a dark canvas (Chirp's navy wash) must pass a
    * light tint here or the chevron disappears into the background.
@@ -89,9 +95,21 @@ export function Screen({
   hasFab = false,
   showBack,
   onBack,
+  onRefresh,
   backTint,
 }: ScreenProps) {
   const palette = useTheme();
+  // c304: the RefreshControl owns its own spinner state so every screen doesn't
+  // grow a `refreshing` flag; fail-soft because load() callbacks already surface
+  // their own errors and a stuck spinner would be a second, worse error UI.
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = useCallback(() => {
+    if (!onRefresh) return;
+    setRefreshing(true);
+    onRefresh()
+      .catch(() => {})
+      .finally(() => setRefreshing(false));
+  }, [onRefresh]);
   const router = useRouter();
   const tabBar = useTabBarVisibility();
   const overlayClearance = useOverlayClearance(hasFab);
@@ -211,6 +229,15 @@ export function Screen({
           showsVerticalScrollIndicator={false}
           onScroll={scrollHandler}
           scrollEventThrottle={16}
+          refreshControl={
+            onRefresh ? (
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={handleRefresh}
+                tintColor={palette.inkFaint}
+              />
+            ) : undefined
+          }
         >
           {backControl}
           {header}

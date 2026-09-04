@@ -36,7 +36,7 @@ import {
 */
 export function Privacy() {
   usePageMeta(
-    "Privacy policy — Chirp",
+    "Privacy policy · Chirp",
     "Exactly what Chirp stores, what it never sees, how to get your data removed, and how chapter dues are handled.",
   );
 
@@ -65,7 +65,7 @@ export function Privacy() {
               which campus and orgs you belong to, and what you post. We never see your card or bank
               number. Your message content is stored in a form our systems are not built to read.
               Your anonymous posts are anonymous to other students, but we do record who wrote
-              them &mdash; and we explain exactly why below. You can get anything removed by
+              them, and we explain exactly why below. You can get anything removed by
               emailing <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
             </p>
           </div>
@@ -123,7 +123,7 @@ export function Privacy() {
           </p>
           <p>
             We are telling you this plainly because most apps in this category do not. The author of
-            a board post is never included in any response our app can request &mdash; that is
+            a board post is never included in any response our app can request. That is
             enforced in the server code, not hidden in the interface. We keep the record so we can
             act on harassment, threats and illegal content, and so that a court order can be
             answered honestly rather than with a claim we cannot support.
@@ -137,7 +137,7 @@ export function Privacy() {
           <p>
             What we do hold about a conversation: who is in it, the title if it is a group, when
             each message was sent, delivery and read receipts, and the public keys your devices
-            publish so other devices can reach them. That is metadata, and it is real &mdash; we can
+            publish so other devices can reach them. That is metadata, and it is real: we can
             see that two accounts are talking, and how often.
           </p>
 
@@ -198,8 +198,8 @@ export function Privacy() {
             Stripe&rsquo;s schedule, to the bank account your chapter&rsquo;s treasurer connected.
           </p>
           <p>
-            Chirp takes a platform fee on each dues payment &mdash; 1% on card payments and 2% on
-            bank transfers &mdash; which is deducted at the time of the charge. Stripe charges its
+            Chirp takes a platform fee on each dues payment (1% on card payments and 2% on
+            bank transfers), which is deducted at the time of the charge. Stripe charges its
             own processing fee on top of that, to your chapter. Everything else is your
             chapter&rsquo;s money from the moment it settles.
           </p>
@@ -231,7 +231,7 @@ export function Privacy() {
 
           <h2>11. What we collect automatically</h2>
           <p>
-            Our hosting provider records standard server logs when your app talks to us &mdash;
+            Our hosting provider records standard server logs when your app talks to us,
             including your IP address, the time of the request, and which endpoint was called. We
             use these to keep the service running and to investigate abuse. We do not use them to
             build advertising profiles, and we do not sell them.
@@ -251,11 +251,11 @@ export function Privacy() {
             these providers to run Chirp:
           </p>
           <ul>
-            <li><strong>Stripe</strong> &mdash; payment processing for dues.</li>
-            <li><strong>Google Firebase</strong> &mdash; sign-in, and hosting for this website.</li>
-            <li><strong>Google Cloud</strong> &mdash; the servers and database Chirp runs on.</li>
+            <li><strong>Stripe</strong>: payment processing for dues.</li>
+            <li><strong>Google Firebase</strong>: sign-in, and hosting for this website.</li>
+            <li><strong>Google Cloud</strong>: the servers and database Chirp runs on.</li>
             <li>
-              <strong>Apple, Google and Expo</strong> &mdash; delivering push notifications to your
+              <strong>Apple, Google and Expo</strong>: delivering push notifications to your
               device.
             </li>
           </ul>
@@ -272,8 +272,8 @@ export function Privacy() {
             <li>leave an org, which removes you from its roster.</li>
           </ul>
           <p>
-            For anything else &mdash; a copy of your data, deletion of your whole account, or
-            removal of a tree entry about someone who is not a Chirp user &mdash; email{" "}
+            For anything else (a copy of your data, deletion of your whole account, or
+            removal of a tree entry about someone who is not a Chirp user), email{" "}
             <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> from the address on your account,
             or tell us enough to find the entry if you do not have an account.
           </p>
@@ -301,13 +301,13 @@ export function Privacy() {
           <p>
             When you delete a post or comment, or remove a chirp, it is hidden from everyone
             immediately. <strong>An automated job then erases it from the database for good 30
-            days later</strong> &mdash; a hard delete, not another layer of hiding. That 30-day
+            days later</strong>: a hard delete, not another layer of hiding. That 30-day
             number is a setting in our backend, not a guess, and it will not quietly change
             without this page changing with it.
           </p>
           <p>
-            Purging a post also erases anything that only makes sense attached to it &mdash; its
-            likes, and every comment on it &mdash; once that post&rsquo;s own 30 days is up, even
+            Purging a post also erases anything that only makes sense attached to it (its
+            likes, and every comment on it) once that post&rsquo;s own 30 days is up, even
             if a particular comment is more recent than that. A comment you delete on its own,
             without deleting the post underneath it, is erased 30 days from when you deleted it.
           </p>

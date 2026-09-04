@@ -457,7 +457,14 @@ function EventCard({
 }
 
 /** Events segment (§8.7): event list + mock create-event sheet, wired to src/api/events.ts. */
-function OrgEventsSegment({ chapterId }: { chapterId: string }) {
+function OrgEventsSegment({
+  chapterId,
+  refreshKey = 0,
+}: {
+  chapterId: string;
+  /** Bumped by the screen's pull-to-refresh (c304); a change refetches. */
+  refreshKey?: number;
+}) {
   const router = useRouter();
   const palette = useTheme();
   const [events, setEvents] = useState<EventWithRsvpSummaryOut[] | null>(null);
@@ -478,9 +485,13 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
     // for the pattern rather than only the listed lines. "Fail soft" is right that a
     // failure must not crash the segment and wrong about how: setEvents([]) renders
     // "No events yet", so a dropped request tells a chapter its calendar is empty.
+    //
+    // refreshKey stays in the deps (c304's pull-to-refresh): a pull must re-run this,
+    // and clearing eventsFailed first is what lets the user retry out of the error
+    // state by pulling.
     setEventsFailed(false);
     reload().catch(() => setEventsFailed(true));
-  }, [reload]);
+  }, [reload, refreshKey]);
 
   useEffect(() => {
     // Deliberately still soft, and the asymmetry is the point (c299): this roster only
@@ -937,7 +948,9 @@ function MemberOrgHub({
       {segment === "feed" ? (
         <OrgFeedSegment chapterId={chapter.id} orgName={chapter.org_name} refreshKey={feedRefreshKey} />
       ) : null}
-      {segment === "events" ? <OrgEventsSegment chapterId={chapter.id} /> : null}
+      {segment === "events" ? (
+        <OrgEventsSegment chapterId={chapter.id} refreshKey={feedRefreshKey} />
+      ) : null}
       {segment === "tools" ? <OrgToolsSegment chapterId={chapter.id} role={role} /> : null}
     </View>
   );
@@ -999,6 +1012,10 @@ export default function OrgsScreen() {
     <View style={{ flex: 1 }}>
       <Screen
         title="Orgs"
+        // c304: pull-to-refresh re-keys the feed and events segments, which each
+        // refetch on the key change; the bump itself is synchronous, so the
+        // spinner hands off to the segments' own loading states.
+        onRefresh={async () => setFeedRefreshKey((k) => k + 1)}
         // Real campus name (c46), absent until it resolves — an absent eyebrow
         // beats a wrong one. Was MOCK_CAMPUS plus a hardcoded "· SPARTANS",
         // which is UNCG's mascot and wrong for every other campus; CampusOut has
