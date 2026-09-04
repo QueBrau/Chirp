@@ -46,10 +46,18 @@ function dueDate(isoDay: string): string {
 
 export default function DuesScreen() {
   const [membership, setMembership] = useState<MyMembershipOut | null | undefined>(undefined);
+  // c313: a failed memberships fetch must not render as "Join a chapter first" -
+  // on a money screen that lie tells a real member their chapter is gone.
+  const [membershipFailed, setMembershipFailed] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
   const [cycles, setCycles] = useState<DuesCycleOut[]>([]);
   const [cyclesFailed, setCyclesFailed] = useState(false);
 
   const [acceptsPayments, setAcceptsPayments] = useState(false);
+  // c313: false-because-unknown and false-because-not-onboarded need different
+  // copy - "your treasurer hasn't finished Stripe setup" is an accusation this
+  // screen must not make on a network blip.
+  const [statusKnown, setStatusKnown] = useState(true);
   // Keyed by dues_cycle_id. Only ever holds a plan when one exists (c197) — a
   // cycle with no plan at all just has no entry, an "absence over sentinel" shape.
   const [planByCycle, setPlanByCycle] = useState<Map<string, DuesPaymentPlanOut>>(new Map());
@@ -59,16 +67,16 @@ export default function DuesScreen() {
       // null, not [] — a failed load must stay distinguishable from a genuinely
       // empty cycle list, or a member who owes money is told "Nothing due".
       listDuesCycles(chapterId).catch(() => null),
-      getChapterPaymentsStatus(chapterId).catch(() => ({
-        onboarded: false,
-        charges_enabled: false,
-        details_submitted: false,
-      })),
+      // null on failure for the same reason (c313): the pay flow stays hidden
+      // either way (fail closed), but the copy must say "couldn't check", not
+      // "your treasurer hasn't set this up".
+      getChapterPaymentsStatus(chapterId).catch(() => null),
     ]);
     setCyclesFailed(duesCycles === null);
     const cyclesList = duesCycles ?? [];
     setCycles(cyclesList);
-    setAcceptsPayments(status.onboarded);
+    setStatusKnown(status !== null);
+    setAcceptsPayments(status?.onboarded ?? false);
     // One request per cycle (not per member — this is always "my" plans), so no
     // N+1 growth with roster size the way c181's directory warning was about.
     // A per-cycle failure (e.g. a transient network blip) just leaves that cycle
@@ -86,13 +94,35 @@ export default function DuesScreen() {
 
   useEffect(() => {
     const init = async () => {
-      const memberships = await myMemberships().catch(() => []);
+      setMembershipFailed(false);
+      let memberships: MyMembershipOut[];
+      try {
+        memberships = await myMemberships();
+      } catch {
+        // c313: leave membership undefined - the failure gate below owns the
+        // render, never the "Join a chapter first" state.
+        setMembershipFailed(true);
+        return;
+      }
       const active = memberships[0] ?? null;
       setMembership(active);
       if (active) await load(active.chapter_id, active.user_id);
     };
     void init();
-  }, [load]);
+  }, [load, retryKey]);
+
+  if (membershipFailed) {
+    return (
+      <Screen title="Dues">
+        <EmptyState
+          title="Couldn't load your dues"
+          message="Something went wrong reaching the server. This isn't a statement that you owe nothing."
+          actionLabel="Try again"
+          onAction={() => setRetryKey((k) => k + 1)}
+        />
+      </Screen>
+    );
+  }
 
   if (membership === undefined) {
     return (
@@ -132,12 +162,20 @@ export default function DuesScreen() {
   const settled = cycles.filter(isSettled);
 
   return (
-    <Screen title="Dues" subtitle="Pay your chapter, not the app">
+    <Screen
+      title="Dues"
+      subtitle="Pay your chapter, not the app"
+      // c313: extends c304's pull-to-refresh to the money screen, and makes the
+      // status-unknown copy's "pull down to refresh" instruction true.
+      onRefresh={() => load(membership.chapter_id, membership.user_id)}
+    >
       <View style={{ gap: spacing.xl }}>
         {cyclesFailed ? (
           <EmptyState
             title="Couldn't load your dues"
             message="Check your connection and try again. This isn't a statement that you owe nothing."
+            actionLabel="Try again"
+            onAction={() => setRetryKey((k) => k + 1)}
           />
         ) : cycles.length === 0 ? (
           <EmptyState
@@ -177,8 +215,11 @@ export default function DuesScreen() {
                         Due {dueDate(cycle.due_date)}
                       </AppText>
                       <AppText variant="caption" tone="tertiary">
-                        In-app payment isn't switched on yet. Your treasurer has to finish
-                        Stripe setup. Pay them directly for now.
+                        {statusKnown
+                          ? "In-app payment isn't switched on yet. Your treasurer has to " +
+                            "finish Stripe setup. Pay them directly for now."
+                          : "We couldn't check whether in-app payment is ready. Pull down " +
+                            "to refresh, or pay your treasurer directly."}
                       </AppText>
                     </View>
                   </Card>
@@ -250,7 +291,12 @@ export default function DuesScreen() {
           </View>
         ) : null}
 
-        <AppText variant="caption" tone="tertiary" onPress={() => void Linking.openURL("https://stripe.com")}>
+        <AppText
+          variant="caption"
+          tone="tertiary"
+          accessibilityRole="link"
+          onPress={() => void Linking.openURL("https://stripe.com")}
+        >
           Payments are processed by Stripe. Card details never reach Chirp.
         </AppText>
       </View>
