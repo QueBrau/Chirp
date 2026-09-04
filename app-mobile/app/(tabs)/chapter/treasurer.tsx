@@ -159,6 +159,8 @@ export default function TreasurerScreen() {
   const [cycles, setCycles] = useState<DuesCycleOut[]>([]);
   const [ledger, setLedger] = useState<LedgerEntryOut[] | null>(null);
   const [summary, setSummary] = useState<LedgerSummaryOut | null>(null);
+  /** The dashboard fetch failed. Distinct from "not an officer" (c299). */
+  const [loadFailed, setLoadFailed] = useState(false);
   /** A full page means there are older entries behind it (c258). */
   const [hasOlderEntries, setHasOlderEntries] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -195,6 +197,7 @@ export default function TreasurerScreen() {
   const chapterId = membership?.chapter_id ?? null;
 
   const loadDashboard = useCallback(async (id: string) => {
+    setLoadFailed(false);
     const [duesCycles, entries, ledgerSummary, spendApprovals, members, paymentsStatus] =
       await Promise.all([
         listDuesCycles(id),
@@ -237,22 +240,32 @@ export default function TreasurerScreen() {
     }
   };
 
-  useEffect(() => {
-    const init = async () => {
-      try {
-        const memberships = await myMemberships();
-        const eligible =
-          memberships.find((m) => m.role === "treasurer" || m.role === "president") ?? null;
-        setMembership(eligible);
-        if (eligible === null) return; // role-gated: no ledger/spend-approval calls
-        await loadDashboard(eligible.chapter_id);
-      } catch (error) {
-        showApiError(error, "Couldn't load the treasurer dashboard");
-        setMembership(null);
-      }
-    };
-    void init();
+  // Retryable as a whole: EITHER half can fail - the memberships lookup or the
+  // dashboard load - and the retry has to cover both. If myMemberships() is what threw,
+  // `membership` is still undefined and there is no chapter_id to re-load with (c299).
+  const init = useCallback(async () => {
+    try {
+      const memberships = await myMemberships();
+      const eligible =
+        memberships.find((m) => m.role === "treasurer" || m.role === "president") ?? null;
+      setMembership(eligible);
+      if (eligible === null) return; // role-gated: no ledger/spend-approval calls
+      await loadDashboard(eligible.chapter_id);
+    } catch (error) {
+        // NOT setMembership(null) (c299). That is the role-denied state, and a wifi
+        // hiccup would render "Treasurer/president only" at a real treasurer - the app
+        // telling an officer it revoked their role. The membership we already resolved
+        // stays; the failure gets its own state, same rule feed/index.tsx's LoadState
+        // comment sets out ("the fetch itself failed must never be presented the same
+        // as a genuinely empty feed").
+      showApiError(error, "Couldn't load the treasurer dashboard");
+      setLoadFailed(true);
+    }
   }, [loadDashboard]);
+
+  useEffect(() => {
+    void init();
+  }, [init]);
 
   const entries = ledger ?? [];
   // c258: NOTHING here derives a number from `entries`. Every figure below comes from
@@ -476,6 +489,21 @@ export default function TreasurerScreen() {
       setExportingCsv(false);
     }
   };
+
+  // Checked BEFORE the role gate: a failed load must never fall through to a state
+  // that makes a claim about who the user is (c299).
+  if (loadFailed) {
+    return (
+      <Screen title="Treasurer" subtitle="Money in the dashboard, talk in the chat">
+        <EmptyState
+          title="Couldn't load your dashboard"
+          message="Check your connection and try again. This is not a statement about your role."
+          actionLabel="Try again"
+          onAction={() => void init()}
+        />
+      </Screen>
+    );
+  }
 
   if (membership === null) {
     return (

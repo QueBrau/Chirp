@@ -37,22 +37,31 @@ export default function MembersScreen() {
   const { sessionStatus, membership, chapterLoading, roleMeta } = useOwnChapter();
   const chapterId = membership?.chapter_id ?? null;
   const [members, setMembers] = useState<MemberOut[] | null>(null);
+  /** The roster fetch failed. Distinct from a genuinely empty chapter (c299). */
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     if (chapterId === null) {
       setMembers(null);
       return;
     }
-    // Fail soft: matches the repo pattern elsewhere in this stack.
+    // NOT `.catch(() => setMembers([]))` (c299). "Fail soft" was the justification
+    // here, and it cited "the repo pattern elsewhere in this stack" — but that pattern
+    // was the bug, not the convention: an empty roster is the server saying this
+    // chapter has no members, and a failed request says nothing at all. Rendering both
+    // as "No members" is exactly what feed/index.tsx's LoadState comment warns about.
+    setLoadFailed(false);
     listMembers(chapterId)
       .then(setMembers)
-      .catch(() => setMembers([]));
+      .catch(() => setLoadFailed(true));
   }, [chapterId]);
 
   // Session-status gating (PR #6 review): a real member's roster must never
   // flash "No members" while the session/chapter/list are still resolving —
   // same rule as chapter/index.tsx.
-  const loading = sessionStatus === "loading" || (membership !== null && chapterLoading) || members === null;
+  const loading =
+    !loadFailed &&
+    (sessionStatus === "loading" || (membership !== null && chapterLoading) || members === null);
 
   const active = (members ?? []).filter((m) => m.status === "active");
   // Group order comes from the server taxonomy (role-meta, c44). Fail soft on a
@@ -67,8 +76,18 @@ export default function MembersScreen() {
   })).filter((group) => group.rows.length > 0);
 
   return (
-    <Screen title="Members" subtitle={loading ? undefined : `${active.length} active`}>
-      {loading ? (
+    // No count in the subtitle when the load failed: `active.length` is 0 then, and
+    // "0 active" is a claim about the roster made from nothing (c299).
+    <Screen
+      title="Members"
+      subtitle={loading || loadFailed ? undefined : `${active.length} active`}
+    >
+      {loadFailed ? (
+        <EmptyState
+          title="Couldn't load the roster"
+          message="Check your connection and try again. This isn't a statement that the chapter is empty."
+        />
+      ) : loading ? (
         <EmptyState title="Loading members..." />
       ) : active.length === 0 ? (
         <EmptyState title="No members" message="Invite your chapter to get the roster going." />

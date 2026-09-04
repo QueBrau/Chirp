@@ -68,6 +68,10 @@ export default function MessagesScreen() {
   const router = useRouter();
   const palette = useTheme();
   const [items, setItems] = useState<ConversationItem[] | null>(null);
+  /** The inbox fetch failed. Distinct from a genuinely empty inbox (c299) - the two
+   * used to render identically, so a dropped request told the user they had no
+   * conversations. Same rule feed/index.tsx's LoadState comment sets out. */
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -86,9 +90,12 @@ export default function MessagesScreen() {
         }),
       );
       setItems(withPreviews);
+      setLoadFailed(false);
     };
-    // Fail soft: matches the repo pattern elsewhere in this stack.
-    load().catch(() => setItems([]));
+    // NOT `.catch(() => setItems([]))` (c299): an empty array is the server's answer
+    // "you have no conversations", and a failed fetch has no answer at all. Rendering
+    // them the same is the bug this rollout removes - the failure gets its own state.
+    load().catch(() => setLoadFailed(true));
 
     // c63: flip a row from "No messages yet" to "Message" the moment
     // something arrives, rather than only on the next full mount of this
@@ -115,7 +122,14 @@ export default function MessagesScreen() {
       <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
         <NewConversationButton onPress={() => router.push("/messages/new")} />
       </View>
-      {items !== null && items.length === 0 ? (
+      {loadFailed ? (
+        // Checked FIRST: a failure must never fall through to copy that asserts
+        // something about the user's actual inbox.
+        <EmptyState
+          title="Couldn't load your messages"
+          message="Check your connection and try again. This isn't a statement that you have none."
+        />
+      ) : items !== null && items.length === 0 ? (
         <EmptyState
           title="No conversations"
           message="Start a DM or group with your chapter."

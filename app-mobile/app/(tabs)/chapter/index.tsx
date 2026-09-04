@@ -206,6 +206,8 @@ function OrgFeedSegment({
 }) {
   const { user } = useSession();
   const [items, setItems] = useState<OrgFeedItem[] | null>(null);
+  /** The org-feed fetch failed. Distinct from a genuinely empty chapter feed (c299). */
+  const [loadFailed, setLoadFailed] = useState(false);
   // Honest signal (board c102): true only for a non-active viewer when this
   // chapter genuinely has actives-only content they cannot see. Never true for an
   // active member, who already sees everything.
@@ -230,11 +232,17 @@ function OrgFeedSegment({
         })),
       );
     } catch {
-      setItems([]);
+      // NOT setItems([]) (c299): an empty array is the chapter genuinely having posted
+      // nothing, and a failed fetch is not an answer at all. This component's own
+      // hiddenNotice comment below already reasons carefully about a viewer being
+      // unable to tell WHY they see zero posts — a silent [] on failure is that same
+      // ambiguity arriving through the back door.
+      setLoadFailed(true);
     }
   }, [chapterId]);
 
   useEffect(() => {
+    setLoadFailed(false);
     void load();
   }, [load, refreshKey]);
 
@@ -300,6 +308,18 @@ function OrgFeedSegment({
   // actives-only tier exists and is simply invisible to them. Gating this behind
   // items.length > 0 would silently recreate exactly that ambiguity.
   const hiddenNotice = activesOnlyHidden ? <ActivesOnlyHiddenNotice /> : null;
+
+  if (loadFailed) {
+    return (
+      <View style={{ gap: spacing.md }}>
+        {hiddenNotice}
+        <EmptyState
+          title="Couldn't load this feed"
+          message="Check your connection and try again. This isn't a statement that nothing has been posted."
+        />
+      </View>
+    );
+  }
 
   if (items !== null && items.length === 0) {
     return (
@@ -441,6 +461,8 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
   const router = useRouter();
   const palette = useTheme();
   const [events, setEvents] = useState<EventWithRsvpSummaryOut[] | null>(null);
+  /** The events fetch failed. Distinct from an empty calendar (c299). */
+  const [eventsFailed, setEventsFailed] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   // Fetched once here, not per card: the roster is the only way to turn a
   // host_id/rsvp.user_id into a name (no GET /users/{id} exists).
@@ -452,11 +474,20 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
   }, [chapterId]);
 
   useEffect(() => {
-    // Fail soft: a failed events load must not crash the segment.
-    reload().catch(() => setEvents([]));
+    // c299, and NOT one of the four sites the card named — found by grepping this file
+    // for the pattern rather than only the listed lines. "Fail soft" is right that a
+    // failure must not crash the segment and wrong about how: setEvents([]) renders
+    // "No events yet", so a dropped request tells a chapter its calendar is empty.
+    setEventsFailed(false);
+    reload().catch(() => setEventsFailed(true));
   }, [reload]);
 
   useEffect(() => {
+    // Deliberately still soft, and the asymmetry is the point (c299): this roster only
+    // supplies display names and avatars for RSVP faces. Losing it degrades those to
+    // fallbacks, which is a cosmetic gap, not a false claim about the chapter — no
+    // empty state anywhere reads off `members`. The rule is "never present a failure as
+    // an answer", not "every fetch needs an error screen".
     listMembers(chapterId)
       .then(setMembers)
       .catch(() => setMembers([]));
@@ -500,7 +531,12 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
         }
       />
 
-      {events !== null && events.length === 0 ? (
+      {eventsFailed ? (
+        <EmptyState
+          title="Couldn't load the calendar"
+          message="Check your connection and try again. This isn't a statement that nothing is planned."
+        />
+      ) : events !== null && events.length === 0 ? (
         <EmptyState
           title="No events yet"
           message="Plan a rush cookout, a formal, or a tailgate. It takes a minute."
