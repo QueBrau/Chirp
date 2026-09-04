@@ -19,6 +19,8 @@ import { useEffect, useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
 import {
+  getAuthErrorMessage,
+  getPasswordLengthError,
   hasFirebaseConfig,
   signInWithEmail,
   signOutUser,
@@ -191,6 +193,17 @@ export default function SignInScreen() {
     // Captured now, deliberately: everything downstream routes off THIS value,
     // not off `authMode`, which the user can still change later.
     const mode = authMode;
+
+    // Length is a sign-up-only check (getPasswordLengthError is a no-op on
+    // sign-in - see its comment in src/auth/authErrors.ts) so the obvious case
+    // answers instantly instead of waiting on a Firebase round trip, and never
+    // tells a returning user their real password is "invalid".
+    const lengthError = getPasswordLengthError(password, mode);
+    if (lengthError !== null) {
+      setError(lengthError);
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
     try {
@@ -209,8 +222,13 @@ export default function SignInScreen() {
       // applyBootstrap() settles the session before anything guarded mounts.
       setSubmitting(false);
       routeAfterAuth(mode);
-    } catch {
-      setError("Couldn't sign you in. Check your email and password and try again.");
+    } catch (err) {
+      // c311: bind the error so its FirebaseError `.code` (auth/wrong-password,
+      // auth/email-already-in-use, ...) reaches the mapper instead of being
+      // discarded by an empty `catch {}` - see src/auth/authErrors.ts for what
+      // each code means and why sign-in deliberately does NOT get more specific
+      // than "email and password don't match" for user-not-found/wrong-password.
+      setError(getAuthErrorMessage(err, mode));
       setSubmitting(false);
     }
   };
