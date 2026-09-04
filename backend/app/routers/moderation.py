@@ -198,14 +198,21 @@ async def _require_moderator_for_campus(
     So: a president who never verified keeps every chapter power, including removing a
     member's post, and cannot touch the campus Chirp board.
 
-    c308: the chapter must also be moderation-approved. Note what this does NOT take
-    away, because it is the reason the approval check can sit here unconditionally
-    rather than being split per tier: a president of an unapproved chapter still
-    administers their own chapter's content in full, because that power is not in this
-    router at all — feed.py's DELETE /chapters/{chapter_id}/posts/{post_id} is
-    author-or-president gated on membership alone. What an unapproved chapter loses is
-    campus reach, which is precisely the privilege that must not be mintable by typing
-    an org name into a form.
+    c308: the chapter must also be moderation-approved, and the cost of putting that
+    check here rather than splitting it per tier is REAL and officer-shaped, so state it
+    exactly. feed.py's DELETE /chapters/{chapter_id}/posts/{post_id} is author-or-
+    PRESIDENT on membership alone, so in an unapproved chapter a president still removes
+    their own chapter's content through that route — but a secretary or treasurer loses
+    own-chapter removal ENTIRELY: refused here, and not eligible there either. Not
+    "inconvenienced", not "routed elsewhere". Gone, until the chapter is approved.
+
+    That is accepted rather than overlooked. Splitting the check per tier would leave a
+    freshly founded chapter able to DISMISS reports about other chapters' org content on
+    the same campus, which is a privilege minted by founding — the exact thing the card
+    forbids — and the officer cost is unreachable for every chapter that existed at
+    migration 0031, since the backfill approved all of them. It becomes reachable the day
+    creation is ungated, which is why it belongs on that card (c325) and not in a
+    footnote here.
     """
     if campus_id is None:
         raise forbidden("insufficient_role")

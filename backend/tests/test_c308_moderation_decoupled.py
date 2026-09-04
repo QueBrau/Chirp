@@ -262,11 +262,14 @@ async def test_an_unapproved_chapters_officer_is_refused_by_the_moderation_route
     a freshly founded chapter DISMISS reports about other chapters' org content on the
     same campus, which is a privilege minted by founding, exactly what the card forbids.
 
-    The cost, stated plainly: in an unapproved chapter, a NON-president officer cannot
-    remove their own chapter's post through /moderation/content/remove. The president
-    still can via feed.py (see the test above); a treasurer cannot until the chapter is
-    approved. For every chapter that existed at migration 0031 this is unreachable —
-    they are all approved — so nobody currently holding this loses it.
+    The cost, stated plainly and more sharply than the first draft of this docstring
+    put it: in an unapproved chapter a NON-president officer loses own-chapter content
+    removal ENTIRELY. This route refuses them, and feed.py's delete does not take them
+    either — it is author-or-PRESIDENT, so a secretary or treasurer who did not write the
+    post has no remaining path to remove it. The president is genuinely unaffected; every
+    other officer is fully blocked, not merely redirected. For every chapter that existed
+    at migration 0031 this is unreachable — the backfill approved all of them — so nobody
+    currently holding it loses it, and it becomes real the day creation is ungated.
     """
     setup = await make_chapter_with("treasurer", approve_moderation=False)
     post = await client.post(

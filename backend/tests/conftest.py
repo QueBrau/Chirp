@@ -584,10 +584,19 @@ def make_chapter_with(
     APPROVED FOR MODERATION BY DEFAULT (c308). Every chapter this factory built before
     c308 conferred campus moderation on its e-board, because every chapter did; after
     c308 only approved ones do, and a chapter made through the API starts unapproved.
-    Defaulting to approved here is what makes the c308 backfill provably like-for-like:
-    the entire pre-existing moderation suite passes UNCHANGED against an approved
-    chapter, and fails against an unapproved one. Pass approve_moderation=False to build
-    the freshly-founded chapter that c308 exists to render harmless.
+
+    WHAT THAT DEFAULT PROVES, PRECISELY, because the first version of this docstring
+    claimed more and a reviewer would have stopped reading there: it proves an APPROVED
+    chapter behaves exactly as chapters did before c308 — the whole pre-existing
+    moderation suite passes unchanged against one, and fails against an unapproved one.
+    It does NOT prove the migration's backfill produces that approved state, because
+    this factory sets the column with its own UPDATE and never runs the migration's
+    statement at all. On an empty schema-from-head database that statement touches zero
+    rows, so it could be inverted outright and every test here would still pass. The
+    backfill has its own file for that reason: test_c308_migration_backfill.py.
+
+    Pass approve_moderation=False to build the freshly-founded chapter that c308 exists
+    to render harmless.
     """
 
     async def _make_chapter_with(

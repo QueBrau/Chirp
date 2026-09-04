@@ -41,11 +41,15 @@ access, exactly as is_platform_admin has worked since c28. That is the existing
 precedent rather than a new gap, but an approval API should exist before self-serve
 creation ships, or approving a real org means a psql session. Carded separately.
 
-Chapter-level power is untouched by this and does not live in moderation.py at all:
-feed.py's DELETE /chapters/{id}/posts/{id} is author-or-president gated on membership
-alone, so a president of an unapproved chapter still administers their own chapter's
-content in full. What an unapproved chapter loses is campus reach, which is the entire
-point of the card.
+WHAT AN UNAPPROVED CHAPTER LOSES, stated exactly rather than reassuringly. Campus reach,
+which is the point of the card — and, for every officer who is not the president,
+own-chapter content removal as well. feed.py's DELETE /chapters/{id}/posts/{id} is
+author-or-PRESIDENT on membership alone, so a president is genuinely unaffected while a
+secretary or treasurer has no remaining route to remove a post they did not write. That
+is accepted, not overlooked: gating only the campus tier instead would leave a freshly
+founded chapter able to dismiss reports about other chapters' org content on the same
+campus, which is a privilege minted by founding. It is unreachable for every chapter
+this migration approves, and becomes real only when creation is ungated (c325).
 """
 
 import sqlalchemy as sa
