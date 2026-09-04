@@ -8,7 +8,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "bundleIdentifier": "com.chirp.app",
+      "bundleIdentifier": "app.chirps.mobile",
       "supportsTablet": false,
       "associatedDomains": [
         "applinks:chirp.example.com"
@@ -18,7 +18,7 @@
       }
     },
     "android": {
-      "package": "com.chirp.app",
+      "package": "app.chirps.mobile",
       "intentFilters": [
         {
           "action": "VIEW",

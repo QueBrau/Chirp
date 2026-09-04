@@ -45,7 +45,7 @@ Register three apps under this one Firebase project (one Firebase project, three
 app registrations — that's normal):
 
 ### iOS app
-- Bundle ID: `com.chirp.app` (matches `app-mobile/app.json` → `expo.ios.bundleIdentifier`).
+- Bundle ID: `app.chirps.mobile` (matches `app-mobile/app.json` → `expo.ios.bundleIdentifier`).
 - App Store ID: leave blank for now (fill in once you have one).
 - Download `GoogleService-Info.plist` — you won't need to commit this or wire it
   into the Expo config for milestone 1 (JS SDK config in `config.ts` is enough for
@@ -53,7 +53,7 @@ app registrations — that's normal):
   dev build adds native Google/Apple Sign-In modules (see §4 note).
 
 ### Android app
-- Package name: `com.chirp.app` (matches `app-mobile/app.json` → `expo.android.package`).
+- Package name: `app.chirps.mobile` (matches `app-mobile/app.json` → `expo.android.package`).
 - SHA-1 certificate fingerprint: **required for Google Sign-In on Android**, skip
   for now if you're only wiring email/password — add it later when the dev build
   lands (`eas credentials` or `keytool` gives you the SHA-1).
@@ -105,10 +105,10 @@ actually working:
 
 1. **Apple Developer Program membership** ($99/yr) — required, no way around it.
 2. **App ID**: developer.apple.com → Certificates, IDs & Profiles → Identifiers →
-   your App ID (`com.chirp.app`) → enable the **Sign In with Apple** capability.
+   your App ID (`app.chirps.mobile`) → enable the **Sign In with Apple** capability.
 3. **Services ID**: create a new Services ID (a *different* identifier, e.g.
-   `com.chirp.app.signin`) → enable Sign In with Apple → configure it with:
-   - Primary App ID: `com.chirp.app`
+   `app.chirps.mobile.signin`) → enable Sign In with Apple → configure it with:
+   - Primary App ID: `app.chirps.mobile`
    - Return URL: the `authDomain` from §4, i.e.
      `https://chirp-xxxxx.firebaseapp.com/__/auth/handler`
 4. **Key**: Certificates, IDs & Profiles → Keys → new key → enable Sign In with
