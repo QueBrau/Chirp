@@ -29,6 +29,11 @@ export {
   type SocialAuthStatus,
 } from "./social";
 export {
+  isGoogleSignInAvailable,
+  signInWithGoogle,
+  type GoogleSignInOutcome,
+} from "./googleSignIn";
+export {
   type SessionContextValue,
   type SessionStatus,
 } from "./SessionProvider";

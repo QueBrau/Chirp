@@ -4,14 +4,17 @@
  * legal line.
  *
  * Real auth (milestone 1): "Continue with Email" reveals an email/password form
- * wired to src/auth/session.ts (Firebase Auth). Apple/Google remain explicitly
- * unavailable until their native provider configuration lands. They must never
- * fall through to the mock onboarding flow: an unavailable provider is not an
+ * wired to src/auth/session.ts (Firebase Auth). Google runs the real native
+ * flow (src/auth/googleSignIn.ts, c169) when isGoogleSignInAvailable() is true
+ * — iOS with the OAuth clients configured — and otherwise falls back to the
+ * honest-stub behavior. Apple remains the honest stub here (c89; its real flow
+ * is c314's, in flight on its own branch). Neither path may fall through to
+ * the mock onboarding flow: an unavailable OR failed provider is not an
  * authenticated session (c89).
  *
  * When Firebase is unavailable, the email form keeps its existing demo-mode
  * behavior. Social buttons use a separate honest error state so they cannot
- * accidentally grant access while that native setup is pending.
+ * accidentally grant access while native setup is unavailable or pending.
  */
 
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -22,7 +25,9 @@ import {
   getAuthErrorMessage,
   getPasswordLengthError,
   hasFirebaseConfig,
+  isGoogleSignInAvailable,
   signInWithEmail,
+  signInWithGoogle,
   signOutUser,
   signUpWithEmail,
   socialAuthUnavailableMessage,
@@ -91,6 +96,55 @@ export default function SignInScreen() {
    */
   const handleUnavailableSocialProvider = (provider: SocialAuthProvider) => {
     setSocialError(socialAuthUnavailableMessage(provider));
+  };
+
+  // Synchronous (config + platform checks only, no OS query), so the button
+  // can read it inline — unlike c314's Apple check there is no async window
+  // where the button might flash "available" before the answer arrives.
+  const googleAvailable = isGoogleSignInAvailable();
+
+  /**
+   * Runs the real native Google flow (src/auth/googleSignIn.ts). Only called
+   * when googleAvailable is true — see the Google Button's onPress below.
+   *
+   * Mirrors submitEmailForm's post-credential handling exactly: a successful
+   * exchange is a Firebase credential, not yet a backend session, so this
+   * sets submittedMode rather than navigating directly — the session-settle
+   * effect owns the wait and the eventual routing, and it keys off
+   * submittedMode alone, not off which provider produced it. "signin" is the
+   * only mode value that produces the right answer for BOTH a returning
+   * Google user (status "ready" → routeAfterAuth("signin")) and a brand-new
+   * Google identity (status "unregistered" → continueToOnboarding()
+   * unconditionally, regardless of mode). There is no "signup" concept for a
+   * social sign-in — the user never chose sign-in vs sign-up, Google just
+   * handed back a credential.
+   */
+  const handleGoogleSignIn = async () => {
+    setSocialError(null);
+    setSubmitting(true);
+    const outcome = await signInWithGoogle();
+    switch (outcome.status) {
+      case "success":
+        setSubmittedMode("signin");
+        return;
+      case "cancelled":
+        // The user dismissed the Google sheet. Not an error (c89/c314's
+        // rule): show nothing, no error text, no alert.
+        setSubmitting(false);
+        return;
+      case "error":
+        setSubmitting(false);
+        setSocialError(outcome.message);
+        return;
+    }
+  };
+
+  const handleGooglePress = () => {
+    if (!googleAvailable) {
+      handleUnavailableSocialProvider("google");
+      return;
+    }
+    void handleGoogleSignIn();
   };
 
   /**
@@ -323,10 +377,13 @@ export default function SignInScreen() {
             <Button
               label="Continue with Google"
               variant="secondary"
-              onPress={() => handleUnavailableSocialProvider("google")}
+              disabled={submitting}
+              onPress={handleGooglePress}
             />
             <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
-              Apple and Google sign-in are not connected in this build yet. Use Email instead.
+              {googleAvailable
+                ? "Apple sign-in is not connected in this build yet. Use Google or Email."
+                : "Apple and Google sign-in are not connected in this build yet. Use Email instead."}
             </AppText>
             {socialError !== null ? (
               <AppText variant="caption" tone="danger" style={{ textAlign: "center" }}>
