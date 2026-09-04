@@ -92,10 +92,27 @@ function InvitesSection() {
   const [invites, setInvites] = useState<EventInviteWithRsvpOut[] | null>(null);
 
   useEffect(() => {
-    // Fail soft (matches OrgEventsSegment): a failed load must not crash Home.
+    // NOT `.catch(() => setInvites([]))` (c317). This one has NO user-visible
+    // symptom today and is fixed anyway, which is worth saying plainly rather than
+    // dressing up: the section returns null for `invites === null` and for
+    // `length === 0` alike, so both the failure and the genuine zero render nothing,
+    // and no copy anywhere claims the user has no invites.
+    //
+    // What was wrong was the STATE, not the pixels. `[]` means "the server answered,
+    // and the answer was none"; null means "we do not know". Collapsing the second
+    // into the first is how this class of bug is planted: the day someone adds a
+    // "You're all caught up" line to this section — the obvious next change to a
+    // section that currently renders nothing — it would start telling a user with a
+    // real pending invite that they have none, and the diff that broke it would look
+    // completely innocent. Leaving the failure as null makes that line safe to write.
+    //
+    // Deliberately NOT an error box on Home: this section is silent for the
+    // near-universal zero case by design (see above), and Home already has its own
+    // load-error state for the feed itself. A second error surface for a usually-empty
+    // strip would be noise, not honesty.
     void loadVisibleInvites()
       .then(setInvites)
-      .catch(() => setInvites([]));
+      .catch(() => setInvites(null));
   }, []);
 
   if (invites === null || invites.length === 0) return null;
