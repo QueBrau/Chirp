@@ -21,18 +21,52 @@
 
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { TextInput, View } from "react-native";
+import { Pressable, TextInput, View } from "react-native";
 
 import { Feather } from "@expo/vector-icons";
 
 import { listMembers, type MemberOut } from "@/api/chapters";
 import { ApiError } from "@/api/client";
-import { createConversation, type ConversationKind } from "@/api/messages";
+import {
+  createConversation,
+  searchUsers,
+  type ConversationKind,
+  type UserSearchResult,
+} from "@/api/messages";
 import { useSession } from "@/auth";
 import { showAlert } from "@/lib/alert";
 import { roleLabel } from "@/lib/roleTerms";
 import { AppText, Button, Card, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
 import { inputField, radii, spacing, typography, useTheme } from "@/theme";
+
+/**
+ * Off-chapter people search (board c322). Server minimum is
+ * routers/messages.py:MIN_SEARCH_QUERY_LENGTH — kept in sync here rather than
+ * imported, same as every other client-side mirror of a server constant in this
+ * app (there is no shared-constants build step between the two runtimes).
+ */
+const MIN_SEARCH_QUERY_LENGTH = 2;
+/** Debounce so a keystroke is not a request — collapses a burst of typing into one call. */
+const SEARCH_DEBOUNCE_MS = 350;
+
+/** Someone the picker can show and select, whichever list they came from. */
+interface PickableUser {
+  id: string;
+  displayName: string;
+  avatarUrl: string | null;
+  /** Roster rows only — search results carry no role (server returns name/avatar only). */
+  subtitle?: string;
+}
+
+type SearchLoadState = "idle" | "loading" | "loaded" | "error";
+
+/** Human sentence for a failed GET /users/search — same house style as createConversationErrorMessage. */
+function searchUsersErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status === 429) {
+    return "Too many searches at once. Wait a moment and try again.";
+  }
+  return "Couldn't search right now.";
+}
 
 /**
  * Human sentences for the codes routers/messages.py:126 can 403/404 with.
@@ -90,7 +124,12 @@ export default function NewConversationScreen() {
   const chapterId = membership?.chapter_id ?? null;
 
   const [members, setMembers] = useState<MemberOut[] | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // A Map, not a Set of ids: a person picked from search results can leave the
+  // visible list the moment the query changes (cleared, or edited to something
+  // else), and the selection must survive that so submit() still has a name to
+  // show and the chip strip below still has one to render. The roster case needs
+  // nothing more than the id, but keying on it here means one shape serves both.
+  const [selectedUsers, setSelectedUsers] = useState<Map<string, PickableUser>>(new Map());
   const [groupTitle, setGroupTitle] = useState("");
   const [submitting, setSubmitting] = useState(false);
   /** The roster fetch failed. Distinct from a chapter with nobody to add (c317). */
@@ -99,6 +138,16 @@ export default function NewConversationScreen() {
   // the SAME render's closure, where `submitting` is still false, so the state
   // check cannot see the first tap. The ref mutates synchronously and can.
   const submittingRef = useRef(false);
+
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<UserSearchResult[] | null>(null);
+  const [searchState, setSearchState] = useState<SearchLoadState>("idle");
+  const [searchError, setSearchError] = useState<string | null>(null);
+  // Bumped on every query change and compared against in the debounced fetch below,
+  // so a slow response to an EARLIER query can never overwrite a newer one's result -
+  // the same shape of race the submittingRef comment above guards against, just for
+  // network order instead of tap order.
+  const searchSeq = useRef(0);
 
   useEffect(() => {
     if (chapterId === null) {
@@ -117,6 +166,39 @@ export default function NewConversationScreen() {
       .catch(() => setLoadFailed(true));
   }, [chapterId]);
 
+  const trimmedQuery = query.trim();
+  const isBelowMinLength = trimmedQuery.length > 0 && trimmedQuery.length < MIN_SEARCH_QUERY_LENGTH;
+  const isSearching = trimmedQuery.length >= MIN_SEARCH_QUERY_LENGTH;
+
+  useEffect(() => {
+    if (!isSearching) {
+      // Covers both the empty box and the below-minimum dead zone: neither is a
+      // request, and clearing any stale result here is what lets the roster (or
+      // the "keep typing" hint) show instead of a leftover result list.
+      searchSeq.current += 1;
+      setSearchState("idle");
+      setSearchResults(null);
+      setSearchError(null);
+      return;
+    }
+    const seq = ++searchSeq.current;
+    setSearchState("loading");
+    const timer = setTimeout(() => {
+      searchUsers(trimmedQuery)
+        .then((results) => {
+          if (searchSeq.current !== seq) return; // a newer query already superseded this one
+          setSearchResults(results);
+          setSearchState("loaded");
+        })
+        .catch((error) => {
+          if (searchSeq.current !== seq) return;
+          setSearchError(searchUsersErrorMessage(error));
+          setSearchState("error");
+        });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [isSearching, trimmedQuery]);
+
   // Session-status gating (same rule as chapter/members.tsx): a real member's
   // roster must never flash "no one to add" while the session or roster are
   // still resolving.
@@ -129,31 +211,43 @@ export default function NewConversationScreen() {
     (member) => member.status === "active" && member.user_id !== user?.id,
   );
 
-  const toggle = (userId: string) => {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (next.has(userId)) next.delete(userId);
-      else next.add(userId);
+  const toggle = (person: PickableUser) => {
+    setSelectedUsers((current) => {
+      const next = new Map(current);
+      if (next.has(person.id)) next.delete(person.id);
+      else next.set(person.id, person);
       return next;
     });
   };
 
-  const kind: ConversationKind = selected.size >= 2 ? "group" : "dm";
+  const kind: ConversationKind = selectedUsers.size >= 2 ? "group" : "dm";
+
+  // The server's chapter-scoped path (body.chapter_id set) requires EVERY named
+  // person to be an active member of THAT chapter — it never runs the off-chapter
+  // reachability rule at all (routers/messages.py create_conversation branches on
+  // chapter_id being None). So a selection reaching outside the roster (anyone
+  // found via search, board c322) can only go through with chapter_id omitted;
+  // sending the caller's own chapterId for it would 403 `not_a_member` on someone
+  // the server would otherwise happily let the caller reach. A pure roster pick
+  // keeps going through the chapter path unchanged, exactly like c273 shipped it.
+  const selectionIsEntirelyRoster =
+    chapterId !== null &&
+    [...selectedUsers.keys()].every((id) => roster.some((member) => member.user_id === id));
 
   const submit = async () => {
     // Re-checked here, not just via the Button's disabled prop: a fast
     // double-tap queues the second onPress before the first setSubmitting(true)
     // has re-rendered, so both would see `disabled={false}` AND a stale
     // `submitting === false`. Only the synchronous ref stops the second POST.
-    if (selected.size === 0 || submittingRef.current) return;
+    if (selectedUsers.size === 0 || submittingRef.current) return;
     submittingRef.current = true;
     setSubmitting(true);
     try {
       const conversation = await createConversation({
-        chapter_id: chapterId,
+        chapter_id: selectionIsEntirelyRoster ? chapterId : null,
         kind,
         title: kind === "group" && groupTitle.trim().length > 0 ? groupTitle.trim() : null,
-        member_user_ids: [...selected],
+        member_user_ids: [...selectedUsers.keys()],
       });
       // replace(), not push(): back from the new thread should return to the
       // conversation list, not to this picker.
@@ -168,7 +262,7 @@ export default function NewConversationScreen() {
   return (
     <Screen
       title="New conversation"
-      subtitle={loading ? undefined : "Pick chapter members to start with"}
+      subtitle={loading ? undefined : "Search or pick someone to start with"}
     >
       {loading ? (
         <EmptyState title="Loading roster..." />
@@ -181,32 +275,140 @@ export default function NewConversationScreen() {
           title="Couldn't load the roster"
           message="Check your connection and try again. This isn't a statement that your chapter has nobody to message."
         />
-      ) : chapterId === null ? (
-        <EmptyState
-          title="No chapter yet"
-          message="Join a chapter to start a conversation with its members."
-        />
-      ) : roster.length === 0 ? (
-        <EmptyState title="No one to add yet" message="Active chapter members will show up here." />
       ) : (
         <View style={{ gap: spacing.lg }}>
-          <Card>
-            {roster.map((member, index) => {
-              const isSelected = selected.has(member.user_id);
-              const label = member.display_name.length > 0 ? member.display_name : member.user_id;
-              return (
-                <ListRow
-                  key={member.id}
-                  title={label}
-                  subtitle={roleLabel(member.role)}
-                  left={<GradientAvatar name={label} size={40} photoUrl={member.avatar_url} />}
-                  right={<SelectionMark selected={isSelected} />}
-                  divider={index < roster.length - 1}
-                  onPress={() => toggle(member.user_id)}
-                />
-              );
-            })}
-          </Card>
+          {/* Default listing is the chapter roster; typing here searches the wider
+              reachable set (board c322) — a chapter mate OR, while campus-verified,
+              anyone on the caller's campus. Shown regardless of whether the caller
+              has a chapter at all, since the campus half of that rule needs no
+              chapter membership to apply. */}
+          <View
+            style={{
+              borderRadius: radii.input,
+              borderWidth: 1,
+              borderColor: palette.border,
+              overflow: "hidden",
+            }}
+          >
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search for someone to message"
+              placeholderTextColor={palette.inkFaint}
+              autoCapitalize="words"
+              autoCorrect={false}
+              style={{
+                ...typography.body,
+                color: palette.ink,
+                backgroundColor: palette.surfaceAlt,
+                paddingHorizontal: spacing.lg,
+                paddingVertical: spacing.md,
+              }}
+            />
+          </View>
+
+          {selectedUsers.size > 0 ? (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
+              {[...selectedUsers.values()].map((person) => (
+                <Pressable
+                  key={person.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${person.displayName}`}
+                  onPress={() => toggle(person)}
+                  style={({ pressed }) => ({
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: spacing.xs,
+                    paddingHorizontal: spacing.md,
+                    paddingVertical: spacing.xs,
+                    borderRadius: radii.pill,
+                    backgroundColor: palette.accentSoft,
+                    opacity: pressed ? 0.8 : 1,
+                  })}
+                >
+                  <AppText variant="caption" style={{ color: palette.accent }}>
+                    {person.displayName}
+                  </AppText>
+                  <Feather name="x" size={12} color={palette.accent} />
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+
+          {isSearching ? (
+            searchState === "loading" ? (
+              <EmptyState title="Searching..." />
+            ) : searchState === "error" ? (
+              <EmptyState title="Couldn't search right now" message={searchError ?? undefined} />
+            ) : (searchResults ?? []).length === 0 ? (
+              <EmptyState title="Nobody matches that" message="Try a different name." />
+            ) : (
+              <Card>
+                {(searchResults ?? []).map((person, index) => {
+                  const isSelected = selectedUsers.has(person.id);
+                  return (
+                    <ListRow
+                      key={person.id}
+                      title={person.display_name}
+                      left={
+                        <GradientAvatar
+                          name={person.display_name}
+                          size={40}
+                          photoUrl={person.avatar_url ?? undefined}
+                        />
+                      }
+                      right={<SelectionMark selected={isSelected} />}
+                      divider={index < (searchResults ?? []).length - 1}
+                      onPress={() =>
+                        toggle({
+                          id: person.id,
+                          displayName: person.display_name,
+                          avatarUrl: person.avatar_url,
+                        })
+                      }
+                    />
+                  );
+                })}
+              </Card>
+            )
+          ) : isBelowMinLength ? (
+            <EmptyState
+              title="Keep typing"
+              message={`Search needs at least ${MIN_SEARCH_QUERY_LENGTH} characters.`}
+            />
+          ) : chapterId === null ? (
+            <EmptyState
+              title="Search for someone to message"
+              message="You're not in a chapter yet, so search above for someone on your campus."
+            />
+          ) : roster.length === 0 ? (
+            <EmptyState title="No one to add yet" message="Active chapter members will show up here." />
+          ) : (
+            <Card>
+              {roster.map((member, index) => {
+                const isSelected = selectedUsers.has(member.user_id);
+                const label = member.display_name.length > 0 ? member.display_name : member.user_id;
+                return (
+                  <ListRow
+                    key={member.id}
+                    title={label}
+                    subtitle={roleLabel(member.role)}
+                    left={<GradientAvatar name={label} size={40} photoUrl={member.avatar_url} />}
+                    right={<SelectionMark selected={isSelected} />}
+                    divider={index < roster.length - 1}
+                    onPress={() =>
+                      toggle({
+                        id: member.user_id,
+                        displayName: label,
+                        avatarUrl: member.avatar_url,
+                        subtitle: roleLabel(member.role),
+                      })
+                    }
+                  />
+                );
+              })}
+            </Card>
+          )}
 
           {kind === "group" ? (
             <Card>
@@ -226,7 +428,7 @@ export default function NewConversationScreen() {
           <Button
             label={submitting ? "Starting..." : "Start conversation"}
             onPress={() => void submit()}
-            disabled={selected.size === 0 || submitting}
+            disabled={selectedUsers.size === 0 || submitting}
           />
 
           <View

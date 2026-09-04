@@ -13,11 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.core.analytics import emit
 from app.core.blocks import blockers_of
-from app.core.campus_access import is_campus_verified
 from app.core.errors import forbidden, not_found
-from app.core.rate_limits import MESSAGE_SEND_LIMIT, limit_per_user
+from app.core.rate_limits import MESSAGE_SEND_LIMIT, USER_SEARCH_LIMIT, limit_per_user
+from app.core.reachability import reachable_off_chapter_ids
 from app.db import get_session
 from app.middleware.auth import get_current_user
+from app.schemas.identity import UserSearchResultOut
 from app.schemas.messaging import (
     ConversationCreate,
     ConversationMemberOut,
@@ -33,6 +34,33 @@ from app.ws.pubsub import publish_to_user
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["messages"])
+
+# ---- GET /users/search (board c322) ----
+#
+# Typeahead over the reachable set, not a directory. Every number below exists to
+# keep it that way.
+
+# A 1-character query against a reachable set that can be an entire verified campus
+# is a directory dump wearing a search box. 2 is the shortest prefix that narrows
+# anything at all for a real name.
+MIN_SEARCH_QUERY_LENGTH = 2
+
+# Matches the display_name ceiling elsewhere (schemas.identity.ProfileUpdate) — no
+# reason a search box needs to accept more than a name could ever be.
+MAX_SEARCH_QUERY_LENGTH = 80
+
+# What the picker actually shows. A typeahead is a shortlist, not a paginated feed —
+# there is no cursor here because there is no "next page" a person composing a
+# message would ever ask for; they refine the query instead. c258/c264's caps are
+# about a list that must never look complete when it silently isn't (a roster, a
+# ledger); this one is a deliberately-truncated top-N by construction, same as any
+# search suggestion box.
+USER_SEARCH_RESULT_CAP = 20
+
+# Fetched from the DB before the block filter runs (see search_users), so that a
+# handful of blocked people mixed into an otherwise-full page don't silently shrink
+# the response below the cap for no reason visible to the caller.
+_SEARCH_FETCH_POOL = USER_SEARCH_RESULT_CAP * 2
 
 
 def _b64_to_bytes(value: str) -> bytes:
@@ -56,61 +84,35 @@ async def _require_active_member(
 async def _require_reachable_off_chapter(
     session: AsyncSession, caller: models.User, member_ids: set[uuid.UUID]
 ) -> None:
-    """Eligibility rule for a conversation with NO chapter_id (board card c243).
+    """Raise unless every id in `member_ids` is reachable by `caller` (board card c243).
 
     This path used to have no check whatsoever — the membership test below it was inside
     `if body.chapter_id is not None`, so omitting chapter_id let any authenticated user
     open a conversation naming ANY user ids in the system, campus and chapter irrelevant.
     That is the cold-DM channel the app never intended to ship.
 
-    WHO IS A LEGITIMATE RECIPIENT. `conversations.chapter_id` is documented as "NULL for
-    cross-chapter DMs" (SPEC §3), so this path exists to let a Sigma Chi member DM a
-    Delta Gamma member — people in DIFFERENT chapters on the SAME campus, which is the
-    exact social graph the campus feed and Chirp already serve. Cross-CHAPTER is the
-    documented feature; cross-CAMPUS is not, and nothing in SPEC, the schema, or the
-    mobile app asks for it. So a recipient is reachable when either:
-
-      1. they share an ACTIVE chapter membership with the caller — chapter content, and
-         per Jose's Aug 16 ruling (core/campus_access.py) chapter membership stands on
-         its own without an .edu; or
-      2. they are on the caller's campus and the CALLER is currently campus-verified —
-         the same gate campus-wide reach goes through everywhere else.
-
-    Anything else is refused. A NULL campus on either side is not a match: `None == None`
-    would otherwise make every campus-less account mutually reachable, which is the
-    `campus_id is not None` shortcut core/campus_access.py explicitly forbids.
-
-    The RECIPIENT is deliberately not required to be verified. Requiring it would make
-    every not-yet-verified account unreachable, which during onboarding week is most of
-    them; the abuse this rule stops needs a verified .edu on the SENDER's side, and that
-    is where the bar belongs.
+    THE RULE ITSELF now lives in `app.core.reachability.reachable_off_chapter_ids` — read
+    that function's docstring for the full account of WHO is reachable and why (chapter
+    mate, or same campus with the CALLER verified; a NULL campus never matches). This
+    function is only the validator half of that rule: it turns "is every id in this
+    proposed set reachable" into a raise. `GET /users/search` (board c322) is the set
+    half — it browses the identical query, plus exclusions of its own (self, ghosts,
+    suspended, blocked) that are about being a valid search result rather than about
+    reachability, so they live there and not here. Extracting the query rather than
+    duplicating the rule is deliberate: two definitions of "reachable" is how a search
+    ends up listing someone the validator then refuses, or hiding someone it would allow.
     """
     others = member_ids - {caller.id}
     if not others:
         return
 
-    shared_chapters = select(models.Membership.chapter_id).where(
-        models.Membership.user_id == caller.id,
-        models.Membership.status == "active",
-    )
-    chapter_mates = await session.execute(
-        select(models.Membership.user_id).where(
-            models.Membership.user_id.in_(others),
-            models.Membership.status == "active",
-            models.Membership.chapter_id.in_(shared_chapters),
+    reachable = await session.execute(
+        select(models.User.id).where(
+            models.User.id.in_(others),
+            models.User.id.in_(reachable_off_chapter_ids(caller)),
         )
     )
-    unreachable = others - set(chapter_mates.scalars())
-
-    if unreachable and caller.campus_id is not None and is_campus_verified(caller):
-        campus_mates = await session.execute(
-            select(models.User.id).where(
-                models.User.id.in_(unreachable),
-                models.User.campus_id == caller.campus_id,
-            )
-        )
-        unreachable -= set(campus_mates.scalars())
-
+    unreachable = others - set(reachable.scalars())
     if unreachable:
         raise forbidden("recipient_not_reachable")
 
@@ -410,3 +412,99 @@ async def upsert_receipt(
         receipt.delivered_at = delivered_at
         await session.commit()
     return MessageReceiptOut.model_validate(receipt)
+
+
+@router.get(
+    "/users/search",
+    response_model=list[UserSearchResultOut],
+    dependencies=[Depends(limit_per_user("user_search", USER_SEARCH_LIMIT))],
+)
+async def search_users(
+    q: str = Query(..., min_length=MIN_SEARCH_QUERY_LENGTH, max_length=MAX_SEARCH_QUERY_LENGTH),
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[UserSearchResultOut]:
+    """Search people the caller may message off-chapter (board c322).
+
+    `new.tsx` (c273) only ever listed the caller's own chapter roster, which is
+    narrower than the server already permits: a campus-verified student may
+    legitimately DM someone from a different chapter on their campus
+    (`_require_reachable_off_chapter`), and until now there was no way to find
+    that person. This is the search half of that same rule — read
+    `app.core.reachability.reachable_off_chapter_ids` for what "reachable" means;
+    it is NOT redefined here.
+
+    Phone-number search is explicitly out of scope (board c323).
+
+    RESULT SHAPE is deliberately UserSearchResultOut, not UserOut: id, display
+    name, avatar only. UserOut carries email, firebase_uid and suspension state —
+    fine for a self-facing response, never fine for a picker showing a stranger.
+
+    EXCLUSIONS beyond reachability, applied here because they are about being a
+    valid recipient rather than about the reachability rule itself:
+      - the caller themselves (searching yourself to message yourself is not a
+        supported flow anywhere in this app);
+      - ghosts (`is_ghost`) — lineage placeholders, never live accounts, and
+        never a thing to open a DM with;
+      - suspended accounts — no route enforces this on the RECIPIENT side today
+        (only the caller is checked, in get_current_user), and this endpoint is
+        not the place to start; it simply never surfaces one as a person to
+        message;
+      - anyone who has BLOCKED the caller, via blocks.py's `blockers_of` — the
+        exact direction `_require_reachable_off_chapter`'s sibling checks already
+        use (create_conversation, send_message), so search cannot show someone a
+        subsequent POST /conversations would then 403 on.
+
+    NOTE ON THE OTHER BLOCK DIRECTION (people the CALLER has blocked): this is
+    deliberately NOT filtered here, even though it excludes people the caller can
+    still technically message per the asymmetric rule in blocks.py. Read that
+    module's docstring before "fixing" this — POST /moderation/blocks/by-chirp
+    lets someone block an anonymous chirp's author without ever learning who it
+    is, and there is no endpoint that lists the caller's own blocks, on purpose.
+    If search silently hid people the caller has blocked, a caller could recover
+    that anonymous identity by searching known names one at a time and watching
+    for the one that goes missing — the exact deanonymisation oracle blocks.py
+    was written to prevent, just rebuilt against search instead of against
+    conversation creation. blockers_of only ever answers "who blocked me", never
+    "who did I block", for the same reason.
+
+    Cap, minimum query length and rate limit all exist for the same reason: this
+    endpoint can browse an entire verified campus, so it is an enumeration
+    surface even though every row in it is a legitimate recipient.
+    """
+    needle = q.strip()
+    if len(needle) < MIN_SEARCH_QUERY_LENGTH:
+        # Query() already enforces min_length on the raw string, but "  a " passes
+        # that check and strips down to one real character.
+        raise HTTPException(status_code=422, detail="query_too_short")
+
+    # Escape LIKE/ILIKE metacharacters in the user-supplied needle so a literal
+    # "%" or "_" in someone's search does not turn into a wildcard.
+    escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    result = await session.execute(
+        select(models.User.id, models.User.display_name, models.User.avatar_url)
+        .where(
+            models.User.id != user.id,
+            models.User.is_ghost.is_(False),
+            models.User.suspended_at.is_(None),
+            models.User.id.in_(reachable_off_chapter_ids(user)),
+            models.User.display_name.ilike(f"%{escaped}%", escape="\\"),
+        )
+        .order_by(models.User.display_name)
+        .limit(_SEARCH_FETCH_POOL)
+    )
+    rows = result.all()
+    if not rows:
+        return []
+
+    blockers = await blockers_of(
+        session, subject_id=user.id, candidate_ids=[row.id for row in rows]
+    )
+    return [
+        UserSearchResultOut(
+            id=row.id, display_name=row.display_name, avatar_url=row.avatar_url
+        )
+        for row in rows
+        if row.id not in blockers
+    ][:USER_SEARCH_RESULT_CAP]

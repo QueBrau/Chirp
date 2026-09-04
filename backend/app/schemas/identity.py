@@ -154,6 +154,21 @@ class UserOut(_Schema):
     created_at: datetime
 
 
+class UserSearchResultOut(_Schema):
+    """GET /users/search row (board c322): id, display name, avatar only.
+
+    Deliberately NOT UserOut. UserOut's own docstring says it is used "ONLY in
+    self-facing responses" — it carries email, firebase_uid, is_platform_admin and
+    the caller's own suspension state. Searching for someone ELSE to message must
+    never leak any of that; the picker only needs enough to render a row and to
+    name the conversation member the caller is about to create.
+    """
+
+    id: uuid.UUID
+    display_name: str
+    avatar_url: str | None = None
+
+
 # ---- campuses ----
 
 

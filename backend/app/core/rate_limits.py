@@ -127,6 +127,21 @@ REPORT_CREATE_LIMIT = (20, 3600)
 # product. If c240 raises the Resend ceiling, this can rise with it.
 CAMPUS_VERIFY_TARGET_LIMIT = (30, 86_400)
 
+# People search (c322): GET /users/search browses the same reachable set the
+# messaging validator enforces, which for a campus-verified caller can be an entire
+# verified campus. That makes it an enumeration surface even though every row it
+# returns is a legitimate recipient, so it gets its own budget distinct from actually
+# sending anything.
+#
+# REAL USE IS BURSTY TYPEAHEAD, NOT STEADY TRAFFIC. app-mobile debounces keystrokes
+# (new.tsx), so one paused query is one request, not one per character; composing a
+# single message means searching for one or two names, maybe re-typing a misspelled
+# one. Call it 5-10 requests to find the right person even on a bad connection with
+# retries. 20 in 60 seconds is roughly double that ceiling, comfortably clear of
+# ordinary use while still bounding a script sweeping a campus roster by short
+# prefixes to the same order of magnitude as this app's other write limits.
+USER_SEARCH_LIMIT = (20, 60)
+
 
 def _client_ip(request: Request) -> str:
     """Best available client address for an unauthenticated caller.

@@ -109,3 +109,22 @@ export async function postReceipt(
 ): Promise<MessageReceiptOut> {
   return request<MessageReceiptOut>(`/messages/${messageId}/receipts`, { method: "POST", body });
 }
+
+/** GET /users/search row (board c322): id, display name, avatar only — never email. */
+export interface UserSearchResult {
+  id: string;
+  display_name: string;
+  avatar_url: string | null;
+}
+
+/**
+ * Search people the caller may message OFF their own chapter (board c322) — the wider
+ * set `_require_reachable_off_chapter` already permits (a chapter mate, or anyone on
+ * the caller's campus while the caller is campus-verified). Server-side minimum length,
+ * cap and rate limit all apply; see routers/messages.py:search_users for the exact
+ * rule and every exclusion (self, ghosts, suspended, blocked). Phone-number search is
+ * explicitly out of scope (board c323).
+ */
+export async function searchUsers(query: string): Promise<UserSearchResult[]> {
+  return request<UserSearchResult[]>("/users/search", { query: { q: query } });
+}
