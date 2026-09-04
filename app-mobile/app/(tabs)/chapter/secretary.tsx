@@ -523,8 +523,8 @@ export default function SecretaryScreen() {
         // letting it fall through as an unhandled rejection.
         showAlert(
           "Can't share yet",
-          "The CSV was generated, but sharing needs a native module that isn't in this " +
-            "build yet. Rebuild the app (EAS dev build) and try again.",
+          "The export worked, but sharing isn't available in this version of the app " +
+            "yet. Ask whoever set up Chirp for your chapter to check for an update.",
         );
       }
     } catch (error) {

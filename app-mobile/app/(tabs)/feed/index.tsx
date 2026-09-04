@@ -254,6 +254,7 @@ export default function FeedScreen() {
   return (
     <View style={{ flex: 1 }}>
       <Screen
+        onRefresh={load}
         title="Home"
         // Real campus name now that GET /campuses/{id} exists (c46). Undefined
         // until it resolves — an absent eyebrow beats a wrong one. The old value
