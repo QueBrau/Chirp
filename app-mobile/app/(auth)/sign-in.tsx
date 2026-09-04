@@ -303,6 +303,28 @@ export default function SignInScreen() {
     setSubmittedMode(null);
   };
 
+  /**
+   * c320: a failed attempt's error must not outlive the user's response to it.
+   * Before this, the message was cleared only by a full form reset or the next
+   * submit, so it sat there through further typing (reading as "still wrong"
+   * over a corrected form) and through a mode switch (where it could be copy
+   * about the OTHER mode — getAuthErrorMessage words some codes per mode).
+   * The next keystroke or a mode flip means "I'm trying something different":
+   * both clear it.
+   */
+  const editEmail = (value: string) => {
+    setError(null);
+    setEmail(value);
+  };
+  const editPassword = (value: string) => {
+    setError(null);
+    setPassword(value);
+  };
+  const toggleAuthMode = () => {
+    setError(null);
+    setAuthMode(authMode === "signin" ? "signup" : "signin");
+  };
+
   const submitEmailForm = async () => {
     // Captured now, deliberately: everything downstream routes off THIS value,
     // not off `authMode`, which the user can still change later.
@@ -367,7 +389,7 @@ export default function SignInScreen() {
           <View style={{ gap: spacing.md }}>
             <TextInput
               value={email}
-              onChangeText={setEmail}
+              onChangeText={editEmail}
               placeholder="Email"
               placeholderTextColor={palette.inkFaint}
               keyboardType="email-address"
@@ -378,7 +400,7 @@ export default function SignInScreen() {
             />
             <TextInput
               value={password}
-              onChangeText={setPassword}
+              onChangeText={editPassword}
               placeholder="Password"
               placeholderTextColor={palette.inkFaint}
               secureTextEntry
@@ -415,7 +437,7 @@ export default function SignInScreen() {
             <Pressable
               accessibilityRole="button"
               disabled={submitting}
-              onPress={() => setAuthMode(authMode === "signin" ? "signup" : "signin")}
+              onPress={toggleAuthMode}
               style={{ alignItems: "center", paddingVertical: spacing.xs, opacity: submitting ? 0.4 : 1 }}
             >
               <AppText variant="caption" tone="accent">
