@@ -46,7 +46,8 @@ import { getFirebaseAuth } from "./firebase";
  */
 const GOOGLE_WEB_CLIENT_ID =
   "593616178468-dltvkkric6o3svoc8psmkjo6ka4ki7qa.apps.googleusercontent.com";
-const GOOGLE_IOS_CLIENT_ID = "REPLACE_ME.apps.googleusercontent.com";
+const GOOGLE_IOS_CLIENT_ID =
+  "593616178468-m5ai5f72q8jjpijv18o3hsec27vef95d.apps.googleusercontent.com";
 
 const PLACEHOLDER_PREFIX = "REPLACE_ME";
 
