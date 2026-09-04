@@ -34,6 +34,11 @@ export {
   type AppleSignInOutcome,
 } from "./appleSignIn";
 export {
+  isGoogleSignInAvailable,
+  signInWithGoogle,
+  type GoogleSignInOutcome,
+} from "./googleSignIn";
+export {
   type SessionContextValue,
   type SessionStatus,
 } from "./SessionProvider";

@@ -56,6 +56,12 @@
         {
           "photosPermission": "Chirp needs access to your photos so you can attach one to a post."
         }
+      ],
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.593616178468-m5ai5f72q8jjpijv18o3hsec27vef95d"
+        }
       ]
     ],
     "extra": {

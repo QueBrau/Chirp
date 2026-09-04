@@ -27,6 +27,7 @@
     "@expo/metro-runtime": "~6.1.2",
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-google-signin/google-signin": "^16.1.5",
     "@stripe/stripe-react-native": "0.50.3",
     "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.0",

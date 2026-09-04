@@ -4,18 +4,18 @@
  * legal line.
  *
  * Real auth (milestone 1): "Continue with Email" reveals an email/password form
- * wired to src/auth/session.ts (Firebase Auth). Google remains explicitly
- * unavailable until its native provider configuration lands (c89, out of scope
- * for c314). Apple runs the real native flow (src/auth/appleSignIn.ts) when
- * isAppleSignInAvailable() is true - iOS with the OS-level capability present
- * - and otherwise falls back to the same honest-stub behavior Google still
- * uses. Neither path may fall through to the mock onboarding flow: an
- * unavailable OR failed provider is not an authenticated session (c89).
+ * wired to src/auth/session.ts (Firebase Auth). Apple runs the real native
+ * flow (src/auth/appleSignIn.ts, c314) when isAppleSignInAvailable() is true —
+ * iOS with the OS-level capability present. Google runs the real native flow
+ * (src/auth/googleSignIn.ts, c169) when isGoogleSignInAvailable() is true —
+ * iOS with the OAuth clients configured. Each falls back independently to the
+ * honest-stub behavior when unavailable. Neither path may fall through to the
+ * mock onboarding flow: an unavailable OR failed provider is not an
+ * authenticated session (c89).
  *
  * When Firebase is unavailable, the email form keeps its existing demo-mode
  * behavior. Social buttons use a separate honest error state so they cannot
- * accidentally grant access while native setup is unavailable or a Firebase
- * console step (enabling the Apple provider) is still pending.
+ * accidentally grant access while native setup is unavailable or pending.
  */
 
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -27,8 +27,10 @@ import {
   getPasswordLengthError,
   hasFirebaseConfig,
   isAppleSignInAvailable,
+  isGoogleSignInAvailable,
   signInWithApple,
   signInWithEmail,
+  signInWithGoogle,
   signOutUser,
   signUpWithEmail,
   socialAuthUnavailableMessage,
@@ -103,6 +105,11 @@ export default function SignInScreen() {
     setSocialError(socialAuthUnavailableMessage(provider));
   };
 
+  // Synchronous (config + platform checks only, no OS query), so the button
+  // can read it inline — unlike the Apple check below there is no async window
+  // where the button might flash "available" before the answer arrives.
+  const googleAvailable = isGoogleSignInAvailable();
+
   // Checked once on mount rather than inline in the button's onPress: the
   // check itself is async (an OS-level query), and the button must decide
   // synchronously whether a tap runs the real flow or falls back to the
@@ -163,6 +170,41 @@ export default function SignInScreen() {
       return;
     }
     void handleAppleSignIn();
+  };
+
+  /**
+   * Runs the real native Google flow (src/auth/googleSignIn.ts). Only called
+   * when googleAvailable is true — see the Google Button's onPress below.
+   * Same post-credential contract as handleAppleSignIn above — see that
+   * comment for why "signin" is the only submittedMode value that routes both
+   * a returning and a brand-new social identity correctly.
+   */
+  const handleGoogleSignIn = async () => {
+    setSocialError(null);
+    setSubmitting(true);
+    const outcome = await signInWithGoogle();
+    switch (outcome.status) {
+      case "success":
+        setSubmittedMode("signin");
+        return;
+      case "cancelled":
+        // The user dismissed the Google sheet. Not an error (c89/c314's
+        // rule): show nothing, no error text, no alert.
+        setSubmitting(false);
+        return;
+      case "error":
+        setSubmitting(false);
+        setSocialError(outcome.message);
+        return;
+    }
+  };
+
+  const handleGooglePress = () => {
+    if (!googleAvailable) {
+      handleUnavailableSocialProvider("google");
+      return;
+    }
+    void handleGoogleSignIn();
   };
 
   /**
@@ -396,13 +438,18 @@ export default function SignInScreen() {
             <Button
               label="Continue with Google"
               variant="secondary"
-              onPress={() => handleUnavailableSocialProvider("google")}
+              disabled={submitting}
+              onPress={handleGooglePress}
             />
-            <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
-              {appleAvailable
-                ? "Google sign-in is not connected in this build yet. Use Email instead."
-                : "Apple and Google sign-in are not connected in this build yet. Use Email instead."}
-            </AppText>
+            {appleAvailable && googleAvailable ? null : (
+              <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
+                {appleAvailable
+                  ? "Google sign-in is not connected in this build yet. Use Apple or Email."
+                  : googleAvailable
+                    ? "Apple sign-in is not connected in this build yet. Use Google or Email."
+                    : "Apple and Google sign-in are not connected in this build yet. Use Email instead."}
+              </AppText>
+            )}
             {socialError !== null ? (
               <AppText variant="caption" tone="danger" style={{ textAlign: "center" }}>
                 {socialError}
