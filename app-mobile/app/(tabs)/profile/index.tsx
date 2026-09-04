@@ -10,7 +10,7 @@
 
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useEffect, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useState, type ComponentProps } from "react";
 import { Pressable, View } from "react-native";
 
 import * as ImagePicker from "expo-image-picker";
@@ -149,6 +149,7 @@ export default function ProfileScreen() {
   const campusId = user?.campus_id ?? null;
 
   const [alumniProfile, setAlumniProfile] = useState<AlumniProfileOut | null>(null);
+  const [alumniLoadFailed, setAlumniLoadFailed] = useState(false);
   // null = not yet resolved; [] is a legitimate "no chapter" result (e.g. a
   // non-greek student) — the distinction is what the loading gate below relies on.
   const [memberships, setMemberships] = useState<MyMembershipOut[] | null>(null);
@@ -170,11 +171,34 @@ export default function ProfileScreen() {
       .map((section) => ({ ...section })),
   );
 
+  /**
+   * c319. The catch here used to be justified as "matches the repo pattern elsewhere in
+   * this stack" — the same sentence c317 removed from two other files, and the third
+   * instance of it citing the defect's own spread as its warrant.
+   *
+   * What it actually did: a failed fetch set the profile to null, and null renders "Add
+   * your company" / "Add your class year". So an alum who filled those in months ago was
+   * told, on a dropped request, that they had never filled them in — and invited to type
+   * it all again. Absence presented as fact, the c299/c313 class.
+   *
+   * The catch lives INSIDE the callback rather than at the call site for c317's reason:
+   * the retry below calls this directly, and a catch attached only to the effect would
+   * leave a failed RETRY unhandled, exactly when the user is already failing.
+   */
+  const loadAlumniProfile = useCallback(async () => {
+    setAlumniLoadFailed(false);
+    try {
+      setAlumniProfile(await getMyAlumniProfile());
+    } catch {
+      setAlumniProfile(null);
+      setAlumniLoadFailed(true);
+    }
+  }, []);
+
   useEffect(() => {
     if (accountType !== "alumni") return;
-    // Fail soft: matches the repo pattern elsewhere in this stack.
-    void getMyAlumniProfile().then(setAlumniProfile).catch(() => setAlumniProfile(null));
-  }, [accountType]);
+    void loadAlumniProfile();
+  }, [accountType, loadAlumniProfile]);
 
   useEffect(() => {
     if (userId === null) {
@@ -482,6 +506,14 @@ export default function ProfileScreen() {
               ) : null}
 
               {section.key === "alumni" ? (
+                alumniLoadFailed ? (
+                  <EmptyState
+                    title="Couldn't load your alumni profile"
+                    message="Check your connection and try again. This isn't a statement that you haven't filled it in."
+                    actionLabel="Try again"
+                    onAction={() => void loadAlumniProfile()}
+                  />
+                ) : (
                 <View>
                   <ListRow
                     title={alumniProfile?.company ?? "Add your company"}
@@ -501,6 +533,7 @@ export default function ProfileScreen() {
                     divider={false}
                   />
                 </View>
+                )
               ) : null}
 
               {section.key === "settings" ? (

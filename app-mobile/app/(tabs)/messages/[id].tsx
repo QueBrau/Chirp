@@ -10,7 +10,7 @@
 
 import { useLocalSearchParams } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { TextInput, View } from "react-native";
 
 import {
@@ -19,7 +19,7 @@ import {
   type ConversationOut,
   type MessageOut,
 } from "@/api/messages";
-import { AppText, Screen } from "@/components";
+import { AppText, EmptyState, Screen } from "@/components";
 import { chirpSocket, isMessageEvent } from "@/realtime/socket";
 import { metrics, radii, spacing, typography, useTheme } from "@/theme";
 
@@ -40,10 +40,40 @@ export default function ThreadScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [conversation, setConversation] = useState<ConversationOut | null>(null);
   const [messages, setMessages] = useState<MessageOut[]>([]);
+  /** The history fetch failed. Distinct from a genuinely empty thread (c317). */
+  const [loadFailed, setLoadFailed] = useState(false);
   // True once this screen has observed (or started inside) an "open" socket,
   // so a LATER "open" is a real reconnect and not the first connection
   // completing.
   const wasOpenRef = useRef(false);
+
+  /**
+   * c317: this used to be `load().catch(() => setMessages([]))`, justified as
+   * "matches the repo pattern elsewhere in this stack" — the same sentence that
+   * justified the bug in chapter/members.tsx before c299 removed it. The pattern
+   * was never the convention; it was the defect, repeated.
+   *
+   * An empty thread and an unreachable server are not the same claim. This screen
+   * has no empty-state copy at all, so a failed load rendered zero bubbles and
+   * nothing else — which in a DM reads as the other person never having written
+   * anything. That is a statement about a person, made out of a dropped request.
+   *
+   * The catch lives INSIDE this callback rather than at the call site, for the
+   * reason c299 found on messages/index.tsx: the retry action below invokes load()
+   * directly, and a catch attached only to the mount effect would leave a failed
+   * RETRY unhandled — silently, and precisely when the user is already failing.
+   */
+  const load = useCallback(async () => {
+    setLoadFailed(false);
+    try {
+      const conversations = await listConversations();
+      setConversation(conversations.find((c) => c.id === id) ?? null);
+      const history = await listMessages(id);
+      setMessages(history);
+    } catch {
+      setLoadFailed(true);
+    }
+  }, [id]);
 
   useEffect(() => {
     // NOT unconditionally false. onStatus() only adds a listener — it never
@@ -58,14 +88,7 @@ export default function ThreadScreen() {
     // the question, not "have I personally seen an open event yet".
     wasOpenRef.current = chirpSocket.getStatus() === "open";
 
-    const load = async () => {
-      const conversations = await listConversations();
-      setConversation(conversations.find((c) => c.id === id) ?? null);
-      const history = await listMessages(id);
-      setMessages(history);
-    };
-    // Fail soft: matches the repo pattern elsewhere in this stack.
-    load().catch(() => setMessages([]));
+    void load();
 
     // c63: live-append messages published for THIS conversation while the
     // screen is open. Deduped by id — the socket can genuinely double-deliver
@@ -116,7 +139,7 @@ export default function ThreadScreen() {
       unsubEvent();
       unsubStatus();
     };
-  }, [id]);
+  }, [id, load]);
 
   return (
     <Screen
@@ -124,6 +147,14 @@ export default function ThreadScreen() {
       subtitle={conversation?.kind === "group" ? "Group" : "Direct message"}
     >
       <View style={{ gap: spacing.sm }}>
+        {loadFailed ? (
+          <EmptyState
+            title="Couldn't load this conversation"
+            message="Check your connection and try again. This isn't a statement that nothing has been said."
+            actionLabel="Try again"
+            onAction={() => void load()}
+          />
+        ) : null}
         {messages.map((message) => (
           <View
             key={message.id}

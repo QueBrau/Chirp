@@ -4,12 +4,13 @@
  * legal line.
  *
  * Real auth (milestone 1): "Continue with Email" reveals an email/password form
- * wired to src/auth/session.ts (Firebase Auth). Google runs the real native
- * flow (src/auth/googleSignIn.ts, c169) when isGoogleSignInAvailable() is true
- * — iOS with the OAuth clients configured — and otherwise falls back to the
- * honest-stub behavior. Apple remains the honest stub here (c89; its real flow
- * is c314's, in flight on its own branch). Neither path may fall through to
- * the mock onboarding flow: an unavailable OR failed provider is not an
+ * wired to src/auth/session.ts (Firebase Auth). Apple runs the real native
+ * flow (src/auth/appleSignIn.ts, c314) when isAppleSignInAvailable() is true —
+ * iOS with the OS-level capability present. Google runs the real native flow
+ * (src/auth/googleSignIn.ts, c169) when isGoogleSignInAvailable() is true —
+ * iOS with the OAuth clients configured. Each falls back independently to the
+ * honest-stub behavior when unavailable. Neither path may fall through to the
+ * mock onboarding flow: an unavailable OR failed provider is not an
  * authenticated session (c89).
  *
  * When Firebase is unavailable, the email form keeps its existing demo-mode
@@ -25,7 +26,9 @@ import {
   getAuthErrorMessage,
   getPasswordLengthError,
   hasFirebaseConfig,
+  isAppleSignInAvailable,
   isGoogleSignInAvailable,
+  signInWithApple,
   signInWithEmail,
   signInWithGoogle,
   signOutUser,
@@ -63,6 +66,10 @@ export default function SignInScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [socialError, setSocialError] = useState<string | null>(null);
+  // Resolved asynchronously (expo-apple-authentication's own OS-level check),
+  // so this starts false and the Apple button behaves like the honest stub
+  // until it resolves — never a flash of "available" that isn't real yet.
+  const [appleAvailable, setAppleAvailable] = useState(false);
   /**
    * Non-null between "Firebase accepted the credential" and "the session
    * resolved" — navigation is deferred across that window — and it holds the
@@ -99,25 +106,78 @@ export default function SignInScreen() {
   };
 
   // Synchronous (config + platform checks only, no OS query), so the button
-  // can read it inline — unlike c314's Apple check there is no async window
+  // can read it inline — unlike the Apple check below there is no async window
   // where the button might flash "available" before the answer arrives.
   const googleAvailable = isGoogleSignInAvailable();
+
+  // Checked once on mount rather than inline in the button's onPress: the
+  // check itself is async (an OS-level query), and the button must decide
+  // synchronously whether a tap runs the real flow or falls back to the
+  // honest stub.
+  useEffect(() => {
+    let cancelled = false;
+    void isAppleSignInAvailable().then((available) => {
+      if (!cancelled) setAppleAvailable(available);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /**
+   * Runs the real native Apple flow (src/auth/appleSignIn.ts). Only called
+   * when appleAvailable is true — see the Apple Button's onPress below.
+   *
+   * Mirrors submitEmailForm's post-credential handling exactly: a successful
+   * exchange is a Firebase credential, not yet a backend session, so this
+   * sets submittedMode rather than navigating directly. The effect above
+   * (written for email) owns the wait and the eventual routing — it keys off
+   * submittedMode alone, not off which provider produced it. "signin" is the
+   * correct mode for BOTH a returning Apple user and a brand-new one: a
+   * returning user resolves to status "ready" and routeAfterAuth("signin")
+   * sends them to the tabs/join-chapter exactly like a returning email user;
+   * a brand-new Apple identity resolves to status "unregistered", and that
+   * branch of the effect already goes to continueToOnboarding() unconditionally
+   * regardless of mode. There is no "signup" concept for a social sign-in —
+   * the user never chose to sign in vs. sign up, Apple just handed back a
+   * credential — so reusing "signin" here is not a mismatch, it is the only
+   * mode value where routeAfterAuth's own logic produces the right answer in
+   * both cases.
+   */
+  const handleAppleSignIn = async () => {
+    setSocialError(null);
+    setSubmitting(true);
+    const outcome = await signInWithApple();
+    switch (outcome.status) {
+      case "success":
+        setSubmittedMode("signin");
+        return;
+      case "cancelled":
+        // The user dismissed the system sheet. Not an error (c314): show
+        // nothing, no error text, no alert.
+        setSubmitting(false);
+        return;
+      case "error":
+        setSubmitting(false);
+        setSocialError(outcome.message);
+        return;
+    }
+  };
+
+  const handleApplePress = () => {
+    if (!appleAvailable) {
+      handleUnavailableSocialProvider("apple");
+      return;
+    }
+    void handleAppleSignIn();
+  };
 
   /**
    * Runs the real native Google flow (src/auth/googleSignIn.ts). Only called
    * when googleAvailable is true — see the Google Button's onPress below.
-   *
-   * Mirrors submitEmailForm's post-credential handling exactly: a successful
-   * exchange is a Firebase credential, not yet a backend session, so this
-   * sets submittedMode rather than navigating directly — the session-settle
-   * effect owns the wait and the eventual routing, and it keys off
-   * submittedMode alone, not off which provider produced it. "signin" is the
-   * only mode value that produces the right answer for BOTH a returning
-   * Google user (status "ready" → routeAfterAuth("signin")) and a brand-new
-   * Google identity (status "unregistered" → continueToOnboarding()
-   * unconditionally, regardless of mode). There is no "signup" concept for a
-   * social sign-in — the user never chose sign-in vs sign-up, Google just
-   * handed back a credential.
+   * Same post-credential contract as handleAppleSignIn above — see that
+   * comment for why "signin" is the only submittedMode value that routes both
+   * a returning and a brand-new social identity correctly.
    */
   const handleGoogleSignIn = async () => {
     setSocialError(null);
@@ -372,7 +432,8 @@ export default function SignInScreen() {
             <Button
               label="Continue with Apple"
               variant="secondary"
-              onPress={() => handleUnavailableSocialProvider("apple")}
+              disabled={submitting}
+              onPress={handleApplePress}
             />
             <Button
               label="Continue with Google"
@@ -380,11 +441,15 @@ export default function SignInScreen() {
               disabled={submitting}
               onPress={handleGooglePress}
             />
-            <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
-              {googleAvailable
-                ? "Apple sign-in is not connected in this build yet. Use Google or Email."
-                : "Apple and Google sign-in are not connected in this build yet. Use Email instead."}
-            </AppText>
+            {appleAvailable && googleAvailable ? null : (
+              <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
+                {appleAvailable
+                  ? "Google sign-in is not connected in this build yet. Use Apple or Email."
+                  : googleAvailable
+                    ? "Apple sign-in is not connected in this build yet. Use Google or Email."
+                    : "Apple and Google sign-in are not connected in this build yet. Use Email instead."}
+              </AppText>
+            )}
             {socialError !== null ? (
               <AppText variant="caption" tone="danger" style={{ textAlign: "center" }}>
                 {socialError}

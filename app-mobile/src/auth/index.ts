@@ -29,6 +29,11 @@ export {
   type SocialAuthStatus,
 } from "./social";
 export {
+  isAppleSignInAvailable,
+  signInWithApple,
+  type AppleSignInOutcome,
+} from "./appleSignIn";
+export {
   isGoogleSignInAvailable,
   signInWithGoogle,
   type GoogleSignInOutcome,

@@ -93,6 +93,8 @@ export default function NewConversationScreen() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [groupTitle, setGroupTitle] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  /** The roster fetch failed. Distinct from a chapter with nobody to add (c317). */
+  const [loadFailed, setLoadFailed] = useState(false);
   // A ref, not the state above: two taps in the same frame both run against
   // the SAME render's closure, where `submitting` is still false, so the state
   // check cannot see the first tap. The ref mutates synchronously and can.
@@ -103,16 +105,25 @@ export default function NewConversationScreen() {
       setMembers(null);
       return;
     }
-    // Fail soft: matches the repo pattern elsewhere in this stack.
+    // NOT `.catch(() => setMembers([]))` (c317), and note the justification that
+    // used to sit here — "matches the repo pattern elsewhere in this stack" — was
+    // the identical sentence c299 removed from chapter/members.tsx. An empty roster
+    // is the server saying this chapter has nobody to add; a failed request says
+    // nothing at all, and rendering both as "No one to add yet" tells a member of
+    // an eight-person chapter they have no one to talk to.
+    setLoadFailed(false);
     listMembers(chapterId)
       .then(setMembers)
-      .catch(() => setMembers([]));
+      .catch(() => setLoadFailed(true));
   }, [chapterId]);
 
   // Session-status gating (same rule as chapter/members.tsx): a real member's
   // roster must never flash "no one to add" while the session or roster are
   // still resolving.
-  const loading = sessionStatus === "loading" || (membership !== null && members === null);
+  // `!loadFailed &&` matters: on failure `members` stays null, and without this the
+  // screen would sit on "Loading roster..." forever instead of saying what happened.
+  const loading =
+    !loadFailed && (sessionStatus === "loading" || (membership !== null && members === null));
 
   const roster = (members ?? []).filter(
     (member) => member.status === "active" && member.user_id !== user?.id,
@@ -161,6 +172,15 @@ export default function NewConversationScreen() {
     >
       {loading ? (
         <EmptyState title="Loading roster..." />
+      ) : loadFailed ? (
+        // Ahead of the "No one to add yet" branch below, because that branch is what
+        // the failure used to fall through into. The state alone does not fix this
+        // screen — without a branch that reads it, the roster still renders the empty
+        // copy and the fix is invisible. Caught by the live pass, not by tsc.
+        <EmptyState
+          title="Couldn't load the roster"
+          message="Check your connection and try again. This isn't a statement that your chapter has nobody to message."
+        />
       ) : chapterId === null ? (
         <EmptyState
           title="No chapter yet"
