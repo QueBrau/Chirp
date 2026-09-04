@@ -2949,7 +2949,7 @@
       "owner": "chirps-3f",
       "tag": "backend",
       "area": "orgs",
-      "title": "c278 RULED Sep 4 (Jose) + IN PROGRESS chirps-3f - ruling: treasurer-scoped read endpoint (dues section only via the shared _dues_overview helper, gated dues_admin), NOT a widened chapter_overview gate - same capability principle as the c163 VP ruling, no attendance/lineage over the wire to a role holding neither. Building now, falsification-standard test; Court keeps final merge (money-adjacent). Context: c258 already fixed the NUMBERS on the treasurer screen via its own DUES_ADMIN route; this closes the gate-shape question.",
+      "title": "c278 PR PUSHED Sep 4, awaiting Court merge (money-adjacent) - jose/c278-treasurer-overview @bf47182: GET /chapters/{id}/treasurer-overview, dues section only via shared _dues_overview, gated dues_admin per Jose's ruling. 8 tests shown red pre-change then green, deputy's 8 still green, gate exactness both directions (VP refused here, treasurer refused there). Needs PR one-click open (no gh this Mac).",
       "detail": "Found while building c258's ledger summary (manager-directed requirement that dues inputs come from the house logic rather than a fresh aggregate - the rule caught a live bug). Not urgent: with the c258 correction the treasurer screen now shows the right numbers via its own DUES_ADMIN-gated route, so nothing is broken today. The card is about the gate, not the numbers. Worth deciding before more surfaces need chapter-level aggregates, because the failure mode here was not 'a screen was wrong' - it was 'a screen could not reach the right answer, so it invented one', which is a shape that repeats."
     },
     {
