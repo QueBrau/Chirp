@@ -965,6 +965,24 @@
       "detail": ""
     },
     {
+      "id": "c322",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "",
+      "area": "messages",
+      "title": "c322 IN PROGRESS Sep 4 (Q lane, Sonnet worker, branch q/c322-people-search) [braul: 'for the messages you should be able to search for people through their name or phone number' - NAME half; phone is c323. Renumbered off a collision with chirps-23's c321, which has a branch - the branchless card yields] SEARCH PEOPLE YOU CAN ACTUALLY MESSAGE. Today messages/new.tsx (c273) lists ONLY listMembers(chapterId) with no search at all, which is NARROWER than the server already allows: messages.py:56 _require_reachable_off_chapter (c243) permits a DM to anyone sharing an ACTIVE chapter with the caller, OR on the caller's campus when the CALLER is campus-verified. So a verified student may legitimately DM a member of a different chapter on their campus and the UI gives them no way to find that person. SCOPE, braul's ruling: campus-wide, matching c243 exactly. A new authed search endpoint returning only people the caller could actually open a conversation with, plus a search field in the picker. THE ARCHITECTURAL POINT THAT MATTERS MOST: _require_reachable_off_chapter is a VALIDATOR that raises, not a QUERY. Search needs the set form. Do NOT write a second reachability rule beside it - two definitions of 'reachable' WILL drift, and drift here is a security bug in both directions (a search that lists people you cannot message, or worse, one that leaks people you should never see). Extract ONE reachable-set query and have BOTH the validator and the search read from it. MUST ALSO HOLD: exclude self, ghosts (lineage placeholders, not real accounts), suspended and deleted users, and anyone in a block relationship EITHER WAY via core/blocks.py blockers_of (c243 - a blocked person must not be findable, or search becomes the workaround for the block). Cap the result list (c258/c264 discipline) and rate limit with core/rate_limits.py limit_per_user (c259) - a name-search endpoint IS an enumeration surface even when scoped, and an uncapped one is a scraper's directory. NO MIGRATION NEEDED - display_name already exists, so no shared resource to claim.",
+      "detail": ""
+    },
+    {
+      "id": "c323",
+      "col": "backlog",
+      "owner": "",
+      "tag": "",
+      "area": "messages",
+      "title": "c323 [FILED Sep 4, NOT BUILT - needs a Jose decision, braul's call was 'card it, do not build yet'] PHONE-NUMBER SEARCH IN MESSAGES. braul asked to find people by name OR phone; the name half is c322, this is the other half and it is far bigger than it sounds. THERE IS NO PHONE NUMBER ANYWHERE IN THIS APP. Verified rather than assumed: nothing in backend/app/models or backend/app/schemas mentions phone, the User model (models/identity.py:24) carries only firebase_uid, email, display_name, avatar_url, account_type, campus_id, is_ghost, is_platform_admin, and even the alumni profile - the one place contact details live - has company/title/industry/location/linkedin_url and NO phone. So this is not a search feature, it is a whole data pipeline: a migration for the column, a collection surface, and a verification story. WHY UNVERIFIED PHONE IS NOT AN OPTION: an unverified field lets anyone type SOMEBODY ELSE'S number and be found as them. Verification means SMS, which means a provider with real per-message cost - note Jose has just chosen SES for email (c240/c284), and this would be a separate spend decision. THE PRIVACY PROBLEM IS THE REAL ONE. Phone lookup is the classic contact-discovery attack: if typing a number reveals whether an account exists, the number space can be walked. Signal, WhatsApp and Telegram have all shipped fixes for exactly this. If it is built, the defences are not optional - EXACT match only (never prefix or partial), hard per-caller rate limiting, the same c243 reachability gate as c322 so a number outside your campus returns nothing, and a response that does NOT distinguish 'no account' from 'not reachable'. WORTH ASKING BEFORE ANY OF IT: what does phone search buy that name search does not? The user base is one campus of students who mostly know each other by name.",
+      "detail": ""
+    },
+    {
       "id": "c320",
       "col": "backlog",
       "owner": "",
