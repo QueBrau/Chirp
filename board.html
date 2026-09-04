@@ -224,7 +224,8 @@
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
-<script id="board-data" type="application/json">{
+<script id="board-data" type="application/json">
+{
   "updated": 1787623688303,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
@@ -3081,7 +3082,8 @@
     {
       "id": "c305",
       "col": "progress",
-      "title": "c305 [claimed chirps-7b, Sep 4 sweep - INVESTIGATE PREMISE FIRST] web/src/pages/JoinChapter.tsx:38-96 - the page a real invite text lands a recipient on. If they don't have Chirp yet, both the auto-redirect (line 55-60) and the 'Open Chirp' button (line 86) target a chirp:// custom scheme that silently no-ops with no app registered; the only fallback (line 91, 'Find out what it is, then come back to this link') routes to '/', and there is NO App Store/Play Store/TestFlight link ANYWHERE on the whole site (header nav, footer, hero - grepped, zero hits) for them to land on there either. BEFORE FIXING: check whether this web page is actually in the frat alpha's real path - Q is distributing the dev build directly (EAS build link, no App Store), so a not-yet-installed pledge may never actually reach this URL during THIS alpha. If it IS reachable (e.g. someone forwards the link before install): fix is honest copy naming the real distribution channel available right now, not a fabricated store link that doesn't exist yet. Note on the card which is true and why before changing anything."
+      "title": "c305 [claimed chirps-7b, Sep 4 sweep - INVESTIGATE PREMISE FIRST] web/src/pages/JoinChapter.tsx:38-96 - the page a real invite text lands a recipient on. If they don't have Chirp yet, both the auto-redirect (line 55-60) and the 'Open Chirp' button (line 86) target a chirp:// custom scheme that silently no-ops with no app registered; the only fallback (line 91, 'Find out what it is, then come back to this link') routes to '/', and there is NO App Store/Play Store/TestFlight link ANYWHERE on the whole site (header nav, footer, hero - grepped, zero hits) for them to land on there either. BEFORE FIXING: check whether this web page is actually in the frat alpha's real path - Q is distributing the dev build directly (EAS build link, no App Store), so a not-yet-installed pledge may never actually reach this URL during THIS alpha. If it IS reachable (e.g. someone forwards the link before install): fix is honest copy naming the real distribution channel available right now, not a fabricated store link that doesn't exist yet. Note on the card which is true and why before changing anything.",
+      "detail": " INVESTIGATION (chirps-7b, Sep 4, written before any change per the card): THE PAGE IS IN THE REAL PATH - app-mobile/src/auth/inviteLink.ts inviteShareUrl() builds the WEB /join-chapter URL for every in-app share, so real invite texts land here. AND THE RECIPIENT-WITHOUT-CHIRP HAS NO INSTALLABLE CHANNEL: c39's first signed iOS build succeeded Sep 4 but is the wrong artifact and cannot be installed; c10 TestFlight is backlog; no store listing exists; Q hand-distributes dev builds. VERDICT: fix with honest copy only - the one true 'how do I get Chirp' answer today is THE PERSON WHO INVITED YOU, so the fallback line becomes that ('Chirp is in early testing with invited chapters - ask the person who sent you this link to get you set up'), chirp:// kept for installed users, NO fabricated store link. Copy self-retires when c10 ships a real TestFlight link (note left for that card)."
     },
     {
       "id": "c306",
@@ -3245,7 +3247,8 @@
     "Aug 30 - EMAIL: SELF-HOSTING EVALUATED AND REJECTED (Jose asked about dropping Resend for nodemailer to avoid paying; he chose 'leave Resend for alpha'). The blocker is structural, not effort: Gmail requires valid REVERSE DNS on the sending IP, and Google documents that PTR records cannot be set for Cloud NAT / non-VM IPs - so a Cloud Run service can get a static egress IP but can NEVER get valid reverse DNS. Self-hosting therefore means running an MTA on a Compute Engine VM, not a library swap. GCP also blocks outbound port 25 externally (587/465 are open, but those are submission-to-a-relay, i.e. still a third party). Two more corrections: nodemailer is a NODE library and our backend is Python (aiosmtplib/smtplib are the equivalents), and all of them are SMTP CLIENTS, not mail servers - so the swap would not remove a provider at all. Total prize was $0.50-20/month. Our mail is .edu verification codes = alpha gate c71, so risking inbox placement to save that is a bad trade. Escape hatch if cost ever bites: Amazon SES behind the existing abstraction, ~$0.50-0.80/mo at our volume.",
     "Sep 4 - LEGAL TIMING (Jose): lawyer review of the legal pages WAITS until after the alpha with Q's chapter - ship ASAP takes priority. The pages themselves are already live (c75), so the alpha runs with honest unreviewed terms. HARD DEADLINE NOTED, not optional: App Store Connect requires a privacy policy URL at external-TestFlight/App Store submission, so review lands at c10 time regardless. Alpha on dev builds needs nothing."
   ]
-}</script>
+}
+</script>
 <script>
 (function () {
   var DATA = document.getElementById('board-data');
