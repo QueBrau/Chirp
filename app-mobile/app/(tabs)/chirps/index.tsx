@@ -45,6 +45,13 @@ import {
 /** Anonymity marker per DESIGN §6: 8px tinted dot, no mask/avatar of any kind. */
 const DOT_SIZE = 8;
 
+/** Loading: initial fetch in flight. Loaded: fetch settled, `chirps` reflects the
+ * server (possibly genuinely empty). Error: the fetch itself failed — must never be
+ * presented the same as a quiet campus. c298: this screen tracked neither, so a failed
+ * load and an in-flight load BOTH rendered as blank space under the composer on the
+ * app's flagship tab. Same three states feed/index.tsx already uses. */
+type LoadState = "loading" | "loaded" | "error";
+
 function age(iso: string): string {
   const hours = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 3_600_000));
   if (hours < 1) return "just now";
@@ -98,26 +105,41 @@ export default function ChirpScreen() {
 
   const campus = useCampus();
   const [chirps, setChirps] = useState<ChirpFeedOut[] | null>(null);
+  const [loadState, setLoadState] = useState<LoadState>("loading");
   const [myVotes, setMyVotes] = useState<Record<string, ChirpVoteValue>>({});
   const [composerText, setComposerText] = useState("");
   const [posting, setPosting] = useState(false);
   const [sheet, setSheet] = useState<{ title: string; options: SheetOption[] } | null>(null);
 
   const loadChirps = useCallback(async (id: string) => {
-    const feed = await listChirps(id);
-    setChirps(feed);
-    // Server-owned vote state: seed from each item's own `my_vote`.
-    const votes: Record<string, ChirpVoteValue> = {};
-    for (const chirp of feed) {
-      if (chirp.my_vote === 1 || chirp.my_vote === -1) votes[chirp.id] = chirp.my_vote;
+    setLoadState("loading");
+    try {
+      const feed = await listChirps(id);
+      setChirps(feed);
+      // Server-owned vote state: seed from each item's own `my_vote`.
+      const votes: Record<string, ChirpVoteValue> = {};
+      for (const chirp of feed) {
+        if (chirp.my_vote === 1 || chirp.my_vote === -1) votes[chirp.id] = chirp.my_vote;
+      }
+      setMyVotes(votes);
+      setLoadState("loaded");
+    } catch {
+      // c298: the catch used to fire a one-time alert and leave `chirps` null forever,
+      // which the render below then treated exactly like a loaded-but-empty board. A
+      // dismissable alert over a permanently blank screen is not an error state; this
+      // is. Same shape as feed/index.tsx, deliberately - see LoadState above.
+      setLoadState("error");
     }
-    setMyVotes(votes);
   }, []);
 
-  useEffect(() => {
-    if (campusId === null || access !== "ok") return; // no campus, or not verified yet
-    void loadChirps(campusId).catch((error: unknown) => showApiError(error, "Couldn't load the board"));
+  const reloadChirps = useCallback(() => {
+    if (campusId === null || access !== "ok") return;
+    void loadChirps(campusId);
   }, [campusId, access, loadChirps]);
+
+  useEffect(() => {
+    reloadChirps();
+  }, [reloadChirps]);
 
 
   const vote = async (chirp: ChirpFeedOut, value: ChirpVoteValue) => {
@@ -382,7 +404,16 @@ export default function ChirpScreen() {
             </View>
           </View>
 
-          {chirps !== null && chirps.length === 0 ? (
+          {loadState === "error" ? (
+            <EmptyState
+              title="Couldn't load the board"
+              message="Something went wrong reaching the server."
+              actionLabel="Try again"
+              onAction={reloadChirps}
+            />
+          ) : loadState === "loading" ? (
+            <EmptyState title="Loading the board..." />
+          ) : chirps !== null && chirps.length === 0 ? (
             <EmptyState
               title="Quiet campus"
               message="Be the first to say something (anonymously)."
@@ -449,6 +480,10 @@ export default function ChirpScreen() {
                         vote={mine === 1 ? "up" : mine === -1 ? "down" : null}
                         upColor={campusColors.secondary}
                         scoreColor={isTop ? campusColors.secondary : undefined}
+                        // c297: same pinning rule as everything else on these cards
+                        // (see this file's header). Without it the score follows the
+                        // system theme and disappears into the light tint at night.
+                        palette={light}
                         onUpvote={() => void vote(chirp, 1)}
                         onDownvote={() => void vote(chirp, -1)}
                       />
