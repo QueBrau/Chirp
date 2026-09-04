@@ -95,6 +95,42 @@ export function showAlert(title: string, message?: string): void {
 }
 
 /**
+ * Server `detail` codes mapped to copy a person can act on (c300).
+ *
+ * WHY THIS EXISTS. `apiErrorMessage` below returned `error.detail` verbatim, and
+ * every detail this backend raises is a snake_case machine code —
+ * `forbidden("campus_unverified")`, `not_found("chapter_not_found")`. So the alert
+ * body an unverified member read after picking the campus audience was literally
+ * the string "campus_unverified".
+ *
+ * Mapped HERE, not in the screen that reported it. These codes are not one screen's
+ * problem: `require_verified_campus` raises both from core/campus_access.py, and
+ * events.py raises them again independently, so the same raw string also reaches the
+ * user through the RSVP and event-detail paths. A special-case inside CreateSheet's
+ * own catch would have fixed the one screen that happened to get reported and left
+ * the identical string raw everywhere else.
+ *
+ * THE TWO CODES GET DIFFERENT COPY ON PURPOSE, and one of them deliberately does not
+ * mention verifying. `require_verified_campus` checks campus membership FIRST, so
+ * `not_your_campus` means the content lives on a campus that is not theirs — no
+ * amount of .edu verification changes that, and a "verify your .edu" line would hand
+ * that user an action that cannot possibly work. The server guards the same trap for
+ * the same reason at events.py:141 ("hints that verifying would help. It would not").
+ *
+ * SCOPE, stated honestly: 69 distinct codes are raised across the backend and 58
+ * client call sites render them through this function, so 67 codes still fall through
+ * verbatim below. That is a real bug per remaining code, not a deliberate design —
+ * it is carded separately rather than fixed here, because writing 67 pieces of
+ * user-facing copy is a product decision, not a mechanical one. What this map does
+ * settle is WHERE that work goes when it happens.
+ */
+const DETAIL_COPY: Record<string, string> = {
+  campus_unverified:
+    "Confirm your .edu address to unlock campus-wide posts and events. You can do it from the Home tab.",
+  not_your_campus: "That belongs to a different campus, so it isn't yours to post to or open.",
+};
+
+/**
  * The user-facing message for a failed API call: ApiError carries a
  * server-provided `.detail`, anything else gets the generic fallback.
  *
@@ -102,9 +138,16 @@ export function showAlert(title: string, message?: string): void {
  * same message inline (a sheet's own error line) instead of in a dialog, and
  * were each re-typing both the conditional and the fallback copy (c239). One
  * function means the dialog and the inline line can never say different things.
+ *
+ * An unmapped detail is still returned verbatim (c300) — the pre-existing
+ * behaviour, kept deliberately: a raw code is bad copy, but it is bad copy that
+ * still distinguishes "already_registered" from "invite_expired", and collapsing
+ * every unmapped code into one generic line would take that away from the user AND
+ * hide the remaining work.
  */
 export function apiErrorMessage(error: unknown): string {
-  return error instanceof ApiError ? error.detail : "Something went wrong. Try again.";
+  if (!(error instanceof ApiError)) return "Something went wrong. Try again.";
+  return DETAIL_COPY[error.detail] ?? error.detail;
 }
 
 /**

@@ -47,6 +47,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { createCampusPost, createPost, type PostAudience } from "@/api/feed";
+import { useCampusAccess } from "@/auth";
 import {
   getMediaUploadUrl,
   uploadMediaBytes,
@@ -195,7 +196,37 @@ export function CreateSheet({
   // A chapter-less author has exactly one destination, so there is no choice to
   // offer and no way for the org default above to apply to them (c71).
   const canChooseAudience = chapterId !== null;
-  const effectiveAudience: PostAudience = canChooseAudience ? audience : "campus";
+  // c300: a chapter member is NOT automatically allowed to post campus-wide. Since
+  // c88 the create route runs require_verified_campus for audience='campus', so an
+  // unverified or lapsed member picking it got a 403 — and before the alert.ts map
+  // landed, read the raw string "campus_unverified" as the alert body.
+  //
+  // A HOOK, not another prop, and this is the first file in src/components to reach
+  // for @/auth — so the deviation is deliberate. `isActiveMember` above is the prop
+  // precedent, and the reason not to follow it: a viewer fact passed down by hand is
+  // a fact each call site can forget, and forgetting this one silently restores the
+  // exact bug being fixed (there is no safe default — defaulting to offered brings
+  // back the 403, defaulting to hidden strips campus posting from verified members).
+  // useCampusAccess's own contract is to be "the one answer every campus-gated screen
+  // should ask for". The usual objection to a hook here — useSession throws outside a
+  // provider — is unreachable: CreateSheet has exactly one caller (Fab), Fab has two
+  // (feed and chapter), and both sit under app/_layout.tsx's SessionProvider.
+  const campusAccess = useCampusAccess();
+  // "loading" counts as OFFERED, deliberately. useCampusAccess's own contract is
+  // never to flash a verify prompt at a student who turns out to be verified, and
+  // verified is the common case; a member who submits inside that window now gets
+  // human copy from DETAIL_COPY rather than a machine code. That is precisely why
+  // both halves of this fix exist — neither one covers this window alone.
+  const campusOffered = campusAccess !== "unverified" && campusAccess !== "lapsed";
+  // Derived, not an effect: `audience` can still hold "campus" from a tap made while
+  // access was resolving. Reading the derived value here (and in `selected` below)
+  // keeps what is highlighted and what is actually POSTED the same thing, without a
+  // second render or a deps array to get wrong.
+  const effectiveAudience: PostAudience = !canChooseAudience
+    ? "campus"
+    : audience === "campus" && !campusOffered
+      ? "org"
+      : audience;
   // The LOCAL device uri of the picked photo (expo-image-picker's asset.uri) — null
   // means "no photo attached," not "still uploading" (see uploadingPhoto). Local
   // rendering ONLY: never sent to the backend, and not what ends up in media_urls.
@@ -540,17 +571,54 @@ export function CreateSheet({
                   <AudienceChoice
                     title="My chapter only"
                     description="Private. Only your chapter's members can see it."
-                    selected={audience === "org"}
+                    selected={effectiveAudience === "org"}
                     onPress={() => setAudience("org")}
                   />
                 ) : null}
-                {canChooseAudience ? (
+                {canChooseAudience && campusOffered ? (
                   <AudienceChoice
                     title={`Everyone at ${campusLabel}`}
                     description="Public to your whole campus, so people outside your chapter can see it too."
-                    selected={audience === "campus"}
+                    selected={effectiveAudience === "campus"}
                     onPress={() => setAudience("campus")}
                   />
+                ) : null}
+                {canChooseAudience && !campusOffered ? (
+                  // Stated, not offered (c300) — the same treatment as the no-chapter
+                  // case above, for the same reason: the server WILL refuse this
+                  // audience, so offering it as a tappable choice is an invitation to
+                  // fail. Stated rather than hidden, because unlike the no-chapter
+                  // case this one has a way out, and a silently missing option would
+                  // leave the member with no idea campus posting exists or how to
+                  // reach it.
+                  //
+                  // Deliberately NOT a button that navigates to /(auth)/verify-campus:
+                  // this sheet is a Modal holding an unsaved draft in local state, so
+                  // routing away from it discards whatever they have typed. The copy
+                  // names where to go instead — the Home tab, which is one of the two
+                  // real entrypoints (feed/index.tsx:318, chirps/index.tsx:347).
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: spacing.md,
+                      padding: spacing.md,
+                      borderRadius: radii.input,
+                      backgroundColor: palette.surfaceAlt,
+                      borderWidth: 1,
+                      borderColor: palette.border,
+                    }}
+                  >
+                    <Feather name="lock" size={20} color={palette.inkFaint} />
+                    <View style={{ flex: 1, gap: spacing.xs }}>
+                      <AppText variant="bodyBold">{`Everyone at ${campusLabel}`}</AppText>
+                      <AppText variant="caption" tone="secondary">
+                        {campusAccess === "lapsed"
+                          ? "It's been a year since you confirmed your .edu. Verify again from the Home tab to post campus-wide."
+                          : "Confirm your .edu from the Home tab to post to your whole campus."}
+                      </AppText>
+                    </View>
+                  </View>
                 ) : null}
                 {/* Actives only (board c102) — offered ONLY to a caller whose own
                     membership is active. Not shown at all otherwise, same "stated,
@@ -561,7 +629,7 @@ export function CreateSheet({
                   <AudienceChoice
                     title="Actives only"
                     description="Private. Only active members of your chapter can see it."
-                    selected={audience === "org_actives"}
+                    selected={effectiveAudience === "org_actives"}
                     onPress={() => setAudience("org_actives")}
                   />
                 ) : null}
