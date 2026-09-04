@@ -224,7 +224,8 @@
   changes autosave locally, then <b>Export board.html</b> and commit the downloaded file over this one so the other dev gets it.
 </footer>
 
-<script id="board-data" type="application/json">{
+<script id="board-data" type="application/json">
+{
   "updated": 1787623688303,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
@@ -3129,6 +3130,24 @@
       "id": "c307",
       "col": "done",
       "title": "c307 [DONE Sep 4, chirps-23, merged 3234435 via PR #202, CI 4/4] All three a11y/touch items fixed, 13-check verify-a11y-touch.mjs added. (1) CreateSheet: KeyboardAvoidingView wraps OUTSIDE the backdrop Pressable, not inside it - manager independently falsified by moving it inside, confirmed 3 checks go red exactly as the builder claimed (nesting it inside would lift nothing, since the backdrop is the flex:1 element the sheet lays out against - a fix that would have looked right in the diff and changed nothing on screen). (2) MediaPostCard InlineAction touch target: TOUCH_TARGET/hitSlop genuinely COMPUTED from source, not asserted as a magic number (icon 15 + hitSlop 15x2 = 45pt vs ActionChip's 44pt anchor). Manager independently falsified by shrinking TOUCH_TARGET to 30: the direct threshold check silently passes (31>=30, a weakened standard sliding through its own weakened check) and is caught ONLY by the hardcoded ActionChip anchor (44!=30) - exactly the failure mode the builder called out, confirmed live. (3) ListRow: accessibilityRole+accessibilityLabel added together on the onPress branch (label optional, defaults to title so none of the ~25 call sites needed editing); static rows deliberately left un-roled. Manager also confirmed the merge correctly PRESERVES the c302 copy fixes ('Attaching photos isn't available...', 'Video posting is coming soon') despite this branch being cut before c302 landed - verified via a real trial merge, not just a clean merge-tree report. DEVICE-ONLY, not claimed: keyboard actually observed to move, 45pt actually measured, VoiceOver actually heard saying the labels - batched with c297's screenshot/VoiceOver and c304's RefreshControl gesture for the c39 device pass."
+    },
+    {
+      "id": "c312",
+      "col": "progress",
+      "owner": "pool",
+      "tag": "frontend",
+      "area": "mobile",
+      "title": "c312 IN PROGRESS (chirps-23, branch court/c312-events-polls-sweep) - EVENT/RSVP + POLLS SWEEP, four verified findings, all cited from the current files. (1) LOAD-ERROR CONFLATION, the c299 pattern and worse than the generic case: event/[id].tsx:134 `load().catch(() => setEvent(null))` and null renders 'Event not found - This event may have been removed, or it may not be shared with you.' So a wifi hiccup tells a legitimately invited guest they were excluded. Affirmatively misleading, not merely unhelpful. (2) NO LOADING STATE: event/[id].tsx:205 renders a bare empty View while fetching - blank screen, no indicator, the c298 shape. (3) UNLABELLED IMAGE-ONLY CONTROL: CreateEventSheet.tsx:393-411 cover swatches carry accessibilityRole=button + state but NO accessibilityLabel and contain only an Image, so a screen reader announces an unnamed button - same class as c297's VoteGlyph. (4) NO KEYBOARD ACCOMMODATION: CreateEventSheet.tsx:265 has a ScrollView but no KeyboardAvoidingView and six TextInputs; RN does not inset for the keyboard automatically, so lower fields and the submit button sit under it (partial accommodation exists via scrolling - completing it, not a total blocker like c307's CreateSheet was).",
+      "detail": "LENSES THAT CAME UP CLEAN, stated rather than padded: PollCard.tsx has no fetching of its own so cannot carry the c299 pattern; its option rows already have role, state and a computed label, and its Pressables are well over 44pt. The event screen's RSVP buttons and invite rows take their accessible names from text content, so role-without-name does not apply there. Visibility-tier chips in CreateEventSheet likewise contain their label text. Copy across all three files reads clean - no dev jargon, no raw error codes, correct singular/plural on vote counts in visible text. ONE TRIVIAL EXTRA folded in since it is one line: PollCard.tsx:83's accessibility label always says 'N votes', announcing '1 votes' for a single vote. SELF-AUDIT of my own merged c307 change, since it touched a shared primitive: grepped every ListRow call site for an onPress ListRow nested inside a Pressable, which would produce the nested-button hazard c131 documents on react-native-web. None found - the event screen's invite rows wrap a ListRow with NO onPress, so the outer Pressable owns the role and there is no nesting."
+    },
+    {
+      "id": "c313",
+      "col": "progress",
+      "owner": "",
+      "tag": "",
+      "area": "",
+      "title": "c313 IN PROGRESS (chirps-7b, branch court/c313-failure-states, tools sweep) - the c299 failure-renders-as-fact class survives at SIX sites on the screens c299 never reached, worst on the money screens: dues.tsx:89 catch renders 'Join a chapter first' to a real member on a blip; dues.tsx:62-66+179-182 a failed payments-status check renders as 'treasurer hasn't finished Stripe setup - pay them directly'; dues.tsx:137 failed-cycles state has no retry; dues-plans.tsx:601+752 failed init renders 'No dues cycle yet - open one from Treasurer' (duplicate-cycle bait); dues-plans.tsx failed plans fetch renders 'No payment plans yet'; secretary.tsx:286+334 failed dashboard renders 'Secretary/president only' - the exact revoked-role bug c299 killed in treasurer.tsx. Fix: the same LoadState pattern. Fold-in: dues.tsx:253's tappable Stripe line gains accessibilityRole=link.",
+      "detail": "From the Sep 4 tools sweep (moderation, secretary agenda/attendance, member dues, dues-plans, OrgToolsSegment; four lenses). CLEAN BILLS, read not pattern-matched: moderation.tsx all four lenses (already carries LoadState with retry, exemplary a11y on the pagination control); OrgToolsSegment all four (capability tiles fail CLOSED with the posture documented - deliberate, not this bug class); copy lens clean across all four files (no dev jargon, tone consistent); design lens clean (house components and tokens throughout). Falsification for the fix: no mobile test harness exists, so both ways LIVE - backend stopped, each screen must show its failure state with retry (never the role/empty lie); backend up, normal states render; screenshots as evidence."
     }
   ],
   "decisions": [
@@ -3282,7 +3301,8 @@
     "Aug 30 - EMAIL: SELF-HOSTING EVALUATED AND REJECTED (Jose asked about dropping Resend for nodemailer to avoid paying; he chose 'leave Resend for alpha'). The blocker is structural, not effort: Gmail requires valid REVERSE DNS on the sending IP, and Google documents that PTR records cannot be set for Cloud NAT / non-VM IPs - so a Cloud Run service can get a static egress IP but can NEVER get valid reverse DNS. Self-hosting therefore means running an MTA on a Compute Engine VM, not a library swap. GCP also blocks outbound port 25 externally (587/465 are open, but those are submission-to-a-relay, i.e. still a third party). Two more corrections: nodemailer is a NODE library and our backend is Python (aiosmtplib/smtplib are the equivalents), and all of them are SMTP CLIENTS, not mail servers - so the swap would not remove a provider at all. Total prize was $0.50-20/month. Our mail is .edu verification codes = alpha gate c71, so risking inbox placement to save that is a bad trade. Escape hatch if cost ever bites: Amazon SES behind the existing abstraction, ~$0.50-0.80/mo at our volume.",
     "Sep 4 - LEGAL TIMING (Jose): lawyer review of the legal pages WAITS until after the alpha with Q's chapter - ship ASAP takes priority. The pages themselves are already live (c75), so the alpha runs with honest unreviewed terms. HARD DEADLINE NOTED, not optional: App Store Connect requires a privacy policy URL at external-TestFlight/App Store submission, so review lands at c10 time regardless. Alpha on dev builds needs nothing."
   ]
-}</script>
+}
+</script>
 <script>
 (function () {
   var DATA = document.getElementById('board-data');
