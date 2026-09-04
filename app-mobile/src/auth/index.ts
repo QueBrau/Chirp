@@ -3,6 +3,11 @@
 export { firebaseConfig, hasFirebaseConfig, type FirebaseConfig } from "./config";
 export { getFirebaseAuth } from "./firebase";
 export {
+  getAuthErrorMessage,
+  getPasswordLengthError,
+  type AuthErrorMode,
+} from "./authErrors";
+export {
   getIdToken,
   onAuthChanged,
   onIdTokenChanged,
