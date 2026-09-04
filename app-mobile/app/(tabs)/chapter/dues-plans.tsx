@@ -574,6 +574,9 @@ export default function DuesPlansScreen() {
   const [plans, setPlans] = useState<DuesPaymentPlanOut[] | null>(null);
   const [members, setMembers] = useState<MemberOut[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // c313: a failed init must never render as "No dues cycle yet" - that copy
+  // tells a treasurer to open a cycle that may already exist.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [recordingId, setRecordingId] = useState<string | null>(null);
   const [cancelingId, setCancelingId] = useState<string | null>(null);
@@ -589,17 +592,26 @@ export default function DuesPlansScreen() {
     setMembers(membersResult);
   }, []);
 
+  // Hoisted (c313) so the failure state's Try again can rerun it; retryKey
+  // re-triggers the effect, which keeps the cancelled-cleanup semantics intact.
+  const [retryKey, setRetryKey] = useState(0);
   useEffect(() => {
     if (chapterId === null || !canManagePlans) return;
     let cancelled = false;
     const init = async () => {
+      setLoadFailed(false);
       try {
         const duesCycles = await listDuesCycles(chapterId);
         if (cancelled) return;
         setCycles(duesCycles);
         if (duesCycles[0]) await load(chapterId, duesCycles[0].id);
       } catch (error) {
-        if (!cancelled) showApiError(error, "Couldn't load payment plans");
+        if (!cancelled) {
+          // c313: mark the failure instead of falling through to states that
+          // read as facts ("No dues cycle yet" / "No payment plans yet").
+          setLoadFailed(true);
+          showApiError(error, "Couldn't load payment plans");
+        }
       } finally {
         if (!cancelled) setLoaded(true);
       }
@@ -608,7 +620,7 @@ export default function DuesPlansScreen() {
     return () => {
       cancelled = true;
     };
-  }, [chapterId, canManagePlans, load]);
+  }, [chapterId, canManagePlans, load, retryKey]);
 
   const memberName = (userId: string) =>
     members.find((m) => m.user_id === userId)?.display_name || userId;
@@ -745,6 +757,22 @@ export default function DuesPlansScreen() {
     return (
       <Screen title="Payment plans" subtitle="Installment plans for dues">
         <EmptyState title="Loading…" />
+      </Screen>
+    );
+  }
+
+  // c313: the failure gate sits BEFORE the no-cycle gate, because "No dues
+  // cycle yet - open one" said to a treasurer on a network blip is an
+  // instruction to create a duplicate of a cycle that may already exist.
+  if (loadFailed) {
+    return (
+      <Screen title="Payment plans" subtitle="Installment plans for dues">
+        <EmptyState
+          title="Couldn't load payment plans"
+          message="Something went wrong reaching the server. Nothing here says whether a cycle or plan exists."
+          actionLabel="Try again"
+          onAction={() => setRetryKey((k) => k + 1)}
+        />
       </Screen>
     );
   }

@@ -151,6 +151,9 @@ export default function SecretaryScreen() {
   // calls, the meetings/attendance endpoints would just 403); object = the
   // real membership driving every call below.
   const [membership, setMembership] = useState<MyMembershipOut | null | undefined>(undefined);
+  // c313: failure is its own state, never conflated with "not eligible".
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
   const [items, setItems] = useState<MeetingItem[] | null>(null);
   const [roster, setRoster] = useState<MemberOut[] | null>(null);
 
@@ -275,6 +278,7 @@ export default function SecretaryScreen() {
 
   useEffect(() => {
     const init = async () => {
+      setLoadFailed(false);
       try {
         const memberships = await myMemberships();
         const eligible =
@@ -285,11 +289,15 @@ export default function SecretaryScreen() {
         await loadSummary(eligible.chapter_id, "semester");
       } catch (error) {
         showApiError(error, "Couldn't load the secretary dashboard");
-        setMembership(null);
+        // c313: a FAILED load must not render as "Secretary/president only" -
+        // that is the revoked-role lie c299 removed from treasurer.tsx. The
+        // role is unknown here, not absent, so membership is left alone and
+        // the failure gate below owns the render.
+        setLoadFailed(true);
       }
     };
     void init();
-  }, [loadDashboard, loadSummary]);
+  }, [loadDashboard, loadSummary, retryKey]);
 
   /**
    * Live poll updates (c162). Somebody else voting is the ONLY thing that moves a
@@ -330,6 +338,22 @@ export default function SecretaryScreen() {
       });
     });
   }, [chapterId]);
+
+  // c313: the failure gate outranks the role gate - on a failed load the role
+  // is UNKNOWN, and "Secretary/president only" to a real secretary is the
+  // revoked-role lie.
+  if (loadFailed) {
+    return (
+      <Screen title="Secretary" subtitle="Minutes, polls, and attendance">
+        <EmptyState
+          title="Couldn't load the dashboard"
+          message="Something went wrong reaching the server."
+          actionLabel="Try again"
+          onAction={() => setRetryKey((k) => k + 1)}
+        />
+      </Screen>
+    );
+  }
 
   if (membership === null) {
     return (
