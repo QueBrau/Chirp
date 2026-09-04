@@ -380,6 +380,88 @@ console.log("\n-- profile/index.tsx: the third instance (c319) --");
   }
 }
 
+console.log("\n-- profile/index.tsx: memberships, failed vs ANSWERED (c321) --");
+
+// THE DISTINCTION THIS SECTION EXISTS FOR. Everywhere else in this file an empty result
+// was always suspect. Here [] is a REAL answer - a chapter-less student genuinely has no
+// memberships, and dropping the orgs/activity sections for them is correct. The defect
+// was that a FAILED fetch produced the same [], so a real member's chapter, role and
+// activity vanished from their own profile with nothing on screen being untrue.
+//
+// So these check failed-vs-answered, and deliberately do NOT assert anything about []
+// being wrong - an assertion of that shape would fire on every chapter-less user.
+{
+  const src = sources[PROFILE];
+
+  // The section drop must still key on membership, not on "did the fetch return rows".
+  if (/\(section\.key === "orgs" \|\| section\.key === "activity"\) && membership === null/.test(src)) {
+    pass("profile: a genuinely chapter-less user still has orgs/activity dropped (empty is an ANSWER)");
+  } else {
+    fail(
+      "profile: the section drop must still key on membership === null",
+      "rewriting it around the failure flag would break the chapter-less case, which is the one [] is right for",
+    );
+  }
+
+  const start = src.indexOf("const loading =");
+  const end = src.indexOf(";", start);
+  if (start === -1) {
+    fail(`${PROFILE}: could not find the loading expression`);
+  } else {
+    const expression = src.slice(start + "const loading =".length, end);
+    const evaluate = (status, user, memberships, membershipsFailed, postCount) =>
+      new Function(
+        "status",
+        "user",
+        "memberships",
+        "membershipsFailed",
+        "postCount",
+        `return (${expression});`,
+      )(status, user, memberships, membershipsFailed, postCount);
+
+    const failed = evaluate("loaded", {}, null, true, 0);
+    if (failed === false) {
+      pass("profile: a FAILED memberships fetch leaves the loading gate (no infinite spinner)");
+    } else {
+      fail(
+        "profile: a failed memberships fetch must exit the loading gate",
+        `computed loading=${JSON.stringify(failed)} - memberships stays null on failure, so this spins forever`,
+      );
+    }
+    const inflight = evaluate("loaded", {}, null, false, 0);
+    if (inflight === true) pass("profile: a genuinely in-flight fetch still shows loading");
+    else fail("profile: an in-flight fetch must still show loading", `got ${JSON.stringify(inflight)}`);
+  }
+
+  // Second-order: postCount is gated on memberships settling, and "settle" has to
+  // include failing - otherwise it stays null and the gate above never opens even once
+  // the memberships term is correct. Fixing one half and shipping an infinite spinner
+  // is a live risk here, not a hypothetical.
+  if (/if \(memberships === null && !membershipsFailed\) return;/.test(src)) {
+    pass("profile: postCount does not park forever when the memberships fetch fails");
+  } else {
+    fail(
+      "profile: the postCount effect must treat a FAILED fetch as settled",
+      "waiting on `memberships === null` alone leaves postCount null and the loading gate shut",
+    );
+  }
+
+  if (/membershipsFailed \? \(/.test(src) && /actionLabel="Try again"/.test(src)) {
+    pass("profile: the failure is stated on screen with a retry, not left as a silent absence");
+  } else {
+    fail("profile: a failed memberships fetch must be visible and retryable");
+  }
+
+  const loaderStart = src.indexOf("const loadMemberships = useCallback(");
+  const loaderEnd = src.indexOf("\n  }, [", loaderStart);
+  const body = loaderStart === -1 || loaderEnd === -1 ? "" : src.slice(loaderStart, loaderEnd);
+  if (body.includes("setMembershipsFailed(true)")) {
+    pass("profile: the catch lives inside loadMemberships(), so the retry is covered");
+  } else {
+    fail("profile: setMembershipsFailed(true) must be inside loadMemberships()'s own catch");
+  }
+}
+
 console.log("\n-- the phrase trap --");
 
 // "matches the repo pattern elsewhere in this stack" is 3-for-3 as a marker for this
