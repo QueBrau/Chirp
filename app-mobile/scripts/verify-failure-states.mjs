@@ -34,6 +34,7 @@ const MEMBER = "app/(tabs)/chapter/member/[id].tsx";
 const NEW_DM = "app/(tabs)/messages/new.tsx";
 const THREAD = "app/(tabs)/messages/[id].tsx";
 const PROFILE = "app/(tabs)/profile/index.tsx";
+const PRESIDENT = "app/(tabs)/chapter/president.tsx";
 
 const sources = {
   [DUES]: read(DUES),
@@ -43,6 +44,7 @@ const sources = {
   [NEW_DM]: read(NEW_DM),
   [THREAD]: read(THREAD),
   [PROFILE]: read(PROFILE),
+  [PRESIDENT]: read(PRESIDENT),
 };
 
 let failures = 0;
@@ -459,6 +461,100 @@ console.log("\n-- profile/index.tsx: memberships, failed vs ANSWERED (c321) --")
     pass("profile: the catch lives inside loadMemberships(), so the retry is covered");
   } else {
     fail("profile: setMembershipsFailed(true) must be inside loadMemberships()'s own catch");
+  }
+}
+
+console.log("\n-- president.tsx: three false statements from one failed fetch (c324) --");
+
+{
+  const src = sources[PRESIDENT];
+
+  // The roster failure produced a COUNT ("0 on the roster"), a claim ("No members") and
+  // an accusation ("Invites you've sent will show up here once redeemed") - the last of
+  // which points a president at their own invitations for a network error.
+  if (/membersFailed\s*\n?\s*\? "Roster didn't load"/.test(src)) {
+    pass("president: the roster caption stops asserting a count when the fetch failed");
+  } else {
+    fail(
+      'president: the caption must not claim "0 on the roster" on a failed fetch',
+      "the number is the quietest of the three lies and the easiest to leave behind",
+    );
+  }
+
+  const errAt = src.indexOf("Couldn't load the roster");
+  const emptyAt = src.indexOf('title="No members"');
+  if (errAt !== -1 && emptyAt !== -1 && errAt < emptyAt) {
+    pass("president: the roster error is reached before the No-members copy");
+  } else {
+    fail("president: a failed roster must not fall through to the No-members copy");
+  }
+  // Same principle as c312: stop lying, do not delete the honest copy. A genuinely
+  // empty roster is a real state and still deserves its own message.
+  if (emptyAt !== -1 && /Invites you've sent will show up here once redeemed/.test(src)) {
+    pass("president: the honest empty-roster copy still exists for a genuinely empty roster");
+  } else {
+    fail("president: the genuine empty-roster copy must survive the fix");
+  }
+
+  const start = src.indexOf("const loading =");
+  const end = src.indexOf(";", start);
+  const expression = start === -1 ? null : src.slice(start + "const loading =".length, end);
+  if (expression === null) {
+    fail(`${PRESIDENT}: could not find the loading expression`);
+  } else {
+    const evaluate = (sessionStatus, membership, chapterLoading, members, membersFailed) =>
+      new Function(
+        "sessionStatus",
+        "membership",
+        "chapterLoading",
+        "members",
+        "membersFailed",
+        `return (${expression});`,
+      )(sessionStatus, membership, chapterLoading, members, membersFailed);
+
+    const failed = evaluate("loaded", {}, false, null, true);
+    if (failed === false) {
+      pass("president: a FAILED roster leaves the loading gate (no infinite spinner)");
+    } else {
+      fail(
+        "president: a failed roster must exit the loading gate",
+        `computed loading=${JSON.stringify(failed)} - members stays null on failure, so this hangs`,
+      );
+    }
+    const inflight = evaluate("loaded", {}, false, null, false);
+    if (inflight === true) pass("president: a genuinely in-flight roster still shows loading");
+    else fail("president: an in-flight roster must still show loading", `got ${JSON.stringify(inflight)}`);
+  }
+
+  const loaderStart = src.indexOf("const refreshMembers = useCallback(");
+  const loaderEnd = src.indexOf("\n  }, [", loaderStart);
+  const body = loaderStart === -1 || loaderEnd === -1 ? "" : src.slice(loaderStart, loaderEnd);
+  if (body.includes("setMembersFailed(true)")) {
+    pass("president: the catch lives inside refreshMembers(), so the retry is covered");
+  } else {
+    fail("president: setMembersFailed(true) must be inside refreshMembers()'s own catch");
+  }
+
+  // The two quieter ones. Neither produced a false SENTENCE - the overview panel simply
+  // vanished and the identity boxes simply went blank - which is the c321 false-absence
+  // symptom and the reason both were triaged LOW before that standard existed.
+  const ovFailAt = src.indexOf("overviewFailed ? (");
+  const ovNullAt = src.indexOf("overview === null ? null");
+  if (ovFailAt !== -1 && ovNullAt !== -1 && ovFailAt < ovNullAt) {
+    pass("president: a failed overview says so instead of the panel silently vanishing");
+  } else {
+    fail("president: a failed overview must be stated, not rendered as absence");
+  }
+
+  const chFailAt = src.indexOf("chapterFailed ? (");
+  const orgInputAt = src.indexOf("value={orgName}");
+  if (chFailAt !== -1 && orgInputAt !== -1 && chFailAt < orgInputAt) {
+    pass("president: a failed chapter fetch hides the name fields rather than showing them blank");
+  } else {
+    fail(
+      "president: an empty ORG NAME box reads as 'this chapter has no name set'",
+      "traced to render for c324 - never destructive (Save is gated on chapter !== null) but still failure presented as fact",
+    );
   }
 }
 
