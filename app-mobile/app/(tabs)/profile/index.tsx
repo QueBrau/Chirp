@@ -153,6 +153,7 @@ export default function ProfileScreen() {
   // null = not yet resolved; [] is a legitimate "no chapter" result (e.g. a
   // non-greek student) — the distinction is what the loading gate below relies on.
   const [memberships, setMemberships] = useState<MyMembershipOut[] | null>(null);
+  const [membershipsFailed, setMembershipsFailed] = useState(false);
   const [campus, setCampus] = useState<CampusOut | null>(null);
   const [postCount, setPostCount] = useState<number | null>(null);
   const [editing, setEditing] = useState(false);
@@ -200,17 +201,43 @@ export default function ProfileScreen() {
     void loadAlumniProfile();
   }, [accountType, loadAlumniProfile]);
 
+  /**
+   * c321. The catch was `() => setMemberships([])`, and THIS ONE IS DIFFERENT FROM ITS
+   * SIBLINGS: on every other screen in this family an empty result was always suspect,
+   * but here [] is a perfectly real answer — a chapter-less student genuinely has no
+   * memberships, and the orgs/activity sections are dropped for them on purpose.
+   *
+   * So the bug was not "[] is wrong". It was that a FAILED fetch and a TRUE empty answer
+   * produced the identical [], and the screen then quietly removed a real member's
+   * chapter, role chip and activity from their own profile with no error anywhere. A
+   * false ABSENCE rather than a false sentence — nothing on screen is untrue, which is
+   * exactly why it survives review.
+   *
+   * The distinction that matters is therefore failed-vs-ANSWERED, not empty-vs-nonempty:
+   * memberships stays null when we do not know, and membershipsFailed says why.
+   *
+   * Catch inside the callback (c317) so the retry below is covered too.
+   */
+  const loadMemberships = useCallback(async (id: string) => {
+    setMembershipsFailed(false);
+    try {
+      // GET /me/memberships is the only call that joins org_name/chapter_name
+      // (fetchMe()'s embedded memberships, used elsewhere via useSession(), don't).
+      setMemberships(await myMemberships());
+    } catch {
+      setMemberships(null);
+      setMembershipsFailed(true);
+    }
+  }, []);
+
   useEffect(() => {
     if (userId === null) {
       setMemberships(null);
+      setMembershipsFailed(false);
       return;
     }
-    // GET /me/memberships is the only call that joins org_name/chapter_name
-    // (fetchMe()'s embedded memberships, used elsewhere via useSession(), don't).
-    myMemberships()
-      .then(setMemberships)
-      .catch(() => setMemberships([]));
-  }, [userId]);
+    void loadMemberships(userId);
+  }, [userId, loadMemberships]);
 
   useEffect(() => {
     if (campusId === null) {
@@ -227,7 +254,12 @@ export default function ProfileScreen() {
   const chapterId = membership?.chapter_id ?? null;
 
   useEffect(() => {
-    if (memberships === null) return; // wait for the membership fetch to settle first
+    // c321: "settle" includes FAILING. Waiting on `memberships === null` alone left this
+    // effect parked forever when the fetch failed, so postCount stayed null and the
+    // loading gate above never opened - an infinite spinner reached by fixing the other
+    // half. chapterId is null in that state, so the branch below sets 0 and the screen
+    // renders the error instead of hanging.
+    if (memberships === null && !membershipsFailed) return;
     if (chapterId === null || userId === null) {
       setPostCount(0);
       return;
@@ -240,7 +272,7 @@ export default function ProfileScreen() {
     countMyPosts(chapterId)
       .then(({ count }) => setPostCount(count))
       .catch(() => setPostCount(0));
-  }, [memberships, chapterId, userId]);
+  }, [memberships, membershipsFailed, chapterId, userId]);
 
   /** Finding 12: Sign out was unreachable (no onPress). Firebase isn't configured yet
    * (see src/auth/config.ts), so mock mode just returns to sign-in without a real
@@ -273,8 +305,14 @@ export default function ProfileScreen() {
   // A real user's identity (name/avatar/account type/campus/chapter/role/post
   // count) must never flash empty or stale while any of it is still in flight —
   // same rule as chapter/members.tsx's `loading` gate.
+  // `!membershipsFailed &&` is load-bearing and looks deletable: memberships stays null
+  // on failure, so without it this screen sits on "Loading profile..." forever instead
+  // of ever reaching the error below. Same trap as messages/new.tsx (c319).
   const loading =
-    status === "loading" || user === null || memberships === null || postCount === null;
+    status === "loading" ||
+    user === null ||
+    (memberships === null && !membershipsFailed) ||
+    postCount === null;
 
   if (loading || user === null) {
     return (
@@ -438,6 +476,22 @@ export default function ProfileScreen() {
           </View>
         ) : null}
       </View>
+
+      {/* c321: the sections below are DROPPED when there is no membership, which is
+          correct for a chapter-less student and was a silent lie for everyone else when
+          the fetch failed. Nothing on screen was untrue - the chapter, role chip and
+          activity were simply gone - which is why it survived review. This says so out
+          loud rather than letting an absence speak. */}
+      {membershipsFailed ? (
+        <EmptyState
+          title="Couldn't load your chapter"
+          message="Your chapter, role and activity aren't shown because this didn't load — not because you don't have them."
+          actionLabel="Try again"
+          onAction={() => {
+            if (userId !== null) void loadMemberships(userId);
+          }}
+        />
+      ) : null}
 
       <View style={{ gap: spacing.md }}>
         {layout.map((section, index) => {
