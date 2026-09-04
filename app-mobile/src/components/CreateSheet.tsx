@@ -34,7 +34,16 @@ import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import type { ComponentProps } from "react";
 import { useRef, useState } from "react";
-import { ActivityIndicator, Image, Modal, Pressable, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  TextInput,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { createCampusPost, createPost, type PostAudience } from "@/api/feed";
@@ -346,10 +355,23 @@ export function CreateSheet({
           undefined behavior once it does. onPress alone makes the backdrop tappable
           without making it a semantic "button" - matches MediaPostCard's own
           full-screen dismiss overlay, which never had this role either. */}
-      <Pressable
-        onPress={close}
-        style={{ flex: 1, backgroundColor: withAlpha(light.ink, 0.4), justifyContent: "flex-end" }}
+      {/* c307: the composer autoFocuses its TextInput, so the keyboard is already up
+          when this opens - and the audience picker and the Post button sit BELOW that
+          input in a fixed-height view, i.e. underneath the keyboard, unreachable. This
+          is the only sheet in the app without an accommodation: CommentsSheet and
+          CreateEventSheet both wrap in a ScrollView, so this is an outlier rather than
+          a pattern (repo-wide grep found zero KeyboardAvoidingView usages before this).
+          padding on iOS / height on Android is the documented pairing; the two
+          platforms measure the keyboard differently and a single behavior is wrong on
+          one of them. */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
+        <Pressable
+          onPress={close}
+          style={{ flex: 1, backgroundColor: withAlpha(light.ink, 0.4), justifyContent: "flex-end" }}
+        >
         {/* Inner Pressable with no onPress: swallows taps so they don't bubble to the backdrop close. */}
         <Pressable
           style={{
@@ -555,8 +577,9 @@ export function CreateSheet({
               />
             </>
           )}
+          </Pressable>
         </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

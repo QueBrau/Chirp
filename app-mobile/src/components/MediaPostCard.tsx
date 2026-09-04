@@ -55,6 +55,17 @@ const MEDIA_HEIGHT = 260;
 const PLAY_CIRCLE = 48;
 const ACTION_CHIP = 36;
 
+/** iOS HIG / WCAG 2.5.5 minimum tappable size. ActionChip already lands exactly here:
+ *  a 36pt circle plus spacing.xs (4) of hitSlop top and bottom = 44. */
+const TOUCH_TARGET = 44;
+/** InlineAction is a 15pt icon beside caption text (lineHeight 17), so its rendered row
+ *  is 17pt tall - with spacing.sm (8) of hitSlop that came to 33pt, well under the
+ *  minimum its own sibling meets (c307). Sized off the ICON rather than the text on
+ *  purpose: 15 is the SHORTER of the two, so this stays >= 44 even if the caption metric
+ *  changes later. 15 + 15 + 15 = 45. */
+const INLINE_ACTION_ICON = 15;
+const INLINE_ACTION_HIT_SLOP = Math.ceil((TOUCH_TARGET - INLINE_ACTION_ICON) / 2);
+
 /** Preset report reasons (backend requires a non-empty `reason` string) — same
  * three presets as the Chirps board's report sheet. */
 const REPORT_REASONS = ["Spam", "Harassment", "Inappropriate"];
@@ -253,7 +264,7 @@ function InlineAction({
       accessibilityRole="button"
       accessibilityLabel={label}
       onPress={onPress}
-      hitSlop={spacing.sm}
+      hitSlop={INLINE_ACTION_HIT_SLOP}
       style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
@@ -264,9 +275,13 @@ function InlineAction({
       {/* c222/c229: same icon-keyed rule as ActionChip above, and the same narrow
           gate - only an ACTIVE HEART becomes the filled shape. */}
       {active && icon === "heart" ? (
-        <FilledHeart size={15} color={palette.like} />
+        <FilledHeart size={INLINE_ACTION_ICON} color={palette.like} />
       ) : (
-        <Feather name={icon} size={15} color={active ? palette.accent : palette.inkFaint} />
+        <Feather
+          name={icon}
+          size={INLINE_ACTION_ICON}
+          color={active ? palette.accent : palette.inkFaint}
+        />
       )}
       <AppText
         variant="caption"
