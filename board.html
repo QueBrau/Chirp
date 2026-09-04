@@ -1991,6 +1991,15 @@
       "detail": "c164 sim find, consistent across screens. Cosmetic but before broad device testing: scroll containers need bottom padding sized to the floating elements (content inset), not just a translucent bar. DESIGN.md binding - the fix is padding, not removing the floating treatment."
     },
     {
+      "id": "c314",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "",
+      "area": "auth",
+      "title": "c314 IN PROGRESS Sep 4 (Q lane, Sonnet worker, branch q/c314-apple-signin) [braul: 'the apple sign in needs to work'; Apple Developer side reported done] SIGN IN WITH APPLE, NATIVE iOS. Split out of c169 so Apple can ship without Google - APPLE GUIDELINE 4.8 makes Sign in with Apple mandatory ONCE GOOGLE SHIPS, so Apple-alone is compliant and Google-alone is not. Google stays an honest c89 stub in this card. FINDING THAT CHANGES WHAT 'APPLE DEVELOPER IS DONE' MEANS: braul added the capability IN XCODE, but there is NO app-mobile/ios directory - this is a managed Expo (CNG) project and EAS runs prebuild from scratch on every build, so a hand-added Xcode entitlement is DESTROYED and never reaches the artifact. The entitlement must be declared in app.json (the expo-apple-authentication config plugin, or ios.usesAppleSignIn). What PROBABLY did persist is the App ID registration in Apple's portal, which is server-side - and that is the half no session can do, so the work was not wasted. Verify the app.json route against the installed Expo SDK 54 rather than assuming the key name. TWO NATIVE MODULES NEEDED, NEITHER INSTALLED: expo-apple-authentication and expo-crypto. Firebase's Apple flow is nonce-based - SHA256 the nonce for Apple, hand the RAW nonce to Firebase alongside the identityToken - so crypto is not optional. Both are native, so this STALES every existing build; braul chose to land it BEFORE cutting the preview build so ONE build carries c273/c309/c310/c311 plus this. STILL BLOCKED ON A CONSOLE STEP NOBODY HAS DONE: the Firebase console Apple provider on chirps-prod is NOT enabled. Until it is, signInWithCredential fails with auth/operation-not-allowed. That does NOT need a rebuild, so it can happen while the build runs - but the button will not work until it does. NOTE the c311 mapper currently renders auth/operation-not-allowed as 'Email sign-in isn't available right now', which is the wrong sentence for an Apple failure and must be handled. NON-NEGOTIABLE from c89: never manufacture a session. iOS-only via isAvailableAsync(); Android and web keep the honest disabled stub. A user CANCELLING the Apple sheet is not an error and must show nothing.",
+      "detail": ""
+    },
+    {
       "id": "c169",
       "col": "backlog",
       "owner": "",
