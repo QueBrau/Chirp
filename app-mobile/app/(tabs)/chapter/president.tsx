@@ -259,6 +259,12 @@ export default function PresidentScreen() {
   const chapterId = membership?.chapter_id ?? null;
 
   const [members, setMembers] = useState<MemberOut[] | null>(null);
+  // c324. Three independent fetches feed this screen and all three failed silently in
+  // their own way, so each needs its own flag: a roster that did not load says nothing
+  // about whether the overview did.
+  const [membersFailed, setMembersFailed] = useState(false);
+  const [overviewFailed, setOverviewFailed] = useState(false);
+  const [chapterFailed, setChapterFailed] = useState(false);
   const [chapter, setChapter] = useState<ChapterOut | null>(null);
   // null while loading OR after a failed fetch. The overview is a summary of screens
   // that all still work on their own, so a failure here hides the panel rather than
@@ -275,12 +281,25 @@ export default function PresidentScreen() {
   // per row below rather than from `members` up front, since members loads async.
   const [pledgeDrafts, setPledgeDrafts] = useState<Record<string, string>>({});
 
+  /**
+   * c324. The catch was `setMembers([])`, and [] renders as THREE false statements to
+   * the one person most likely to act on them: a "0 on the roster" caption, "No members",
+   * and "Invites you've sent will show up here once redeemed" — which blames the
+   * president's own invites for a network error and invites them to re-send invitations
+   * that were already accepted.
+   *
+   * Unlike profile/index.tsx (c321), [] is not a legitimate answer here at all: a chapter
+   * with an active president has at least that president on its roster. But the fix is
+   * the same shape regardless — null means we do not know, membersFailed says why.
+   */
   const refreshMembers = useCallback(async () => {
     if (chapterId === null) return;
+    setMembersFailed(false);
     try {
       setMembers(await listMembers(chapterId));
     } catch {
-      setMembers([]);
+      setMembers(null);
+      setMembersFailed(true);
     }
   }, [chapterId]);
 
@@ -295,9 +314,15 @@ export default function PresidentScreen() {
     }
     // Same window the Secretary dashboard computes, from the one shared helper, so the
     // meeting counts on the two screens cannot disagree by a boundary meeting.
+    setOverviewFailed(false);
     getChapterOverview(chapterId, currentSemesterWindow(new Date()))
       .then(setOverview)
-      .catch(() => setOverview(null));
+      // c324: null used to make the panel silently vanish — the c321 false-absence
+      // symptom. Nothing untrue on screen, just a dashboard quietly missing a section.
+      .catch(() => {
+        setOverview(null);
+        setOverviewFailed(true);
+      });
   }, [chapterId]);
 
   useEffect(() => {
@@ -305,17 +330,35 @@ export default function PresidentScreen() {
       setChapter(null);
       return;
     }
+    setChapterFailed(false);
     getChapter(chapterId)
       .then((value) => {
         setChapter(value);
         setOrgName(value.org_name);
         setChapterName(value.chapter_name ?? "");
       })
-      .catch(() => setChapter(null));
+      // c324, TRACED rather than assumed: on failure orgName/chapterName stay at their
+      // initial "", so the identity editor renders an EMPTY org-name box — which reads
+      // as "this chapter has no name set" to the president of a chapter that certainly
+      // has one. Failure as fact, in input form.
+      //
+      // It was never destructive: identityChanged requires chapter !== null, so Save
+      // stays disabled and a blank box cannot be written over the real name. That is why
+      // it was triaged LOW before c321; under the false-absence standard it is still
+      // worth saying out loud rather than showing an empty field.
+      .catch(() => {
+        setChapter(null);
+        setChapterFailed(true);
+      });
   }, [chapterId]);
 
+  // `!membersFailed &&` on the members term: it stays null on failure now, so without
+  // this the screen would spin forever instead of reaching the error below (the second-
+  // order trap c321 hit — fixing the catch alone converts a lie into a hang).
   const loading =
-    sessionStatus === "loading" || (membership !== null && chapterLoading) || members === null;
+    sessionStatus === "loading" ||
+    (membership !== null && chapterLoading) ||
+    (members === null && !membersFailed);
 
   const active = (members ?? []).filter((m) => m.status !== "removed");
   const activePresidentCount = active.filter(
@@ -474,7 +517,12 @@ export default function PresidentScreen() {
         <EmptyState title="Loading..." />
       ) : (
         <View style={{ gap: spacing.xl }}>
-          {overview === null ? null : (
+          {overviewFailed ? (
+            <EmptyState
+              title="Couldn't load the chapter snapshot"
+              message="These numbers aren't shown because they didn't load — not because they're zero."
+            />
+          ) : overview === null ? null : (
             <OverviewPanel overview={overview} accent={campusColors.secondary} />
           )}
 
@@ -501,6 +549,12 @@ export default function PresidentScreen() {
 
           <View>
             <SectionHeader title="Chapter details" caption="Org and chapter name" />
+            {chapterFailed ? (
+              <EmptyState
+                title="Couldn't load your chapter's details"
+                message="The name fields are hidden rather than shown blank — an empty box here would read as though your chapter has no name set."
+              />
+            ) : (
             <Card>
               <View style={{ gap: spacing.md }}>
                 <View style={{ gap: spacing.xs }}>
@@ -528,14 +582,26 @@ export default function PresidentScreen() {
                 />
               </View>
             </Card>
+            )}
           </View>
 
           <View>
             <SectionHeader
               title="Members"
-              caption={`${active.length} on the roster · tap someone to edit`}
+              caption={
+                membersFailed
+                  ? "Roster didn't load"
+                  : `${active.length} on the roster · tap someone to edit`
+              }
             />
-            {active.length === 0 ? (
+            {membersFailed ? (
+              <EmptyState
+                title="Couldn't load the roster"
+                message="Check your connection and try again. This isn't a statement that your chapter has no members, or that your invites went unredeemed."
+                actionLabel="Try again"
+                onAction={() => void refreshMembers()}
+              />
+            ) : active.length === 0 ? (
               <EmptyState title="No members" message="Invites you've sent will show up here once redeemed." />
             ) : (
               <Card>
