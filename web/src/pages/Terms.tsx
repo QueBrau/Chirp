@@ -37,7 +37,7 @@ import {
 */
 export function Terms() {
   usePageMeta(
-    "Terms of service — Chirp",
+    "Terms of service · Chirp",
     "The rules for using Chirp, including how dues payments work and who is responsible for them.",
   );
 
@@ -48,7 +48,7 @@ export function Terms() {
         <h1 className="display">Terms of service</h1>
         <div className="accent-bar" aria-hidden="true"></div>
         <p className="lede">
-          The rules for using Chirp, and who is responsible for what &mdash; particularly
+          The rules for using Chirp, and who is responsible for what, particularly
           where money is involved.
         </p>
         <div className="legal-meta">
@@ -104,8 +104,8 @@ export function Terms() {
           <h2>4. What you post</h2>
           <p>
             You keep ownership of what you post. You grant Chirp the permission needed
-            to store your content and show it to the people you posted it to &mdash; your
-            org, your campus, or the person you messaged &mdash; and nothing broader.
+            to store your content and show it to the people you posted it to (your
+            org, your campus, or the person you messaged) and nothing broader.
           </p>
           <p>
             Org content stays inside the org. A post made to an org is not shown on
@@ -139,7 +139,7 @@ export function Terms() {
           </p>
           <p>
             <strong>Your chapter is the merchant of record.</strong> That means your
-            chapter &mdash; not Chirp &mdash; is responsible for what the dues cover, for refunds,
+            chapter, not Chirp, is responsible for what the dues cover, for refunds,
             and for resolving disputes and chargebacks. Chirp charges a platform fee
             on each payment and does not take custody of your chapter&rsquo;s funds.
           </p>
@@ -159,8 +159,8 @@ export function Terms() {
             that breaks these terms, or where we are required to.
           </p>
           <p>
-            Records that belong to an org rather than to you alone &mdash; ledger entries,
-            meeting attendance &mdash; remain with the org after you leave, because they are
+            Records that belong to an org rather than to you alone (ledger entries,
+            meeting attendance) remain with the org after you leave, because they are
             the org&rsquo;s books.
           </p>
 
@@ -168,7 +168,7 @@ export function Terms() {
           <p>
             Chirp is provided as it is. We work to keep it running and accurate, but we do not
             promise it will always be available, error-free, or that it will never lose data. Use it
-            accordingly &mdash; do not make Chirp the only copy of something that matters.
+            accordingly: do not make Chirp the only copy of something that matters.
           </p>
           <p>
             Chirp is a tool your org uses to run itself. We are not responsible for what your org
@@ -201,7 +201,7 @@ export function Terms() {
           </p>
           <p>
             Disputes about dues themselves are between you and your chapter, which is the merchant
-            for those payments &mdash; see section 6.
+            for those payments (see section 6).
           </p>
 
           <h2>10. Governing law</h2>

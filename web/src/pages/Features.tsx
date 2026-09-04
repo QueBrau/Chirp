@@ -3,7 +3,7 @@ import { CtaSection } from "../components/CtaSection";
 
 export function Features() {
   usePageMeta(
-    "Features — Chirp",
+    "Features · Chirp",
     "A tour of what's actually in Chirp: the campus Home feed, private Org tools, the Chirp board, private messages, treasurer and secretary tools, and the alumni network.",
   );
 
@@ -12,7 +12,7 @@ export function Features() {
       <section className="page-head">
         <div className="wrap">
           <p className="eyebrow">What&rsquo;s inside</p>
-          <h1 className="display">The feed, the org, and the books &mdash; all in one app.</h1>
+          <h1 className="display">The feed, the org, and the books: all in one app.</h1>
           <div className="accent-bar" aria-hidden="true"></div>
           <p className="lede">
             Chirp is a campus app first: every student lands on a feed the day they
@@ -46,7 +46,7 @@ export function Features() {
               </div>
               <p className="copy" style={{ marginTop: "var(--space-5)", lineHeight: "1.7" }}>
                 Posts can be text, a photo, or a video. Comments and likes work the
-                way you&rsquo;d expect &mdash; no separate app for the social side of campus.
+                way you&rsquo;d expect. No separate app for the social side of campus.
               </p>
             </div>
           </div>
@@ -102,7 +102,7 @@ export function Features() {
               <h3 className="title">The member roster</h3>
               <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
                 Every active member, their role, and their pledge class in one
-                list &mdash; the roster an officer actually needs, not a spreadsheet.
+                list: the roster an officer actually needs, not a spreadsheet.
               </p>
             </article>
           </div>
@@ -116,7 +116,7 @@ export function Features() {
             <div className="card">
               <span className="chip chip--accent">Anonymous to other students</span>
               <p className="copy" style={{ marginTop: "var(--space-5)", lineHeight: "1.7" }}>
-                Posts show no name and no photo. Everyone sees a vote score &mdash;
+                Posts show no name and no photo. Everyone sees a vote score:
                 upvote or downvote, same as the rest of the board.
               </p>
             </div>
@@ -133,7 +133,7 @@ export function Features() {
                 <p>
                   The server does still record who posted each Chirp, and that record
                   is never returned by the API to other students. It exists only so
-                  reports and abuse can be acted on &mdash; most anonymous apps hide this;
+                  reports and abuse can be acted on. Most anonymous apps hide this;
                   we&rsquo;d rather say it plainly.
                 </p>
               </div>
@@ -153,7 +153,7 @@ export function Features() {
               <p className="lede" style={{ marginTop: "var(--space-5)", fontSize: "16px" }}>
                 Message another student one-to-one or in a group. Messages are
                 private, and stored so that the server is not designed to read
-                them &mdash; not a public feed, not a group chat everyone can see.
+                them: not a public feed, not a group chat everyone can see.
               </p>
             </div>
 
@@ -189,8 +189,8 @@ export function Features() {
               <h3 className="title">Treasurer</h3>
               <p style={{ marginTop: "var(--space-2)" }}><span className="chip chip--success">Append-only</span></p>
               <p className="copy" style={{ marginTop: "var(--space-3)", lineHeight: "1.6" }}>
-                Dues cycles, an append-only ledger &mdash; nothing is ever edited or
-                deleted, only corrected with a new entry &mdash; dues paid by card or
+                Dues cycles, an append-only ledger (nothing is ever edited or
+                deleted, only corrected with a new entry), dues paid by card or
                 bank transfer, and a CSV export for handing the books to next
                 year&rsquo;s treasurer.
               </p>
@@ -219,7 +219,7 @@ export function Features() {
               <h3 className="title">Alumni &amp; jobs</h3>
               <p style={{ marginTop: "var(--space-2)" }}><span className="chip chip--accent">Optional</span></p>
               <p className="copy" style={{ marginTop: "var(--space-3)", lineHeight: "1.6" }}>
-                Alumni keep a profile &mdash; grad year, company, title, industry &mdash; and
+                Alumni keep a profile (grad year, company, title, industry) and
                 can mark themselves open to mentoring. Job posts go out to a
                 chapter or the wider alumni network.
               </p>
