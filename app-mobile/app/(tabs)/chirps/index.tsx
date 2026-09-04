@@ -251,7 +251,11 @@ export default function ChirpScreen() {
     !posting;
 
   return (
-    <Screen backgroundColor={canvas} scroll>
+    <Screen
+      backgroundColor={canvas}
+      scroll
+      onRefresh={() => (campusId !== null ? loadChirps(campusId) : Promise.resolve())}
+    >
       {/* Custom header (§10.1), not Screen's `title` prop — the canvas is navy in DARK
           mode, where header text has to be onAccent (white) rather than the
           system-following ink tones. In light mode the canvas is the normal background

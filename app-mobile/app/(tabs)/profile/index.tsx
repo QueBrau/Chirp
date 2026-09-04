@@ -309,7 +309,7 @@ export default function ProfileScreen() {
     } catch {
       showAlert(
         "Can't change your picture yet",
-        "Choosing a photo needs the latest app build. Rebuild the app (EAS dev build) and try again.",
+        "Changing your picture isn't available in this version of the app yet. Ask whoever set up Chirp for your chapter to check for an update.",
       );
       return;
     }
@@ -507,7 +507,7 @@ export default function ProfileScreen() {
                 <View>
                   <ListRow
                     title="Notifications"
-                    subtitle="Content-free push. Not wired up yet."
+                    subtitle="Push notifications are coming soon."
                     left={<SettingsIconWell name="bell" />}
                   />
                   <ListRow

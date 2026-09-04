@@ -14,7 +14,7 @@
  */
 
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { Feather } from "@expo/vector-icons";
@@ -69,9 +69,9 @@ export default function MessagesScreen() {
   const palette = useTheme();
   const [items, setItems] = useState<ConversationItem[] | null>(null);
 
-  useEffect(() => {
-    const load = async () => {
-      const conversations = await listConversations();
+  // Hoisted from the mount effect (c304) so pull-to-refresh can invoke it too.
+  const load = useCallback(async () => {
+    const conversations = await listConversations();
       const withPreviews = await Promise.all(
         conversations.map(async (conversation) => {
           const messages = await listMessages(conversation.id);
@@ -86,7 +86,9 @@ export default function MessagesScreen() {
         }),
       );
       setItems(withPreviews);
-    };
+  }, []);
+
+  useEffect(() => {
     // Fail soft: matches the repo pattern elsewhere in this stack.
     load().catch(() => setItems([]));
 
@@ -108,10 +110,14 @@ export default function MessagesScreen() {
     });
 
     return unsubEvent;
-  }, []);
+  }, [load]);
 
   return (
-    <Screen title="Messages" subtitle="Start conversations. Sending isn't available yet.">
+    <Screen
+      title="Messages"
+      subtitle="Start conversations. Sending isn't available yet."
+      onRefresh={load}
+    >
       <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
         <NewConversationButton onPress={() => router.push("/messages/new")} />
       </View>

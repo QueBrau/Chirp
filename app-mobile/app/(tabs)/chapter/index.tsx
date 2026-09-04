@@ -437,7 +437,14 @@ function EventCard({
 }
 
 /** Events segment (§8.7): event list + mock create-event sheet, wired to src/api/events.ts. */
-function OrgEventsSegment({ chapterId }: { chapterId: string }) {
+function OrgEventsSegment({
+  chapterId,
+  refreshKey = 0,
+}: {
+  chapterId: string;
+  /** Bumped by the screen's pull-to-refresh (c304); a change refetches. */
+  refreshKey?: number;
+}) {
   const router = useRouter();
   const palette = useTheme();
   const [events, setEvents] = useState<EventWithRsvpSummaryOut[] | null>(null);
@@ -454,7 +461,7 @@ function OrgEventsSegment({ chapterId }: { chapterId: string }) {
   useEffect(() => {
     // Fail soft: a failed events load must not crash the segment.
     reload().catch(() => setEvents([]));
-  }, [reload]);
+  }, [reload, refreshKey]);
 
   useEffect(() => {
     listMembers(chapterId)
@@ -901,7 +908,9 @@ function MemberOrgHub({
       {segment === "feed" ? (
         <OrgFeedSegment chapterId={chapter.id} orgName={chapter.org_name} refreshKey={feedRefreshKey} />
       ) : null}
-      {segment === "events" ? <OrgEventsSegment chapterId={chapter.id} /> : null}
+      {segment === "events" ? (
+        <OrgEventsSegment chapterId={chapter.id} refreshKey={feedRefreshKey} />
+      ) : null}
       {segment === "tools" ? <OrgToolsSegment chapterId={chapter.id} role={role} /> : null}
     </View>
   );
@@ -963,6 +972,10 @@ export default function OrgsScreen() {
     <View style={{ flex: 1 }}>
       <Screen
         title="Orgs"
+        // c304: pull-to-refresh re-keys the feed and events segments, which each
+        // refetch on the key change; the bump itself is synchronous, so the
+        // spinner hands off to the segments' own loading states.
+        onRefresh={async () => setFeedRefreshKey((k) => k + 1)}
         // Real campus name (c46), absent until it resolves — an absent eyebrow
         // beats a wrong one. Was MOCK_CAMPUS plus a hardcoded "· SPARTANS",
         // which is UNCG's mascot and wrong for every other campus; CampusOut has

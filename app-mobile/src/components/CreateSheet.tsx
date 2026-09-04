@@ -266,7 +266,7 @@ export function CreateSheet({
       // Matches treasurer.tsx exportCsv()'s precedent for the identical risk.
       showAlert(
         "Can't attach a photo yet",
-        "Photo attach needs the latest app build. Rebuild the app (EAS dev build) and try again.",
+        "Attaching photos isn't available in this version of the app yet. Ask whoever set up Chirp for your chapter to check for an update.",
       );
       return;
     }
@@ -413,7 +413,7 @@ export function CreateSheet({
                 />
                 <ListRow
                   title="Video"
-                  subtitle="Coming soon. Media posting isn't wired up yet"
+                  subtitle="Video posting is coming soon"
                   divider
                   left={<OptionIcon icon="video" muted />}
                   right={<Badge label="Soon" />}
