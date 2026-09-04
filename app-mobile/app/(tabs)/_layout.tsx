@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSession } from "@/auth";
 import { AppText } from "@/components";
 import { TabBarVisibilityProvider, useTabBarVisibility } from "@/nav/TabBarVisibility";
-import { cardShadow, metrics, radii, spacing, typography, useTheme } from "@/theme";
+import { cardShadow, metrics, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
 
@@ -32,6 +32,7 @@ const TAB_META: Record<string, { label: string; icon: FeatherIconName }> = {
 
 function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const palette = useTheme();
+  const { campusColors } = useAppearance();
   const insets = useSafeAreaInsets();
 
   const tabBar = useTabBarVisibility();
@@ -100,25 +101,38 @@ function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
             style={{ flex: focused ? 1.7 : 1, alignItems: "center" }}
           >
             {focused ? (
+              // c310: solid palette.accent pill (was accentSoft) with the campus
+              // secondary (gold moment token, per useAppearance()) on icon + label
+              // (was palette.accent, the campus PRIMARY navy — low-contrast on the
+              // pale accentSoft pill it used to sit on). Gold on accentSoft would
+              // be lower contrast than before, so the pill has to go solid too.
               <View
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
                   gap: spacing.xs,
-                  backgroundColor: palette.accentSoft,
+                  backgroundColor: palette.accent,
                   borderRadius: radii.pill,
                   paddingHorizontal: spacing.md,
                   paddingVertical: spacing.sm,
                 }}
               >
-                <Feather name={meta.icon} size={typography.headline.fontSize} color={palette.accent} />
-                <AppText variant="micro" tone="accent" numberOfLines={1}>
+                <Feather name={meta.icon} size={typography.headline.fontSize} color={campusColors.secondary} />
+                <AppText
+                  variant="micro"
+                  numberOfLines={1}
+                  style={{ color: campusColors.secondary }}
+                >
                   {meta.label}
                 </AppText>
               </View>
             ) : (
               <View style={{ paddingVertical: spacing.sm }}>
-                <Feather name={meta.icon} size={typography.title.fontSize} color={palette.inkFaint} />
+                {/* c310: inkFaint (#9BA0B8 / #666B85) was the faintest ink token in
+                    the system on a floating bar — the actual legibility bug.
+                    inkSecondary reads clearly while staying subordinate to the
+                    focused tab. */}
+                <Feather name={meta.icon} size={typography.title.fontSize} color={palette.inkSecondary} />
               </View>
             )}
           </Pressable>

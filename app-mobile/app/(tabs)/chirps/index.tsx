@@ -357,10 +357,15 @@ export default function ChirpScreen() {
       ) : (
         <>
           {/* Composer: light-tinted surface like the cards below, visually subordinate
-              to them (no display-scale text, no gold). */}
+              to them (no display-scale text, no gold). Uses chirpTints[1] (cool
+              blue #EDF6FF), NOT chirpTints[0] (peach) — the first card below always
+              draws index 0, and the composer sitting directly above it must not
+              twin with that card's tint. c309: this was light.surface (pure white)
+              until now, a plain white box among the tinted cards — worst on the
+              navy Chirps canvas in dark mode. */}
           <View
             style={{
-              backgroundColor: light.surface,
+              backgroundColor: light.chirpTints[1],
               borderRadius: radii.card,
               borderWidth: 1,
               borderColor: light.border,
