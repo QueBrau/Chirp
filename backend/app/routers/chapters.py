@@ -16,6 +16,7 @@ from app.core.invites import clamp_invite_expiry
 from app.core.pagination import MAX_HISTORY_PAGE, MAX_ROSTER_PAGE, warn_if_capped
 from app.core.permissions import (
     DEPUTY_OVERVIEW,
+    DUES_ADMIN,
     EBOARD,
     MEMBERS_ADMIN,
     Role,
@@ -52,6 +53,7 @@ from app.schemas.identity import (
     RoleMetaOut,
     RoleTermOut,
     RosterOverview,
+    TreasurerOverview,
 )
 from app.services.role_term_service import apply_role_change, open_initial_term
 
@@ -563,6 +565,33 @@ async def deputy_overview(
         dues=dues,
         invites=invites,
     )
+
+
+@router.get("/chapters/{chapter_id}/treasurer-overview")
+async def treasurer_overview(
+    chapter_id: uuid.UUID,
+    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> TreasurerOverview:
+    """The chapter's authoritative dues picture, for the Treasurer (board card c278).
+
+    Jose's product ruling (board decisions log, Sep 4): a SCOPED read endpoint rather
+    than a widened chapter_overview gate — the same capability logic deputy_overview
+    documents above: that payload mixes attendance and lineage, which dues_admin
+    grants no claim to, so widening its gate would ship other officers' domains over
+    the wire. This endpoint computes only the dues section, through the same
+    _dues_overview helper the president and deputy dashboards read, so no two
+    officers can see different numbers for the same chapter — the c258 lesson, where
+    a client-side recomputation missed installment payers and displayed refunded
+    money as collected.
+
+    Gated on dues_admin (treasurer + president), not a new capability: reading the
+    correctly-computed dues state is the least a role that can WRITE ledger entries
+    against it should hold.
+    """
+    now = datetime.now(timezone.utc)
+    dues = await _dues_overview(chapter_id, session)
+    return TreasurerOverview(chapter_id=chapter_id, generated_at=now, dues=dues)
 
 
 @router.patch("/chapters/{chapter_id}/members")

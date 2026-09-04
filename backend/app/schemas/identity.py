@@ -455,3 +455,23 @@ class DeputyOverview(_Schema):
     roster: RosterOverview
     dues: DuesOverview
     invites: InviteOverview
+
+
+class TreasurerOverview(_Schema):
+    """Body for GET /chapters/{id}/treasurer-overview — the Treasurer's read of the
+    chapter's authoritative dues picture (board card c278, Jose's product ruling).
+
+    A trimmed sibling of ChapterOverview in the same mold as DeputyOverview above,
+    one section narrower still: the treasurer holds dues_admin and nothing else from
+    this card, so dues is the ONLY section — roster, invites, attendance and lineage
+    are absent from the RESPONSE, not merely hidden in the UI. Exists because the
+    gate-shaped alternative was worse both ways: widening the president-only
+    chapter_overview would ship other officers' domains to dues_admin, and leaving
+    the gap meant the officer who owns the dues number kept being refused the
+    correctly-computed version of it — which is how a second, wrong client-side
+    computation grew (found and corrected in c258).
+    """
+
+    chapter_id: uuid.UUID
+    generated_at: datetime
+    dues: DuesOverview
