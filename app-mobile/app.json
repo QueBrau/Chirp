@@ -43,6 +43,7 @@
       "expo-sqlite",
       "expo-notifications",
       "expo-font",
+      "expo-apple-authentication",
       [
         "@stripe/stripe-react-native",
         {

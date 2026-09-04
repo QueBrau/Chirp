@@ -29,6 +29,11 @@ export {
   type SocialAuthStatus,
 } from "./social";
 export {
+  isAppleSignInAvailable,
+  signInWithApple,
+  type AppleSignInOutcome,
+} from "./appleSignIn";
+export {
   type SessionContextValue,
   type SessionStatus,
 } from "./SessionProvider";
