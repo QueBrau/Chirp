@@ -984,11 +984,11 @@
     },
     {
       "id": "c320",
-      "col": "progress",
+      "col": "done",
       "owner": "",
       "tag": "",
       "area": "auth",
-      "title": "c320 FIX PUSHED Sep 4 - stale sign-in error now clears on next keystroke AND on signin/signup toggle (was: only submit/full-reset cleared it, so a mode switch could leave copy describing the wrong mode). Branch jose/c320-signin-error-clear @087fcbc, tsc 5.9.3 clean, PR needs one-click open (no gh on this Mac), then review.",
+      "title": "c320 [DONE Sep 4, chirps-3f (Jose+Claude), merged 37068ea via PR #218, CI 4/4, manager line-level review, no findings] Sign-in error no longer outlives the user's response to it: editEmail/editPassword/toggleAuthMode wrappers clear it on the next keystroke or a mode flip. The mode-switch case was the real bug beyond cosmetics - getAuthErrorMessage words some codes per mode, so stale copy could describe the WRONG mode after a flip. Composes with c169's 4-state caption (socialError/caption are separate state, untouched). Q's simulator find, closed same day.",
       "detail": ""
     },
     {
