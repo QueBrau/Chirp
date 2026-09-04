@@ -87,8 +87,14 @@ export function JoinChapter() {
           Open Chirp
         </a>
 
+        {/* c305: no store listing, no TestFlight exists yet (c39 artifact
+            uninstallable, c10 backlog) - the ONE true way to get Chirp today is
+            the person who sent the invite, so that is what the copy says. When
+            c10 ships a real TestFlight link, this paragraph is where it goes. */}
         <p className="copy" style={{ marginTop: "var(--space-5)" }}>
-          Don't have Chirp yet? <Link to="/">Find out what it is</Link>, then come back to this link.
+          Don't have Chirp yet? It's in early testing with invited chapters, so ask the
+          person who sent you this link to get you set up. Curious meanwhile?{" "}
+          <Link to="/">See what Chirp is</Link>.
         </p>
       </div>
     </div>

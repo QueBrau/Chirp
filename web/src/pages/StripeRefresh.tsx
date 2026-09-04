@@ -14,7 +14,7 @@ import { usePageMeta } from "../components/usePageMeta";
  * Promising anything more would be a lie about what this page can do.
  */
 export function StripeRefresh() {
-  usePageMeta("That setup link expired — Chirp");
+  usePageMeta("That setup link expired · Chirp");
 
   return (
     <div className="bounce">

@@ -3,7 +3,7 @@ import { CtaSection } from "../components/CtaSection";
 
 export function HowItWorks() {
   usePageMeta(
-    "How Chirp works — Chirp",
+    "How Chirp works · Chirp",
     "The four steps from signing up with your school email to running your org's dues, events, and tree from your phone.",
   );
 
@@ -39,7 +39,7 @@ export function HowItWorks() {
             <div className="step">
               <div className="step__num" aria-hidden="true"></div>
               <div>
-                <h2 className="headline">Land on your campus feed &mdash; no org required</h2>
+                <h2 className="headline">Land on your campus feed, no org required</h2>
                 <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
                   The moment you&rsquo;re signed in you&rsquo;re on Home, seeing For You and
                   Campus posts from your school. You do not need to belong to a
@@ -65,7 +65,7 @@ export function HowItWorks() {
               <div>
                 <h2 className="headline">Run the org from your phone</h2>
                 <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6", maxWidth: "var(--measure)" }}>
-                  Dues, events, meetings, the tree &mdash; officers manage all of it from
+                  Dues, events, meetings, the tree: officers manage all of it from
                   the Orgs tab, role by role, without a separate spreadsheet or a
                   separate app.
                 </p>
@@ -86,7 +86,7 @@ export function HowItWorks() {
               <p className="lede" style={{ marginTop: "var(--space-5)", fontSize: "16px" }}>
                 An officer creates the invite code, and the role a new member
                 gets is set at the moment that code is minted. There&rsquo;s no separate
-                step to promote someone afterward &mdash; the code already carries the
+                step to promote someone afterward. The code already carries the
                 role it was built for.
               </p>
             </div>

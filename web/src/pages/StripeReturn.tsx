@@ -17,7 +17,7 @@ import { usePageMeta } from "../components/usePageMeta";
  * app check".
  */
 export function StripeReturn() {
-  usePageMeta("Back from Stripe — Chirp");
+  usePageMeta("Back from Stripe · Chirp");
 
   return (
     <div className="bounce">

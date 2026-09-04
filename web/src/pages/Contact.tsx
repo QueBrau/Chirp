@@ -5,7 +5,7 @@ import { CONTACT_EMAIL } from "../siteConfig";
 
 export function Contact() {
   usePageMeta(
-    "Contact Chirp — Chirp",
+    "Contact Chirp · Chirp",
     "Reach Chirp for early access, press, privacy and data requests, or to report a security issue.",
   );
 

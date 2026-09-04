@@ -6,7 +6,7 @@ import { CtaSection } from "../components/CtaSection";
 
 export function Home() {
   usePageMeta(
-    "Chirp — your campus, your chapter, one app",
+    "Chirp: your campus, your chapter, one app",
     "Chirp is where students post, where student orgs run themselves, and where chapter dues get paid without a spreadsheet.",
   );
 
