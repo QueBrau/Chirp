@@ -3164,8 +3164,8 @@
     },
     {
       "id": "c316",
-      "col": "progress",
-      "title": "c316 [LAUNCH-BLOCKING - claimed chirps-ad Sep 4, found in their own c299 widen-triage] A NETWORK FAILURE MAKES A FALSE STATEMENT ABOUT A NAMED PERSON. app/(tabs)/chapter/member/[id].tsx:55 `load().catch(() => setMember(null))` and member===null renders 'Member not found - This member may have left the chapter.' Every c299 site said 'there is nothing here'; this one says a specific person LEFT, to whoever opened their profile, on a dropped request. Manager verified verbatim against current main - including that the file ALREADY has session-status gating with a comment about not falling through to 'Member not found' too early: the author closed the timing hole and left the network hole open on the line below it. FIX: same 404/403-vs-transport classification as c312's event/[id].tsx fix (ApiError.status) - only a real 404 gets the may-have-left copy, transport failures get their own state with retry."
+      "col": "done",
+      "title": "c316 [DONE Sep 4, chirps-ad, merged 474f76d via PR #212, CI 4/4] The member-profile false claim is dead. Fix is SHARPER than a c312 copy-paste, and the divergence is correct: on this screen the ordinary not-in-chapter case never throws (roster fetch succeeds, findMember misses - the success path), so only a 404 from getRoleTerms carries the genuine 'not a member here' meaning (membership_not_found, manager-verified at backend/app/routers/chapters.py:629). 403 deliberately EXCLUDED from that set unlike c312 - a 403 here means the VIEWER's own membership lapsed mid-read, a statement about the reader, and answering it with 'they may have left' would be the same lie in a new costume. Failure branch renders BEFORE the not-found branch (member is null in both states, so order IS the fix - same trap c299 hit on treasurer's role gate) with retry wired. c318's regression trap will pin the ordering."
     },
     {
       "id": "c317",
