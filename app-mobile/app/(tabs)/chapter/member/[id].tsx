@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 
 import { getRoleTerms, listMembers, type MemberOut, type RoleTerm } from "@/api/chapters";
+import { ApiError } from "@/api/client";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { chipVariant, roleLabel, termDateLabel } from "@/lib/roleTerms";
 import { findMember } from "@/lib/roster";
@@ -34,6 +35,8 @@ export default function MemberDetailScreen() {
 
   const [member, setMember] = useState<MemberOut | null | undefined>(undefined);
   const [terms, setTerms] = useState<RoleTerm[]>([]);
+  /** The fetch itself failed. Distinct from "this person is not in the chapter" (c316). */
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(async () => {
     if (chapterId === null || !id) {
@@ -48,13 +51,43 @@ export default function MemberDetailScreen() {
     setTerms(history);
   }, [chapterId, id]);
 
+  /**
+   * c316: this used to be `load().catch(() => setMember(null))`, and null renders
+   * "Member not found — This member may have left the chapter." So a dropped
+   * connection did not merely fail to answer, it told the reader that a specific,
+   * named person had left their chapter. Every other site in the c299 sweep said
+   * "there is nothing here"; this one made a false statement about someone.
+   *
+   * WHICH FAILURE IS ACTUALLY AN ANSWER, and this differs from c312's version of
+   * the same fix. On event/[id].tsx the server 404s for a missing event, so 404 and
+   * 403 both mean "gone or not yours". Here the ordinary not-in-this-chapter case
+   * does not throw at all — the roster fetch SUCCEEDS and findMember simply does not
+   * find them, which is the success path above. The one exception that carries the
+   * same meaning is a 404 from getRoleTerms: list_role_terms raises
+   * membership_not_found when the target has no membership row for this chapter
+   * (backend/app/routers/chapters.py:629), which is precisely "not a member here".
+   *
+   * A 403 is deliberately NOT in that set, unlike c312. It would mean the VIEWER's
+   * own membership stopped being active mid-read — a statement about the reader, not
+   * about the person on screen, so answering it with "they may have left" would be
+   * the same lie in a new costume.
+   */
+  const runLoad = useCallback(() => {
+    setLoadFailed(false);
+    load().catch((error: unknown) => {
+      const notAMember = error instanceof ApiError && error.status === 404;
+      setMember(null);
+      setLoadFailed(!notAMember);
+    });
+  }, [load]);
+
   useEffect(() => {
     // Session-status gating (matches members.tsx / event/[id].tsx): don't
     // fetch — and don't fall through to "Member not found" — while the
     // session/chapter are still resolving.
     if (sessionStatus === "loading" || (membership !== null && chapterLoading)) return;
-    load().catch(() => setMember(null));
-  }, [load, sessionStatus, membership, chapterLoading]);
+    runLoad();
+  }, [runLoad, sessionStatus, membership, chapterLoading]);
 
   // Session-status gating (matches members.tsx): a real member's history must
   // never flash "not found" while the session/chapter/roster are still
@@ -66,6 +99,16 @@ export default function MemberDetailScreen() {
     <Screen title="Member" subtitle="Profile and role history">
       {loading ? (
         <EmptyState title="Loading member..." />
+      ) : loadFailed ? (
+        // Rendered BEFORE the not-found branch on purpose: `member` is null in both
+        // states, so whichever comes first wins, and the wrong order here is exactly
+        // the bug (c299 hit the same ordering trap on treasurer.tsx's role gate).
+        <EmptyState
+          title="Couldn't load this member"
+          message="Something went wrong reaching the server. This isn't a statement that they left the chapter."
+          actionLabel="Try again"
+          onAction={runLoad}
+        />
       ) : member === null ? (
         <EmptyState title="Member not found" message="This member may have left the chapter." />
       ) : (
