@@ -85,11 +85,30 @@ function OptionIcon({ name, selected }: { name: FeatherName; selected: boolean }
 
 export default function AccountTypeScreen() {
   const router = useRouter();
+  const palette = useTheme();
   const { refresh, applyBootstrap } = useSession();
   // Invite code riding along from a deep link (join-chapter -> sign-in -> here);
   // forwarded back to join-chapter after bootstrap so the code survives onboarding.
   const { code: inviteCode } = useLocalSearchParams<{ code?: string }>();
-  const [selected, setSelected] = useState<AccountType>("non_greek");
+  /**
+   * The user's own tap, or null while they have not made one (c301).
+   *
+   * NOT `useState(inviteCode ? "greek" : "non_greek")`. A lazy initial value is
+   * computed once, on the first render, and useLocalSearchParams is not guaranteed
+   * to have resolved the deep link's params by then — a code arriving one render
+   * late would leave the default stuck on "non_greek" forever, which is the exact
+   * bug this card is about, just harder to see. Deriving `selected` below instead
+   * means the default follows the code whenever it lands, and the moment the user
+   * taps anything their choice wins and keeps winning.
+   */
+  const [chosen, setChosen] = useState<AccountType | null>(null);
+  /**
+   * Arriving with an invite code is arriving from a chapter, so "greek" is the
+   * default that matches why they are here. It is a PRE-SELECTION, not a lock:
+   * every option stays tappable, and Finding 13's routing is untouched — picking
+   * anything else still goes to the feed rather than to join-chapter.
+   */
+  const selected: AccountType = chosen ?? (inviteCode ? "greek" : "non_greek");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -150,10 +169,48 @@ export default function AccountTypeScreen() {
   return (
     <Screen title="Who are you?" subtitle="Pick how you'll use Chirp. You can add a chapter later.">
       <View style={{ gap: spacing.md }}>
+        {inviteCode ? (
+          // c301: the code rides chirp://join-chapter?code=... -> sign-in -> here, and
+          // proceed() forwards it ONLY for "greek". Every other choice dropped it with
+          // nothing on screen ever having said an invite existed, so recovery meant
+          // realising what happened and going back to whoever sent the link.
+          //
+          // The pre-selection above is most of the fix; this is the half that makes
+          // choosing AWAY from it a deliberate act instead of an accident. The second
+          // line changes with the selection on purpose — the consequence is stated at
+          // the moment it becomes true, not buried in copy nobody re-reads.
+          //
+          // It cannot name the chapter: redeeming a code is the only endpoint that
+          // resolves one, and the caller here may not even have a users row yet
+          // (bootstrap has not run), so there is nothing to ask that would answer.
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: spacing.md,
+              padding: spacing.md,
+              borderRadius: radii.input,
+              backgroundColor: palette.accentSoft,
+              borderWidth: 1,
+              borderColor: palette.border,
+            }}
+          >
+            <Feather name="mail" size={20} color={palette.accent} />
+            <View style={{ flex: 1, gap: spacing.xs }}>
+              <AppText variant="bodyBold">You have a chapter invite waiting</AppText>
+              <AppText variant="caption" tone="secondary">
+                {selected === "greek"
+                  ? "Continue and we'll take you straight to it."
+                  : "Pick \u201cI'm in a fraternity or sorority\u201d to use it now. Otherwise you can enter the code later from Orgs."}
+              </AppText>
+            </View>
+          </View>
+        ) : null}
+
         {OPTIONS.map((option) => {
           const isSelected = selected === option.type;
           return (
-            <Card key={option.type} onPress={() => setSelected(option.type)}>
+            <Card key={option.type} onPress={() => setChosen(option.type)}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
                 <OptionIcon name={option.icon} selected={isSelected} />
                 <View style={{ flex: 1, gap: spacing.xs }}>
