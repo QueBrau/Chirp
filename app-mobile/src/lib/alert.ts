@@ -117,22 +117,16 @@ export function showAlert(title: string, message?: string): void {
  * that user an action that cannot possibly work. The server guards the same trap for
  * the same reason at events.py:141 ("hints that verifying would help. It would not").
  *
- * SCOPE, RE-DERIVED at batch 2 rather than carried forward (c315). 97 codes are mapped
- * below and 15 more collapse to one line via SYSTEM_CODES, so 112 of the backend's codes
- * are accounted for, across the 58 client call sites that render them through this
- * function.
+ * SCOPE, RE-DERIVED at batch 2 rather than carried forward (c315). The backend raises
+ * 113 distinct codes; 97 are mapped below and 16 collapse to one line via SYSTEM_CODES,
+ * so all 113 are accounted for, across the 58 client call sites that render them through
+ * this function.
  *
- * THE BACKEND NOW RAISES 113, so ONE is unaccounted: `invalid_base64` (routers/keys.py:48
- * and routers/messages.py:71, a 422 on a malformed base64 field in the E2EE payloads).
- * It is not in either batch. It looks like SYSTEM_CODES material — a client-side encoding
- * fault a user cannot act on — but adding a code is a product decision, so it is reported
- * rather than assumed.
- *
- * HOW A CORRECT-LOOKING TOTAL HID IT, which is the part worth keeping: batch 2's lists
- * were built against a census of 112 and also total 112, so the arithmetic checked out.
- * Between the census and the brief, `query_too_short` was ADDED to the backend (+1) and
- * `invalid_base64` was dropped from the lists (-1). One in, one out, checksum unchanged.
- * A matching total is not a covered set — only comparing the actual SETS finds this.
+ * RE-DERIVE, NEVER INHERIT, and diff the SETS rather than the totals: batch 2's lists
+ * were built against a 112-code census and also totalled 112, so the arithmetic checked
+ * out while `query_too_short` had been added to the backend (+1) and `invalid_base64`
+ * dropped from the lists (−1) — one in, one out, checksum unchanged, one code silently
+ * uncovered. A matching total is not a covered set.
  *
  * THE NUMBERS HERE USED TO BE WRONG in a second way, recorded rather than quietly fixed.
  * c300 said "69 raised, 67 remaining" because that census grepped only the `forbidden()`
@@ -146,10 +140,22 @@ export function showAlert(title: string, message?: string): void {
  *     grep -rhoE 'detail="[a-z0-9_]+"' app
  *
  * THE PER-SCREEN SEAM (c327, Jose's ruling: per-screen copy WINS). Some screens map these
- * same codes themselves and their wording is the deliberate winner for their flow, being
- * richer and status-aware — join-chapter.tsx and verify-campus.tsx both do. This map is
- * the fallback for every OTHER call site, so two strings for one code is intended here,
- * not drift to reconcile. Each of those mappers says so at its own definition.
+ * same codes themselves, and their wording is the deliberate winner for their flow, being
+ * richer and status-aware in a way a shared per-code table cannot be. This map is the
+ * fallback for every OTHER call site, so two strings for one code is intended here, not
+ * drift to reconcile.
+ *
+ * FOUR mappers currently do this, which is more than c327 recorded — the fourth turned up
+ * only because a batch-2 spot-check went looking for a code it could actually trigger:
+ *
+ *     (auth)/join-chapter.tsx      the join()* catch chain      c327
+ *     (auth)/verify-campus.tsx     sendError / redeemError      c327 / c158
+ *     (tabs)/messages/new.tsx      searchUsersErrorMessage      c315 batch 2
+ *     (tabs)/messages/new.tsx      createConversationErrorMessage — c164, whose own
+ *                                  comment says it exists so apiErrorMessage will not
+ *                                  surface a raw code
+ *
+ * So do not read an entry below as what a user sees on those flows; check the screen.
  *
  * Copy in this map is product-approved verbatim. Adding a code means getting a line
  * written and approved, not inventing one at the call site.
@@ -291,6 +297,7 @@ const SYSTEM_CODES: ReadonlySet<string> = new Set([
   "app_public_base_url_not_configured",
   "dues_installment_requires_plan_route",
   "email_not_configured",
+  "invalid_base64",
   "invalid_media_token",
   "invalid_media_url",
   "invalid_payload",
