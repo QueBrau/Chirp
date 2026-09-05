@@ -59,6 +59,18 @@ export default function JoinChapterScreen() {
    */
   const settleSession = () => refresh().catch(() => undefined);
 
+  /**
+   * c327 (Jose's ruling): THIS SCREEN'S WORDING WINS, deliberately.
+   *
+   * lib/alert.ts's DETAIL_COPY also maps several of these codes, and where the two
+   * disagree this screen's catch chain is the intended answer for this flow — it is richer and
+   * status-aware, which a shared per-code table cannot be. DETAIL_COPY is the fallback
+   * for every OTHER call site that meets the same code.
+   *
+   * So two strings for one code is the design here, not drift to reconcile. Do not
+   * "harmonise" them; deleting this screen's catch chain in favour of the shared line would trade
+   * flow-specific copy for generic copy and lose the distinctions it draws.
+   */
   const join = async () => {
     setJoining(true);
     setError(null);
