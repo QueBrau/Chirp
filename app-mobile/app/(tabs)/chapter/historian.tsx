@@ -46,6 +46,11 @@ export default function HistorianScreen() {
 
   const [tree, setTree] = useState<LineageTreeOut | null>(null);
   const [treeLoading, setTreeLoading] = useState(true);
+  // c333: the third state. `tree` is null both when the chapter has no families and
+  // when the fetch failed, and the empty branch below offers "New family" — so a
+  // dropped request told a chapter with existing families that it had none and invited
+  // them to create a duplicate.
+  const [treeFailed, setTreeFailed] = useState(false);
   const [members, setMembers] = useState<MemberOut[]>([]);
   const [familySheetOpen, setFamilySheetOpen] = useState(false);
   const [pairSheetOpen, setPairSheetOpen] = useState(false);
@@ -58,10 +63,12 @@ export default function HistorianScreen() {
       return;
     }
     setTreeLoading(true);
+    setTreeFailed(false);
     try {
       setTree(await getLineage(chapterId));
     } catch {
       setTree(null);
+      setTreeFailed(true);
     } finally {
       setTreeLoading(false);
     }
@@ -174,7 +181,17 @@ export default function HistorianScreen() {
                 </Pressable>
               }
             />
-            {tree === null || tree.families.length === 0 ? (
+            {treeFailed ? (
+              // BEFORE the empty branch: tree is null in both states, so order decides
+              // which one a failed fetch renders. The "New family" action below is what
+              // makes the wrong order harmful rather than just wrong.
+              <EmptyState
+                title="Couldn't load the lineage"
+                message="Check your connection and try again. This isn't a statement that your chapter has no families."
+                actionLabel="Try again"
+                onAction={() => void reload()}
+              />
+            ) : tree === null || tree.families.length === 0 ? (
               <EmptyState
                 title="No families yet"
                 message="Start one. Every big/little pairing can live in a family, and the tree colors itself by them."

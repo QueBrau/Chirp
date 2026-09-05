@@ -46,6 +46,12 @@ export default function TreeScreen() {
   // Tracked separately from `tree` so "still fetching" and "fetch settled,
   // no lineage" render as two distinct EmptyStates instead of collapsing.
   const [treeLoading, setTreeLoading] = useState(chapterId !== null);
+  // c333: and a THIRD state, because the comment above named two and the failure
+  // quietly collapsed into the second. `tree` is null both when the chapter has no
+  // lineage and when the fetch failed, so without this flag a dropped request rendered
+  // "No lineage yet" under a "Pair the first big and little" button — telling a chapter
+  // with a full tree that it has none, and offering to start one.
+  const [treeFailed, setTreeFailed] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
@@ -63,6 +69,7 @@ export default function TreeScreen() {
       return;
     }
     setTreeLoading(true);
+    setTreeFailed(false);
     // Fail soft: previously this had no .catch(), so a real chapter id's
     // request rejecting (or the old mock id 422ing) left the screen stuck on
     // "Loading lineage..." forever with an unhandled rejection.
@@ -70,6 +77,7 @@ export default function TreeScreen() {
       setTree(await getLineage(chapterId));
     } catch {
       setTree(null);
+      setTreeFailed(true);
     } finally {
       setTreeLoading(false);
     }
@@ -162,6 +170,9 @@ export default function TreeScreen() {
   // Session-status gating (matches members.tsx): a real member's tree must
   // never flash "No lineage yet" while the session/chapter/tree are still
   // resolving.
+  // treeLoading is already set false in the catch's finally, so no !treeFailed term is
+  // needed here — verified rather than assumed, because the same shape DID need one on
+  // c321 and c324 where the failure path left the state null with nothing clearing it.
   const loading = sessionStatus === "loading" || (membership !== null && chapterLoading) || treeLoading;
 
   const pending = tree?.edges.filter((e) => !e.confirmed_by_little).length ?? 0;
@@ -186,6 +197,18 @@ export default function TreeScreen() {
 
       {loading ? (
         <EmptyState title="Loading lineage..." />
+      ) : treeFailed ? (
+        // BEFORE the empty branch, not after: `tree` is null in both states, so
+        // whichever is written first wins. The create action is what makes the wrong
+        // order actively harmful rather than merely wrong — "Pair the first big and
+        // little" on a network error recruits the user into recording a pairing their
+        // chapter may already have (the dues-plans duplicate-cycle shape, c299).
+        <EmptyState
+          title="Couldn't load the lineage"
+          message="Check your connection and try again. This isn't a statement that your chapter has no bigs and littles."
+          actionLabel="Try again"
+          onAction={() => void load()}
+        />
       ) : nothingToDraw ? (
         <EmptyState
           title="No lineage yet"

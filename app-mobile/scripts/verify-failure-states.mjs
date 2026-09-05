@@ -18,6 +18,27 @@
  *   secretary.tsx   "Secretary/president only" said to an actual secretary, i.e. the app
  *                   telling someone their role was revoked because the wifi dropped.
  *
+ * KNOWN GAP, carded rather than built: the generic collapse scan below models the lie as
+ * a BRANCH (an empty state reached when a fetch result is null). At least one member of
+ * this class is not a branch at all — profile's post count rendered a fabricated 0 inline,
+ * `{postCountFailed ? "—" : count}`, where a number always renders. That file is covered
+ * by a named check above instead. If a second value-swap instance ever appears, the
+ * generic discriminator is presence in the SAME expression that renders the value, not
+ * position before a branch — worth building then, not for one instance now.
+ *
+ * HOW TO FALSIFY A CHECK IN THIS FILE — a procedure, not a habit.
+ *
+ * RESTORE THE ACTUAL PRIOR STATE. `git show origin/main:<path> > <path>`, run, restore.
+ * Do NOT hand-build something that resembles the bug: the c333 pass sabotaged a failure
+ * flag by renaming it `_unusedTreeFailed`, which still contained "Failed", so the check
+ * could not fire and the falsification proved nothing. A stand-in you write is a
+ * stand-in you write to be caught; the real prior state is the thing that got past you.
+ *
+ * Then check the check itself, because a green sabotage run has two explanations and
+ * only one of them is good: either the assertion is weak, or the sabotage never landed.
+ * Read the offender list, not just the pass/fail count — the c333 pass had a check that
+ * named ONE of the two files it was written for and looked healthy at the summary line.
+ *
  * ASSERTIONS ARE COMPUTED OR POSITIONAL, NEVER "the string is present". A presence check
  * passes on a file where the gate exists but is unreachable, which is the exact failure
  * mode. And every anchor is SYNTAX, never prose - c312's order check matched a comment
@@ -35,6 +56,7 @@ const NEW_DM = "app/(tabs)/messages/new.tsx";
 const THREAD = "app/(tabs)/messages/[id].tsx";
 const PROFILE = "app/(tabs)/profile/index.tsx";
 const PRESIDENT = "app/(tabs)/chapter/president.tsx";
+const NODE_DETAIL = "src/tree/NodeDetail.tsx";
 
 const sources = {
   [DUES]: read(DUES),
@@ -45,6 +67,7 @@ const sources = {
   [THREAD]: read(THREAD),
   [PROFILE]: read(PROFILE),
   [PRESIDENT]: read(PRESIDENT),
+  [NODE_DETAIL]: read(NODE_DETAIL),
 };
 
 let failures = 0;
@@ -554,6 +577,176 @@ console.log("\n-- president.tsx: three false statements from one failed fetch (c
     fail(
       "president: an empty ORG NAME box reads as 'this chapter has no name set'",
       "traced to render for c324 - never destructive (Save is gated on chapter !== null) but still failure presented as fact",
+    );
+  }
+}
+
+console.log("\n-- NodeDetail + postCount: the c330 survivors --");
+
+{
+  const src = sources[NODE_DETAIL];
+  if (/setTermsFailed\(!\(error instanceof ApiError && error\.status === 404\)\)/.test(src)) {
+    pass("NodeDetail: a 404 is a real no-role, anything else is our failure (c316's classification)");
+  } else {
+    fail(
+      "NodeDetail: must tell a 404 apart from a transport failure",
+      "treating every error as no-role is the c316 bug on the same endpoint one screen over",
+    );
+  }
+  const failAt = src.indexOf("termsFailed ? (");
+  // Anchored on the FULL rendered string, not the phrase: the c330 comment above the
+  // catch quotes "No current role on" mid-sentence, and anchoring on the short form
+  // matched the COMMENT at line 68 instead of the JSX at 147 — this check failed on
+  // correct code the first time it ran. Second time this trap has fired (c312 was the
+  // first), inside the very script that documents it.
+  const emptyAt = src.indexOf("No current role on record");
+  if (failAt !== -1 && emptyAt !== -1 && failAt < emptyAt) {
+    pass("NodeDetail: the failure arm is reached before the no-role copy");
+  } else {
+    fail("NodeDetail: a failed terms fetch must not render as 'no current role'");
+  }
+}
+
+{
+  const src = sources[PROFILE];
+  if (/setPostCountFailed\(true\)/.test(src)) {
+    pass("profile: a failed post count is recorded rather than rendered as 0");
+  } else {
+    fail("profile: setPostCount(0) on failure states a NUMBER as fact - 0 posts is a claim");
+  }
+  // AND IT MUST BE READ WHERE THE NUMBER RENDERS. Recording the failure and consuming it
+  // are different jobs, and this check asserted only the first: deleting both reads while
+  // leaving the setter in place left the suite at ALL PASS, with the original fabricated
+  // 0 back on screen. Same setter-not-read gap the collapse check was blocked for, in a
+  // second place, on one of the two census survivors — found by chirps-ad, who hit the
+  // human version of it in their own c317 first cut.
+  //
+  // THIS SHAPE IS NOT A BRANCH. There is no "No posts" empty state to order against; the
+  // lie was a NUMBER rendered where a number always renders, swapped inline. So the
+  // discriminator is presence in the same expression, not position before a branch.
+  if (/\{postCountFailed\s*\?/.test(src) && /variant="stat">\{postCountFailed/.test(src)) {
+    pass("profile: the failure is READ in the expression that renders the count");
+  } else {
+    fail(
+      "profile: postCountFailed must be consumed where the number renders",
+      "a setter with nothing reading it puts the fabricated 0 straight back on screen",
+    );
+  }
+  // The c321 second-order lesson, applied to the fix that c321 itself planted: postCount
+  // must still be SET on failure or the loading gate never opens. Recording the failure
+  // and clearing the gate are two different jobs and both are required.
+  if (/postCount === null/.test(src) && /setPostCount\(0\)/.test(src)) {
+    pass("profile: the count is still set on failure, so the loading gate still opens");
+  } else {
+    fail(
+      "profile: recording the failure must not re-hang the screen",
+      "the gate keys on postCount === null, so the failure path must still set a number",
+    );
+  }
+}
+
+console.log("\n-- NEW SHAPE: null collapsed with empty, under a create action --");
+
+// THE CLASS c333 NAMED, and it is narrower than "failure as fact" on purpose.
+//
+// A render condition of the form `X === null || X.something.length === 0` folds two
+// different facts into one branch: "we do not know" and "there is genuinely nothing".
+// Dozens of branches in this app collapse those two and are perfectly fine — right up
+// until the branch puts a CREATE button underneath. Then a dropped request does not
+// merely misinform, it recruits the user into recording something their chapter may
+// already have: "Pair the first big and little" over a lineage that exists, "New
+// family" over families that exist, the dues-plans duplicate-cycle shape (c299).
+//
+// So the rule is not "never collapse null with empty". It is: if you collapse them,
+// there must be a failure branch reached BEFORE this one. This check finds every
+// collapse in app/ and src/ and requires a *Failed identifier earlier in the file.
+{
+  const collapse = /(\w+) === null \|\| \1[\w.?[\]]*\.length === 0/g;
+  const offenders = [];
+  let checked = 0;
+  for (const root of ["app", "src"]) {
+    const entries = readdirSync(new URL(`../${root}`, import.meta.url), {
+      recursive: true,
+      withFileTypes: true,
+    });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".tsx")) continue;
+      const full = `${entry.parentPath ?? entry.path}/${entry.name}`;
+      const text = readFileSync(full, "utf8");
+      collapse.lastIndex = 0;
+      let m;
+      while ((m = collapse.exec(text)) !== null) {
+        checked++;
+        // STRIP COMMENTS FIRST, and require a SETTER CALL rather than the word.
+        //
+        // The first version of this check tested `before` for /\w*[Ff]ailed/ and passed
+        // on historian.tsx — because a comment 40 lines up happened to contain the word
+        // "failed" in prose ("roleMeta null (loading or failed) fails"). It reported
+        // coverage it did not have, on one of the two survivors this check was written
+        // for. Third instance of the anchor-on-prose trap today, this time inside the
+        // detector for the class.
+        //
+        // `set<Something>Failed(` is code and cannot be written in a sentence.
+        const before = text
+          .slice(0, m.index)
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .replace(/\/\/[^\n]*/g, "");
+        // THE CREATE-ACTION CLAUSE, and it is what keeps this rule honest rather than
+        // a restatement of the whole class. feed/index.tsx collapses null with empty and
+        // is CORRECT: its branch is `return null`, so a failed invites fetch simply hides
+        // the strip — no copy, no claim, nothing to act on. Flagging it would make this
+        // check fire on correct code, which is how a check earns being ignored.
+        //
+        // What makes tree/historian different is the button underneath: "Pair the first
+        // big and little" / "New family" turn a false empty into an instruction to
+        // duplicate something that already exists.
+        // The collapse is sometimes INLINE in the JSX (historian) and sometimes hoisted
+        // into a named const used further down (tree.tsx's `nothingToDraw`). A fixed
+        // window from the match only catches the first — it missed tree.tsx, one of the
+        // two survivors this check exists for, until this followed the name to its use.
+        const declared = text.slice(0, m.index).match(/const (\w+) =\s*$/);
+        let branch = text.slice(m.index, m.index + 700);
+        if (declared) {
+          const useAt = text.indexOf(`${declared[1]} ? (`, m.index);
+          if (useAt !== -1) branch = text.slice(useAt, useAt + 900);
+        }
+        const offersCreate = /actionLabel=/.test(branch);
+
+        // A SETTER IS NOT A FIX. Requiring only /set\w*Failed\(/ above the collapse
+        // asserts that a failure flag is WRITTEN somewhere — not that anything READS it
+        // before the empty branch. Deleting tree.tsx's entire treeFailed render arm while
+        // leaving the state and the catch in place passed this check at exit 0: the
+        // no-op-fix shape, state set and never read, sailing through the detector built
+        // for this class. That is c317's own historical bug (loadFailed set, no branch
+        // reading it) reproduced inside the trap. Caught by the manager's falsification,
+        // not by mine.
+        //
+        // So: derive the flag from the setter and require its READ, positioned before the
+        // collapse actually renders — the same reads-in-render assertion the named-file
+        // checks above already make, generalized to any file this scan reaches.
+        const renderAt = declared && branch !== text.slice(m.index, m.index + 700)
+          ? text.indexOf(`${declared[1]} ? (`, m.index)
+          : m.index;
+        const flags = [...before.matchAll(/set(\w*Failed)\s*\(/g)].map(
+          (f) => f[1].charAt(0).toLowerCase() + f[1].slice(1),
+        );
+        const readBeforeRender = flags.some((flag) => {
+          const read = text.indexOf(`${flag} ? (`);
+          return read !== -1 && read < renderAt;
+        });
+        if (offersCreate && !readBeforeRender) {
+          const line = before.split("\n").length;
+          offenders.push(`${full.split("/app-mobile/")[1] ?? full}:${line} (${m[0]})`);
+        }
+      }
+    }
+  }
+  if (offenders.length === 0) {
+    pass(`every null-collapsed-with-empty branch has a failure branch before it (${checked} checked)`);
+  } else {
+    fail(
+      "a branch collapses 'unknown' with 'genuinely empty' and nothing distinguishes a failure first",
+      `${offenders.join("; ")} — a create action under a collapsed null/empty branch, with no failure state READ before it. A setter alone is not a fix: state written and never read renders the empty copy exactly as before.`,
     );
   }
 }
