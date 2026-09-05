@@ -18,6 +18,19 @@
  *   secretary.tsx   "Secretary/president only" said to an actual secretary, i.e. the app
  *                   telling someone their role was revoked because the wifi dropped.
  *
+ * HOW TO FALSIFY A CHECK IN THIS FILE — a procedure, not a habit.
+ *
+ * RESTORE THE ACTUAL PRIOR STATE. `git show origin/main:<path> > <path>`, run, restore.
+ * Do NOT hand-build something that resembles the bug: the c333 pass sabotaged a failure
+ * flag by renaming it `_unusedTreeFailed`, which still contained "Failed", so the check
+ * could not fire and the falsification proved nothing. A stand-in you write is a
+ * stand-in you write to be caught; the real prior state is the thing that got past you.
+ *
+ * Then check the check itself, because a green sabotage run has two explanations and
+ * only one of them is good: either the assertion is weak, or the sabotage never landed.
+ * Read the offender list, not just the pass/fail count — the c333 pass had a check that
+ * named ONE of the two files it was written for and looked healthy at the summary line.
+ *
  * ASSERTIONS ARE COMPUTED OR POSITIONAL, NEVER "the string is present". A presence check
  * passes on a file where the gate exists but is unreachable, which is the exact failure
  * mode. And every anchor is SYNTAX, never prose - c312's order check matched a comment
