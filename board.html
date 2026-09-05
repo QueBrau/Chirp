@@ -3186,10 +3186,10 @@
     },
     {
       "id": "c327",
-      "col": "backlog",
+      "col": "done",
       "tag": "mobile",
       "area": "auth",
-      "title": "c327 [RULED Sep 5: per-screen copy WINS deliberately, map stays fallback; closes when the seam documentation lands in the c335 batch-2 PR.] c327 [FILED Sep 4 by chirps-3f from chirps-ad's c315 spot-check] ERROR-COPY DIVERGENCE: six batch-1 codes are SHADOWED by exact-name per-screen mappers with DIFFERENT wording - join-chapter.tsx (invite_exhausted/expired/revoked) and verify-campus.tsx (unrecognized_edu_domain, verification_code_invalid, verification_expired) intercept before apiErrorMessage, plus status-branch shadowing (invalid_email via 400, verification_rate_limited via 429, email_send_failed via 502, no_pending_verification + invite_not_found via 404, already_member via generic fallback). Result: TWO approved strings for one code in two places - the exact divergence c239 consolidated apiErrorMessage to prevent. DETAIL_COPY entries stay (correct fallback for every other call site). PRODUCT CALL NEEDED at batch-2 scoping (Jose + chirps-3f): per code, which wording wins - or keep the richer status-aware per-screen copy deliberately and document the seam.",
+      "title": "c327 [DONE Sep 5 with #228 per Jose's ruling: per-screen copy WINS deliberately on its screens (warmer, context-aware, status-branch capable); batch map stays fallback everywhere else. Seam documented in all four per-screen mapper files AND alert.ts, so the divergence reads as chosen, not drifted.] c327 [RULED Sep 5: per-screen copy WINS deliberately, map stays fallback; closes when the seam documentation lands in the c335 batch-2 PR.] c327 [FILED Sep 4 by chirps-3f from chirps-ad's c315 spot-check] ERROR-COPY DIVERGENCE: six batch-1 codes are SHADOWED by exact-name per-screen mappers with DIFFERENT wording - join-chapter.tsx (invite_exhausted/expired/revoked) and verify-campus.tsx (unrecognized_edu_domain, verification_code_invalid, verification_expired) intercept before apiErrorMessage, plus status-branch shadowing (invalid_email via 400, verification_rate_limited via 429, email_send_failed via 502, no_pending_verification + invite_not_found via 404, already_member via generic fallback). Result: TWO approved strings for one code in two places - the exact divergence c239 consolidated apiErrorMessage to prevent. DETAIL_COPY entries stay (correct fallback for every other call site). PRODUCT CALL NEEDED at batch-2 scoping (Jose + chirps-3f): per code, which wording wins - or keep the richer status-aware per-screen copy deliberately and document the seam.",
       "detail": ""
     },
     {
@@ -3274,8 +3274,8 @@
     },
     {
       "id": "c335",
-      "col": "progress",
-      "title": "c335 [c315 BATCH 2 - approved by Jose Sep 5, ships pre-alpha. Brief sent to chirps-ad by chirps-3f directly (their lane, they review; manager presses the button per the split). Scope: the ~63 user-hittable unmapped codes as drafted + SYSTEM_CODES set collapsing 15 internal/config/protocol codes (stripe_not_configured, signature/payload errors, etc.) to one honest 'Something went wrong on our end. Try again in a moment.' line + the c327 seam documentation in both screen files and alert.ts (closing c327 with this PR). After this lands: census closes 112/112 accounted - every backend error code either mapped, system-collapsed, or deliberately per-screen.]"
+      "col": "done",
+      "title": "c335 [DONE Sep 5, chirps-ad built + chirps-3f reviewed (byte-verify all 63 strings, zero diffs) + manager button with head-SHA-matches-reviewed-commit verified, merged 5a9930c via PR #228, CI 4/4] ERROR-CODE CENSUS CLOSED 113/113 AS SET EQUALITY BOTH DIRECTIONS - 97 mapped + 16 SYSTEM_CODES collapsed to one honest 'Something went wrong on our end' line, zero unaccounted AND zero dead entries (the second direction proves no map entry names a code the backend never raises). Live end-to-end proof on cannot_block_self (raw code before, approved copy after). Census correction for the record: 112 -> 113 mid-flight because error codes contain DIGITS and both prior grep classes missed it - corrected pattern [a-z0-9_]+, banked to memory. Every backend error code is now mapped, system-collapsed, or deliberately per-screen."
     }
   ],
   "decisions": [
