@@ -40,14 +40,35 @@ export default function JoinChapterScreen() {
     setError(null);
     try {
       await joinChapter(code.trim());
-      void refresh(); // pull the new membership into the session
+      // c332: AWAIT the refresh, then route REGARDLESS of what it returns.
+      //
+      // The await exists only to close the stale-render window on the success path —
+      // `void refresh()` let /feed mount against a session that did not know about the
+      // membership yet.
+      //
+      // ROUTING REGARDLESS IS THE LOAD-BEARING HALF. By the time joinChapter resolves
+      // the join is complete server-side: the membership row exists and the invite's
+      // seat is spent. A failed refresh says nothing about that, so surfacing it as an
+      // error would be a false statement AND an instruction to re-enter a code that is
+      // now dead. Residual staleness is what the destination's own failure states are
+      // for, and this week made those comprehensive (c299/c313/c316/c317/c330).
+      //
+      // DELIBERATELY NOT account-type.tsx's shape, which awaits refresh and falls back
+      // to an error when it does not settle (line ~155). That path gates a DIFFERENT
+      // question — whether the account exists at all — where an unsettled session means
+      // the app genuinely does not know, and proceeding would bounce off the guards.
+      // Here the answer is already known. Do not harmonise these two; the asymmetry is
+      // the point, same as the c312/c316 status sets that also look copyable and are not.
+      await refresh();
       router.replace("/feed");
     } catch (err) {
       if (err instanceof ApiError && (err.status === 404 || err.status === 400)) {
         setError("That invite code didn't work. Check it and try again.");
       } else if (err instanceof ApiError && err.status === 409) {
-        // Already a member — that's success from the user's point of view.
-        void refresh();
+        // Already a member — that's success from the user's point of view, and the
+        // membership predates this attempt entirely, so the same rule applies even
+        // more plainly: await to close the stale window, route either way.
+        await refresh();
         router.replace("/feed");
       } else if (err instanceof ApiError && err.status === 403 && err.detail === "invite_expired") {
         setError("This invite code has expired. Ask your e-board for a fresh one.");
