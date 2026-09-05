@@ -21,7 +21,8 @@
     "verify:lineage-a11y": "node scripts/verify-lineage-a11y.mjs",
     "verify:a11y-touch": "node scripts/verify-a11y-touch.mjs",
     "verify:events-polls": "node scripts/verify-events-polls.mjs",
-    "verify:failure-states": "node scripts/verify-failure-states.mjs"
+    "verify:failure-states": "node scripts/verify-failure-states.mjs",
+    "verify:ci-coverage": "node scripts/verify-ci-coverage.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/muli": "^0.1.0",

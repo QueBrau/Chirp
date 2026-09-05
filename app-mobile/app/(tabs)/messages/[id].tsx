@@ -207,6 +207,13 @@ export default function ThreadScreen() {
             />
             <View
               accessibilityRole="button"
+              // c336: this announced as a bare "button, dimmed". The icon carries the
+              // meaning for sighted users and nothing at all for a screen reader, and
+              // the caption explaining why it is disabled is a separate element the
+              // button's focus never reaches. The hint reuses that visible wording
+              // rather than inventing a second account of the same fact.
+              accessibilityLabel="Send message"
+              accessibilityHint="Sending unlocks with E2EE (milestone 4)"
               accessibilityState={{ disabled: true }}
               style={{
                 width: metrics.buttonHeight,
