@@ -3251,6 +3251,16 @@
       "id": "c330",
       "col": "progress",
       "title": "c330 [claimed chirps-ad Sep 4 by manager assignment - FINAL PRE-ALPHA SWEEP, two halves] (A) The last unswept surfaces, and they are the FIRST-FIVE-MINUTES screens: app/(auth)/verify-campus.tsx, join-chapter.tsx, suspended.tsx, and the (auth) index/landing - the whole frat walks these before anything else. Four lenses as established (design vs DESIGN.md, load/error states incl. the failure-as-fact class, copy, a11y/touch) - sign-in.tsx and account-type.tsx are already covered (c311/c320/c301), skip them. (B) THE DEFINITIVE CENSUS to declare the failure-as-fact class CLOSED repo-wide: every `.catch` in app-mobile/app + src whose handler's only effect is setting state to a value the render treats as a legitimate answer ([], '', null-that-renders-copy) - the structural rule from your own c319 refinement, not the phrase grep. Cross off every site already fixed or ruled-defensible (c299/c313/c316/c317/c321/c324 + the seven-of-nine clean gates + your own six LOW rulings - all on those cards); anything NEW gets fixed in this card if small or carded if not; a ZERO-NEW result is the deliverable that lets the board say the class is closed before alpha. Falsification standard throughout; chirps-23 reads the census adversarially when their c326 lands. PR to me."
+    },
+    {
+      "id": "c331",
+      "col": "backlog",
+      "title": "c331 [FILED Sep 4 from c330's auth-screen sweep - chirps-3f lane, product+code] VERIFY-CAMPUS HAS NO RESEND AFFORDANCE. A student whose code never arrives has one route back: a ghost button labelled 'Use a different address' - wrong verb for the common case (same address, send it again), and c158's own comment says a failed/slow send is the LIKELY path today. Add an explicit resend (rate-limited server-side already via campus_verification's limiter), with copy that doesn't imply the address was wrong. First-five-minutes screen for the whole frat - worth doing before invites if time allows."
+    },
+    {
+      "id": "c332",
+      "col": "backlog",
+      "title": "c332 [FILED Sep 4 from c330 - two small mechanical items, one card, whoever frees] (1) join-chapter navigates on a FIRE-AND-FORGET session refresh, so the destination can briefly render against a stale session - account-type.tsx already solved this exact shape in its 409 path (await the refresh, then route); mirror it. (2) TREE NODES CARRY NO ACCESSIBLE NAME - the family tree is not screen-reader navigable at all; SVG nodes aren't buttons so a11y sweeps keyed on Pressables missed them. Give each node an accessible name/role (the member's name + 'view details')."
     }
   ],
   "decisions": [
