@@ -500,4 +500,23 @@ def test_0030_migration_up_down_up_with_a_row_present() -> None:
         from app.config import get_settings
 
         get_settings.cache_clear()
-        asyncio.run(_admin_execute(admin_url, [f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)']))
+        # c326: this teardown must never be able to REPLACE the failure it is cleaning
+        # up after. WITH (FORCE) terminates other backends, which the `chirp` role may
+        # not do, so it raises InsufficientPrivilegeError precisely when a connection is
+        # still open — i.e. when an assertion above failed mid-test and left one. The
+        # raise happens inside `finally`, so it becomes THE reported error and the real
+        # message is gone. Proven by deliberately failing the assertion above: the
+        # privilege error surfaced and the assertion never did.
+        #
+        # Invisible while this test is green, which is why it survived review. Same
+        # pattern the sibling migration tests already use for the same reason — see
+        # test_role_terms_backfill.py's note that failing a test over a housekeeping
+        # race "would misreport a passing backfill as broken, which is worse". A leaked
+        # database named _c279updownup_<hex> is findable and reapable by hand; a lost
+        # assertion message is not.
+        try:
+            asyncio.run(
+                _admin_execute(admin_url, [f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'])
+            )
+        except Exception:
+            pass
