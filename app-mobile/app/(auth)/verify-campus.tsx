@@ -210,6 +210,18 @@ export default function VerifyCampusScreen() {
   );
 }
 
+/**
+ * c327 (Jose's ruling): THIS SCREEN'S WORDING WINS, deliberately.
+ *
+ * lib/alert.ts's DETAIL_COPY also maps several of these codes, and where the two
+ * disagree this mapper is the intended answer for this flow — it is richer and
+ * status-aware, which a shared per-code table cannot be. DETAIL_COPY is the fallback
+ * for every OTHER call site that meets the same code.
+ *
+ * So two strings for one code is the design here, not drift to reconcile. Do not
+ * "harmonise" them; deleting this mapper in favour of the shared line would trade
+ * flow-specific copy for generic copy and lose the distinctions below.
+ */
 /** Copy for a failed send. Each branch tells the user something different to do. */
 function sendError(err: unknown): string {
   if (!(err instanceof ApiError)) return "Something went wrong. Try again.";
