@@ -26,6 +26,7 @@ import { View } from "react-native";
 
 import { hasFirebaseConfig, signOutUser, useSession } from "@/auth";
 import { AppText, Button, Card, Screen } from "@/components";
+import { showApiError } from "@/lib/alert";
 import { radii, spacing, useTheme } from "@/theme";
 
 function formatSuspendedSince(iso: string): string {
@@ -53,6 +54,14 @@ export default function SuspendedScreen() {
         await signOutUser();
       }
       router.replace("/sign-in");
+    } catch (error) {
+      // c330: signOutUser() rejecting used to be swallowed entirely — the spinner
+      // stopped, the navigation never happened, and nothing said why. On THIS screen
+      // that is worse than elsewhere: signing out is the only action available, so a
+      // silent failure leaves someone already told they are suspended tapping a button
+      // that appears to do nothing. Same class as the rest of this sweep — a failure
+      // presented as though nothing was asked.
+      showApiError(error, "Couldn't sign you out");
     } finally {
       setSigningOut(false);
     }

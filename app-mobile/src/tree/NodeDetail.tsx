@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { getRoleTerms, type RoleName, type RoleTerm } from "@/api/chapters";
+import { ApiError } from "@/api/client";
 import type { LineageEdgeOut, LineageTreeOut } from "@/api/lineage";
 import { chipVariant, currentTerm, roleLabel, termDateLabel } from "@/lib/roleTerms";
 import { AppText, Avatar, Badge, Card, Chip } from "@/components";
@@ -56,12 +57,28 @@ export function NodeDetail({
   // no Membership row (lineage_service's "allowed ghost" concept), so
   // GET .../role-terms would 404 for them; skip the fetch and the line both.
   const [terms, setTerms] = useState<RoleTerm[] | null>(null);
+  /** The role-terms fetch failed. Distinct from "this person holds no role" (c330). */
+  const [termsFailed, setTermsFailed] = useState(false);
   useEffect(() => {
     setTerms(null);
+    setTermsFailed(false);
     if (!node || node.is_ghost) return;
     getRoleTerms(chapterId, userId)
       .then(setTerms)
-      .catch(() => setTerms([]));
+      // c330: this was `.catch(() => setTerms([]))`, and [] renders "No current role on
+      // record" — a statement about the named person whose node you just tapped, made
+      // out of a dropped request. Identical to c316's "may have left the chapter" on
+      // member/[id].tsx, on the same endpoint, one screen over; c316 fixed the profile
+      // and this tree sheet kept the bug.
+      //
+      // 404 is the one failure that IS the answer: list_role_terms raises
+      // membership_not_found when the target has no membership row for this chapter
+      // (backend/app/routers/chapters.py:629), so "no role" is then true. Everything
+      // else is our failure to answer and must not be spoken as a fact about them.
+      .catch((error: unknown) => {
+        setTerms([]);
+        setTermsFailed(!(error instanceof ApiError && error.status === 404));
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapterId, userId, node?.is_ghost]);
 
@@ -118,6 +135,12 @@ export function NodeDetail({
             ) : terms === null ? (
               <AppText variant="caption" tone="tertiary" style={muliRegular}>
                 Loading role…
+              </AppText>
+            ) : termsFailed ? (
+              // Ahead of the "no role" line, because `terms` is [] in both states and
+              // whichever branch comes first wins — the ordering IS the fix (c299/c316).
+              <AppText variant="caption" tone="tertiary" style={muliRegular}>
+                Couldn't load role
               </AppText>
             ) : (
               <AppText variant="caption" tone="tertiary" style={muliRegular}>
