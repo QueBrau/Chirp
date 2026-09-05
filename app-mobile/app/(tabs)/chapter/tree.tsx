@@ -27,6 +27,7 @@ import { confirmAction, showApiError } from "@/lib/alert";
 import { radii, spacing, useTheme } from "@/theme";
 import { muli, useMuliFonts } from "@/tree/fonts";
 import { unplacedCount } from "@/tree/layout";
+import { LineagePairList } from "@/tree/LineagePairList";
 import { NodeDetail } from "@/tree/NodeDetail";
 import { PairSheet } from "@/tree/PairSheet";
 import { TreeCanvas } from "@/tree/TreeCanvas";
@@ -281,11 +282,27 @@ export default function TreeScreen() {
             ))}
           </View>
 
-          <TreeCanvas
-            tree={tree}
-            selectedUserId={selectedUserId}
-            onSelectUser={setSelectedUserId}
-          />
+          {/* c334: the drawing is decorative for assistive tech. Its nodes are
+              Circle/SvgText onPress handlers a screen reader can neither reach
+              nor name, so the surface is hidden HERE, on the wrapper, and the
+              pair list below carries the same data plus the same selection.
+              The props stay on this View and never move onto the <G> inside
+              TreeCanvas: c332 proved a11y props on <G> typecheck, pass every
+              gate, and silently DELETE rendered nodes.
+              aria-hidden is not redundant: react-native-web maps neither RN
+              prop to it, so without it the web build kept handing the whole
+              SVG surface to screen readers. Verified by render, not by hope. */}
+          <View
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            aria-hidden
+          >
+            <TreeCanvas
+              tree={tree}
+              selectedUserId={selectedUserId}
+              onSelectUser={setSelectedUserId}
+            />
+          </View>
 
           {selectedUserId && chapterId !== null ? (
             <NodeDetail
@@ -327,6 +344,16 @@ export default function TreeScreen() {
                 .join(" · ") || "All lineage edges confirmed"}
             </AppText>
           )}
+
+          {/* Below the canvas, and after the detail card so a canvas tap keeps
+              its result adjacent to the drawing. For a screen reader this is
+              the whole tree: the only reachable naming of who is whose big and
+              the only way to select a member. */}
+          <LineagePairList
+            tree={tree}
+            selectedUserId={selectedUserId}
+            onSelectUser={setSelectedUserId}
+          />
         </View>
       )}
 

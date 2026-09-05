@@ -215,6 +215,29 @@ jobs:
         # gets re-reviewed instead of under-claiming forever.
         run: npm run verify:e2ee-claims
 
+      - name: Lineage a11y list
+        working-directory: app-mobile
+        # Board card c334. The family tree is an SVG canvas whose nodes carry
+        # onPress handlers no screen reader can reach, so the pairs now also
+        # render as a real list and the canvas is hidden from assistive tech.
+        # This runs the actual components through react-dom/server, because the
+        # defect this replaces (c332) typechecked, satisfied every source-level
+        # check, and DELETED rendered nodes: the only way to see it is to render
+        # and count. Node counts are compared against main's own TreeCanvas, so
+        # a red here after a deliberate canvas change means re-verify and
+        # re-baseline, not suppress.
+        run: npm run verify:lineage-a11y
+
+      - name: Failure states are not empty states
+        working-directory: app-mobile
+        # Board card c333, wired here as part of c334 because it was never
+        # wired at all: the guard existed and passed, but nothing ran it on a
+        # PR, so "trapped" was only true for whoever remembered to type the
+        # command. It catches a failed fetch rendered as a confident empty
+        # state, which is worse than an error because it invites the user to
+        # recreate data their chapter already has.
+        run: npm run verify:failure-states
+
   web:
     # Board card c113. web/ is the PUBLIC MARKETING SITE and it had no gate at
     # all, so a break merged silently and surfaced at the next manual deploy.
