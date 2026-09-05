@@ -18,6 +18,14 @@
  *   secretary.tsx   "Secretary/president only" said to an actual secretary, i.e. the app
  *                   telling someone their role was revoked because the wifi dropped.
  *
+ * KNOWN GAP, carded rather than built: the generic collapse scan below models the lie as
+ * a BRANCH (an empty state reached when a fetch result is null). At least one member of
+ * this class is not a branch at all — profile's post count rendered a fabricated 0 inline,
+ * `{postCountFailed ? "—" : count}`, where a number always renders. That file is covered
+ * by a named check above instead. If a second value-swap instance ever appears, the
+ * generic discriminator is presence in the SAME expression that renders the value, not
+ * position before a branch — worth building then, not for one instance now.
+ *
  * HOW TO FALSIFY A CHECK IN THIS FILE — a procedure, not a habit.
  *
  * RESTORE THE ACTUAL PRIOR STATE. `git show origin/main:<path> > <path>`, run, restore.
@@ -605,6 +613,24 @@ console.log("\n-- NodeDetail + postCount: the c330 survivors --");
     pass("profile: a failed post count is recorded rather than rendered as 0");
   } else {
     fail("profile: setPostCount(0) on failure states a NUMBER as fact - 0 posts is a claim");
+  }
+  // AND IT MUST BE READ WHERE THE NUMBER RENDERS. Recording the failure and consuming it
+  // are different jobs, and this check asserted only the first: deleting both reads while
+  // leaving the setter in place left the suite at ALL PASS, with the original fabricated
+  // 0 back on screen. Same setter-not-read gap the collapse check was blocked for, in a
+  // second place, on one of the two census survivors — found by chirps-ad, who hit the
+  // human version of it in their own c317 first cut.
+  //
+  // THIS SHAPE IS NOT A BRANCH. There is no "No posts" empty state to order against; the
+  // lie was a NUMBER rendered where a number always renders, swapped inline. So the
+  // discriminator is presence in the same expression, not position before a branch.
+  if (/\{postCountFailed\s*\?/.test(src) && /variant="stat">\{postCountFailed/.test(src)) {
+    pass("profile: the failure is READ in the expression that renders the count");
+  } else {
+    fail(
+      "profile: postCountFailed must be consumed where the number renders",
+      "a setter with nothing reading it puts the fabricated 0 straight back on screen",
+    );
   }
   // The c321 second-order lesson, applied to the fix that c321 itself planted: postCount
   // must still be SET on failure or the loading gate never opens. Recording the failure
