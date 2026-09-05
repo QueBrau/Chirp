@@ -685,7 +685,30 @@ console.log("\n-- NEW SHAPE: null collapsed with empty, under a create action --
           if (useAt !== -1) branch = text.slice(useAt, useAt + 900);
         }
         const offersCreate = /actionLabel=/.test(branch);
-        if (offersCreate && !/set\w*Failed\s*\(/.test(before)) {
+
+        // A SETTER IS NOT A FIX. Requiring only /set\w*Failed\(/ above the collapse
+        // asserts that a failure flag is WRITTEN somewhere — not that anything READS it
+        // before the empty branch. Deleting tree.tsx's entire treeFailed render arm while
+        // leaving the state and the catch in place passed this check at exit 0: the
+        // no-op-fix shape, state set and never read, sailing through the detector built
+        // for this class. That is c317's own historical bug (loadFailed set, no branch
+        // reading it) reproduced inside the trap. Caught by the manager's falsification,
+        // not by mine.
+        //
+        // So: derive the flag from the setter and require its READ, positioned before the
+        // collapse actually renders — the same reads-in-render assertion the named-file
+        // checks above already make, generalized to any file this scan reaches.
+        const renderAt = declared && branch !== text.slice(m.index, m.index + 700)
+          ? text.indexOf(`${declared[1]} ? (`, m.index)
+          : m.index;
+        const flags = [...before.matchAll(/set(\w*Failed)\s*\(/g)].map(
+          (f) => f[1].charAt(0).toLowerCase() + f[1].slice(1),
+        );
+        const readBeforeRender = flags.some((flag) => {
+          const read = text.indexOf(`${flag} ? (`);
+          return read !== -1 && read < renderAt;
+        });
+        if (offersCreate && !readBeforeRender) {
           const line = before.split("\n").length;
           offenders.push(`${full.split("/app-mobile/")[1] ?? full}:${line} (${m[0]})`);
         }
@@ -697,7 +720,7 @@ console.log("\n-- NEW SHAPE: null collapsed with empty, under a create action --
   } else {
     fail(
       "a branch collapses 'unknown' with 'genuinely empty' and nothing distinguishes a failure first",
-      `${offenders.join("; ")} — if that branch offers a create action, a dropped request invites a duplicate`,
+      `${offenders.join("; ")} — a create action under a collapsed null/empty branch, with no failure state READ before it. A setter alone is not a fix: state written and never read renders the empty copy exactly as before.`,
     );
   }
 }
