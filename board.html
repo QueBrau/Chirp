@@ -3234,8 +3234,8 @@
     },
     {
       "id": "c326",
-      "col": "progress",
-      "title": "c326 [claimed chirps-23 Sep 4 - their own file, proven on themselves before claiming] test_c279_block_provenance.py:503's teardown DROP DATABASE ... WITH (FORCE) is UNGUARDED inside finally - an InsufficientPrivilegeError there REPLACES the assertion failure it cleans up after (proven empirically: deliberately failed the c279 assertion, the privilege error surfaced instead of the real message). Invisible while green, bites exactly when the test fails - when the message matters most. Harness-reporting-on-itself family. SCOPE SWEPT, exactly one site: every other WITH (FORCE) in the suite is either a SETUP drop (fails honestly, no masking - c230:743, role_terms:179) or an already-guarded teardown (c230:787, role_terms:221 which even carries the reasoning, conftest x3, c308's two as of 69ee172). Fix: three-line try/except + reasoning comment, matching role_terms:221's established pattern. Builder's own note kept for the record: 'I copied c230's migration-test mechanics into c279 and did not copy its guarded teardown' - the know-the-rule-quote-the-rule shape, second instance same day."
+      "col": "done",
+      "title": "c326 [DONE Sep 4, chirps-23, merged a2d2b7c via PR #225, CI 4/4] The unguarded FORCE teardown in test_c279 is guarded - the one site in the suite (their own sweep: every other WITH(FORCE) is either a setup drop that fails honestly or already guarded). Proven before fixing by deliberately failing the c279 assertion and watching the privilege error replace it. Comment carries the mechanism, why it survived review (invisible while green), the sibling precedent (role_terms:221), and the explicit trade: a leaked scratch database is findable, a lost assertion message is not. Kept as its own PR deliberately - folding it into c333 would have made 'what does the red prove' ambiguous."
     },
     {
       "id": "c328",
