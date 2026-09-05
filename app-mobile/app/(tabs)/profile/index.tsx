@@ -156,6 +156,8 @@ export default function ProfileScreen() {
   const [membershipsFailed, setMembershipsFailed] = useState(false);
   const [campus, setCampus] = useState<CampusOut | null>(null);
   const [postCount, setPostCount] = useState<number | null>(null);
+  /** The count fetch failed. Distinct from a member who has genuinely posted 0 (c330). */
+  const [postCountFailed, setPostCountFailed] = useState(false);
   const [editing, setEditing] = useState(false);
   const [layout, setLayout] = useState<ProfileSectionLayout[]>(() =>
     mockProfileLayout
@@ -270,8 +272,21 @@ export default function ProfileScreen() {
     // One server-side aggregate instead, applying the same visibility rules the
     // feed listing does, so the number and the feed can never disagree.
     countMyPosts(chapterId)
-      .then(({ count }) => setPostCount(count))
-      .catch(() => setPostCount(0));
+      .then(({ count }) => {
+        setPostCount(count);
+        setPostCountFailed(false);
+      })
+      // c330: `.catch(() => setPostCount(0))` rendered "0 posts to the chapter feed" —
+      // a number, presented as a fact about this member's activity, produced by a failed
+      // request. Note WHY it was written that way: c321 fixed an infinite spinner by
+      // making the effect always settle, and 0 settles it. That trade trades a hang for
+      // a falsehood. Still settling to 0 here (the loading gate keys on
+      // `postCount === null`, so anything else re-hangs the screen) but recording the
+      // failure, so the STAT can decline to state a number it does not have.
+      .catch(() => {
+        setPostCount(0);
+        setPostCountFailed(true);
+      });
   }, [memberships, membershipsFailed, chapterId, userId]);
 
   /** Finding 12: Sign out was unreachable (no onPress). Firebase isn't configured yet
@@ -552,9 +567,11 @@ export default function ProfileScreen() {
 
               {section.key === "activity" ? (
                 <View style={{ flexDirection: "row", alignItems: "baseline", gap: spacing.sm }}>
-                  <AppText variant="stat">{count}</AppText>
+                  <AppText variant="stat">{postCountFailed ? "—" : count}</AppText>
                   <AppText variant="caption" tone="secondary">
-                    {count === 1 ? "post" : "posts"} to the chapter feed
+                    {postCountFailed
+                      ? "post count unavailable right now"
+                      : `${count === 1 ? "post" : "posts"} to the chapter feed`}
                   </AppText>
                 </View>
               ) : null}
