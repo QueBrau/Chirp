@@ -117,7 +117,14 @@ globalThis.document = {
   addEventListener: listener,
   removeEventListener: listener,
 };
-globalThis.navigator = { userAgent: "node", product: "" };
+// Node 22+ ships a built-in `navigator` that is getter-only, so a plain
+// assignment throws there while working fine on Node 20. defineProperty covers
+// both; CI pins 20 but nobody should have to discover this locally.
+Object.defineProperty(globalThis, "navigator", {
+  value: { userAgent: "node", product: "" },
+  configurable: true,
+  writable: true,
+});
 
 const React = require("react");
 const { renderToStaticMarkup } = require("react-dom/server");

@@ -238,6 +238,57 @@ jobs:
         # recreate data their chapter already has.
         run: npm run verify:failure-states
 
+      # The six below existed and passed and ran on NOTHING (board c336). They were
+      # written with their cards, never wired, and so only asserted when somebody
+      # remembered the command. c334 wired two of them; these are the rest. A guard
+      # nobody runs is documentation with an exit code.
+      - name: Accessibility and touch targets
+        working-directory: app-mobile
+        # c307, extended by c336: sections 1-3 check three named files, section 4
+        # enumerates every .tsx and fails on any button role without a resolvable
+        # accessible name. Section 4 caught the messages composer's send button, which
+        # announced as a bare "button, dimmed" with no name at all.
+        run: npm run verify:a11y-touch
+
+      - name: Social auth boundary
+        working-directory: app-mobile
+        # c89. Provider credentials live outside this repo, so this proves the wiring
+        # and the boundary rather than claiming Apple/Google sign-in works.
+        run: npm run verify:auth
+
+      - name: Chirps board invariants
+        working-directory: app-mobile
+        # c297/c298: the pinned palette that keeps a vote score legible in dark mode,
+        # and the load states that stop a failed fetch rendering as an empty board.
+        run: npm run verify:chirps-board
+
+      - name: Events and polls
+        working-directory: app-mobile
+        # c312. The finding was not a missing spinner: a failed fetch rendered as
+        # "may have been removed, or not shared with you", which is a confident false
+        # statement about someone else's data.
+        run: npm run verify:events-polls
+
+      - name: Invite hand-off contract
+        working-directory: app-mobile
+        # c5. The share sheet and QR renderer are UI integrations and out of reach
+        # here; this keeps the minted-invite wiring from silently regressing.
+        run: npm run verify:invites
+
+      - name: Message cursor pagination
+        working-directory: app-mobile
+        # Keeps a client edit from dropping before_id, the tie-break the backend
+        # already accepts, which would silently reintroduce duplicate/skipped messages.
+        run: npm run verify:messages-pagination
+
+      - name: Every verifier actually runs
+        working-directory: app-mobile
+        # c336's own ratchet. Eight of fourteen guards here were never wired, so they
+        # asserted nothing on any PR while still passing by hand. This fails when a new
+        # verifier exists without a CI step, which makes adding the file the whole
+        # registration and leaves nothing to remember.
+        run: npm run verify:ci-coverage
+
   web:
     # Board card c113. web/ is the PUBLIC MARKETING SITE and it had no gate at
     # all, so a break merged silently and surfaced at the next manual deploy.
