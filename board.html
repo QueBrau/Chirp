@@ -417,6 +417,15 @@
   ],
   "cards": [
     {
+      "id": "c382",
+      "col": "progress",
+      "owner": "J",
+      "tag": "deploy",
+      "area": "infra",
+      "title": "c382 [Sep 7 Jose/Codex] Backend redeploy claimed on Jose request for Q mobile - source pinned ed0620d; schema/CI preflight then API + WS same-image rollout",
+      "detail": "Jose explicitly requested the backend redeploy in this session. Deployment source pinned to reviewed origin/main ed0620d (includes c378 PR238 and c351/c352 PR239); no unmerged audit branches. Live preflight: chirp-api-00055-z4s and chirp-ws-00018-4fd. Existing proxy on localhost5433. Verify packaged/live Alembic head first, preserve runtime configuration and timeout3600, deploy API from source then WS pinned to the resulting immutable image. Verify both traffic/digest and authenticated reads. Please leave this deployment window to this session; independent feature work continues. Mobile bundled UI requires its own build and is not shipped by this operation."
+    },
+    {
       "id": "c179",
       "col": "done",
       "owner": "Q",
