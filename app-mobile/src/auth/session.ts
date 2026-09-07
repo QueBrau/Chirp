@@ -26,6 +26,7 @@ export interface AuthAttempt {
   assertCurrent: () => void;
 }
 let transition: AuthAttempt | null = null;
+let transitionOutcome: boolean | null = null;
 let mutationQueue: Promise<unknown> = Promise.resolve();
 let activeMutation: (() => void) | null = null;
 let mutationGuardInstalled = false;
@@ -36,6 +37,16 @@ let pending: { owner: AuthIdentity; force: boolean; sequence: number; promise: P
 /** Read Firebase synchronously before capturing ownership; callbacks may arrive later. */
 export function captureSession(): AuthIdentity {
   if (DEV_UID !== null) return replaceIdentity(DEV_UID);
+  // A native cancellation may finish without entering the mutation queue while
+  // an older SDK call is between its veto and currentUser commit. Do not release
+  // quarantine until EVERY queued/in-flight SDK mutation has actually settled.
+  if (transition && transitionOutcome !== null && pendingMutations.size === 0) {
+    const actualUid = getFirebaseAuth().currentUser?.uid ?? null;
+    if (transitionOutcome || actualUid === null || actualUid === transition.baselineUid) {
+      transition = null;
+      transitionOutcome = null;
+    }
+  }
   if (transition) return currentIdentity();
   return replaceIdentity(getFirebaseAuth().currentUser?.uid ?? null);
 }
@@ -77,19 +88,18 @@ export function beginSignIn(): AuthAttempt {
     assertCurrent: () => { if (id !== authIntent) throw new SessionChangedError(); },
   };
   transition = attempt;
+  transitionOutcome = null;
   replaceIdentity(null, true);
   return attempt;
 }
 
 function finishTransition(attempt: AuthAttempt, success: boolean): void {
   if (transition !== attempt || attempt.id !== authIntent) return;
-  const actualUid = getFirebaseAuth().currentUser?.uid ?? null;
-  // On failure, never adopt an unexpected SDK identity left by an older action.
-  // Keep it quarantined until a later explicit action succeeds or Firebase is empty.
-  if (success || actualUid === null || actualUid === attempt.baselineUid) {
-    transition = null;
-    captureSession();
-  }
+  // Record a completed/cancelled intent even when another mutation still owns
+  // the SDK. captureSession reconciles it only after that owner settles, and
+  // only if its eventual UID is permitted by this intent's original baseline.
+  transitionOutcome = success;
+  captureSession();
 }
 
 /**
@@ -124,6 +134,7 @@ export function runAuthMutation<T>(attempt: AuthAttempt, task: () => Promise<T>,
     } finally {
       pendingMutations.delete(attempt);
       if (activeMutation === validate) activeMutation = null;
+      captureSession();
     }
   });
   // Only settlement of the underlying SDK mutation releases the queue.

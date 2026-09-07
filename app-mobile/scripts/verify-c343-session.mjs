@@ -77,7 +77,10 @@ function environment() {
   env.emitToken = user => { for (const fn of tokenListeners) fn(user); };
   // Matches the installed Firebase SDK boundary: pre-commit callbacks run BEFORE
   // currentUser changes and before the credential/signOut promise resolves.
-  env.commitUser = async user => { for (const fn of beforeListeners) await fn(user); env.commits.push(user?.uid ?? null); env.emit(user); };
+  // Firebase awaits middleware, then queues the currentUser/persistence commit.
+  // A newer auth intent can begin in that gap; a passed veto is not an atomic commit.
+  env.afterMiddleware = async () => {};
+  env.commitUser = async user => { for (const fn of beforeListeners) await fn(user); await env.afterMiddleware(); env.commits.push(user?.uid ?? null); env.emit(user); };
   env.signOut = async () => { await env.commitUser(null); };
   env.signIn = async () => { throw new Error("Test must supply sign-in"); };
   env.permission = async () => ({ granted: true });
@@ -409,6 +412,32 @@ await test("auth deadline maps to safe retry copy instead of suggesting wrong cr
   const mapper = e.load("src/auth/authErrors.ts").getAuthErrorMessage;
   const message = mapper(new e.operation.OperationTimeoutError(), "signin");
   assert.match(message, /timed out.*try again/i); assert.doesNotMatch(message, /password/i);
+});
+
+await test("cancelled newer native sign-in keeps older SDK veto-to-commit gap quarantined", async e => {
+  await e.mountProvider(); const sdkQueue = deferred(); e.afterMiddleware = () => sdkQueue.promise;
+  e.signIn = async () => { const user = e.user("A"); await e.commitUser(user); return { user }; };
+  const old = settled(e.session.signInWithEmail("A", "unused")); await flush();
+  assert.equal(e.auth.currentUser, null);
+  const nextNativeAttempt = e.session.beginSignIn(); e.session.cancelSignIn(nextNativeAttempt);
+  assert.equal(e.session.captureSession().uid, null);
+  sdkQueue.resolve(); assert.ok((await old).error); await flush();
+  assert.equal(e.auth.currentUser.uid, "A", "models the stale SDK write after a passed veto");
+  assert.equal(e.session.captureSession().uid, null); assert.equal(await e.session.getIdToken(), null);
+  assert.equal(e.identity.tokenFor(), null); assert.equal(e.hook.value.status, "signedOut");
+  e.afterMiddleware = async () => {};
+  e.signIn = async () => { const user = e.user("B"); await e.commitUser(user); return { user }; };
+  await e.session.signInWithEmail("B", "unused"); await flush();
+  assert.equal(e.identity.tokenFor(), "token-B"); assert.equal(e.hook.value.user.firebase_uid, "B");
+});
+
+await test("native cancellation releases safely after an older SDK failure without commit", async e => {
+  const network = deferred(); e.signIn = async () => { await network.promise; throw new Error("network failure"); };
+  const old = settled(e.session.signInWithEmail("A", "unused")); await flush();
+  const nextNativeAttempt = e.session.beginSignIn(); e.session.cancelSignIn(nextNativeAttempt);
+  network.resolve(); assert.ok((await old).error); await flush();
+  // Initial Firebase hydration can now be observed again; no stale SDK owner remains.
+  e.emit(e.user("B")); assert.equal(await e.session.getIdToken(), "token-B");
 });
 
 console.log(`ALL PASS: ${count} executed c343 behavior regressions (TypeScript ${ts.version}).`);
