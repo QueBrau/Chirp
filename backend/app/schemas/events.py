@@ -193,6 +193,12 @@ class EventRsvpOut(_Schema):
     created_at: datetime
 
 
+class EventOwnRsvpOut(_Schema):
+    """The caller's own answer, independent of guest-list permission and pagination."""
+
+    status: RsvpStatus | None
+
+
 class EventRsvpCountsOut(_Schema):
     """Headcounts for one event: the host's planning number (c275).
 
