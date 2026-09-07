@@ -42,4 +42,24 @@ if (!signIn.includes("socialAuthUnavailableMessage")) {
   process.exit(1);
 }
 
+// c331: the code-entry state must offer a resend for the SAME address, and the
+// send-failure mapper must render the server's 429 as human copy, not a code.
+// Source-level on purpose: the live 429 is rate-limiter state, not something a
+// unit test can honestly trigger; what we can pin is that the affordance exists
+// and is wired to the send path rather than to "start over with a new address".
+const verifyCampus = readFileSync(new URL("app/(auth)/verify-campus.tsx", ROOT), "utf8");
+const resendRequired = [
+  ["Resend affordance", '"Send a new code"'],
+  ["Resend re-uses the send path", "void send(true)"],
+  ["Different-address path kept", 'label="Use a different address"'],
+  ["429 copy is human", "Give it fifteen minutes"],
+];
+for (const [name, needle] of resendRequired) {
+  if (!verifyCampus.includes(needle)) {
+    console.error(`FAIL  ${name}: missing ${JSON.stringify(needle)}`);
+    process.exit(1);
+  }
+  console.log(`PASS  ${name}`);
+}
+
 console.log("ALL PASS");
