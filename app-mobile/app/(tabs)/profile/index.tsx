@@ -634,6 +634,15 @@ export default function ProfileScreen() {
                     left={<SettingsIconWell name="moon" />}
                     onPress={() => router.push("/profile/appearance")}
                   />
+                  {/* board c381: the "get me out" path for a mis-filed account
+                      type — (auth)/account-type.tsx only ever ran once, at
+                      signup, with no way back from a wrong tap. */}
+                  <ListRow
+                    title="Account type"
+                    subtitle={ACCOUNT_TYPE_LABELS[user.account_type]}
+                    left={<SettingsIconWell name="repeat" />}
+                    onPress={() => router.push("/profile/account-type")}
+                  />
                   <ListRow
                     title="Sign out"
                     subtitle="You'll return to the sign-in screen"
