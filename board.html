@@ -1074,6 +1074,15 @@
       "detail": ""
     },
     {
+      "id": "c380",
+      "col": "backlog",
+      "owner": "J",
+      "tag": "",
+      "area": "qa",
+      "title": "c380 [NEEDS A HUMAN WITH PROD DB ACCESS - braul Sep 7: 'the app isnt live so theres no users to look up. Just add mock users to test the search feature'] SEARCH IS DEPLOYED AND CORRECT AND HAS NOTHING TO FIND. Probed prod directly rather than guessing: GET /users/search returns 401 while a bogus route returns 404, so c322 shipped in deploy window #9 and the endpoint is live. The reachable set is simply empty - pre-launch there are no other students on braul's campus, and his OWN name is excluded by design (test_self_is_never_returned). Nothing is broken; there is no data. WHY THE ROUTER CANNOT JUST DO THIS: two deliberate locks, both security decisions, and neither should be weakened for convenience. (1) scripts/seed_dev_accounts.py REFUSES a non-local database by design - its own docstring calls that the inner lock. (2) AUTH_MODE=emulated is refused in production by the ENV guard (SECURITY-REVIEW finding 5), the outer lock. Separately the router has no prod credentials at all - INFRA-PRIVATE.html is not on this machine. WHAT IS NEEDED: a SEPARATE prod-fixture seed script, not a relaxation of the local one. Requirements that make it safe: every seeded row carries an obvious marker so real students are never confused with fixtures and cleanup is one query; it is idempotent; it has a companion teardown; it pins users to a named campus passed explicitly rather than guessed; and the users need NO Firebase identity at all, because search only reads users.display_name/campus_id - they never have to log in. THINK BEFORE RUNNING IT: these rows live in the production database. They will be findable by real students the moment the app opens, so the teardown is not optional and should run before launch. Prod already carries QA fixtures (c42, c33 - Chirp HQ), so this is precedent, not a new category. CHEAPER ALTERNATIVE THAT NEEDS NOBODY: the local stack already seeds 12 accounts on one campus (TEST-ACCOUNTS.md) and search works against it today with zero prod risk - it proves the FEATURE, though not the prod integration.",
+      "detail": ""
+    },
+    {
       "id": "c378",
       "col": "progress",
       "owner": "Q",
