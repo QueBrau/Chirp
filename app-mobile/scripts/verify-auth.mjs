@@ -133,7 +133,7 @@ for (const [name, needle] of plumbing) {
 // nearby comment cannot fake a pass.
 {
   const effectStart = sessionProvider.indexOf("getCampusVerification()");
-  const effectEnd = sessionProvider.indexOf("}, [userId]);", effectStart);
+  const effectEnd = sessionProvider.indexOf("}, [userId, sessionGeneration]);", effectStart);
   const body =
     effectStart === -1 || effectEnd === -1 ? "" : sessionProvider.slice(effectStart, effectEnd);
   const catchAt = body.indexOf(".catch(() => {");

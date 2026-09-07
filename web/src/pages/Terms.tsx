@@ -72,9 +72,9 @@ export function Terms() {
           <h2>1. Who can use Chirp</h2>
           <p>
             Chirp is built for students and alumni of the campuses we support. You
-            choose your campus and account type when you sign up, and you are
-            responsible for those being accurate. We do not currently verify school
-            affiliation.
+            choose your account type when you sign up and are responsible for its accuracy.
+            Campus features require verification of a supported school email address; its domain
+            determines your campus. This confirms mailbox access, not current enrollment.
           </p>
           <p>
             <strong>You must be at least {MIN_AGE} years old to hold a Chirp account.</strong> There
@@ -155,8 +155,10 @@ export function Terms() {
 
           <h2>7. Ending your use of Chirp</h2>
           <p>
-            You can delete your account at any time. We can suspend or close an account
-            that breaks these terms, or where we are required to.
+            You can request account deletion by emailing{" "}
+            <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. Requests are handled through
+            support; the app does not currently offer self-service account deletion. We can
+            suspend or close an account that breaks these terms, or where we are required to.
           </p>
           <p>
             Records that belong to an org rather than to you alone (ledger entries,

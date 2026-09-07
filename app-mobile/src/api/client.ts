@@ -1,6 +1,9 @@
 /** Typed fetch wrapper for the Chirp backend: base URL, auth header injection. */
 
-import { getIdToken, hasFirebaseConfig } from "@/auth";
+import { hasFirebaseConfig } from "../auth/config";
+import { captureSession, getIdToken } from "../auth/session";
+import { currentIdentity, tokenFor, type AuthIdentity } from "../auth/identity";
+import { Operation, type OperationOptions } from "./operation";
 
 /** The live Cloud Run API, used whenever EXPO_PUBLIC_API_URL is not set. */
 const DEFAULT_API_BASE_URL = "https://chirp-api-593616178468.us-central1.run.app";
@@ -23,13 +26,7 @@ const DEFAULT_WS_URL = "wss://chirp-ws-593616178468.us-central1.run.app/ws";
 export const API_BASE_URL: string =
   process.env.EXPO_PUBLIC_API_URL ?? DEFAULT_API_BASE_URL;
 
-let authToken: string | null = null;
 let debugFirebaseUid: string | null = null;
-
-/** Store the Firebase ID token sent as `Authorization: Bearer <token>` on every request. */
-export function setAuthToken(token: string | null): void {
-  authToken = token;
-}
 
 /** Emulated-auth mode only: uid sent as `X-Debug-Firebase-Uid` (backend auth_mode="emulated"). */
 export function setDebugFirebaseUid(uid: string | null): void {
@@ -51,7 +48,9 @@ export class ApiError extends Error {
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-export interface RequestOptions {
+export interface RequestOptions extends OperationOptions {
+  /** Share this operation across a multi-step upload instead of resetting its budget. */
+  operation?: Operation;
   method?: HttpMethod;
   /** JSON-serialized body. */
   body?: unknown;
@@ -70,96 +69,74 @@ function buildUrl(path: string, query?: RequestOptions["query"]): string {
   return parts.length > 0 ? `${url}?${parts.join("&")}` : url;
 }
 
-/** Fire the actual network request with whatever bearer/debug headers are currently set. */
-function doFetch(path: string, options: RequestOptions): Promise<Response> {
+/** Fire with the captured identity; a retry never adopts another account's bearer. */
+function doFetch(path: string, options: RequestOptions, operation: Operation): Promise<Response> {
+  operation.assertCurrent();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+  const authToken = tokenFor(operation.owner);
+  if (authToken) headers["Authorization"] = "Bearer " + authToken;
   if (debugFirebaseUid) headers["X-Debug-Firebase-Uid"] = debugFirebaseUid;
-
-  return fetch(buildUrl(path, options.query), {
-    method: options.method ?? "GET",
-    headers,
+  return operation.wait(fetch(buildUrl(path, options.query), {
+    method: options.method ?? "GET", headers, signal: operation.signal,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  }));
 }
 
-/**
- * On a 401, retry ONCE after forcing a fresh Firebase ID token — the ~1hr token can
- * go stale between onIdTokenChanged refreshes (e.g. app resumed from background).
- * Gated on hasFirebaseConfig(): a no-op in mock/demo mode.
- */
-async function fetchWithAuthRetry(path: string, options: RequestOptions): Promise<Response> {
-  let response = await doFetch(path, options);
-
-  if (response.status === 401 && hasFirebaseConfig()) {
-    const freshToken = await getIdToken(true);
-    if (freshToken) {
-      setAuthToken(freshToken);
-      response = await doFetch(path, options);
-    }
+async function fetchWithAuthRetry(path: string, options: RequestOptions, operation: Operation): Promise<Response> {
+  let response = await doFetch(path, options, operation);
+  if (response.status === 401 && !debugFirebaseUid && hasFirebaseConfig()) {
+    const freshToken = await operation.wait(getIdToken(true, operation.owner));
+    if (freshToken) response = await doFetch(path, options, operation);
   }
-
   return response;
 }
 
-/** Turn a fetch Response into the resolved payload, or throw ApiError on non-2xx. */
-async function parseResponse<T>(response: Response): Promise<T> {
+async function parseResponse<T>(response: Response, operation: Operation): Promise<T> {
   if (!response.ok) {
     let detail = response.statusText;
     try {
-      const payload = (await response.json()) as { detail?: unknown };
+      const payload = await operation.wait(response.json()) as { detail?: unknown };
       if (typeof payload.detail === "string") detail = payload.detail;
     } catch {
-      // non-JSON error body; keep statusText
+      operation.assertCurrent(); // Cancellation/deadline must not become an HTTP error.
     }
     throw new ApiError(response.status, detail);
   }
   if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  return operation.wait(response.json()) as Promise<T>;
 }
 
-/**
- * Perform an authenticated JSON request against the backend. Throws ApiError on non-2xx.
- */
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  return parseResponse<T>(await fetchWithAuthRetry(path, options));
-}
-
-/**
- * Same auth/URL/error handling as `request`, but resolves the raw response body as
- * text instead of JSON-parsing it. For endpoints that don't return JSON — e.g. the
- * treasurer/secretary CSV exports (`/ledger/export.csv`, `/meetings/export.csv`).
- */
-export async function requestText(path: string, options: RequestOptions = {}): Promise<string> {
-  const response = await fetchWithAuthRetry(path, options);
-  if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const payload = (await response.json()) as { detail?: unknown };
-      if (typeof payload.detail === "string") detail = payload.detail;
-    } catch {
-      // non-JSON error body; keep statusText
-    }
-    throw new ApiError(response.status, detail);
+async function runRequest<T>(
+  path: string, options: RequestOptions, parse: (response: Response, operation: Operation) => Promise<T>,
+): Promise<T> {
+  const owner: AuthIdentity = hasFirebaseConfig() && !debugFirebaseUid ? captureSession() : currentIdentity();
+  const operation = options.operation ?? new Operation(options, owner);
+  try {
+    operation.assertCurrent();
+    return await parse(await fetchWithAuthRetry(path, options, operation), operation);
+  } finally {
+    if (!options.operation) operation.dispose();
   }
-  return response.text();
 }
 
-/**
- * Same auth/URL/error handling as `request`, but also returns the raw response
- * Headers alongside the parsed JSON body. For the rare endpoint that carries
- * metadata OUTSIDE the body — today just GET /chapters/{id}/posts' actives-only
- * "hidden content exists" signal (board c102) — rather than changing that
- * endpoint's long-established bare-array response shape, which several existing
- * backend tests and app-mobile's own listPosts() already parse directly.
- */
-export async function requestWithHeaders<T>(
-  path: string,
-  options: RequestOptions = {},
+/** JSON body decoding uses the same deadline as fetch, refresh and retry. */
+export function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return runRequest(path, options, parseResponse<T>);
+}
+
+export function requestText(path: string, options: RequestOptions = {}): Promise<string> {
+  return runRequest(path, options, async (response, operation) => {
+    if (!response.ok) await parseResponse(response, operation);
+    return operation.wait(response.text());
+  });
+}
+
+export function requestWithHeaders<T>(
+  path: string, options: RequestOptions = {},
 ): Promise<{ data: T; headers: Headers }> {
-  const response = await fetchWithAuthRetry(path, options);
-  const data = await parseResponse<T>(response);
-  return { data, headers: response.headers };
+  return runRequest(path, options, async (response, operation) => ({
+    data: await parseResponse<T>(response, operation), headers: response.headers,
+  }));
 }
 
 /**
@@ -208,5 +185,5 @@ export function wsUrl(): string {
  * debug uid in emulated mode.
  */
 export function wsAuthProtocol(): string | null {
-  return authToken ?? debugFirebaseUid;
+  return tokenFor() ?? debugFirebaseUid;
 }

@@ -9,31 +9,9 @@ import {
   MIN_AGE,
 } from "../siteConfig";
 
-/*
-  JOSE — read this before changing anything below.
-
-  Every factual claim on this page is traceable to a model under
-  backend/app/models/. That is the whole value of it: a privacy policy written
-  from a template describes a product we do not have, and the first person to
-  diff it against the schema finds it out. If the schema changes, this page
-  changes in the same PR.
-
-  Three statements here are deliberately unflattering, and they are the ones
-  most worth keeping honest:
-
-  1. Anonymous board posts are anonymous to other students, NOT to us. We store
-     author_id. Saying otherwise would be a lie we could not keep.
-  2. Reporting a private message forwards that message's text to us. That is
-     what forwarded_plaintext on content_reports is.
-  3. Deleted content is hidden immediately, and erased for good 30 days later by
-     app.jobs.purge.purge_expired_soft_deletes (board c69). That function is the
-     only place that runs DELETE FROM on posts/comments/chirps — grep it before
-     changing the retention number below, which reads Settings.purge_retention_days
-     (backend/app/config.py) so the two can never drift apart silently.
-
-  Written for North Carolina and UNCG only, deliberately, rather than hedged
-  across fifty states. Revisit when the first campus outside NC onboards.
-*/
+/* Product facts are mapped to code in docs/public-claims-review.md (c367).
+   Counsel review remains c75. Do not promise implemented E2EE, automatic account
+   deletion or a successful retention job from schema names or intended policy. */
 export function Privacy() {
   usePageMeta(
     "Privacy policy · Chirp",
@@ -63,10 +41,10 @@ export function Privacy() {
             <p>
               <strong>The short version.</strong> We store what the app needs to work: who you are,
               which campus and orgs you belong to, and what you post. We never see your card or bank
-              number. Your message content is stored in a form our systems are not built to read.
-              Your anonymous posts are anonymous to other students, but we do record who wrote
-              them, and we explain exactly why below. You can get anything removed by
-              emailing <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+              number. Messaging does not currently provide end-to-end encryption, and sending
+              messages in the mobile app is currently unavailable. Your anonymous posts are
+              anonymous to other students, but we do record who wrote them. For data access or
+              removal requests, email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
             </p>
           </div>
 
@@ -85,13 +63,15 @@ export function Privacy() {
           <h2>2. What we collect when you sign up</h2>
           <p>
             Your email address, your display name, an optional avatar image link, the account type
-            you pick (student, member of a fraternity or sorority, or alum), and the campus you
-            select. We also store an identifier from our sign-in provider so we can recognise you
+            you pick (student, member of a fraternity or sorority, or alum). We also store
+            an identifier from our sign-in provider so we can recognise you
             when you return, and the date your account was created.
           </p>
           <p>
-            Your campus and account type are self-declared. We do not currently verify that you
-            attend the school you select, and we do not ask for a student ID number.
+            Your account type is self-declared. To unlock campus features, you verify access to
+            a supported school email address using a code. The email domain determines your campus.
+            We store that address, the verification attempt and its outcome. This checks access to
+            the mailbox, not current enrollment or student status. We do not ask for a student ID number.
           </p>
 
           <h2>3. Your orgs</h2>
@@ -122,40 +102,35 @@ export function Privacy() {
             which account cast each vote.
           </p>
           <p>
-            We are telling you this plainly because most apps in this category do not. The author of
-            a board post is never included in any response our app can request. That is
-            enforced in the server code, not hidden in the interface. We keep the record so we can
+            Student-facing board responses omit the author identity. Chirp retains the underlying
+            authorship record for authorized safety and operational work. We keep the record so we can
             act on harassment, threats and illegal content, and so that a court order can be
             answered honestly rather than with a claim we cannot support.
           </p>
 
           <h2>6. Messages</h2>
           <p>
-            Message content is stored only as an opaque block of data. Our servers do not parse it,
-            index it, log it, or use it to target anything.
+            Sending messages in the mobile app is currently unavailable. The current messaging
+            system uses encrypted connections to our servers; it does not provide end-to-end
+            encryption. Do not rely on it to keep message content unreadable to Chirp.
           </p>
           <p>
-            What we do hold about a conversation: who is in it, the title if it is a group, when
-            each message was sent, delivery and read receipts, and the public keys your devices
-            publish so other devices can reach them. That is metadata, and it is real: we can
-            see that two accounts are talking, and how often.
+            Conversation records include participants, group titles and message times. Our
+            messaging backend also stores submitted message data, device public keys and delivery
+            receipts. It does not currently store a separate read receipt. These records can show
+            which accounts communicate and when.
           </p>
 
           <h2>7. Reports and moderation</h2>
           <p>
-            If you report a post, a board post, or a message, we store the report, what was
-            reported, who reported it, and the reason you gave.
+            If you report content, we store what was reported, who reported it and the reason you
+            gave. A report can include a copy of the reported message for a moderator to read.
           </p>
           <p>
-            <strong>Reporting a private message is the one case where message content becomes
-            readable to us.</strong> When you submit that report, your app includes the text of the
-            reported message so a person can judge it. Nothing else from the conversation is
-            included, and it is attached only to that report. If you do not want a message read by a
-            moderator, do not report it.
-          </p>
-          <p>
-            Reports are reviewed by Chirp, and for org and campus content, by the officers of the
-            campus the content was posted to.
+            In-app reports are reviewed by eligible officers of approved chapters, within the
+            content scope their permissions allow. Holding an officer role alone does not grant
+            campus-wide access. Chirp can also access retained records for authorized safety and
+            operational work.
           </p>
 
           <h2>8. Family tree and lineage</h2>
@@ -264,61 +239,40 @@ export function Privacy() {
             investigate abuse or protect someone&rsquo;s safety.
           </p>
 
-          <h2>13. How to get your things removed</h2>
-          <p>You can do most of this yourself, in the app:</p>
-          <ul>
-            <li>edit or clear your display name, avatar and alumni profile;</li>
-            <li>delete your own posts and comments;</li>
-            <li>leave an org, which removes you from its roster.</li>
-          </ul>
+          <h2>13. How to request access or removal</h2>
           <p>
-            For anything else (a copy of your data, deletion of your whole account, or
-            removal of a tree entry about someone who is not a Chirp user), email{" "}
-            <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> from the address on your account,
-            or tell us enough to find the entry if you do not have an account.
+            The app lets you edit your profile and remove supported content. For a copy of your
+            data, account deletion, membership removal, or help with a tree entry, email{" "}
+            <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. Account deletion and data export
+            are currently handled through support; there is no self-service account deletion flow.
           </p>
           <p>
-            <strong>We will respond within 30 days.</strong> We may ask you to confirm your identity
-            before we act on a request, so that someone else cannot delete your account.
+            Contact us from the address on your account, or provide enough information to locate
+            a tree entry if you do not have an account. We may ask you to confirm your identity
+            before acting. <strong>We will respond within 30 days.</strong>
           </p>
           <p>
-            Deleting your account removes your profile and disconnects it from your orgs. Two things
-            do not go away, and you should know that before you ask:
+            A removal request does not erase every related record. Chapter financial ledgers are
+            retained as the org&rsquo;s books, and moderation records may need to remain for review.
+            We will explain what can be removed and what must be retained when handling your request.
           </p>
-          <ul>
-            <li>
-              <strong>Your chapter&rsquo;s financial ledger.</strong> Dues payments are part of an
-              org&rsquo;s books, which are append-only by design. The entry stays; we can
-              disassociate your name from it.
-            </li>
-            <li>
-              <strong>Content someone else reported.</strong> If a report about your content is open
-              or was acted on, we keep that record so the decision remains reviewable.
-            </li>
-          </ul>
 
           <h2>14. How long we keep things</h2>
           <p>
-            When you delete a post or comment, or remove a chirp, it is hidden from everyone
-            immediately. <strong>An automated job then erases it from the database for good 30
-            days later</strong>: a hard delete, not another layer of hiding. That 30-day
-            number is a setting in our backend, not a guess, and it will not quietly change
-            without this page changing with it.
+            Removed posts, comments and Chirps are hidden from normal feeds immediately. Our
+            retention policy makes this content eligible for deletion from the active database
+            after 30 days. Deletion depends on the retention process completing successfully;
+            it is not a guarantee of erasure on an exact date.
           </p>
           <p>
-            Purging a post also erases anything that only makes sense attached to it (its
-            likes, and every comment on it) once that post&rsquo;s own 30 days is up, even
-            if a particular comment is more recent than that. A comment you delete on its own,
-            without deleting the post underneath it, is erased 30 days from when you deleted it.
+            Removing a post also makes its attached comments and likes eligible for deletion with
+            it. A comment removed on its own follows its own removal date. Associated moderation
+            and financial records can be retained separately.
           </p>
           <p>
-            If you do not want to wait 30 days, email{" "}
-            <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> and we will erase it by hand
-            sooner.
-          </p>
-          <p>
-            Backups of the database are retained by our hosting provider on a rolling basis, so
-            deleted content can persist in a backup for a period after the purge job has run.
+            Contact <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> for help with removal
+            or questions about retained data. Backup copies can retain deleted content until
+            they expire under the backup retention schedule.
           </p>
 
           <h2>15. Security</h2>

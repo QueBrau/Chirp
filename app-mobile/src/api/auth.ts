@@ -1,6 +1,6 @@
 /** Auth API: account bootstrap (POST /auth/bootstrap) + identity types mirroring backend schemas. */
 
-import { request } from "./client";
+import { request, type RequestOptions } from "./client";
 import type { MembershipOut } from "./chapters";
 
 export type AccountType = "greek" | "non_greek" | "alumni";
@@ -84,8 +84,8 @@ export async function getCampus(campusId: string): Promise<CampusOut> {
  * yet — callers (SessionProvider) treat that as an "unregistered" state, not
  * an error.
  */
-export async function fetchMe(): Promise<{ user: UserOut; memberships: MembershipOut[] }> {
-  return request<{ user: UserOut; memberships: MembershipOut[] }>("/auth/me");
+export async function fetchMe(options: RequestOptions = {}): Promise<{ user: UserOut; memberships: MembershipOut[] }> {
+  return request<{ user: UserOut; memberships: MembershipOut[] }>("/auth/me", options);
 }
 
 /**
