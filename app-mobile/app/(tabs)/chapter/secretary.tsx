@@ -69,6 +69,8 @@ type ExpandedPanel = { meetingId: string; kind: "minutes" | "attendance" } | nul
  * change here and needs nothing on the backend.
  */
 const POLL_OPTION_SLOTS = 4;
+// Matches the server's poll option text ceiling (c345).
+const POLL_OPTION_MAX_LENGTH = 200;
 
 const ATTENDANCE_OPTIONS: { key: AttendanceStatus; label: string; short: string }[] = [
   { key: "present", label: "present", short: "P" },
@@ -684,6 +686,7 @@ export default function SecretaryScreen() {
                   <TextInput
                     key={index}
                     value={value}
+                    maxLength={POLL_OPTION_MAX_LENGTH}
                     onChangeText={(text) =>
                       setNewOptions((prev) =>
                         prev.map((existing, i) => (i === index ? text : existing)),
