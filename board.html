@@ -1065,6 +1065,15 @@
       "detail": ""
     },
     {
+      "id": "c378",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "",
+      "area": "orgs",
+      "title": "c378 IN PROGRESS Sep 7 (Q lane, Sonnet worker, branch q/c378-self-serve-chapter) [braul, from the real device build: 'I dont have a chapter it doesnt let me create one'] THE UNGATING c308 DEFERRED. Both prerequisites are now DONE and nobody wrote the follow-up: c308 (fd73383, migration 0031) decoupled moderation from e-board-anywhere and says verbatim 'Ungating itself stays a separate future card gated on c325'; c325 (54e7f6d) shipped PATCH /chapters/{id}/moderation-approval and its own card says 'the c308 prerequisite for self-serve creation is built'. So the gate that remains is now vestigial. CONFIRMED STILL SHUT: chapters.py create_chapter still opens `if not user.is_platform_admin: raise forbidden('platform_admin_required')`, and createChapter() in app-mobile/src/api/chapters.ts:132 has ZERO call sites - the c76 shape a third time, an API the app cannot invoke. There is no create-org screen at all. APPROACH B, already ruled on this board: (1) drop is_platform_admin; (2) require the caller to be CAMPUS-VERIFIED (core/campus_access.is_campus_verified) - a real .edu, not merely an account; (3) force the new chapter's campus_id to the CALLER'S OWN campus, never read it from the body, same reasoning as campus_verification's start_verification which resolves campus server-side on purpose; (4) new chapters are created with moderation_approved FALSE - that is the whole point of c308, so founding an org confers NO campus moderation and finding 1 stays closed; (5) rate limit creation via core/rate_limits.py limit_per_user or the orgs table is a spam target. MOBILE: a create-organization screen reachable from the Orgs tab's empty state, which today is a dead end for anyone without an invite code. Give createChapter its first caller. WHY THIS IS THE ROOT OF TWO OTHER COMPLAINTS: without a chapter the Orgs tab is empty and most of the app looks unchanged, which is why campus verification reads as 'doesn't change anything' even when it SUCCEEDED - redeem does set user.campus_id (services/campus_verification.py:303) and Chirps gates on campusId + access==='ok', so Chirps SHOULD have opened. Confirm that separately rather than assuming it is broken.",
+      "detail": ""
+    },
+    {
       "id": "c377",
       "col": "progress",
       "owner": "Q",
