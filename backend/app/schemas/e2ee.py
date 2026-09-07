@@ -1,11 +1,13 @@
 """E2EE key-directory schemas: devices, signed/one-time prekeys, prekey bundles."""
 
 import base64
+import binascii
 import uuid
 from datetime import datetime
+from functools import partial
 from typing import Annotated
 
-from pydantic import AliasChoices, BeforeValidator, Field
+from pydantic import AfterValidator, AliasChoices, BeforeValidator, Field
 
 from app.schemas.base import _Schema
 
@@ -19,27 +21,66 @@ def _to_b64(value: object) -> object:
 
 Base64Str = Annotated[str, BeforeValidator(_to_b64)]
 
+# Storage ceilings for the mounted, legacy opaque-byte directory, not claims about
+# a selected crypto algorithm. Mobile crypto is still parked. Exact key sizes and
+# signature verification must follow its eventual supported protocol contract.
+MAX_PUBLIC_KEY_BYTES = 256
+MAX_SIGNATURE_BYTES = 256
+MAX_KYBER_PUBLIC_KEY_BYTES = 4096
+MAX_DEVICE_LABEL_LENGTH = 100
+
+
+def _bounded_base64(value: str, *, max_bytes: int) -> str:
+    """Validate decoded storage size as well as the encoded string's cheap bound."""
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("invalid_base64") from None
+    if not 1 <= len(decoded) <= max_bytes:
+        raise ValueError("invalid_key_size")
+    return value
+
+
+PublicKeyInput = Annotated[
+    str,
+    Field(min_length=1, max_length=4 * ((MAX_PUBLIC_KEY_BYTES + 2) // 3)),
+    AfterValidator(partial(_bounded_base64, max_bytes=MAX_PUBLIC_KEY_BYTES)),
+]
+SignatureInput = Annotated[
+    str,
+    Field(min_length=1, max_length=4 * ((MAX_SIGNATURE_BYTES + 2) // 3)),
+    AfterValidator(partial(_bounded_base64, max_bytes=MAX_SIGNATURE_BYTES)),
+]
+KyberPublicKeyInput = Annotated[
+    str,
+    Field(min_length=1, max_length=4 * ((MAX_KYBER_PUBLIC_KEY_BYTES + 2) // 3)),
+    AfterValidator(partial(_bounded_base64, max_bytes=MAX_KYBER_PUBLIC_KEY_BYTES)),
+]
+# These identifiers are PostgreSQL INTEGER columns. Reject overflow at the HTTP
+# boundary instead of turning a malformed request into a database error.
+KeyIdentifier = Annotated[int, Field(ge=0, le=2**31 - 1)]
+
 
 # ---- prekey inputs ----
 
 
 class SignedPrekeyCreate(_Schema):
-    key_id: int
-    public_key_b64: str = Field(min_length=1)
-    signature_b64: str = Field(min_length=1)
+    key_id: KeyIdentifier
+    public_key_b64: PublicKeyInput
+    signature_b64: SignatureInput
 
 
 class OneTimePrekeyCreate(_Schema):
-    key_id: int
-    public_key_b64: str = Field(min_length=1)
+    key_id: KeyIdentifier
+    public_key_b64: PublicKeyInput
 
 
 class KyberPrekeyCreate(_Schema):
     """A single Kyber (PQXDH) prekey — used for both the last-resort slot and one-time batch."""
 
-    key_id: int
-    public_key_b64: str = Field(min_length=1)
-    signature_b64: str = Field(min_length=1)
+    key_id: KeyIdentifier
+    public_key_b64: KyberPublicKeyInput
+    signature_b64: SignatureInput
 
 
 # ---- device registration ----
@@ -70,9 +111,9 @@ class DeviceCreate(_Schema):
     clients/tests that predate PQXDH support keep working unchanged.
     """
 
-    device_label: str | None = None
-    registration_id: int
-    identity_key_b64: str = Field(min_length=1)
+    device_label: str | None = Field(default=None, max_length=MAX_DEVICE_LABEL_LENGTH)
+    registration_id: KeyIdentifier
+    identity_key_b64: PublicKeyInput
     signed_prekey: SignedPrekeyCreate
     one_time_prekeys: list[OneTimePrekeyCreate] = Field(
         default_factory=list, max_length=MAX_PREKEY_BATCH

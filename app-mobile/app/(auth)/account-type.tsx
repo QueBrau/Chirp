@@ -6,37 +6,15 @@
 
 import { Feather } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState, type ComponentProps } from "react";
+import { useState } from "react";
 import { View } from "react-native";
 
 import { bootstrap, type AccountType } from "@/api/auth";
 import { ApiError } from "@/api/client";
 import { getFirebaseAuth, hasFirebaseConfig, useSession, withInviteCode } from "@/auth";
 import { AppText, Button, Card, Screen } from "@/components";
+import { ACCOUNT_TYPE_OPTIONS, type AccountTypeIconName } from "@/lib/accountType";
 import { radii, spacing, typography, useTheme } from "@/theme";
-
-type FeatherName = ComponentProps<typeof Feather>["name"];
-
-const OPTIONS: { type: AccountType; icon: FeatherName; title: string; description: string }[] = [
-  {
-    type: "non_greek",
-    icon: "user",
-    title: "I'm a student",
-    description: "Campus feed, the anonymous board, and messaging with friends.",
-  },
-  {
-    type: "greek",
-    icon: "users",
-    title: "I'm in a fraternity or sorority",
-    description: "Everything above, plus your chapter feed, dues, and the family tree.",
-  },
-  {
-    type: "alumni",
-    icon: "award",
-    title: "I'm an alum",
-    description: "Stay on the family tree, mentor actives, and post to the job board.",
-  },
-];
 
 /** Selection dot: outlined ring when idle, filled accent + Feather check when picked. */
 function SelectionMark({ selected }: { selected: boolean }) {
@@ -61,7 +39,7 @@ function SelectionMark({ selected }: { selected: boolean }) {
   );
 }
 
-function OptionIcon({ name, selected }: { name: FeatherName; selected: boolean }) {
+function OptionIcon({ name, selected }: { name: AccountTypeIconName; selected: boolean }) {
   const palette = useTheme();
   return (
     <View
@@ -109,6 +87,18 @@ export default function AccountTypeScreen() {
    * anything else still goes to the feed rather than to join-chapter.
    */
   const selected: AccountType = chosen ?? (inviteCode ? "greek" : "non_greek");
+  /**
+   * board c381: a screen that opens with a real-looking selection nobody made is
+   * the bug. Before this, `selected` above doubled as both "what's highlighted"
+   * AND "what Continue will submit", so a tap that never registered (or simply
+   * never happened) submitted the pre-selection as if it were a choice — that is
+   * how a real user ended up permanently filed as "non_greek" having meant
+   * "alumni". `chosen` alone gates submission now; `selected` still drives what's
+   * on screen, so a late-arriving invite code can still visibly pre-select
+   * "greek" (the c301 behaviour above is untouched) without that pre-selection
+   * ever being enough to submit on its own.
+   */
+  const hasChosen = chosen !== null;
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -207,7 +197,7 @@ export default function AccountTypeScreen() {
           </View>
         ) : null}
 
-        {OPTIONS.map((option) => {
+        {ACCOUNT_TYPE_OPTIONS.map((option) => {
           const isSelected = selected === option.type;
           return (
             <Card key={option.type} onPress={() => setChosen(option.type)}>
@@ -235,11 +225,13 @@ export default function AccountTypeScreen() {
           label={
             submitting
               ? "Please wait..."
-              : selected === "greek"
-                ? "Next: join your chapter"
-                : "Continue"
+              : !hasChosen
+                ? "Pick one to continue"
+                : selected === "greek"
+                  ? "Next: join your chapter"
+                  : "Continue"
           }
-          disabled={submitting}
+          disabled={submitting || !hasChosen}
           style={{ marginTop: spacing.lg }}
           onPress={() => void handleContinue()}
         />

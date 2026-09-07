@@ -118,8 +118,9 @@ async def _open_reservation(
         await session.execute(
             sa_text(
                 "INSERT INTO dues_payment_intents "
-                "(chapter_id, dues_cycle_id, user_id, rail, status) "
-                "VALUES (:chapter_id, :cycle_id, :user_id, :rail, 'open')"
+                "(chapter_id, dues_cycle_id, user_id, rail, status, amount_cents, currency) "
+                "VALUES (:chapter_id, :cycle_id, :user_id, :rail, 'open', "
+                "(SELECT amount_cents FROM dues_cycles WHERE id = :cycle_id), 'usd')"
             ),
             {
                 "chapter_id": chapter_id,

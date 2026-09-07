@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, tuple_, update
+from sqlalchemy import func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -421,61 +421,43 @@ async def create_block(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> UserBlockOut:
-    """Block another user; 403 on self, 409 if the block already exists (incl. a concurrent double-tap)."""
-    # c237. Self-blocking was accepted here while block_chirp_author below has always
-    # refused it, so the same act was legal through one endpoint and forbidden through
-    # the other. It is not harmless: contact is unaffected (blockers_of filters
-    # subject_id out), but feed.py's c35 anti-join hides posts whose author the caller
-    # has blocked, and that includes the caller themselves - so a self-block silently
-    # removes your OWN posts from your own feed, which reads as data loss rather than
-    # as a moderation setting. Same 403 cannot_block_self as by-chirp, deliberately:
-    # one act, one status, one detail string.
+    """Add named intent; only an existing named intent conflicts, including races."""
     if body.blocked_id == user.id:
         raise forbidden("cannot_block_self")
-    # c279: a by-chirp block on this same pair is UPGRADED to 'named' rather than
-    # refused, and the upgrade answers 201 exactly as a fresh block does.
-    #
-    # THAT STATUS IS A SECURITY PROPERTY, NOT A CONVENIENCE. Before provenance existed
-    # this endpoint 409'd whenever any row was present, which handed back the identity
-    # the by-chirp endpoint refuses to give: block an anonymous chirp's author, then
-    # named-block roster members one at a time - the one that 409s is the author. Same
-    # oracle shape c243 closed on the DM path. With the upgrade in place, "no row" and
-    # "a by-chirp row" are indistinguishable from outside (both 201) and only a block
-    # the caller made BY NAME - which they already know about - still 409s.
-    #
-    # Never the other direction: a named block is not downgraded by a later by-chirp
-    # block (see block_chirp_author's on_conflict_do_nothing). Someone who blocked a
-    # person by name is asking for everything hidden, and a chirp they happen to block
-    # afterwards must not quietly give some of it back.
-    existing = await session.get(models.UserBlock, (user.id, body.blocked_id))
-    if existing is not None:
-        if existing.source == "named":
-            raise conflict("already_blocked")
-        existing.source = "named"
-        await session.commit()
-        await session.refresh(existing)
-        return UserBlockOut.model_validate(existing)
-
-    block = models.UserBlock(
-        blocker_id=user.id, blocked_id=body.blocked_id, source="named"
+    # c342: a previous anonymous intent is neither returned nor replaced. The
+    # timestamp is THIS named action's time in both insert and upgrade cases.
+    # One conditional upsert serializes concurrent named/anonymous writes; after
+    # waiting on a rival, Postgres rechecks source before allowing the upgrade.
+    named_at = datetime.now(timezone.utc)
+    statement = (
+        pg_insert(models.UserBlock)
+        .values(
+            blocker_id=user.id,
+            blocked_id=body.blocked_id,
+            source="named",
+            created_at=named_at,
+            anonymous_created_at=None,
+        )
+        .on_conflict_do_update(
+            index_elements=["blocker_id", "blocked_id"],
+            set_={"source": "named", "created_at": named_at},
+            where=models.UserBlock.source == "by_chirp",
+        )
+        .returning(
+            models.UserBlock.blocker_id,
+            models.UserBlock.blocked_id,
+            models.UserBlock.created_at,
+        )
     )
-    session.add(block)
     try:
+        result = await session.execute(statement)
+        block = result.mappings().first()
         await session.commit()
     except IntegrityError:
-        # Concurrent duplicate insert race on the (blocker_id, blocked_id) PK. The row
-        # that won may be a by-chirp block, so this re-reads and upgrades rather than
-        # 409ing - otherwise the race would reopen the oracle described above for
-        # exactly the callers unlucky enough to hit it.
         await session.rollback()
-        raced = await session.get(models.UserBlock, (user.id, body.blocked_id))
-        if raced is None or raced.source == "named":
-            raise conflict("already_blocked") from None
-        raced.source = "named"
-        await session.commit()
-        await session.refresh(raced)
-        return UserBlockOut.model_validate(raced)
-    await session.refresh(block)
+        raise conflict("already_blocked") from None
+    if block is None:
+        raise conflict("already_blocked")
     return UserBlockOut.model_validate(block)
 
 
@@ -508,19 +490,27 @@ async def block_chirp_author(
     if chirp.author_id == user.id:
         raise forbidden("cannot_block_self")
 
-    # Unconditional idempotent upsert, deliberately: the earlier read-then-maybe-insert
-    # returned the same 204 either way, but an already-blocked author short-circuited on
-    # the read while a new block paid for an INSERT plus a commit. That latency gap is
-    # itself the one-bit oracle the 204 was chosen to close — timing the response still
-    # answered "do these two chirps share an author". Every call now does the same work.
+    # One upsert in both cases, with no response split. This avoids an application
+    # short-circuit on an existing relationship; it is not a constant-time claim
+    # about database locks or disk I/O. Named source/time survive a later anon block.
+    anonymous_at = datetime.now(timezone.utc)
     await session.execute(
         pg_insert(models.UserBlock)
-        # c279: provenance. do-nothing on conflict is what makes "never downgrade" true
-        # - if a named block is already here, it stays named. It also keeps this
-        # statement exactly as constant-work as it was: one insert, one outcome, no
-        # branch whose cost depends on whether these two are already linked.
-        .values(blocker_id=user.id, blocked_id=chirp.author_id, source="by_chirp")
-        .on_conflict_do_nothing(index_elements=["blocker_id", "blocked_id"])
+        .values(
+            blocker_id=user.id,
+            blocked_id=chirp.author_id,
+            source="by_chirp",
+            created_at=anonymous_at,
+            anonymous_created_at=anonymous_at,
+        )
+        .on_conflict_do_update(
+            index_elements=["blocker_id", "blocked_id"],
+            set_={
+                "anonymous_created_at": func.coalesce(
+                    models.UserBlock.anonymous_created_at, anonymous_at
+                )
+            },
+        )
     )
     await session.commit()
     return None
@@ -532,11 +522,62 @@ async def delete_block(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    """Unblock a user (identified by ?blocked_id=); 404 if no such block."""
-    block = await session.get(models.UserBlock, (user.id, blocked_id))
+    """Remove named intent only; missing and anonymous-only rows both answer 404."""
+    result = await session.execute(
+        select(models.UserBlock)
+        .where(
+            models.UserBlock.blocker_id == user.id,
+            models.UserBlock.blocked_id == blocked_id,
+            models.UserBlock.source == "named",
+        )
+        .with_for_update()
+    )
+    block = result.scalar_one_or_none()
     if block is None:
         raise not_found("block_not_found")
-    await session.delete(block)
+    # Preserve the independent anonymous intent through arbitrary named cycles.
+    # Locking also stops a concurrent anon upsert from being erased by our delete.
+    if block.anonymous_created_at is None:
+        await session.delete(block)
+    else:
+        block.source = "by_chirp"
+        block.created_at = block.anonymous_created_at
+    await session.commit()
+
+
+@router.delete("/moderation/blocks/by-chirp/{chirp_id}", status_code=204)
+async def unblock_chirp_author(
+    chirp_id: uuid.UUID,
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Remove anonymous intent through a server-resolved Chirp, never a user ID.
+
+    Idempotent 204 even if no anonymous intent exists. Soft-removed but retained
+    Chirps can still undo a block; a removed post must not trap a safety setting.
+    This does not return an author, timestamp, or whether a relationship existed.
+    """
+    chirp = await session.get(models.Chirp, chirp_id)
+    if chirp is None:
+        raise not_found("chirp_not_found")
+    require_verified_campus(user, chirp.campus_id)
+    if chirp.author_id == user.id:
+        raise forbidden("cannot_block_self")
+    result = await session.execute(
+        select(models.UserBlock)
+        .where(
+            models.UserBlock.blocker_id == user.id,
+            models.UserBlock.blocked_id == chirp.author_id,
+            models.UserBlock.anonymous_created_at.is_not(None),
+        )
+        .with_for_update()
+    )
+    block = result.scalar_one_or_none()
+    if block is not None:
+        if block.source == "named":
+            block.anonymous_created_at = None
+        else:
+            await session.delete(block)
     await session.commit()
 
 

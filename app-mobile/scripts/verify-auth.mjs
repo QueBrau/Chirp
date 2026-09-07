@@ -1,5 +1,7 @@
 /**
- * Offline regression guard for c89's social-auth boundary.
+ * Offline regression guard for c89's social-auth boundary, plus a few other
+ * auth-flow invariants that landed in this same file over time (c331, c379,
+ * and now c381's account-type tap gate below).
  *
  * This is intentionally source-level: native provider credentials and Firebase
  * console setup are external to this repository, so no local test can honestly
@@ -131,7 +133,7 @@ for (const [name, needle] of plumbing) {
 // nearby comment cannot fake a pass.
 {
   const effectStart = sessionProvider.indexOf("getCampusVerification()");
-  const effectEnd = sessionProvider.indexOf("}, [userId]);", effectStart);
+  const effectEnd = sessionProvider.indexOf("}, [userId, sessionGeneration]);", effectStart);
   const body =
     effectStart === -1 || effectEnd === -1 ? "" : sessionProvider.slice(effectStart, effectEnd);
   const catchAt = body.indexOf(".catch(() => {");
@@ -157,5 +159,37 @@ for (const [name, needle] of plumbing) {
     process.exit(1);
   }
 }
+
+// c381: (auth)/account-type.tsx opened with a real-looking selection nobody made -
+// the invite-code pre-selection and the plain "student" default both looked
+// identical to an actual tap, so Continue submitted a default as if it were a
+// choice. Source-level for the same reason as everything else in this file: no
+// test here can honestly drive a real tap on this screen, but the wiring that
+// makes a tap a PRECONDITION for submitting is a plain, regression-prone
+// invariant worth pinning by name.
+const accountType = readFileSync(new URL("app/(auth)/account-type.tsx", ROOT), "utf8");
+
+const c381Required = [
+  ["The user's own tap is tracked separately from what's displayed", "const hasChosen = chosen !== null;"],
+  ["Continue is disabled until a tap happens", "disabled={submitting || !hasChosen}"],
+];
+for (const [name, needle] of c381Required) {
+  if (!accountType.includes(needle)) {
+    console.error(`FAIL  ${name}: missing ${JSON.stringify(needle)}`);
+    process.exit(1);
+  }
+  console.log(`PASS  ${name}`);
+}
+
+// The c301 invite-code pre-selection must survive the c381 fix - a regression that
+// "fixes" the default-submission bug by dropping the pre-selection instead (e.g.
+// initialising `chosen` from the invite code) would pass the two checks above while
+// silently reintroducing c301: an arriving code no longer influencing what's shown
+// at all.
+if (!accountType.includes('const selected: AccountType = chosen ?? (inviteCode ? "greek" : "non_greek");')) {
+  console.error("FAIL  account-type.tsx: the c301 invite-code pre-selection is gone");
+  process.exit(1);
+}
+console.log("PASS  c301 invite-code pre-selection still present alongside the c381 tap gate");
 
 console.log("ALL PASS");
