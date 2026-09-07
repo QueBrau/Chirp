@@ -2,7 +2,7 @@
 
 THE EXPLOIT, WHICH IS THE FIRST TEST IN THIS FILE BECAUSE IT IS THE CARD.
 POST /moderation/blocks/by-chirp/{chirp_id} is airtight on its own terms: no response
-body, no 409 split, an unconditional upsert so even the latency is constant. It never
+body, no 409 split, an unconditional upsert rather than an early existence return. It never
 tells the caller who the author is. But it used to write an ORDINARY user_blocks row,
 and that row filtered the blocker's NAMED surfaces too - so:
 
@@ -13,16 +13,16 @@ author_id both, learned from the pre-block snapshot. DELETE the block afterwards
 feed comes back, with nothing durable marking that it happened. The endpoint was
 airtight; the row it wrote was the leak.
 
-The fix is provenance: named blocks hide everything exactly as before, by-chirp blocks
-hide chirp surfaces only. So the named feed STOPS MOVING when a by-chirp block lands and
-the diff has nothing to show.
+The c279 fix added provenance so by-chirp blocks hid chirp surfaces only and the named
+feed stopped moving. c342 extends that separation in the opposite direction: new named
+blocks do not move Chirps, and named cycles preserve independent anonymous intent.
 
 WHAT MUST SURVIVE THE FIX, and each has a test here because weakening any of them would
 be a worse bug than the one being closed:
   - the harasser still cannot contact the person who blocked them (that is what by-chirp
     blocking is FOR);
   - that author's chirps still disappear (the safety half);
-  - a named block still hides everything (the c243/c35 suites should barely notice);
+  - a named block still hides named content (c342 separates anonymous intent);
   - a named block is never silently downgraded by a later by-chirp block.
 """
 from __future__ import annotations
@@ -171,9 +171,10 @@ async def test_a_by_chirp_block_leaves_named_surfaces_byte_identical(
     # The safety half still works: that author's chirps are gone.
     assert scene.chirp_id not in await _chirp_ids(client, scene)
 
-    # And the erase-the-evidence step restores the chirp, as unblock should.
+    # c342: anonymous undo resolves the author from the Chirp on the server. Named
+    # DELETE cannot erase this relationship or identify which account owns it.
     unblocked = await client.delete(
-        f"/moderation/blocks?blocked_id={scene.author.id}", headers=scene.blocker.headers
+        f"/moderation/blocks/by-chirp/{scene.chirp_id}", headers=scene.blocker.headers
     )
     assert unblocked.status_code == 204, unblocked.text
     assert scene.chirp_id in await _chirp_ids(client, scene)
@@ -210,11 +211,10 @@ async def test_the_harasser_still_cannot_contact_the_person_who_blocked_them(
     assert attempt.json() == {"detail": "recipient_not_reachable"}
 
 
-async def test_a_named_block_still_hides_everything(
+async def test_a_named_block_still_hides_named_surfaces(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
-    """The c35/c243 behaviour, unchanged. A named block is the caller saying "I never
-    want to see this person again", and it must still mean that."""
+    """Named content and contact remain protected; c342 isolates anonymous visibility."""
     scene = await _scene(client, make_chapter_with)
     before = await _named_surfaces(client, scene)
     assert scene.author.id in before["posts"]
@@ -229,7 +229,7 @@ async def test_a_named_block_still_hides_everything(
     after = await _named_surfaces(client, scene)
     assert scene.author.id not in after["posts"], "a named block must still hide posts"
     assert "a named comment by the author" not in after["comments"]
-    assert scene.chirp_id not in await _chirp_ids(client, scene)
+    assert scene.chirp_id in await _chirp_ids(client, scene)
     assert await _block_source(scene.blocker.id, scene.author.id) == "named"
 
 
@@ -301,8 +301,7 @@ async def test_the_409_no_longer_reveals_that_a_by_chirp_block_exists(
 async def test_a_by_chirp_block_never_downgrades_a_named_one(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
-    """Upgrade only, never the reverse. Someone who blocked a person BY NAME asked for
-    everything hidden; a chirp they happen to block afterwards must not give some back."""
+    """Adding anonymous intent must not give back content hidden by named intent."""
     scene = await _scene(client, make_chapter_with)
     await client.post(
         "/moderation/blocks",

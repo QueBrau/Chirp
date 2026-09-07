@@ -21,18 +21,18 @@
  * /campuses/{campus_id}/feed now filters blocked authors server-side.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Image, Pressable, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 
 import { likePost, listCampusFeed, unlikePost, type FeedPostOut } from "@/api/feed";
-import { listMyInvitesWithRsvps, type EventInviteWithRsvpOut } from "@/api/events";
+import { listActionableInvitePage, type EventInviteWithRsvpOut, type MyInvitesPage } from "@/api/events";
 import { blockUser, createReport } from "@/api/moderation";
 // useCampus (not a local getCampus fetch) — main moved campus resolution into
 // SessionProvider (c67) precisely to kill the per-screen duplicate requests.
 import { useCampus, useCampusAccess, useSession } from "@/auth";
-import { AppText, Card, Chip, EmptyState, Fab, MediaPostCard, Screen } from "@/components";
+import { AppText, Button, Card, Chip, EmptyState, Fab, MediaPostCard, Screen } from "@/components";
 import { showAlert, showApiError } from "@/lib/alert";
 import { compactAge as age, eventWhen } from "@/lib/dates";
 import { radii, spacing, useAppearance, useTheme } from "@/theme";
@@ -68,17 +68,11 @@ const FILTERS: { key: FeedFilter; label: string }[] = [
  * joined query, safe for a non-member because the invite already admits them
  * to the event — come back on every row, no per-invite fallback needed.
  *
- * Cancelled events are always kept (mirrors the backend docstring: the party
- * being off is the single most important row this can return) even if
- * already answered — everyone else is filtered down to the not-yet-answered
- * ones (my_rsvp_status === null) so a responded invite stops nagging. The
- * endpoint itself is already soonest-first ascending (c201/c204), so no
- * client-side re-sort is needed.
+ * c352: Home asks for actionable invitations BEFORE pagination: pending upcoming
+ * or ongoing events, plus upcoming cancellations even if already answered. Past
+ * events remain available through the API's history/all views. Filtering the first
+ * 50 rows here used to let old answered invites hide every pending invitation.
  */
-async function loadVisibleInvites(): Promise<EventInviteWithRsvpOut[]> {
-  const rows = await listMyInvitesWithRsvps();
-  return rows.filter((row) => row.event.canceled_at !== null || row.my_rsvp_status === null);
-}
 
 /** Invites section (c203): the discovery surface for GET /me/event-invites-with-rsvps
  * (c204). Home rather than the Orgs tab — the point is reaching someone who does NOT
@@ -86,12 +80,19 @@ async function loadVisibleInvites(): Promise<EventInviteWithRsvpOut[]> {
  * never reach exactly the person it exists for. Renders nothing while loading and
  * nothing when there is genuinely nothing to show, rather than a permanent EmptyState
  * box on the app's main landing screen for the near-universal case of zero invites. */
-function InvitesSection() {
+function InvitesSection({ refreshVersion }: { refreshVersion: number }) {
   const router = useRouter();
   const palette = useTheme();
   const [invites, setInvites] = useState<EventInviteWithRsvpOut[] | null>(null);
+  const [next, setNext] = useState<MyInvitesPage | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const generation = useRef(0);
+  const moreBusy = useRef(false);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
+    const current = ++generation.current;
+    setInvites(null);
+    setNext(null);
     // NOT `.catch(() => setInvites([]))` (c317). This one has NO user-visible
     // symptom today and is fixed anyway, which is worth saying plainly rather than
     // dressing up: the section returns null for `invites === null` and for
@@ -110,10 +111,35 @@ function InvitesSection() {
     // near-universal zero case by design (see above), and Home already has its own
     // load-error state for the feed itself. A second error surface for a usually-empty
     // strip would be noise, not honesty.
-    void loadVisibleInvites()
-      .then(setInvites)
-      .catch(() => setInvites(null));
-  }, []);
+    void listActionableInvitePage()
+      .then((page) => {
+        if (current !== generation.current) return;
+        setInvites(page.items);
+        setNext(page.next);
+      })
+      .catch(() => {
+        if (current === generation.current) setInvites(null);
+      });
+    return () => { generation.current += 1; };
+  }, [refreshVersion]));
+
+  const loadMore = async () => {
+    if (!next || moreBusy.current) return;
+    moreBusy.current = true;
+    setLoadingMore(true);
+    const current = generation.current;
+    try {
+      const page = await listActionableInvitePage(next);
+      if (current !== generation.current) return;
+      setInvites((old) => [...new Map([...(old ?? []), ...page.items].map((row) => [row.event.id, row])).values()]);
+      setNext(page.next);
+    } catch (error) {
+      if (current === generation.current) showApiError(error, "Couldn't load more invitations");
+    } finally {
+      moreBusy.current = false;
+      setLoadingMore(false);
+    }
+  };
 
   if (invites === null || invites.length === 0) return null;
 
@@ -151,6 +177,13 @@ function InvitesSection() {
           </View>
         </Card>
       ))}
+      {next ? (
+        <Button
+          label={loadingMore ? "Loading invitations..." : "Load more invitations"}
+          variant="secondary" disabled={loadingMore}
+          onPress={() => void loadMore()}
+        />
+      ) : null}
     </View>
   );
 }
@@ -166,6 +199,7 @@ export default function FeedScreen() {
   const [items, setItems] = useState<FeedPostOut[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [filter, setFilter] = useState<FeedFilter>("forYou");
+  const [inviteRefreshVersion, setInviteRefreshVersion] = useState(0);
   const campus = useCampus();
 
   // Alumni / non-campus accounts have no campus_id — there's no campus feed to
@@ -271,7 +305,10 @@ export default function FeedScreen() {
   return (
     <View style={{ flex: 1 }}>
       <Screen
-        onRefresh={load}
+        onRefresh={async () => {
+          setInviteRefreshVersion((version) => version + 1);
+          await load();
+        }}
         title="Home"
         // Real campus name now that GET /campuses/{id} exists (c46). Undefined
         // until it resolves — an absent eyebrow beats a wrong one. The old value
@@ -290,7 +327,7 @@ export default function FeedScreen() {
             (backend/app/routers/events.py _readable_event checks the invite
             before any visibility tier), so this must not disappear behind
             the "confirm your school" / "no campus feed" states further down. */}
-        {user !== null ? <InvitesSection /> : null}
+        {user !== null ? <InvitesSection key={user.id} refreshVersion={inviteRefreshVersion} /> : null}
 
         <View style={{ flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg }}>
           {FILTERS.map((option) => {
@@ -356,12 +393,19 @@ export default function FeedScreen() {
           <EmptyState title="Nothing here yet" message="Posts from your campus will show up here." />
         ) : (
           <View style={{ gap: spacing.md }}>
-            {visibleItems.map((item) => (
+            {visibleItems.map((item, index) => (
               <MediaPostCard
                 key={item.id}
                 post={item}
                 authorName={item.display_name}
                 authorPhotoUrl={item.avatar_url}
+                // Rotating pastel tint (c383), keyed on POSITION so no two adjacent
+                // cards draw the same one. Index within the rendered list, not within
+                // `items` - they are the same list today (`visibleItems = items`, see
+                // above) and must stay the same one if a real "For You" ranking ever
+                // makes them differ, or the tints would repeat wherever a post is
+                // filtered out.
+                tintIndex={index}
                 timeLabel={age(item.created_at)}
                 likeCount={item.like_count}
                 commentCount={item.comment_count}

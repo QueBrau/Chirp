@@ -12,6 +12,9 @@ from app.db import Base
 
 class Device(Base):
     __tablename__ = "devices"
+    __table_args__ = (
+        Index("idx_devices_user_revoked_created", "user_id", "revoked_at", "created_at", "id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -32,6 +35,12 @@ class Device(Base):
 
 class SignedPrekey(Base):
     __tablename__ = "signed_prekeys"
+    __table_args__ = (
+        Index(
+            "idx_signed_prekeys_device_created", "device_id",
+            text("created_at DESC"), text("id DESC"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -50,6 +59,7 @@ class SignedPrekey(Base):
 class OneTimePrekey(Base):
     __tablename__ = "one_time_prekeys"
     __table_args__ = (
+        Index("idx_otk_device_retained", "device_id"),
         Index(
             "idx_otk_available",
             "device_id",
@@ -75,6 +85,10 @@ class KyberPrekey(Base):
 
     __tablename__ = "kyber_prekeys"
     __table_args__ = (
+        Index(
+            "idx_kyber_device_kind_created", "device_id", "is_last_resort",
+            text("created_at DESC"), text("id DESC"),
+        ),
         Index(
             "idx_kyber_otk_available",
             "device_id",

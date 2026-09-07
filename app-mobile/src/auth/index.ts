@@ -5,12 +5,14 @@ export { getFirebaseAuth } from "./firebase";
 export {
   getAuthErrorMessage,
   getPasswordLengthError,
+  isUserNotFoundError,
   type AuthErrorMode,
 } from "./authErrors";
 export {
   getIdToken,
   onAuthChanged,
   onIdTokenChanged,
+  sendPasswordReset,
   signInWithEmail,
   signOutUser,
   signUpWithEmail,
