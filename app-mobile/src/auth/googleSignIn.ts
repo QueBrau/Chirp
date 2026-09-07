@@ -11,8 +11,8 @@
  * an authenticated session: every exit that is not a genuine Firebase
  * credential returns "cancelled" or "error", never "success".
  *
- * On success the Firebase ID token is handed to src/api/client's
- * setAuthToken() exactly the way signInWithEmail/signUpWithEmail and
+ * On success the Firebase ID token is handed to src/auth/session's
+ * generation-owned writer shared by signInWithEmail/signUpWithEmail and
  * signInWithApple do it — the API client has no other way to learn a session
  * exists. SessionProvider's onAuthStateChanged listener then resolves the
  * account against GET /auth/me the same as every other provider (verified for
@@ -26,7 +26,8 @@ import {
 import { GoogleAuthProvider, signInWithCredential } from "firebase/auth";
 import { Platform } from "react-native";
 
-import { setAuthToken } from "@/api/client";
+import { operationErrorMessage } from "@/api/operation";
+import { beginSignIn, cancelSignIn, prepareSignedInUser, runAuthMutation } from "./session";
 
 import { hasFirebaseConfig } from "./config";
 import { getFirebaseAuth } from "./firebase";
@@ -103,6 +104,8 @@ function configureOnce(): void {
  * which is a false statement when the failing provider is Google.
  */
 function googleErrorMessage(error: unknown): string {
+  const operationMessage = operationErrorMessage(error);
+  if (operationMessage) return operationMessage;
   const code = readErrorCode(error);
 
   switch (code) {
@@ -140,6 +143,7 @@ function readErrorCode(error: unknown): string | null {
  * module doc comment.
  */
 export async function signInWithGoogle(): Promise<GoogleSignInOutcome> {
+  const attempt = beginSignIn();
   try {
     configureOnce();
 
@@ -172,10 +176,9 @@ export async function signInWithGoogle(): Promise<GoogleSignInOutcome> {
     }
 
     const credential = GoogleAuthProvider.credential(idToken);
-    const userCredential = await signInWithCredential(getFirebaseAuth(), credential);
-    // Same token handoff as signInWithEmail/signUpWithEmail in session.ts —
-    // the API client has no other way to learn this session exists.
-    setAuthToken(await userCredential.user.getIdToken());
+    const userCredential = await runAuthMutation(attempt, () => signInWithCredential(getFirebaseAuth(), credential));
+    // One guarded token writer for every sign-in provider.
+    await prepareSignedInUser(userCredential.user, attempt);
     return { status: "success" };
   } catch (error) {
     // Outer net: the Firebase credential exchange or getIdToken() can throw
@@ -183,5 +186,7 @@ export async function signInWithGoogle(): Promise<GoogleSignInOutcome> {
     // rather than an unhandled rejection that leaves the screen stuck on
     // "Please wait..." forever.
     return { status: "error", message: googleErrorMessage(error) };
+  } finally {
+    cancelSignIn(attempt);
   }
 }
