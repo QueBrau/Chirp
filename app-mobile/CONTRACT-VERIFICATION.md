@@ -10,7 +10,8 @@ Comments also looked like unresolved calls without failing the gate. The new
 TypeScript AST extractor follows named imports and aliases of `request`,
 `requestText`, and `requestWithHeaders` from `./client`; unresolved call paths,
 options or methods fail. Python AST supplies router/query and declared schema
-metadata without importing the backend application.
+metadata, including response models declared in router modules, without importing
+the backend application.
 
 The gate checks:
 
@@ -27,12 +28,19 @@ The first run found a real response drift: mobile `FeedPostOut` inherited requir
 `deleted_at` from the create-response DTO, but backend list responses omit it. The
 list DTO now explicitly omits that field. The create and comment DTOs retain it.
 
-Nine isolated child-process mutations must fail for the expected reason: wrong CSV
+Twelve isolated child-process mutations must fail for the expected reason: wrong CSV
 route, wrong aliased CSV route, unresolved CSV path, unresolved method, wrong query
-key, wrong client response field, missing server response field, wrong client event
-field, and missing server event field. Mutations operate on the real source in
+key, a query hidden in an options spread, wrong client response field, missing server response field, wrong client event
+field, missing server event field, shorthand method and router-local response
+field. Mutations operate on the real source in
 memory or its extracted inventory; no repository file is rewritten. A disappeared
 fixture anchor is a failing self-check, not an accepted result.
+
+The auth integration introduced opaque `fetchMe` and `getMediaUploadUrl` options.
+These helpers now accept only operation/deadline/cancellation fields and forward
+them explicitly with the fixed method/body, so transport controls remain available
+without hiding method/query changes from the gate. Independent review reproduced
+the shorthand-method and router-local-response omissions before they were fixed.
 
 This does not validate JSON at runtime, field values/nullability, nested payloads,
 request bodies, response headers, every possible publisher, authorization or

@@ -102,7 +102,7 @@ function OverflowButton({ onPress, onScrim = false }: { onPress: () => void; onS
 }
 
 export interface MediaPostCardProps {
-  post: PostOut;
+  post: Omit<PostOut, "deleted_at">;
   authorName: string;
   /** Mock photo (§10.2), e.g. `https://i.pravatar.cc/150?u=<id>` — falls back to the initials gradient. */
   authorPhotoUrl?: string | null;

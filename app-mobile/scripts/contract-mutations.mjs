@@ -25,6 +25,23 @@ export const MUTATIONS = {
     source: replace('method: "POST", body', 'method: String("POST"), body'),
     expected: "unresolved/overridable HTTP method",
   },
+  "hidden-query-spread": {
+    file: "/src/api/feed.ts",
+    source: replace('method: "POST", body', '...{ query: { wrong_key: 1 } }, method: "POST", body'),
+    expected: "unresolved/overridable HTTP method",
+  },
+  "shorthand-method": {
+    file: "/src/api/feed.ts",
+    source: source => source.replace('import { request, requestWithHeaders } from "./client";',
+      'import { request, requestWithHeaders } from "./client";\nconst method = "POST" as const;')
+      .replace("query: { limit: opts.limit", "method, query: { limit: opts.limit"),
+    expected: "unresolved/overridable HTTP method",
+  },
+  "router-local-response": {
+    file: "/src/api/chirps.ts",
+    source: replace("my_vote: number | null;", "required_vote_that_server_never_sends: number | null;"),
+    expected: "response field absent from backend required_vote_that_server_never_sends",
+  },
   "wrong-query-field": {
     file: "/src/api/feed.ts",
     source: replace("query: { limit: opts.limit", "query: { wrong_limit: opts.limit"),

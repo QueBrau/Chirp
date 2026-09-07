@@ -87,6 +87,9 @@ for (const file of readdirSync(API_DIR).sort()) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)
       || statement.moduleSpecifier.text !== "./client") continue;
     const bindings = statement.importClause?.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) {
+      unresolved.push(file + ": namespace client import requires explicit wrapper extraction");
+    }
     if (!bindings || !ts.isNamedImports(bindings)) continue;
     for (const item of bindings.elements) {
       const original = (item.propertyName ?? item.name).text;
@@ -101,13 +104,13 @@ for (const file of readdirSync(API_DIR).sort()) {
       if (path === null || (options && !ts.isObjectLiteralExpression(options))) {
         unresolved.push(where + ": non-literal path or request options");
       } else {
-        const methodNode = property(options, "method")?.initializer;
-        const method = methodNode ? (ts.isStringLiteralLike(methodNode) ? methodNode.text : null) : "GET";
-        // A spread can override the inferred method. These calls need an explicit
-        // method after every spread; do not silently call an unknown operation GET.
-        const spreads = options?.properties.filter(ts.isSpreadAssignment) ?? [];
         const methodProperty = property(options, "method");
-        if (method === null || spreads.some(p => !methodProperty || p.pos > methodProperty.pos)) {
+        const methodNode = methodProperty?.initializer;
+        const method = methodProperty ? (methodNode && ts.isStringLiteralLike(methodNode) ? methodNode.text : null) : "GET";
+        // Spreads can hide methods and query keys. Spell out the transport fields
+        // at API call sites rather than presenting unknown options as a contract.
+        const spreads = options?.properties.filter(ts.isSpreadAssignment) ?? [];
+        if (method === null || spreads.length > 0) {
           unresolved.push(where + ": unresolved/overridable HTTP method");
         } else {
           calls.push({ path, method, where, node, options, wrapper: imports.get(node.expression.text) });

@@ -22,7 +22,8 @@ def keyword(call, key):
 
 
 schemas = {}
-for path in sorted((ROOT / "backend/app/schemas").glob("*.py")):
+schema_files = sorted((ROOT / "backend/app/schemas").glob("*.py")) + sorted((ROOT / "backend/app/routers").glob("*.py"))
+for path in schema_files:
     for node in ast.parse(path.read_text()).body:
         if not isinstance(node, ast.ClassDef):
             continue
