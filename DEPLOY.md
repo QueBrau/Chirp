@@ -5,6 +5,11 @@ Deploys `backend/` (FastAPI) to **Cloud Run**, with **Cloud SQL** (Postgres 16),
 is already Cloud Run-ready (listens on `$PORT`, uvicorn factory). Pairs with
 `SETUP-FIREBASE.md` (auth) and the go-live board cards.
 
+For current recovery inspection and the retention job's separate rollout, use
+[RECOVERY-RETENTION.md](RECOVERY-RETENTION.md). The purge CLI now previews by
+default; applying deletion requires explicit arguments on the job. An API redeploy
+does not update that job's image or identity.
+
 Set once (`PROJECT` is your GCP project id):
 ```bash
 export PROJECT=chirps-prod
