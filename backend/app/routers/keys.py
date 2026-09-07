@@ -4,11 +4,11 @@ import binascii
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.core.errors import forbidden, not_found, too_many_requests
+from app.core.errors import conflict, forbidden, not_found, too_many_requests
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.schemas.e2ee import (
@@ -33,11 +33,84 @@ router = APIRouter(tags=["keys"])
 
 # SECURITY-REVIEW finding 9: prekey-bundle fetch consumes a one-time prekey per call, so an
 # unthrottled caller can drain a victim's OTK pool without ever starting a session. Cap it per
-# (caller, target) pair. See app.services.rate_limit for the per-instance caveat — this is a
-# first-layer mitigation, not a hard guarantee (production should move to a Redis-backed
-# counter using the client already in app.ws.pubsub.get_redis()).
+# (caller, target) pair. The shared limiter uses Redis in production, with a local
+# fallback during an outage. Database quotas below remain authoritative in either mode.
 _PREKEY_BUNDLE_RATE_LIMIT_MAX_CALLS = 10
 _PREKEY_BUNDLE_RATE_LIMIT_WINDOW_SECONDS = 600.0  # 10 minutes
+
+# Bounds for the still-parked key directory. Retained quotas include consumed and
+# superseded rows: deleting those requires a supported key-reuse/retirement contract,
+# which is deliberately not invented here. Revoked device records count toward the
+# total account cap so repeated replacement cannot bypass the storage ceiling.
+MAX_ACTIVE_DEVICES = 5
+MAX_RETAINED_DEVICES = 20
+MAX_RETAINED_ONE_TIME_PREKEYS = 400
+MAX_RETAINED_SIGNED_PREKEYS = 16
+MAX_RETAINED_LAST_RESORT_PREKEYS = 16
+_DEVICE_REGISTER_RATE_MAX_CALLS = 10
+_DEVICE_REGISTER_RATE_WINDOW_SECONDS = 3600.0
+_PREKEY_WRITE_ACCOUNT_MAX_CALLS = 60
+_PREKEY_WRITE_DEVICE_MAX_CALLS = 30
+_PREKEY_WRITE_RATE_WINDOW_SECONDS = 600.0
+
+
+async def _bounded_count(
+    session: AsyncSession, query: Select[tuple[uuid.UUID]], *, limit: int
+) -> int:
+    """Count at most limit + 1 matching identifiers, including legacy oversized pools."""
+    # The LIMIT is inside the aggregate: a plain COUNT would scan every matching
+    # retained row even when only the over-quota decision is needed.
+    result = await session.execute(
+        select(func.count()).select_from(query.limit(limit + 1).subquery())
+    )
+    return int(result.scalar_one())
+
+
+async def _check_device_quota(session: AsyncSession, user_id: uuid.UUID) -> None:
+    """Serialize registrations per account and refuse both active and retained overflow."""
+    await session.execute(
+        select(models.User.id).where(models.User.id == user_id).with_for_update()
+    )
+    devices = select(models.Device.id).where(models.Device.user_id == user_id)
+    retained = await _bounded_count(session, devices, limit=MAX_RETAINED_DEVICES)
+    if retained >= MAX_RETAINED_DEVICES:
+        raise conflict("device_storage_limit_reached")
+    active = devices.where(models.Device.revoked_at.is_(None))
+    active_count = await _bounded_count(session, active, limit=MAX_ACTIVE_DEVICES)
+    if active_count >= MAX_ACTIVE_DEVICES:
+        raise conflict("active_device_limit_reached")
+
+
+async def _check_prekey_quota(
+    session: AsyncSession, device_id: uuid.UUID, body: PrekeyUpload
+) -> None:
+    """Check retained row budgets while the caller holds the owning device row lock."""
+    quotas = (
+        (
+            models.OneTimePrekey, len(body.one_time_prekeys),
+            MAX_RETAINED_ONE_TIME_PREKEYS, (), "one_time_prekey_storage_limit_reached",
+        ),
+        (
+            models.SignedPrekey, int(body.signed_prekey is not None),
+            MAX_RETAINED_SIGNED_PREKEYS, (), "signed_prekey_storage_limit_reached",
+        ),
+        (
+            models.KyberPrekey, len(body.kyber_one_time), MAX_RETAINED_ONE_TIME_PREKEYS,
+            (models.KyberPrekey.is_last_resort.is_(False),),
+            "kyber_prekey_storage_limit_reached",
+        ),
+        (
+            models.KyberPrekey, int(body.kyber_last_resort is not None),
+            MAX_RETAINED_LAST_RESORT_PREKEYS,
+            (models.KyberPrekey.is_last_resort.is_(True),),
+            "last_resort_prekey_storage_limit_reached",
+        ),
+    )
+    for model, added, limit, conditions, detail in quotas:
+        query = select(model.id).where(model.device_id == device_id, *conditions)
+        retained = await _bounded_count(session, query, limit=limit)
+        if retained + added > limit:
+            raise conflict(detail)
 
 
 def _b64_to_bytes(value: str) -> bytes:
@@ -49,55 +122,69 @@ def _b64_to_bytes(value: str) -> bytes:
 
 
 async def _get_owned_device(
-    session: AsyncSession, device_id: uuid.UUID, user: models.User
+    session: AsyncSession, device_id: uuid.UUID, user: models.User, *, lock: bool = False
 ) -> models.Device:
     """Load a device, 404 if missing, 403 unless owned by the caller."""
-    device = await session.get(models.Device, device_id)
+    query = select(models.Device).where(
+        models.Device.id == device_id, models.Device.user_id == user.id
+    )
+    if lock:
+        query = query.with_for_update()
+    device = (await session.execute(query)).scalar_one_or_none()
     if device is None:
+        existing = await session.scalar(
+            select(models.Device.id).where(models.Device.id == device_id)
+        )
+        if existing is not None:
+            raise forbidden("not_device_owner")
         raise not_found("device_not_found")
-    if device.user_id != user.id:
-        raise forbidden("not_device_owner")
     return device
 
 
 async def _available_otk_count(session: AsyncSession, device_id: uuid.UUID) -> int:
     """Count one-time prekeys with consumed_at IS NULL for a device."""
-    result = await session.execute(
-        select(func.count())
-        .select_from(models.OneTimePrekey)
+    count = await _bounded_count(
+        session,
+        select(models.OneTimePrekey.id)
         .where(
             models.OneTimePrekey.device_id == device_id,
             models.OneTimePrekey.consumed_at.is_(None),
-        )
+        ),
+        limit=MAX_RETAINED_ONE_TIME_PREKEYS,
     )
-    return int(result.scalar_one())
+    if count > MAX_RETAINED_ONE_TIME_PREKEYS:
+        raise conflict("one_time_prekey_storage_limit_reached")
+    return count
 
 
 async def _available_kyber_otk_count(session: AsyncSession, device_id: uuid.UUID) -> int:
     """Count one-time Kyber prekeys with consumed_at IS NULL for a device."""
-    result = await session.execute(
-        select(func.count())
-        .select_from(models.KyberPrekey)
+    count = await _bounded_count(
+        session,
+        select(models.KyberPrekey.id)
         .where(
             models.KyberPrekey.device_id == device_id,
             models.KyberPrekey.consumed_at.is_(None),
             models.KyberPrekey.is_last_resort.is_(False),
-        )
+        ),
+        limit=MAX_RETAINED_ONE_TIME_PREKEYS,
     )
-    return int(result.scalar_one())
+    if count > MAX_RETAINED_ONE_TIME_PREKEYS:
+        raise conflict("kyber_prekey_storage_limit_reached")
+    return count
 
 
 async def _has_last_resort_kyber(session: AsyncSession, device_id: uuid.UUID) -> bool:
     """Whether the device has a last-resort Kyber prekey registered."""
     result = await session.execute(
-        select(func.count())
-        .select_from(models.KyberPrekey)
+        select(models.KyberPrekey.id)
         .where(
             models.KyberPrekey.device_id == device_id,
             models.KyberPrekey.is_last_resort.is_(True),
         )
+        .limit(1)
     )
-    return int(result.scalar_one()) > 0
+    return result.scalar_one_or_none() is not None
 
 
 async def _prekey_count_out(session: AsyncSession, device_id: uuid.UUID) -> PrekeyCountOut:
@@ -117,6 +204,13 @@ async def register_device(
     session: AsyncSession = Depends(get_session),
 ) -> DeviceOut:
     """Register a device: identity key + signed prekey + a batch of one-time prekeys."""
+    if not await rate_limit_allow(
+        f"device_register:{user.id}",
+        max_calls=_DEVICE_REGISTER_RATE_MAX_CALLS,
+        window_seconds=_DEVICE_REGISTER_RATE_WINDOW_SECONDS,
+    ):
+        raise too_many_requests("device_registration_rate_limited")
+    await _check_device_quota(session, user.id)
     identity_key = _b64_to_bytes(body.identity_key_b64)
     signed_public = _b64_to_bytes(body.signed_prekey.public_key_b64)
     signed_signature = _b64_to_bytes(body.signed_prekey.signature_b64)
@@ -182,9 +276,20 @@ async def replenish_prekeys(
     session: AsyncSession = Depends(get_session),
 ) -> PrekeyCountOut:
     """Replenish one-time prekeys (and optionally rotate the signed prekey). Owner only."""
-    device = await _get_owned_device(session, device_id, user)
+    if not await rate_limit_allow(
+        f"prekey_write_account:{user.id}",
+        max_calls=_PREKEY_WRITE_ACCOUNT_MAX_CALLS,
+        window_seconds=_PREKEY_WRITE_RATE_WINDOW_SECONDS,
+    ) or not await rate_limit_allow(
+        f"prekey_write_device:{user.id}:{device_id}",
+        max_calls=_PREKEY_WRITE_DEVICE_MAX_CALLS,
+        window_seconds=_PREKEY_WRITE_RATE_WINDOW_SECONDS,
+    ):
+        raise too_many_requests("prekey_write_rate_limited")
+    device = await _get_owned_device(session, device_id, user, lock=True)
     if device.revoked_at is not None:
         raise forbidden("device_revoked")
+    await _check_prekey_quota(session, device.id, body)
 
     if body.signed_prekey is not None:
         session.add(
@@ -271,10 +376,16 @@ async def fetch_prekey_bundle(
     devices_result = await session.execute(
         select(models.Device)
         .where(models.Device.user_id == user_id, models.Device.revoked_at.is_(None))
-        .order_by(models.Device.created_at)
+        .order_by(models.Device.created_at, models.Device.id)
+        .limit(MAX_ACTIVE_DEVICES + 1)
     )
+    devices = devices_result.scalars().all()
+    if len(devices) > MAX_ACTIVE_DEVICES:
+        # Never silently omit a supported recipient device or consume some keys
+        # before discovering a legacy account above the directory's bound.
+        raise conflict("active_device_limit_reached")
     bundles: list[DevicePrekeyBundleOut] = []
-    for device in devices_result.scalars().all():
+    for device in devices:
         spk_result = await session.execute(
             select(models.SignedPrekey)
             .where(models.SignedPrekey.device_id == device.id)
