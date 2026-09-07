@@ -12,6 +12,7 @@ from app.models.finance import (
     LedgerEntry,
     ProcessedStripeEvent,
     SpendApproval,
+    StripeSettlementQuarantine,
 )
 from app.models.house import HouseBallot
 from app.models.identity import (
@@ -77,6 +78,7 @@ __all__ = [
     "RoleTerm",
     "SignedPrekey",
     "SpendApproval",
+    "StripeSettlementQuarantine",
     "User",
     "UserBlock",
     "Chirp",
