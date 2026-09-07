@@ -276,11 +276,10 @@ without gaps between the steps below. Do not migrate and then walk away.
    client still calls `/campuses/{id}/yaks` until this runs, so web stays
    broken on the new API even after step 3 completes — this is not optional
    just because the API is already up.
-5. **(manager) Verify.** `scripts/deploy-verify --base-url <chirp-api service
-   URL from INFRA-PRIVATE.html#cloudrun>` — see below for what it checks. Follow
-   with a real signed-in request through the app per the section 5 / gotcha #4
-   warning: a 200 from health, or from this script's control checks alone, is
-   not evidence the deploy is healthy on the paths that matter.
+5. **(manager) Verify.** Run the authenticated API + WebSocket service procedure
+   in [DEPLOY-VERIFICATION.md](DEPLOY-VERIFICATION.md) with the expected release
+   heads/revisions/digests and known QA fixture. Require `AUTHENTICATED_READY`.
+   The unauthenticated routing probes and `/_health` do not satisfy this gate.
 
 **Abort / rollback.** 0022's downgrade is real and tested (c179: migration
 up → down → up run against a database holding a real `yak` report row; the
@@ -297,47 +296,24 @@ instead of open-ended.
 
 ### scripts/deploy-verify
 
-Run after step 4, pointed at whatever you just deployed. It probes four things
-over plain HTTP — no credentials of its own, so it never needs prod access to
-exist or to be rehearsed locally — and prints (never runs) the two manual proof
-steps that do need real credentials:
+Use the authenticated procedure in [DEPLOY-VERIFICATION.md](DEPLOY-VERIFICATION.md)
+after migration and deployment. It verifies both Cloud Run services against the
+expected release revisions, resolved image digests, packaged migration head and
+live database head, plus a known authenticated user and campus query. The bearer
+is accepted only through `DEPLOY_VERIFY_BEARER`; the former command-line bearer
+option is rejected. No sends, payments or cloud mutations occur.
 
-- **(a)** a real auth-gated route with no token → expects `401`. Deliberately
-  **not** `/healthz` — Google's `*.run.app` frontend intercepts that exact path
-  and answers with its own 404 before the request reaches the container
-  (`INFRA-PRIVATE.html#cloudrun` gotcha), which would misreport a healthy
-  deploy as down.
-- **(b)** a route that has never existed, as a control — expects `404`. If this
-  is not 404, the target isn't answering normal FastAPI routing at all (wrong
-  host, a proxy, a maintenance page) and nothing else the script reports can be
-  trusted.
-- **(c)** the route-swap hinge itself: `/campuses/{id}/yaks` must be fully gone
-  (`404` — the router module that served it no longer exists), and
-  `/campuses/{id}/chirps` must still be routed (`401` unauthenticated, or `200`
-  if run with `--bearer`).
-- **(d)** prints the exact `gcloud logging read` command for c176's "email
-  sent" log-line proof. The send itself stays a manual step (trigger one real
-  `.edu` verification through the app, or a bearer-authenticated
-  `POST /auth/campus-verification`) — the script only prints the read.
-- **(e)** prints the read-only SQL for c184's four URL-column counts
-  (`alumni_profiles.linkedin_url`, `job_posts.apply_url`, `events.cover_url`,
-  `users.avatar_url`) for Jose to run by hand through the proxy — the script
-  never executes it.
+`scripts/deploy-verify --base-url <service URL>` without a bearer retains the four
+unauthenticated routing probes (auth gate, bogus route, retired `/yaks`, routed
+`/chirps`). Its successful verdict is **ROUTING_ONLY**, never deployment readiness.
+The default remains `http://localhost:8000` for local rehearsal. Authentication
+mode requires explicit API and WebSocket service origins, release expectations,
+QA fixture IDs and project; routing-only success does not satisfy the deployment
+gate. A `000`/zero status is an unanswered probe, so confirm the chosen origin
+before diagnosing the release.
 
-Defaults to `http://localhost:8000` so it runs unattended against a local
-stack; pass `--base-url` (or `DEPLOY_VERIFY_BASE_URL`) for the prod service URL,
-which lives in `INFRA-PRIVATE.html#cloudrun` and is deliberately not hardcoded
-here.
-
-**c250: running it bare after a prod deploy produces a total red that looks like a
-prod failure and is not.** A manager did exactly that and got `0 passed, 4 failed`
-with four `000` status codes — every probe reaching nothing, because the script was
-still quietly checking `localhost:8000`. A total red across every probe (`000`
-everywhere) means **wrong target**, not a broken deploy — check the `target:` line
-the script prints as its second line before you re-run it or start diagnosing.
-That is different from a cold-start flake (a partial red against a real URL, e.g.
-3/1) — don't conflate the two. The correct invocation after any prod deploy is
-`scripts/deploy-verify --base-url <service URL>`.
+The old printed email-send and URL-column recipes were independent manual checks,
+and are not evidence that authenticated deployment verification passed.
 
 ## Env var reference (Settings → env)
 | env var | required | example |
