@@ -42,7 +42,7 @@ class SuspensionStateOut(_Schema):
 
 
 class ChapterModerationApprovalRequest(_Schema):
-    """Body for PATCH /moderation/chapters/{chapter_id}/moderation-approval.
+    """Body for PATCH /chapters/{chapter_id}/moderation-approval.
 
     No `reason` field, unlike SuspendUserRequest above: this flips a boolean that
     gates a CHAPTER's standing (chapters.moderation_approved, migration 0031), not a
