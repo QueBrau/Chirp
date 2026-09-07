@@ -30,6 +30,11 @@ MAX_ROSTER_PAGE = 500
 # Slow-growing per-chapter or per-member history: role terms, invite codes. Generous
 # for anything a human body actually produces, and small enough to bound the response.
 MAX_HISTORY_PAGE = 200
+# c340: GET /chapters/{id}/moderation-approval/history. Newest 100 approve/revoke rows,
+# no pagination for the alpha — a chapter's approval flips are a handful in its whole
+# life, and the cap exists so a scripted flip-flop cannot make one read unbounded.
+# warn_if_capped is the tell that a real chapter reached it.
+MAX_APPROVAL_HISTORY = 100
 
 
 def warn_if_capped(

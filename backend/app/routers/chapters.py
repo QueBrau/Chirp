@@ -13,7 +13,12 @@ from app import models
 from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
 from app.core.invites import clamp_invite_expiry
-from app.core.pagination import MAX_HISTORY_PAGE, MAX_ROSTER_PAGE, warn_if_capped
+from app.core.pagination import (
+    MAX_APPROVAL_HISTORY,
+    MAX_HISTORY_PAGE,
+    MAX_ROSTER_PAGE,
+    warn_if_capped,
+)
 from app.core.permissions import (
     DEPUTY_OVERVIEW,
     DUES_ADMIN,
@@ -34,6 +39,7 @@ from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.middleware.org_scope import get_current_membership
 from app.schemas.moderation import (
+    ChapterModerationApprovalHistoryEntry,
     ChapterModerationApprovalRequest,
     ChapterModerationApprovalOut,
 )
@@ -233,6 +239,69 @@ async def set_chapter_moderation_approval(
     await session.commit()
     await session.refresh(chapter)
     return ChapterModerationApprovalOut.model_validate(chapter)
+
+
+@router.get("/chapters/{chapter_id}/moderation-approval/history")
+async def chapter_moderation_approval_history(
+    chapter_id: uuid.UUID,
+    _admin: models.User = Depends(require_platform_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[ChapterModerationApprovalHistoryEntry]:
+    """The approve/revoke audit trail for one chapter, newest first (board card c340).
+
+    The read side c337's filing asked for: the rows set_chapter_moderation_approval
+    writes, joined to users for the actor's current display name in the SAME query —
+    one round trip for the whole page, never one per row.
+
+    Gated like the write it reads (require_platform_admin, the exact
+    platform_admin_required detail): approvals are a platform decision about an org,
+    and the trail of who made them is not the chapter's own business to read. 404s
+    the chapter before reading so an unknown id is chapter_not_found, not an empty
+    list that looks like a real chapter with no history.
+
+    Filter is target_type = 'chapter' AND target_id = the chapter — BOTH, because
+    target_id is a bare uuid with no type discriminator of its own: a user-target row
+    whose target_id happened to equal this chapter's id would otherwise read as
+    chapter history. The action filter keeps this an APPROVAL history even if a later
+    card adds other chapter-targeted actions.
+
+    Newest first by created_at, id as the tie-break so two rows in one transaction
+    still come back in a stable order. Hard cap MAX_APPROVAL_HISTORY newest, no
+    pagination for the alpha; warn_if_capped is the tell if a real chapter ever
+    reaches it.
+    """
+    chapter = await session.get(models.Chapter, chapter_id)
+    if chapter is None:
+        raise not_found("chapter_not_found")
+    result = await session.execute(
+        select(models.ModerationAction, models.User.display_name)
+        .join(models.User, models.User.id == models.ModerationAction.actor_id)
+        .where(
+            models.ModerationAction.target_type == "chapter",
+            models.ModerationAction.target_id == chapter_id,
+            models.ModerationAction.action.in_(("approve_chapter", "revoke_chapter")),
+        )
+        .order_by(models.ModerationAction.created_at.desc(), models.ModerationAction.id.desc())
+        .limit(MAX_APPROVAL_HISTORY)
+    )
+    rows = result.all()
+    warn_if_capped(
+        logger,
+        rows,
+        MAX_APPROVAL_HISTORY,
+        "chapter_moderation_approval_history",
+        chapter_id=str(chapter_id),
+    )
+    return [
+        ChapterModerationApprovalHistoryEntry(
+            actor_id=entry.actor_id,
+            actor_display_name=display_name,
+            action=entry.action,
+            reason=entry.reason,
+            created_at=entry.created_at,
+        )
+        for entry, display_name in rows
+    ]
 
 
 @router.get("/chapters/{chapter_id}/members")
