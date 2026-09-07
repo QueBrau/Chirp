@@ -4,9 +4,19 @@
  *   npm run verify:a11y-touch
  *
  * Three independent items, so three independent sections. The touch-target one is
- * genuinely COMPUTED - the constants are read out of MediaPostCard.tsx and the effective
- * tap height is re-derived here - rather than asserted as a magic number, because "44"
- * appearing in a file proves nothing about what a finger can hit.
+ * genuinely COMPUTED - the constants are read out of MediaPostCard.tsx, src/theme and
+ * the Chirps board and the effective tap height is re-derived here - rather than
+ * asserted as a magic number, because "44" appearing in a file proves nothing about what
+ * a finger can hit.
+ *
+ * SECTION 2 WAS REWRITTEN FOR c383 and the rewrite is the interesting part. It used to
+ * measure InlineAction and ActionChip, the two action densities the FYP card had; c383
+ * folded those into one labelled row and moved the overflow glyph into a shared circular
+ * control, so those constants no longer exist. The c307 RULE is unchanged - every action
+ * clears 44pt, and its slop is derived from the control rather than hand-picked - so the
+ * section now measures the controls that replaced them, on BOTH cards that draw them.
+ * Deleting the section instead would have been the easy read of a red verifier and would
+ * have retired a real lesson along with the code that happened to carry it.
  *
  * WHAT THESE CANNOT DO, stated here so the PR does not have to imply otherwise: none of
  * this runs a simulator. A KeyboardAvoidingView present in source is not a keyboard
@@ -36,10 +46,20 @@ import { createRequire } from "node:module";
 const CREATE_SHEET = new URL("../src/components/CreateSheet.tsx", import.meta.url);
 const MEDIA_CARD = new URL("../src/components/MediaPostCard.tsx", import.meta.url);
 const LIST_ROW = new URL("../src/components/ListRow.tsx", import.meta.url);
+// c383 moved the overflow control's diameter into the shared theme and gave the Chirps
+// board the same control, so section 2 now reads three files rather than one. Reading
+// the token where it is DEFINED is the point: a check that re-declares 32 here would
+// keep passing after somebody changed the real one.
+const THEME_INDEX = new URL("../src/theme/index.ts", import.meta.url);
+const TYPOGRAPHY = new URL("../src/theme/typography.ts", import.meta.url);
+const CHIRPS_BOARD = new URL("../app/(tabs)/chirps/index.tsx", import.meta.url);
 
 const createSheet = readFileSync(CREATE_SHEET, "utf8");
 const mediaCard = readFileSync(MEDIA_CARD, "utf8");
 const listRow = readFileSync(LIST_ROW, "utf8");
+const themeIndex = readFileSync(THEME_INDEX, "utf8");
+const typographySrc = readFileSync(TYPOGRAPHY, "utf8");
+const chirpsBoard = readFileSync(CHIRPS_BOARD, "utf8");
 
 let failures = 0;
 const check = (name, actual, expected) => {
@@ -53,10 +73,15 @@ const check = (name, actual, expected) => {
   }
 };
 
-const num = (src, name) => {
-  const match = src.match(new RegExp(`const ${name} = (\\d+);`));
+const num = (src, name) => matchNum(src, new RegExp(`const ${name} = (\\d+);`), name);
+
+/** Same contract as num(), for a value that is a record field rather than a const. */
+const matchNum = (src, re, what) => {
+  const match = src.match(re);
   if (!match) {
-    console.error(`FAIL  could not read ${name} from source`);
+    // Exit rather than count a failure: an unreadable input means this section is
+    // measuring nothing, and "could not parse" quietly passing is the c336 bug.
+    console.error(`FAIL  could not read ${what} from source`);
     process.exit(1);
   }
   return Number(match[1]);
@@ -89,42 +114,79 @@ check(
   true,
 );
 
-console.log("\n-- (2) InlineAction touch target --");
+console.log("\n-- (2) post-card action touch targets --");
 
+// c383 replaced the two action densities (InlineAction / ActionChip) with ONE labelled
+// row and moved the overflow glyph into a shared circular control. The constants this
+// section reads changed with them; the c307 rule they enforce did not, and is the reason
+// this section is COMPUTED rather than asserted: "44" appearing in a file proves nothing
+// about what a finger can hit.
 const TOUCH_TARGET = num(mediaCard, "TOUCH_TARGET");
-const ICON = num(mediaCard, "INLINE_ACTION_ICON");
-const CHIP = num(mediaCard, "ACTION_CHIP");
+const ACTION_ICON = num(mediaCard, "ACTION_ICON");
+// Not re-declared here: read from the theme, where the card actually gets it.
+const CONTROL = matchNum(themeIndex, /tintControlSize: (\d+),/, "metrics.tintControlSize");
+const CAPTION_LINE = matchNum(typographySrc, /caption: \{[^}]*lineHeight: (\d+)/, "typography.caption.lineHeight");
 
 // Re-derive what the component computes, from the same numbers it uses.
-const inlineHitSlop = Math.ceil((TOUCH_TARGET - ICON) / 2);
-const inlineEffective = ICON + inlineHitSlop * 2;
-// The sibling this was measured against: 36pt circle + spacing.xs (4) each side.
-const chipEffective = CHIP + 4 * 2;
+const actionHitSlop = Math.ceil((TOUCH_TARGET - ACTION_ICON) / 2);
+const actionEffective = ACTION_ICON + actionHitSlop * 2;
+const overflowHitSlop = Math.ceil((TOUCH_TARGET - CONTROL) / 2);
+const overflowEffective = CONTROL + overflowHitSlop * 2;
+// The Chirps board hand-rolls the same control with spacing.sm (8) of slop either side.
+const chirpsOverflowEffective = CONTROL + 8 * 2;
 
 console.log(
-  `   TOUCH_TARGET=${TOUCH_TARGET} icon=${ICON} hitSlop=${inlineHitSlop} ` +
-    `-> InlineAction ${inlineEffective}pt | ActionChip ${chipEffective}pt`,
+  `   TOUCH_TARGET=${TOUCH_TARGET} actionIcon=${ACTION_ICON} slop=${actionHitSlop} -> ${actionEffective}pt | ` +
+    `control=${CONTROL} slop=${overflowHitSlop} -> ${overflowEffective}pt | chirps ${chirpsOverflowEffective}pt`,
 );
 
 check(
-  `InlineAction's effective tap height clears ${TOUCH_TARGET}pt (got ${inlineEffective})`,
-  inlineEffective >= TOUCH_TARGET,
+  `PostAction's effective tap height clears ${TOUCH_TARGET}pt (got ${actionEffective})`,
+  actionEffective >= TOUCH_TARGET,
   true,
 );
 check(
-  `ActionChip still lands on ${TOUCH_TARGET}pt (got ${chipEffective}) - the sibling this was measured against`,
-  chipEffective === TOUCH_TARGET,
+  `the feed card's overflow button clears ${TOUCH_TARGET}pt (got ${overflowEffective})`,
+  overflowEffective >= TOUCH_TARGET,
   true,
 );
 check(
-  "InlineAction actually uses the computed slop, not a hardcoded token",
-  /hitSlop=\{INLINE_ACTION_HIT_SLOP\}/.test(mediaCard),
+  `the Chirps board's own overflow button clears ${TOUCH_TARGET}pt too (got ${chirpsOverflowEffective})`,
+  chirpsOverflowEffective >= TOUCH_TARGET,
   true,
 );
-// The floor only holds while the icon is the shorter of icon vs caption lineHeight (17).
 check(
-  "the icon is still the SHORTER dimension, so sizing off it stays conservative",
-  ICON <= 17,
+  "PostAction uses the computed slop, not a hardcoded token",
+  /hitSlop=\{ACTION_HIT_SLOP\}/.test(mediaCard),
+  true,
+);
+check(
+  "so does the overflow button",
+  /hitSlop=\{OVERFLOW_HIT_SLOP\}/.test(mediaCard),
+  true,
+);
+// The slops must stay DERIVED from TOUCH_TARGET. c307 was a hand-picked 8 that looked
+// deliberate and left a 33pt target, so a literal here is the exact regression to catch.
+check(
+  "both slops are still derived from TOUCH_TARGET rather than written down",
+  /ACTION_HIT_SLOP = Math\.ceil\(\(TOUCH_TARGET - ACTION_ICON\) \/ 2\)/.test(mediaCard) &&
+    /OVERFLOW_HIT_SLOP = Math\.ceil\(\(TOUCH_TARGET - OVERFLOW_CIRCLE\) \/ 2\)/.test(mediaCard),
+  true,
+);
+// PostAction is an icon beside a caption, so the rendered row is as tall as the TALLER of
+// the two. Deriving off the icon is exact only while the icon is that taller one; if the
+// caption ever outgrows it the derivation silently starts under-measuring the row.
+check(
+  `the action icon is still at least the caption lineHeight (${ACTION_ICON} vs ${CAPTION_LINE}), so the row height is what was measured`,
+  ACTION_ICON >= CAPTION_LINE,
+  true,
+);
+// Both cards must keep drawing the SAME control, which is the whole reason the diameter
+// moved into the theme (c383).
+check(
+  "both cards size their overflow control from metrics.tintControlSize",
+  /OVERFLOW_CIRCLE = metrics\.tintControlSize;/.test(mediaCard) &&
+    /width: metrics\.tintControlSize,/.test(chirpsBoard),
   true,
 );
 
