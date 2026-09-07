@@ -61,7 +61,7 @@ type Phase = "email" | "code" | "done";
 export default function VerifyCampusScreen() {
   const router = useRouter();
   const palette = useTheme();
-  const { refresh } = useSession();
+  const { refresh, applyCampusVerification } = useSession();
   const access = useCampusAccess();
 
   const [phase, setPhase] = useState<Phase>("email");
@@ -109,8 +109,17 @@ export default function VerifyCampusScreen() {
         setError("That didn't complete. Try requesting a new code.");
         return;
       }
-      // Pull the new campus_verified_at into the session before leaving, or the tab
-      // we return to re-renders against the stale "unverified" answer and refuses again.
+      // c379: publish the redeem response straight into the session. Without this,
+      // Chirps/the campus feed stayed locked until a full app restart — the session
+      // only re-fetches campus-verification when userId changes, and redeeming does
+      // not touch userId, so nothing was ever going to notice this new answer on its
+      // own. redeemCampusVerification() already IS the authoritative status, so this
+      // is a local write, not a second network round trip.
+      applyCampusVerification(status);
+      // Still refresh() for user.campus_id: redeem overwrites it server-side (a proved
+      // .edu supersedes a campus inherited from an invite code — see
+      // campus_verification.py), and the campus-name effect above is keyed on
+      // user.campus_id, which applyCampusVerification does not touch.
       await refresh();
       setPhase("done");
     } catch (err) {

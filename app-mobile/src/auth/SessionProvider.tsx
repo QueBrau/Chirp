@@ -102,6 +102,20 @@ export interface SessionContextValue {
    * memberships in the background.
    */
   applyBootstrap: (user: UserOut) => void;
+  /**
+   * Publish a known-good CampusVerificationStatus into the session directly (c379),
+   * the same shape as applyBootstrap above: a caller that just received an
+   * authoritative answer from the server hands it straight to the session instead
+   * of waiting for a fetch that will never come on its own.
+   *
+   * Why one is needed at all: campusVerification is resolved once per userId (see
+   * the effect below), and redeeming a code does not change the user's id — so
+   * nothing would ever re-run that effect after POST
+   * /auth/campus-verification/redeem, and the session would keep serving the
+   * pre-redeem answer until the app restarted and re-mounted with a fresh
+   * userId-keyed fetch.
+   */
+  applyCampusVerification: (verification: CampusVerificationStatus) => void;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -210,29 +224,53 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // PERSON, and a user with campus_id null still needs a real answer — they are
   // exactly who the verify screen is for. Keying on campusId would skip the fetch
   // for the users who most need it.
+  //
+  // c379: this is why a successful redeem could not simply wait for this effect to
+  // re-run — redeeming does not change userId, so it never does. verificationGenRef
+  // below is what lets applyCampusVerification (also below) publish a fresh answer
+  // out of band, without this effect's own in-flight request racing back over it.
+  const verificationGenRef = useRef(0);
   const userId = user?.id ?? null;
   useEffect(() => {
+    // Bumped unconditionally, including the null branch: invalidates a request
+    // still in flight from a prior userId (or from applyCampusVerification) so its
+    // eventual answer cannot land after this run and overwrite a newer one.
+    const gen = ++verificationGenRef.current;
+
     if (userId === null) {
       setCampusVerification(null);
       return;
     }
 
-    let active = true;
     getCampusVerification()
       .then((value) => {
-        if (active) setCampusVerification(value);
+        if (verificationGenRef.current === gen) setCampusVerification(value);
       })
       .catch(() => {
         // Fails CLOSED, unlike campus above. A failed campus lookup costs a cosmetic
         // label; a failed verification lookup must not be read as "verified", so this
         // stays null and callers keep waiting rather than opening a gated surface.
-        if (active) setCampusVerification(null);
+        if (verificationGenRef.current === gen) setCampusVerification(null);
       });
 
+    // Parity with the old `active`-flag cleanup this replaced: on unmount, bump so
+    // this run's still-in-flight promise can never apply a state update afterward.
     return () => {
-      active = false;
+      verificationGenRef.current += 1;
     };
   }, [userId]);
+
+  /**
+   * See applyCampusVerification on the context value below — this is its
+   * implementation. Bumping verificationGenRef here discards the result of any
+   * GET /auth/campus-verification still in flight from the effect above (issued
+   * before this redeem, answering with the NOW-STALE pre-redeem status) so it
+   * cannot land afterward and clobber the fresh value this just set.
+   */
+  const applyCampusVerification = useCallback((verification: CampusVerificationStatus) => {
+    verificationGenRef.current += 1;
+    setCampusVerification(verification);
+  }, []);
 
   // c63: the realtime gateway (c21) has been live and tested server-side since
   // before this session existed, and nothing in the app ever called
@@ -359,8 +397,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [loadMe]);
 
   const value = useMemo<SessionContextValue>(
-    () => ({ status, user, memberships, campus, campusVerification, refresh, applyBootstrap }),
-    [status, user, memberships, campus, campusVerification, refresh, applyBootstrap],
+    () => ({
+      status,
+      user,
+      memberships,
+      campus,
+      campusVerification,
+      refresh,
+      applyBootstrap,
+      applyCampusVerification,
+    }),
+    [
+      status,
+      user,
+      memberships,
+      campus,
+      campusVerification,
+      refresh,
+      applyBootstrap,
+      applyCampusVerification,
+    ],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
