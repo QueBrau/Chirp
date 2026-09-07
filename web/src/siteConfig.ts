@@ -16,7 +16,7 @@
 export const CONTACT_EMAIL = "chirp.shared@gmail.com";
 
 /** Shown as the "last updated" line on both legal pages. */
-export const LEGAL_LAST_UPDATED = "August 2026";
+export const LEGAL_LAST_UPDATED = "September 7, 2026";
 
 /**
  * Chirp is launching at UNC Greensboro only, so both legal documents are
