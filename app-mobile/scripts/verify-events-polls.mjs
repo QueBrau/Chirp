@@ -16,6 +16,7 @@
  * Those stay on the device checklist.
  */
 import { readFileSync } from "node:fs";
+import { runEventPaginationCases } from "./event-pagination-cases.mjs";
 
 const EVENT = new URL("../app/(tabs)/chapter/event/[id].tsx", import.meta.url);
 const SHEET = new URL("../src/components/CreateEventSheet.tsx", import.meta.url);
@@ -111,5 +112,6 @@ check(
   /option\.votes === 1 \? "1 vote" :/.test(poll),
 );
 
+await runEventPaginationCases();
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);
