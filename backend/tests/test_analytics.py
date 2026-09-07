@@ -38,6 +38,7 @@ from tests.test_campus_verification import DOMAIN, _code_from, _set_domains, sen
 from tests.test_payments import (
     _create_dues_cycle,
     _onboard,
+    _succeeded_event,
     stripe_calls,
     stripe_env,
 )
@@ -397,34 +398,35 @@ async def test_webhook_without_chirp_metadata_emits_nothing(
     assert _analytics_events(caplog) == []
 
 
-def _stripe_webhook_event(
+async def _stripe_webhook_event(
     event_type: str, *, cycle_id: str, user_id: str, rail: str = "card"
 ) -> dict:
-    return {
-        "id": f"evt_{event_type}_{cycle_id}_{user_id}",
-        "type": event_type,
-        "data": {
-            "object": {
-                "id": f"pi_{cycle_id}_{user_id}",
-                "metadata": {
-                    "chirp_dues_cycle_id": cycle_id,
-                    "chirp_user_id": user_id,
-                    "chirp_rail": rail,
-                },
-            }
-        },
-    }
+    event = await _succeeded_event(
+        cycle_id, user_id, "pi_analytics", "evt_analytics", rail=rail,
+    )
+    event["type"] = event_type
+    # Failed telemetry needs an actual open -> failed transition.
+    if event_type == "payment_intent.payment_failed":
+        from app.db import get_session_factory
+        from sqlalchemy import text
+        async with get_session_factory()() as session:
+            await session.execute(text("UPDATE dues_payment_intents SET status='open' "
+                                       "WHERE stripe_payment_intent_id='pi_analytics'"))
+            await session.commit()
+    return event
 
 
 async def test_webhook_payment_succeeded_emits_coarse_props(
     client: AsyncClient,
     make_chapter_with: MakeChapterWith,
     stripe_env: None,
+    stripe_calls: dict,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
     cycle_id = await _create_dues_cycle(client, setup)
-    event = _stripe_webhook_event(
+    event = await _stripe_webhook_event(
         "payment_intent.succeeded", cycle_id=cycle_id, user_id=setup.member.id, rail="ach"
     )
     caplog.clear()  # setup above already emitted user_signed_up
@@ -446,11 +448,13 @@ async def test_webhook_payment_failed_emits_coarse_props(
     client: AsyncClient,
     make_chapter_with: MakeChapterWith,
     stripe_env: None,
+    stripe_calls: dict,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
     cycle_id = await _create_dues_cycle(client, setup)
-    event = _stripe_webhook_event(
+    event = await _stripe_webhook_event(
         "payment_intent.payment_failed", cycle_id=cycle_id, user_id=setup.member.id, rail="card"
     )
     caplog.clear()  # setup above already emitted user_signed_up
@@ -472,13 +476,15 @@ async def test_webhook_replay_does_not_double_emit(
     client: AsyncClient,
     make_chapter_with: MakeChapterWith,
     stripe_env: None,
+    stripe_calls: dict,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The `else:` gate on the commit's try/except matters precisely here: a
     replayed delivery of an already-processed event must not double-count."""
     setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
     cycle_id = await _create_dues_cycle(client, setup)
-    event = _stripe_webhook_event(
+    event = await _stripe_webhook_event(
         "payment_intent.succeeded", cycle_id=cycle_id, user_id=setup.member.id
     )
     caplog.clear()  # setup above already emitted user_signed_up

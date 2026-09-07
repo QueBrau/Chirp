@@ -7,6 +7,7 @@ application fee, connected account) — the part that moves real money.
 from __future__ import annotations
 
 import logging
+import json
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -486,7 +487,7 @@ async def test_dues_intent_409_after_the_member_already_paid(
     setup = await make_chapter_with(role="member")
     await _onboard(client, setup)
     cycle_id = await _create_dues_cycle(client, setup)
-    await _post_webhook(client, _succeeded_event(cycle_id, setup.member.id))
+    await _post_webhook(client, await _succeeded_event(cycle_id, setup.member.id))
 
     response = await client.post(
         f"/payments/dues/{cycle_id}/intent",
@@ -681,7 +682,7 @@ async def test_a_reservation_settled_through_stripe_stays_blocked_after_a_refund
     assert intent_id is not None
 
     settled = await _post_webhook(
-        client, _succeeded_event(cycle_id, setup.member.id, intent_id, "evt_settled")
+        client, await _succeeded_event(cycle_id, setup.member.id, intent_id, "evt_settled")
     )
     assert settled.status_code == 200
 
@@ -775,22 +776,49 @@ async def test_customer_is_per_chapter_not_per_user(
 # ---------------------------------------------------------------------------
 
 
-def _succeeded_event(
-    cycle_id: str, user_id: str, intent_id: str = "pi_test_1", event_id: str = "evt_1"
+async def _succeeded_event(
+    cycle_id: str, user_id: str, intent_id: str = "pi_test_1", event_id: str = "evt_1",
+    *, rail: str = "card",
 ) -> dict[str, Any]:
-    return {
-        "id": event_id,
-        "type": "payment_intent.succeeded",
-        "data": {
-            "object": {
-                "id": intent_id,
+    """Seed a stored provider reservation when absent and describe its settlement.
+
+    Direct webhook tests model a previously abandoned provider intent with a failed
+    reservation; route tests reuse their actual reservation. New binding-negative
+    tests mutate the resulting signed event WITHOUT changing database authority.
+    """
+    from app import models
+    from app.db import get_session_factory
+    from sqlalchemy import select
+
+    async with get_session_factory()() as session:
+        cycle = await session.get(models.DuesCycle, uuid.UUID(cycle_id))
+        assert cycle is not None
+        chapter = await session.get(models.Chapter, cycle.chapter_id)
+        assert chapter is not None and chapter.stripe_account_id
+        reservation = await session.scalar(select(models.DuesPaymentIntent).where(
+            models.DuesPaymentIntent.stripe_payment_intent_id == intent_id))
+        if reservation is None:
+            reservation = models.DuesPaymentIntent(
+                chapter_id=chapter.id, dues_cycle_id=cycle.id, user_id=uuid.UUID(user_id),
+                rail=rail, status="failed", stripe_payment_intent_id=intent_id,
+                amount_cents=cycle.amount_cents, currency="usd",
+            )
+            session.add(reservation)
+            await session.commit()
+        return {
+            "id": event_id, "object": "event", "type": "payment_intent.succeeded",
+            "livemode": False, "account": chapter.stripe_account_id,
+            "data": {"object": {
+                "id": intent_id, "object": "payment_intent", "livemode": False,
+                "amount": reservation.amount_cents, "amount_received": reservation.amount_cents,
+                "currency": reservation.currency,
                 "metadata": {
-                    "chirp_dues_cycle_id": cycle_id,
-                    "chirp_user_id": user_id,
+                    "chirp_chapter_id": str(reservation.chapter_id),
+                    "chirp_dues_cycle_id": str(reservation.dues_cycle_id),
+                    "chirp_user_id": str(reservation.user_id), "chirp_rail": reservation.rail,
                 },
-            }
-        },
-    }
+            }},
+        }
 
 
 async def _post_webhook(client: AsyncClient, event: dict[str, Any]) -> Any:
@@ -800,7 +828,7 @@ async def _post_webhook(client: AsyncClient, event: dict[str, Any]) -> Any:
     try:
         return await client.post(
             "/webhooks/stripe",
-            content=b"{}",
+            content=json.dumps(event).encode(),
             headers={"Stripe-Signature": "t=1,v1=fake"},
         )
     finally:
@@ -855,7 +883,7 @@ async def test_webhook_appends_dues_payment_to_the_ledger(
     await _onboard(client, setup)
     cycle_id = await _create_dues_cycle(client, setup, amount_cents=25_000)
 
-    response = await _post_webhook(client, _succeeded_event(cycle_id, setup.member.id))
+    response = await _post_webhook(client, await _succeeded_event(cycle_id, setup.member.id))
     assert response.status_code == 200
 
     entries = await client.get(
@@ -863,7 +891,7 @@ async def test_webhook_appends_dues_payment_to_the_ledger(
     )
     dues = [e for e in entries.json() if e["entry_type"] == "dues_payment"]
     assert len(dues) == 1
-    # Amount comes from the dues cycle, never from the event body.
+    # Amount comes from the stored reservation snapshot after validating the event.
     assert dues[0]["amount_cents"] == 25_000
     assert dues[0]["related_user_id"] == setup.member.id
 
@@ -878,7 +906,7 @@ async def test_webhook_replay_of_the_same_event_does_not_double_charge(
     setup = await make_chapter_with(role="member")
     await _onboard(client, setup)
     cycle_id = await _create_dues_cycle(client, setup)
-    event = _succeeded_event(cycle_id, setup.member.id)
+    event = await _succeeded_event(cycle_id, setup.member.id)
 
     first = await _post_webhook(client, event)
     second = await _post_webhook(client, event)
@@ -901,11 +929,11 @@ async def test_two_events_for_one_intent_still_produce_one_entry(
 
     await _post_webhook(
         client,
-        _succeeded_event(cycle_id, setup.member.id, intent_id="pi_x", event_id="evt_a"),
+        await _succeeded_event(cycle_id, setup.member.id, intent_id="pi_x", event_id="evt_a"),
     )
     second = await _post_webhook(
         client,
-        _succeeded_event(cycle_id, setup.member.id, intent_id="pi_x", event_id="evt_b"),
+        await _succeeded_event(cycle_id, setup.member.id, intent_id="pi_x", event_id="evt_b"),
     )
 
     assert second.status_code == 200
@@ -1125,7 +1153,7 @@ async def test_a_failed_payment_releases_the_reservation_so_the_member_can_retry
     # is what _resolve_reservation matches on.
     intent_id = await _reserved_intent_id(cycle_id, setup.member.id)
     assert intent_id is not None
-    failed = dict(_succeeded_event(cycle_id, setup.member.id, intent_id, "evt_failed_1"))
+    failed = dict(await _succeeded_event(cycle_id, setup.member.id, intent_id, "evt_failed_1"))
     failed["type"] = "payment_intent.payment_failed"
     assert (await _post_webhook(client, failed)).status_code == 200
 
@@ -1146,7 +1174,7 @@ async def test_two_distinct_intents_for_one_cycle_cannot_both_reach_the_ledger(
     stripe_calls: dict[str, list[dict[str, Any]]],
 ) -> None:
     """Backstop, independent of the reservation: even if two different intents somehow
-    both settle (a pre-0010 intent, a manual Stripe dashboard charge), the ledger's
+    both settle (an abandoned intent later settles after a retry), the ledger's
     partial unique index keeps exactly one dues_payment per (cycle, member). The older
     uq_ledger_stripe_payment_intent only dedups a REPLAY of one intent id."""
     setup = await make_chapter_with(role="member")
@@ -1154,10 +1182,10 @@ async def test_two_distinct_intents_for_one_cycle_cannot_both_reach_the_ledger(
     cycle_id = await _create_dues_cycle(client, setup)
 
     first = await _post_webhook(
-        client, _succeeded_event(cycle_id, setup.member.id, "pi_ach", "evt_ach")
+        client, await _succeeded_event(cycle_id, setup.member.id, "pi_ach", "evt_ach")
     )
     second = await _post_webhook(
-        client, _succeeded_event(cycle_id, setup.member.id, "pi_card", "evt_card")
+        client, await _succeeded_event(cycle_id, setup.member.id, "pi_card", "evt_card")
     )
 
     assert first.status_code == 200
@@ -1184,13 +1212,13 @@ async def test_a_second_distinct_capture_that_cannot_be_recorded_logs_a_reconcil
     cycle_id = await _create_dues_cycle(client, setup)
 
     first = await _post_webhook(
-        client, _succeeded_event(cycle_id, setup.member.id, "pi_ach", "evt_ach")
+        client, await _succeeded_event(cycle_id, setup.member.id, "pi_ach", "evt_ach")
     )
     assert first.status_code == 200
 
     with caplog.at_level("ERROR", logger="app.routers.payments"):
         second = await _post_webhook(
-            client, _succeeded_event(cycle_id, setup.member.id, "pi_card", "evt_card")
+            client, await _succeeded_event(cycle_id, setup.member.id, "pi_card", "evt_card")
         )
 
     assert second.status_code == 200  # still 2xx — Stripe must not retry this forever
@@ -1224,11 +1252,11 @@ async def test_a_replayed_event_for_the_same_intent_does_not_log_a_reconciliatio
     cycle_id = await _create_dues_cycle(client, setup)
 
     await _post_webhook(
-        client, _succeeded_event(cycle_id, setup.member.id, "pi_x", "evt_a")
+        client, await _succeeded_event(cycle_id, setup.member.id, "pi_x", "evt_a")
     )
     with caplog.at_level("ERROR", logger="app.routers.payments"):
         second = await _post_webhook(
-            client, _succeeded_event(cycle_id, setup.member.id, "pi_x", "evt_b")
+            client, await _succeeded_event(cycle_id, setup.member.id, "pi_x", "evt_b")
         )
 
     assert second.status_code == 200
@@ -1278,9 +1306,12 @@ async def _seed_reservation(
             text(
                 "INSERT INTO dues_payment_intents "
                 "(chapter_id, dues_cycle_id, user_id, rail, status, "
-                "stripe_payment_intent_id, created_at, updated_at) "
+                "stripe_payment_intent_id, created_at, updated_at, amount_cents, currency) "
                 "VALUES (:chapter_id, :cycle_id, :user_id, :rail, :status, :pi_id, "
-                "now() - (:age_hours * interval '1 hour'), now()) "
+                "now() - (:age_hours * interval '1 hour'), now(), "
+                # c349: the snapshot the route writes at creation; taken from the cycle
+                # here because this helper bypasses the route on purpose.
+                "(SELECT amount_cents FROM dues_cycles WHERE id = :cycle_id), 'usd') "
                 "RETURNING id"
             ),
             {
