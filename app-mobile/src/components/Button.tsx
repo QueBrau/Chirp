@@ -1,17 +1,42 @@
 /**
  * Pill button per DESIGN.md §5 — 52 tall. Variants:
  * primary (accent bg / white), secondary (accentSoft / accent),
- * ghost (transparent / inkSecondary), destructive (dangerSoft / danger).
+ * ghost (transparent / inkSecondary), destructive (dangerSoft / danger),
+ * brand (accent bg / campus SECONDARY label), neutral (surfaceAlt / ink).
  * "danger" is a legacy alias for destructive.
+ *
+ * `neutral` (c385) is the quiet filled button: a real surface, no accent in it at
+ * all. It exists because `secondary` is UNREADABLE IN DARK MODE whenever the
+ * accent is dark - the default accent source is campus primary, and UNCG's navy
+ * label on the accentSoft fill measures 1.18:1 there (10.96:1 in light, so the
+ * defect is dark-only). surfaceAlt + ink is ~15:1 in both modes by construction.
+ * Reach for it when a filled button should not be an accent moment; the sign-in
+ * screen's Apple/Google row is the first user. `secondary` itself is still broken
+ * everywhere else it appears in dark mode - that is board c386, not this variant.
+ *
+ * `brand` (c385) is the gold-moment CTA — §10.4 rule 4, one per screen. It is a
+ * NAMED VARIANT rather than a `labelColor` prop on purpose: an arbitrary-colour
+ * escape hatch on the one shared button is how a design system stops being one.
+ * It reads campus secondary from useAppearance() itself, so there is no colour to
+ * pass and none to get wrong. Solid accent + campus secondary is the same pairing
+ * the floating tab bar already ships (§5, c310) and is UNCG's own; gold on navy
+ * measures ~8.6:1 in both modes.
  */
 
 import { Pressable, type ViewStyle } from "react-native";
 
-import { metrics, radii, spacing, useTheme } from "@/theme";
+import { metrics, radii, spacing, useAppearance, useTheme } from "@/theme";
 
 import { AppText, type TextTone } from "./AppText";
 
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "destructive" | "danger";
+export type ButtonVariant =
+  | "primary"
+  | "secondary"
+  | "ghost"
+  | "destructive"
+  | "danger"
+  | "brand"
+  | "neutral";
 
 export interface ButtonProps {
   label: string;
@@ -23,6 +48,7 @@ export interface ButtonProps {
 
 export function Button({ label, onPress, variant = "primary", disabled = false, style }: ButtonProps) {
   const palette = useTheme();
+  const { campusColors } = useAppearance();
 
   const container: ViewStyle = {
     minHeight: metrics.buttonHeight,
@@ -33,6 +59,8 @@ export function Button({ label, onPress, variant = "primary", disabled = false, 
     justifyContent: "center",
   };
   let tone: TextTone = "onAccent";
+  /** Set by `brand` only — every other variant names its colour with a tone token. */
+  let labelColor: string | null = null;
 
   switch (variant) {
     case "primary":
@@ -52,6 +80,14 @@ export function Button({ label, onPress, variant = "primary", disabled = false, 
       container.backgroundColor = palette.dangerSoft;
       tone = "danger";
       break;
+    case "brand":
+      container.backgroundColor = palette.accent;
+      labelColor = campusColors.secondary;
+      break;
+    case "neutral":
+      container.backgroundColor = palette.surfaceAlt;
+      tone = "primary";
+      break;
   }
 
   return (
@@ -61,7 +97,7 @@ export function Button({ label, onPress, variant = "primary", disabled = false, 
       onPress={onPress}
       style={({ pressed }) => [container, { opacity: disabled ? 0.5 : pressed ? 0.8 : 1 }, style]}
     >
-      <AppText variant="bodyBold" tone={tone}>
+      <AppText variant="bodyBold" tone={tone} style={labelColor === null ? undefined : { color: labelColor }}>
         {label}
       </AppText>
     </Pressable>

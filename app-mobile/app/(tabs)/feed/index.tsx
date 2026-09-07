@@ -393,12 +393,19 @@ export default function FeedScreen() {
           <EmptyState title="Nothing here yet" message="Posts from your campus will show up here." />
         ) : (
           <View style={{ gap: spacing.md }}>
-            {visibleItems.map((item) => (
+            {visibleItems.map((item, index) => (
               <MediaPostCard
                 key={item.id}
                 post={item}
                 authorName={item.display_name}
                 authorPhotoUrl={item.avatar_url}
+                // Rotating pastel tint (c383), keyed on POSITION so no two adjacent
+                // cards draw the same one. Index within the rendered list, not within
+                // `items` - they are the same list today (`visibleItems = items`, see
+                // above) and must stay the same one if a real "For You" ranking ever
+                // makes them differ, or the tints would repeat wherever a post is
+                // filtered out.
+                tintIndex={index}
                 timeLabel={age(item.created_at)}
                 likeCount={item.like_count}
                 commentCount={item.comment_count}
