@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { Palette } from "./colors";
 import { resolvePalette, useAppearance } from "./appearance";
+import { withAlpha } from "./colorUtils";
 import { applyOrgAccent, useOrgAccentColors } from "./orgScope";
 import { radii } from "./radii";
 import { spacing } from "./spacing";
@@ -88,6 +89,40 @@ export function cardShadow(palette: Palette): ViewStyle {
 }
 
 /**
+ * The rotating pastel background every post card wears (DESIGN §5 TintedPostCard,
+ * c383) — Chirps, the FYP and the org feed all draw from the same four tints, keyed
+ * on the card's INDEX in its list so no two neighbours ever match.
+ *
+ * Index, deliberately, and not a hash of the post id: a hash is stable per post,
+ * which sounds better until two adjacent cards collide and there is nothing anyone
+ * can do about it. The tint's whole job is breaking up a scrolling column (§10.1),
+ * and only position can guarantee that.
+ *
+ * The `?? surface` is not dead code under `noUncheckedIndexedAccess` — it is how
+ * this returns a real color rather than `string | undefined` at every call site.
+ */
+export function postTint(palette: Palette, index: number): string {
+  const tints = palette.chirpTints;
+  return tints[((index % tints.length) + tints.length) % tints.length] ?? palette.surface;
+}
+
+/**
+ * Background for a small control sitting ON a tinted post card — today the circular
+ * overflow button in a card header (§5 TintedPostCard).
+ *
+ * NOT `surface` in both modes, which is the obvious version and is wrong in dark:
+ * the dark tints are 12% pale washes that sit LIGHTER than `surface` (#15161F), so a
+ * surface-colored circle would sink into the card instead of floating on it. A light
+ * ink wash lifts it in dark exactly as white does on the pastels in light.
+ *
+ * Same role as cardShadow() above: a two-mode token pairing that has to move
+ * together, in one place, so the modes cannot drift.
+ */
+export function onTintControl(palette: Palette): string {
+  return palette.mode === "dark" ? withAlpha(palette.ink, 0.1) : palette.surface;
+}
+
+/**
  * The one text-field surface: body type on `surfaceAlt` (DESIGN §2 names it the
  * input bg) at the §4 input radius. Same role as cardShadow() above — a token
  * combination every input needs, in one place, so changing the input treatment
@@ -144,6 +179,14 @@ export const metrics = {
   /** Fab's circle diameter (§7) — shared with `useOverlayClearance` so the
    * clearance a FAB screen reserves always matches the FAB actually rendered. */
   fabSize: 56,
+  /**
+   * The circular soft control in a TintedPostCard's header row (§5, c383) — the
+   * overflow button on a feed card and on a chirp. Shared rather than written twice
+   * because those two cards are supposed to look like the same card, and the Chirps
+   * board is hand-rolled: it is exactly the kind of pair that drifts by one edit.
+   * Its background comes from `onTintControl(palette)` above.
+   */
+  tintControlSize: 32,
   /**
    * Header accent bar LEADING an oversized screen title (§10.1: "zones, not card
    * soup"). Dimensions only — color is the screen's own accent (campus primary by
