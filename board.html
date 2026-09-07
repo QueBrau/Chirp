@@ -1074,6 +1074,15 @@
       "detail": ""
     },
     {
+      "id": "c381",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "",
+      "area": "auth",
+      "title": "c381 IN PROGRESS Sep 7 (Q lane) [braul: 'i already created my account as an alumni' but the Alumni section is absent from his profile EVEN IN EDIT LAYOUT MODE] ACCOUNT TYPE IS A ONE-TIME CHOICE WITH NO WAY BACK, AND THE SCREEN THAT SETS IT OPENS WITH A PRE-SELECTION. DIAGNOSIS, and the edit-mode detail is what proved it: profile/index.tsx:531 returns null for the alumni section when user.account_type !== 'alumni', and that check runs BEFORE the !editing && !visible check on 535 - so a section absent EVEN IN EDIT MODE means the SERVER is not returning 'alumni'. Not a layout-visibility problem, and not c377, which IS in his build (verified by ancestry against 015879e). TWO FACTS THAT COMBINE BADLY: (1) account-type.tsx derives selected = chosen ?? (inviteCode ? 'greek' : 'non_greek'), so the screen opens with a real-looking selection nobody chose, and a user whose tap on 'I'm an alum' does not register submits non_greek believing otherwise. The comment there calls it 'a PRE-SELECTION, not a lock' - true, and exactly the problem: on screen a pre-selection and a choice are indistinguishable. (2) account_type is written ONCE at auth.py:73 during bootstrap and is IMMUTABLE afterwards - ProfileUpdate (schemas/identity.py:123-124) carries only display_name and avatar_object_name, and no other route anywhere writes that column. So the mistake is permanent and the app offers no path out. FIX, two independent halves: (a) make account_type changeable - add it to ProfileUpdate and surface it in Profile > Settings. It is self-declared anyway and gates only which sections render, so there is no privilege in it. This is what unblocks braul and anyone already mis-filed. (b) require an explicit tap before Continue enables, so a pre-selection can never be submitted as a choice. That stops the next person. NOTE (a) is a BACKEND change and rides the same redeploy c378 is already waiting on. Nothing here reaches braul's phone until prod is redeployed.",
+      "detail": ""
+    },
+    {
       "id": "c380",
       "col": "backlog",
       "owner": "J",
