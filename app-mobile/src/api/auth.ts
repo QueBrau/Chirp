@@ -35,7 +35,7 @@ export interface UserOut {
 }
 
 /**
- * Body for PATCH /auth/me (c221). Every field optional; omitted means "leave alone".
+ * Body for PATCH /auth/me (c221, c381). Every field optional; omitted means "leave alone".
  *
  * avatar_object_name is the tmp/ `object_name` from getMediaUploadUrl(), NOT a url.
  * The server moves that object and assigns the canonical avatar_url itself, exactly
@@ -46,10 +46,15 @@ export interface UserOut {
  * sending `avatar_object_name: null` REMOVES the picture, while leaving the key out
  * keeps whatever is stored. Build the object conditionally rather than defaulting
  * fields to null, or a name-only edit will silently wipe the user's photo.
+ *
+ * account_type (c381) does NOT share that null-means-clear shape — the column is
+ * NOT NULL, so the server 422s an explicit null (account_type_cannot_be_cleared).
+ * Never send the key at all unless you mean to set a new value.
  */
 export interface ProfileUpdate {
   display_name?: string;
   avatar_object_name?: string | null;
+  account_type?: AccountType;
 }
 
 export async function updateProfile(body: ProfileUpdate): Promise<UserOut> {
