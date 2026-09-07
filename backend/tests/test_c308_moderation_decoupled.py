@@ -40,7 +40,6 @@ from tests.conftest import (
     MakeCampus,
     MakeChapterWith,
     MakeUser,
-    _grant_platform_admin,
     approve_chapter_moderation,
     set_campus,
     verify_campus,
@@ -60,13 +59,17 @@ async def _make_chapter_on_campus(
     conftest's make_chapter_with mints a fresh campus per call and approves by default;
     this card's whole subject is two chapters sharing one campus with different approval
     states, which that factory cannot express.
+
+    Creation is self-serve (c378): the president is pinned onto `campus_id` via
+    set_campus (verified) BEFORE the POST, and the request carries no campus_id at
+    all — the server forces it from the caller's own verified campus, which is
+    exactly what lets two independently-founded chapters land on the same campus.
     """
     president = await make_user(president_name)
-    await _grant_platform_admin(president.id)
+    await set_campus(president.id, campus_id)
     created = await client.post(
         "/chapters",
         json={
-            "campus_id": campus_id,
             "org_name": f"Org {uuid.uuid4().hex[:6]}",
             "chapter_name": president_name,
         },
@@ -311,6 +314,17 @@ async def test_a_real_officer_cannot_reach_a_second_campus_by_founding_there(
     one that still fails.
 
     Campus A is theirs by right. Campus B they simply founded on.
+
+    HOW THE ATTACKER GETS TO CAMPUS B, post-c378: POST /chapters forces the new
+    chapter's campus_id off the CALLER's own verified campus — never off a request
+    body (see create_chapter's docstring) — so there is no body field to hand a
+    second campus through any more. The attacker instead RE-VERIFIES onto campus B
+    (set_campus stands in for a real second .edu redemption; a dual-enrolled student
+    or someone who simply controls two school addresses is a real shape of this),
+    which overwrites their OWN campus_id/campus_verified_at to B while leaving their
+    EXISTING membership on campus A's chapter untouched. That is still exactly the
+    shape c308 exists to defang: one person, active e-board on two chapters, one of
+    them freshly founded.
     """
     campus_a = await make_campus()
     campus_b = await make_campus()
@@ -320,12 +334,13 @@ async def test_a_real_officer_cannot_reach_a_second_campus_by_founding_there(
     )
     attacker = legit.president
 
-    # The same person founds on campus B. They keep is_platform_admin from the helper,
-    # which is exactly what self-serve creation would hand every user for free.
+    # Re-verify onto campus B, then found there. attacker keeps their active
+    # membership on campus A's approved chapter from _make_chapter_on_campus above —
+    # only users.campus_id/campus_verified_at move.
+    await set_campus(attacker.id, campus_b)
     founded = await client.post(
         "/chapters",
         json={
-            "campus_id": campus_b,
             "org_name": f"Throwaway {uuid.uuid4().hex[:6]}",
             "chapter_name": "Minted",
         },

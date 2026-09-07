@@ -182,7 +182,22 @@ class CampusOut(_Schema):
 
 
 class ChapterCreate(_Schema):
-    campus_id: uuid.UUID
+    """Body for POST /chapters. NO campus_id (board c378), same move as c85's
+    UserCreate above.
+
+    Self-serve creation (c378) forces the new chapter's campus_id from the CALLER's
+    own verified campus (core.campus_access.is_campus_verified), server-side, in
+    routers/chapters.py — never from this body. A campus_id field here would let a
+    verified student at campus A submit a body naming campus B and have the chapter
+    read as B's, which campus B never asked for; that is exactly the self-asserted-
+    campus hole c85 closed for user signup, one layer up.
+
+    Removing the field rather than validating it is deliberate, same reasoning as
+    UserCreate: _Schema does not set extra="forbid", so a client (or an old test)
+    still sending campus_id has it silently ignored instead of getting a 422, and
+    the mobile client's create-org screen never sends one.
+    """
+
     org_name: str = Field(min_length=1)
     chapter_name: str | None = None
 

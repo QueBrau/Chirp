@@ -34,7 +34,6 @@ from tests.conftest import (
     ChapterSetup,
     MakeCampus,
     MakeUser,
-    _grant_platform_admin,
     set_campus,
     verify_campus,
 )
@@ -48,13 +47,22 @@ async def _make_chapter_on_campus(
     """Same shape as conftest's make_chapter_with, parametrized on a caller-supplied
     campus rather than minting a fresh one — needed here because the exploit is
     specifically TWO CHAPTERS ON ONE CAMPUS, which make_chapter_with (one campus per
-    call) cannot produce."""
+    call) cannot produce.
+
+    Creation is self-serve (c378) and GATED on campus verification, so the president
+    is pinned onto `campus_id` verified via set_campus before the POST — no campus_id
+    in the body, the server forces it. Immediately after, verification is dropped
+    back to unverified (set_campus again, verified=False, SAME campus_id) so this
+    helper's default output is unchanged from before c378: a president whose chapter
+    sits on `campus_id` but who has not personally proved a current .edu, which is
+    exactly the fixture this whole file's "unverified officer" tests are written
+    against. Positive tests call verify_campus explicitly to flip it back on.
+    """
     president = await make_user(president_name)
-    await _grant_platform_admin(president.id)
+    await set_campus(president.id, campus_id)
     created = await client.post(
         "/chapters",
         json={
-            "campus_id": campus_id,
             "org_name": f"Test Org {uuid.uuid4().hex[:6]}",
             "chapter_name": president_name,
         },
@@ -62,6 +70,7 @@ async def _make_chapter_on_campus(
     )
     assert created.status_code == 201, created.text
     chapter_id = created.json()["id"]
+    await set_campus(president.id, campus_id, verified=False)
     # c308: a chapter created through the API is unapproved for moderation, so without
     # this every test in this file would 403 at the door and stop testing the campus
     # TIER it exists to test. These two chapters stand for established orgs, exactly

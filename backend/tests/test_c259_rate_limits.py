@@ -33,6 +33,7 @@ from httpx import AsyncClient
 
 from app.core.rate_limits import (
     ACCOUNT_BOOTSTRAP_LIMIT,
+    CHAPTER_CREATE_LIMIT,
     CHIRP_CREATE_LIMIT,
     COMMENT_CREATE_LIMIT,
     INVITE_MINT_LIMIT,
@@ -285,6 +286,81 @@ async def test_invite_redemption_limit_also_bounds_code_guessing(
 
 
 # ---------------------------------------------------------------------------
+# 3b. chapter creation (c378) — the self-serve spam target
+# ---------------------------------------------------------------------------
+
+
+async def test_chapter_creation_stops_a_loop_but_not_a_real_founder(
+    client: AsyncClient, make_user: MakeUser, make_campus: MakeCampus
+) -> None:
+    """Board card c378 lifted the platform-admin gate on POST /chapters, so a
+    verified account can call it directly with no human review per row — the
+    chapters table becomes a spam target the moment that's true, same reasoning as
+    invite minting one route over.
+
+    Heavy real pattern: a founder creates their org, then retries once after a
+    typo'd name — call it 2, comfortably under the ceiling.
+    """
+    _assert_headroom(2, CHAPTER_CREATE_LIMIT, "chapter_create")
+    max_calls, _ = CHAPTER_CREATE_LIMIT
+    founder = await make_user("Founder")
+    campus_id = await make_campus()
+    await set_campus(founder.id, campus_id)
+
+    for i in range(max_calls):
+        response = await client.post(
+            "/chapters",
+            json={"org_name": f"Org {i}", "chapter_name": "Alpha"},
+            headers=founder.headers,
+        )
+        assert response.status_code == 201, f"chapter {i + 1}: {response.text}"
+
+    refused = await client.post(
+        "/chapters",
+        json={"org_name": "One Too Many", "chapter_name": "Alpha"},
+        headers=founder.headers,
+    )
+    assert refused.status_code == 429, refused.text
+    assert refused.json()["detail"] == "chapter_create_rate_limited"
+
+
+async def test_chapter_creation_limit_is_per_user_not_global(
+    client: AsyncClient, make_user: MakeUser, make_campus: MakeCampus
+) -> None:
+    """One spamming account exhausting its budget must not block a genuine second
+    founder on the same campus."""
+    max_calls, _ = CHAPTER_CREATE_LIMIT
+    campus_id = await make_campus()
+
+    hog = await make_user("Hog")
+    await set_campus(hog.id, campus_id)
+    for i in range(max_calls):
+        assert (
+            await client.post(
+                "/chapters",
+                json={"org_name": f"Hog Org {i}", "chapter_name": "Alpha"},
+                headers=hog.headers,
+            )
+        ).status_code == 201
+    assert (
+        await client.post(
+            "/chapters",
+            json={"org_name": "One Too Many", "chapter_name": "Alpha"},
+            headers=hog.headers,
+        )
+    ).status_code == 429
+
+    bystander = await make_user("Bystander")
+    await set_campus(bystander.id, campus_id)
+    response = await client.post(
+        "/chapters",
+        json={"org_name": "Bystander Org", "chapter_name": "Alpha"},
+        headers=bystander.headers,
+    )
+    assert response.status_code == 201, response.text
+
+
+# ---------------------------------------------------------------------------
 # 4. content writes — spam and flood
 # ---------------------------------------------------------------------------
 
@@ -484,6 +560,7 @@ def test_every_limit_is_documented_as_a_pair() -> None:
         "account_bootstrap": ACCOUNT_BOOTSTRAP_LIMIT,
         "invite_mint": INVITE_MINT_LIMIT,
         "invite_redeem": INVITE_REDEEM_LIMIT,
+        "chapter_create": CHAPTER_CREATE_LIMIT,
         "post_create": POST_CREATE_LIMIT,
         "comment_create": COMMENT_CREATE_LIMIT,
         "chirp_create": CHIRP_CREATE_LIMIT,

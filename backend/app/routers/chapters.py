@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.campus_access import is_campus_verified
 from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
 from app.core.invites import clamp_invite_expiry
@@ -30,6 +31,7 @@ from app.core.permissions import (
     require_role,
 )
 from app.core.rate_limits import (
+    CHAPTER_CREATE_LIMIT,
     INVITE_MINT_LIMIT,
     INVITE_REDEEM_LIMIT,
     limit_per_user,
@@ -79,7 +81,11 @@ DEFAULT_CHAPTER_APPROVAL_REASON = "platform admin decision, no reason given"
 _EBOARD_ROLE_VALUES: frozenset[str] = frozenset(role.value for role in EBOARD)
 
 
-@router.post("/chapters", status_code=201)
+@router.post(
+    "/chapters",
+    status_code=201,
+    dependencies=[Depends(limit_per_user("chapter_create", CHAPTER_CREATE_LIMIT))],
+)
 async def create_chapter(
     body: ChapterCreate,
     user: models.User = Depends(get_current_user),
@@ -87,15 +93,64 @@ async def create_chapter(
 ) -> ChapterOut:
     """Create a chapter; the creator becomes its president via a new membership.
 
-    Platform-admin only (SECURITY-REVIEW finding 1 / board card c28): self-serve
-    chapter creation was the last privilege-escalation vector, since the
-    creator auto-becomes president (full EBOARD powers). There is no API to
-    grant is_platform_admin — it is flipped directly in the DB.
+    SELF-SERVE (board card c378) — platform-admin-only was board card c28 /
+    SECURITY-REVIEW finding 1, and that gate is GONE, not merely relaxed. Read this
+    docstring before touching this route again; the two things that made the old
+    finding true are each closed by a different, independent mechanism below, and
+    removing either one reopens it.
+
+    WHY THIS IS SAFE NOW. Finding 1 was never "creation itself is dangerous" — it
+    was that the creator auto-becomes president, and president was full EBOARD,
+    and EBOARD granted campus MODERATION (any e-board member of any chapter could
+    read their campus's report queue, which carries forwarded_plaintext of reported
+    E2EE messages). Board card c308 (migration 0031) cut that last wire: chapters
+    now carry `moderation_approved`, `server_default FALSE`, and every e-board
+    moderation query (moderation.py's `_require_any_moderator` and the per-campus
+    scoping inside it) requires it. This route never sets moderation_approved —
+    the column's own default is the only thing deciding it, so a founder gets a
+    chapter and a presidency, never the campus moderation surface that made c28's
+    gate necessary. c325 then gave platform admins an API
+    (PATCH /chapters/{id}/moderation-approval) to turn a real org on, which is the
+    other half c308's own docstring named as the prerequisite for this ungating.
+    See test_c308_moderation_decoupled.py and test_c378_self_serve_chapter.py for
+    the adversarial proof, not just this comment.
+
+    GATED ON CAMPUS VERIFICATION (core.campus_access.is_campus_verified), not
+    merely an account and not merely `user.campus_id is not None` — that function's
+    own docstring explains why a bare campus_id is not enough (c96 invite
+    inheritance fills it with zero email involved). Founding an org is at least as
+    sensitive as posting to the campus feed or the Chirp board, both of which
+    already require this exact same proof, so creation gets no weaker a gate than
+    reading them does. Being a platform admin buys no exemption here any more —
+    admin was the OLD gate and is fully retired, not layered on top of the new one.
+
+    CAMPUS_ID IS SERVER-RESOLVED, never read from the request body — ChapterCreate
+    has no campus_id field (see its docstring, same move as c85's UserCreate). The
+    new chapter is pinned to the CALLER'S OWN verified campus, mirroring
+    services/campus_verification.start_verification's refusal to take a campus from
+    anything but the proved email domain (see that function's docstring for why): a
+    body-supplied campus_id would let a verified campus-A student mint a chapter
+    that reads as campus B's, which campus B never consented to and which would
+    have handed them a foothold for the c308-closed escalation if B ever approved
+    it by mistake. `is_campus_verified(user)` being true guarantees `user.campus_id`
+    is set — the only writer of `campus_verified_at`
+    (services/campus_verification.redeem) sets both columns in the same
+    transaction — so there is no null case to smooth over here; if that invariant
+    is ever wrong, refusing the same as unverified is the safe failure, not a 500.
+
+    RATE LIMITED (limit_per_user, core/rate_limits.CHAPTER_CREATE_LIMIT) because the
+    entire point of ungating this route is that any verified student can call it
+    with no human review per row — the chapters table becomes a spam target the
+    moment that is true, the same reasoning invite minting and invite redemption
+    already apply one route over.
+
+    The creator still becomes president of their own new chapter, unchanged from
+    c28's version — that was never the vulnerability, and still isn't.
     """
-    if not user.is_platform_admin:
-        raise forbidden("platform_admin_required")
+    if not is_campus_verified(user) or user.campus_id is None:
+        raise forbidden("campus_unverified")
     chapter = models.Chapter(
-        campus_id=body.campus_id,
+        campus_id=user.campus_id,
         org_name=body.org_name,
         chapter_name=body.chapter_name,
     )
@@ -109,12 +164,6 @@ async def create_chapter(
     session.add(membership)
     await session.flush()
     await open_initial_term(session, membership=membership)
-    # c96, same rule as join_chapter: the founding president belongs to the
-    # campus they just created a chapter on. Safe here for the stronger reason
-    # that this route is platform-admin-only.
-    if user.campus_id is None:
-        user.campus_id = chapter.campus_id
-        session.add(user)
     await session.commit()
     await session.refresh(chapter)
     return ChapterOut.model_validate(chapter)
