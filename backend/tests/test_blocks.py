@@ -294,9 +294,8 @@ async def test_block_by_chirp_is_idempotent_and_does_the_same_work_each_time(
 
     Both calls return 204 and exactly one UserBlock row exists. The endpoint is an
     unconditional upsert rather than read-then-maybe-insert so the two outcomes are
-    also latency-equivalent — an attacker timing the response must not be able to
-    tell whether a block already existed, which would reveal that two chirps share an
-    author (SPEC 8.3).
+    free of an application-level early return. This checks idempotency and row count;
+    it does not assert constant database timing under locks or I/O.
     """
     campus_id = await make_campus()
     author = await _make_campus_user(client, campus_id, "Chirp Author")

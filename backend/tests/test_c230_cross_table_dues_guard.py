@@ -78,6 +78,10 @@ def _reservation(chapter_id: str, cycle_id: str, user_id: str, rail: str = "card
         dues_cycle_id=uuid.UUID(cycle_id),
         user_id=uuid.UUID(user_id),
         rail=rail,
+        # c349: the snapshot the route writes at creation (_create_dues_cycle's
+        # default amount); NOT NULL since migration 0033.
+        amount_cents=25_000,
+        currency="usd",
     )
 
 
@@ -391,8 +395,9 @@ async def _seed_conflicting_pair_bypassing_the_guard(
         await session.execute(
             text(
                 "INSERT INTO dues_payment_intents "
-                "(chapter_id, dues_cycle_id, user_id, rail, status) "
-                "VALUES (:chapter_id, :cycle_id, :user_id, 'card', 'open')"
+                "(chapter_id, dues_cycle_id, user_id, rail, status, amount_cents, currency) "
+                "VALUES (:chapter_id, :cycle_id, :user_id, 'card', 'open', "
+                "(SELECT amount_cents FROM dues_cycles WHERE id = :cycle_id), 'usd')"
             ),
             {"chapter_id": chapter_id, "cycle_id": cycle_id, "user_id": user_id},
         )
