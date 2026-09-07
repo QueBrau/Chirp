@@ -9,6 +9,7 @@ rides along as `application_fee_amount`.
 Card data never transits this backend (SPEC §8.7).
 """
 import uuid
+import json
 
 import stripe
 from fastapi import HTTPException
@@ -41,6 +42,22 @@ def _secret_key() -> str:
     if not key:
         raise HTTPException(status_code=503, detail="stripe_not_configured")
     return key
+
+
+def expected_livemode() -> bool | None:
+    """Which mode a webhook event MUST report, derived from the configured secret key.
+
+    sk_live_/rk_live_ -> True, sk_test_/rk_test_ -> False, anything else -> None (not
+    verifiable; the webhook quarantines rather than guesses). Derived, never hard-coded,
+    so the same code is right before and after the live cutover: flipping the key in
+    Secret Manager flips the expectation with it (board card c349).
+    """
+    key = get_settings().stripe_secret_key or ""
+    if key.startswith(("sk_live_", "rk_live_")):
+        return True
+    if key.startswith(("sk_test_", "rk_test_")):
+        return False
+    return None
 
 
 def publishable_key() -> str:
@@ -115,6 +132,7 @@ async def create_dues_payment_intent(
     account_id: str,
     customer_id: str,
     amount_cents: int,
+    currency: str,
     rail: str,
     cycle_id: uuid.UUID,
     user_id: uuid.UUID,
@@ -141,12 +159,12 @@ async def create_dues_payment_intent(
         stripe_account=account_id,
         idempotency_key=f"dues:{cycle_id}:{user_id}:{rail}:{reservation_id}",
         amount=amount_cents,
-        currency=CURRENCY,
+        currency=currency,
         customer=customer_id,
         payment_method_types=RAIL_PAYMENT_METHOD_TYPES[rail],
         application_fee_amount=platform_fee_cents(amount_cents, rail),
-        # Metadata is the only link back to Chirp rows when the webhook arrives —
-        # the webhook has no session and cannot infer who paid from the intent alone.
+        # The stored reservation/intent ID supplies authority. Metadata must match
+        # that reservation during successful settlement; it cannot invent ownership.
         metadata={
             "chirp_dues_cycle_id": str(cycle_id),
             "chirp_user_id": str(user_id),
@@ -186,7 +204,7 @@ async def cancel_payment_intent(account_id: str, intent_id: str) -> stripe.Payme
     )
 
 
-def verify_webhook_event(payload: bytes, signature: str) -> stripe.Event:
+def verify_webhook_event(payload: bytes, signature: str) -> dict:
     """Verify a webhook signature against the RAW body and return the parsed event.
 
     Verification happens before any parsing: an unverified payload is entirely
@@ -196,7 +214,10 @@ def verify_webhook_event(payload: bytes, signature: str) -> stripe.Event:
     if not secret:
         raise HTTPException(status_code=503, detail="stripe_not_configured")
     try:
-        return stripe.Webhook.construct_event(payload, signature, secret)
+        stripe.Webhook.construct_event(payload, signature, secret)
+        # Interpret the SAME authenticated bytes. This keeps settlement independent
+        # of SDK resource wrappers, which do not consistently implement Mapping/get.
+        return json.loads(payload)
     except stripe.SignatureVerificationError:
         raise HTTPException(status_code=400, detail="invalid_signature") from None
     except ValueError:
