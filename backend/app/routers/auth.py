@@ -121,11 +121,21 @@ async def update_me(
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> UserOut:
-    """Edit your own profile: display name and profile picture (board c221).
+    """Edit your own profile: display name, profile picture, and account type (c221, c381).
 
     SELF ONLY, by construction. There is no user id in the path and none in the body -
     the row edited is whatever get_current_user resolved, so there is no shape in which
     this route can be pointed at somebody else's profile.
+
+    ACCOUNT_TYPE (c381): a real user mis-filed at signup (or a tap that never
+    registered) had no way back, since bootstrap was this column's only writer.
+    Same model_fields_set convention as display_name below, not avatar_object_name's -
+    there is no "clear it" state, because the column is NOT NULL, so an explicit null
+    is refused exactly like display_name's is. A genuine change emits its own
+    analytics event (account_type_changed) rather than replaying user_signed_up,
+    which is a signup event and this is not one. See schemas/identity.py's AccountType
+    and ProfileUpdate docstrings for the full contract and why this remains safe to
+    mutate (it drives presentation only, never authorization - c242).
 
     THE AVATAR IS FINALIZED TO avatars/, NOT posts/, AND THAT IS LOAD-BEARING.
     jobs/media_reconcile.py builds its reference set from `select(Post.media_urls)` and
@@ -169,6 +179,25 @@ async def update_me(
                 str(user.id),
                 body.avatar_object_name,
                 destination_prefix=AVATAR_PREFIX,
+            )
+
+    if "account_type" in fields:
+        if body.account_type is None:
+            # NOT NULL on the row, and there is no "back to nothing" state for it the
+            # way avatar_object_name has initials to fall back to - refused rather
+            # than silently ignored, same shape as display_name_cannot_be_cleared.
+            raise HTTPException(status_code=422, detail="account_type_cannot_be_cleared")
+        if body.account_type != user.account_type:
+            previous_account_type = user.account_type
+            user.account_type = body.account_type
+            # A CHANGE, not a signup - user_signed_up already fired once, at
+            # bootstrap, and must not fire again here (see the schemas/identity.py
+            # AccountType docstring). Own event, own name.
+            emit(
+                "account_type_changed",
+                user_id=user.id,
+                previous_account_type=previous_account_type,
+                account_type=user.account_type,
             )
 
     await session.commit()

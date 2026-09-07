@@ -11,8 +11,8 @@
  * Same contract as src/auth/session.ts: every function here assumes its
  * precondition was already checked by the caller (there, hasFirebaseConfig();
  * here, isAppleSignInAvailable()) rather than re-checking internally. On a
- * successful exchange the ID token is handed to src/api/client's
- * setAuthToken() exactly the way signInWithEmail/signUpWithEmail do it - the
+ * successful exchange the ID token is handed to src/auth/session's
+ * generation-owned writer, shared by every sign-in helper — the
  * API client has no other way to learn a session exists. Per c89, an
  * unavailable or failed provider must never look like an authenticated
  * session: every exit that is not a genuine Firebase credential returns
@@ -24,7 +24,8 @@ import * as Crypto from "expo-crypto";
 import { OAuthProvider, signInWithCredential } from "firebase/auth";
 import { Platform } from "react-native";
 
-import { setAuthToken } from "@/api/client";
+import { operationErrorMessage } from "@/api/operation";
+import { beginSignIn, cancelSignIn, prepareSignedInUser, runAuthMutation } from "./session";
 
 import { getFirebaseAuth } from "./firebase";
 
@@ -74,6 +75,8 @@ function generateRawNonce(): string {
  * network-request-failed) is a copy-review concern, not a correctness one.
  */
 function appleErrorMessage(error: unknown): string {
+  const operationMessage = operationErrorMessage(error);
+  if (operationMessage) return operationMessage;
   const code = readErrorCode(error);
 
   switch (code) {
@@ -107,6 +110,7 @@ function readErrorCode(error: unknown): string | null {
  * this - see the module doc comment.
  */
 export async function signInWithApple(): Promise<AppleSignInOutcome> {
+  const attempt = beginSignIn();
   try {
     // The nonce is generated once and used in two DIFFERENT forms below: Apple
     // receives its SHA-256 hash, Firebase receives the raw value. Sending the
@@ -147,10 +151,9 @@ export async function signInWithApple(): Promise<AppleSignInOutcome> {
       idToken: appleCredential.identityToken,
       rawNonce, // Firebase gets the RAW value. Never the hash - see above.
     });
-    const userCredential = await signInWithCredential(getFirebaseAuth(), credential);
-    // Same token handoff as signInWithEmail/signUpWithEmail in session.ts -
-    // the API client has no other way to learn this session exists.
-    setAuthToken(await userCredential.user.getIdToken());
+    const userCredential = await runAuthMutation(attempt, () => signInWithCredential(getFirebaseAuth(), credential));
+    // One guarded token writer for every sign-in provider.
+    await prepareSignedInUser(userCredential.user, attempt);
     return { status: "success" };
   } catch (error) {
     // Outer net: nonce generation/hashing, the Firebase credential exchange,
@@ -158,5 +161,7 @@ export async function signInWithApple(): Promise<AppleSignInOutcome> {
     // always get a settled outcome rather than an unhandled rejection that
     // would leave the screen stuck on "Please wait..." forever.
     return { status: "error", message: appleErrorMessage(error) };
+  } finally {
+    cancelSignIn(attempt);
   }
 }

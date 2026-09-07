@@ -14,6 +14,7 @@
  */
 
 import { wsAuthProtocol, wsUrl } from "../api/client";
+import { currentIdentity, ownsIdentity, onIdentityChanged } from "../auth/identity";
 import type { MessageType } from "../api/messages";
 import type { PollOut } from "../api/polls";
 
@@ -92,6 +93,7 @@ const STABLE_CONNECTION_MS = 5_000;
 /** Single WS connection to the gateway; stream is server → client only. */
 export class ChirpSocket {
   private ws: WebSocket | null = null;
+  private unsubscribeIdentity: (() => void) | null = null;
   private status: SocketStatus = "idle";
   private shouldRun = false;
   private reconnectAttempts = 0;
@@ -123,12 +125,15 @@ export class ChirpSocket {
   /** Open the connection (token rides the subprotocol — see wsAuthProtocol()). */
   connect(): void {
     this.shouldRun = true;
+    this.unsubscribeIdentity ??= onIdentityChanged(() => this.disconnect());
     this.open();
   }
 
   /** Close and stop reconnecting. */
   disconnect(): void {
     this.shouldRun = false;
+    this.unsubscribeIdentity?.();
+    this.unsubscribeIdentity = null;
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -137,8 +142,9 @@ export class ChirpSocket {
       clearTimeout(this.stabilityTimer);
       this.stabilityTimer = null;
     }
-    this.ws?.close();
-    this.ws = null;
+    const ws = this.ws;
+    this.ws = null; // Invalidate before close: some adapters invoke onclose synchronously.
+    ws?.close();
     this.setStatus("closed");
   }
 
@@ -147,14 +153,17 @@ export class ChirpSocket {
     this.setStatus("connecting");
     // security-pass item 7: token goes in as a subprotocol, not the URL. No
     // token yet (never signed in, or SessionProvider raced ahead of
-    // setAuthToken) means an anonymous handshake the server will 4401 — same
+    // token resolution) means an anonymous handshake the server will 4401 — same
     // failure as before, just no longer one that also wrote a bearer token
     // into Cloud Run's request-url logging on the way.
+    const owner = currentIdentity();
     const protocol = wsAuthProtocol();
     const ws = new WebSocket(wsUrl(), protocol !== null ? [protocol] : undefined);
     this.ws = ws;
+    const isCurrent = () => this.shouldRun && this.ws === ws && ownsIdentity(owner);
 
     ws.onopen = () => {
+      if (!isCurrent()) return;
       // c152: NOT an immediate reconnectAttempts reset — that was the bug.
       // ws.onopen fires as soon as the browser's handshake completes, and the
       // server's accept() genuinely succeeds before a downstream failure
@@ -170,6 +179,7 @@ export class ChirpSocket {
       // attempts/hour; requiring a survived duration instead drops it by
       // roughly 25x and lets the delay actually reach the 30s cap.
       this.stabilityTimer = setTimeout(() => {
+        if (!isCurrent()) return;
         this.reconnectAttempts = 0;
         this.stabilityTimer = null;
       }, STABLE_CONNECTION_MS);
@@ -177,6 +187,7 @@ export class ChirpSocket {
     };
 
     ws.onmessage = (frame: { data: unknown }) => {
+      if (!isCurrent()) return;
       if (typeof frame.data !== "string") return;
       let event: SocketEvent;
       try {
@@ -189,6 +200,7 @@ export class ChirpSocket {
     };
 
     ws.onclose = (event: { code: number }) => {
+      if (!isCurrent()) return;
       this.ws = null;
       // c152: this connection did not survive to reset the counter — cancel
       // the pending timer rather than let it fire later. Without this, a
