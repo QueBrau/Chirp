@@ -15,7 +15,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -193,6 +193,12 @@ class DuesPaymentIntent(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'open'"))
     # Null between reserving the slot and Stripe answering.
     stripe_payment_intent_id: Mapped[str | None] = mapped_column(Text)
+    # c349: what the PaymentIntent was created FOR, snapshotted with the reservation
+    # (migration 0033). The webhook compares the event's amount_received/amount and
+    # currency to THESE, never to the cycle at settlement time and never to the
+    # event's own metadata.
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -303,4 +309,48 @@ class DuesPlanInstallment(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ledger_entries.id")
+    )
+
+
+class StripeSettlementQuarantine(Base):
+    """A verified Stripe event that did NOT match its stored reservation (board c349).
+
+    Append-only, like moderation_actions and the ledger: the record that money reported
+    by Stripe was refused as dues because the event disagreed with what the reservation
+    snapshot says was created — wrong livemode, wrong connected account, wrong amount or
+    currency, altered metadata, or no reservation at all. Nothing else is written for
+    such an event (no ledger row, no reservation status change); the event id still
+    lands in processed_stripe_events so Stripe stops redelivering it.
+
+    expected/observed hold internal ids, amounts, currency, livemode and the acct_ id.
+    NEVER the raw event: it carries customer PII (see stripe_webhook's docstring).
+    """
+
+    __tablename__ = "stripe_settlement_quarantine"
+    __table_args__ = (
+        CheckConstraint(
+            "reason IN ('no_reservation', 'livemode_mismatch', 'livemode_unverifiable', "
+            "'account_mismatch', 'amount_mismatch', 'currency_mismatch', 'metadata_mismatch')",
+            name="stripe_settlement_quarantine_reason_check",
+        ),
+        Index("idx_settlement_quarantine_chapter", "chapter_id", text("created_at DESC")),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    event_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(Text)
+    reservation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("dues_payment_intents.id")
+    )
+    chapter_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chapters.id")
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    expected: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    observed: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
