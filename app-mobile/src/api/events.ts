@@ -89,6 +89,19 @@ export interface GuestListPage {
   limit?: number;
 }
 
+export interface EventInvitePage extends GuestListPage {
+  unansweredOnly?: boolean;
+}
+
+export interface EventPageResult<T, Cursor> {
+  items: T[];
+  /** A full page may require one final empty request to establish exhaustion. */
+  next: Cursor | null;
+}
+
+export const EVENT_GUEST_PAGE_SIZE = 200;
+export const HOME_INVITE_PAGE_SIZE = 50;
+
 /** All events for a chapter (Events segment, §8.7), soonest-first by start time. */
 export async function listEvents(chapterId: string): Promise<EventOut[]> {
   return request<EventOut[]>(`/chapters/${chapterId}/events`);
@@ -100,6 +113,11 @@ export async function createEvent(chapterId: string, body: EventCreate): Promise
 
 export async function getEvent(eventId: string): Promise<EventOut> {
   return request<EventOut>(`/events/${eventId}`);
+}
+
+/** This caller's answer, even when their row is beyond the first guest page. */
+export async function getMyRsvp(eventId: string): Promise<{ status: RsvpStatus | null }> {
+  return request<{ status: RsvpStatus | null }>(`/events/${eventId}/rsvps/mine`);
 }
 
 /** Edit an event. Host or e-board only; a cancelled event is not editable. */
@@ -132,11 +150,14 @@ export async function inviteToEvent(
 
 /** One page of an event's invites, earliest first. Guest-list gated. */
 export async function listEventInvites(
-  eventId: string,
-  page: GuestListPage = {},
+    eventId: string,
+  page: EventInvitePage = {},
 ): Promise<EventInviteOut[]> {
   return request<EventInviteOut[]>(`/events/${eventId}/invites`, {
-    query: { after: page.after, after_user_id: page.afterUserId, limit: page.limit },
+    query: {
+      after: page.after, after_user_id: page.afterUserId, limit: page.limit,
+      unanswered_only: page.unansweredOnly,
+    },
   });
 }
 
@@ -170,8 +191,19 @@ export interface EventInviteWithRsvpOut {
  * per-invite listGuests() + getChapter() N+1 (see feed/index.tsx's old
  * loadVisibleInvites for the shape this collapses).
  */
-export async function listMyInvitesWithRsvps(): Promise<EventInviteWithRsvpOut[]> {
-  return request<EventInviteWithRsvpOut[]>("/me/event-invites-with-rsvps");
+export interface MyInvitesPage {
+  before?: string;
+  beforeId?: string;
+  limit?: number;
+  view?: "all" | "actionable" | "history";
+}
+
+export async function listMyInvitesWithRsvps(
+  page: MyInvitesPage = {},
+): Promise<EventInviteWithRsvpOut[]> {
+  return request<EventInviteWithRsvpOut[]>("/me/event-invites-with-rsvps", {
+    query: { before: page.before, before_id: page.beforeId, limit: page.limit, view: page.view },
+  });
 }
 
 /** One page of an event's RSVPs, earliest answers first. Guest-list gated. */
@@ -182,6 +214,39 @@ export async function listRsvps(
   return request<EventRsvpOut[]>(`/events/${eventId}/rsvps`, {
     query: { after: page.after, after_user_id: page.afterUserId, limit: page.limit },
   });
+}
+
+export async function listRsvpPage(
+  eventId: string, cursor: GuestListPage = {},
+): Promise<EventPageResult<EventRsvpOut, GuestListPage>> {
+  const items = await listRsvps(eventId, { ...cursor, limit: EVENT_GUEST_PAGE_SIZE });
+  const last = items[items.length - 1];
+  return { items, next: items.length === EVENT_GUEST_PAGE_SIZE
+    ? { after: last.created_at, afterUserId: last.user_id } : null };
+}
+
+/** Only server-confirmed unanswered invitees; never subtract partial RSVP pages. */
+export async function listUnansweredInvitePage(
+  eventId: string, cursor: GuestListPage = {},
+): Promise<EventPageResult<EventInviteOut, GuestListPage>> {
+  const items = await listEventInvites(eventId, {
+    ...cursor, limit: EVENT_GUEST_PAGE_SIZE, unansweredOnly: true,
+  });
+  const last = items[items.length - 1];
+  return { items, next: items.length === EVENT_GUEST_PAGE_SIZE
+    ? { after: last.created_at, afterUserId: last.invited_user_id } : null };
+}
+
+/** Home shows pending upcoming/ongoing invitations and upcoming cancellations. */
+export async function listActionableInvitePage(
+  cursor: MyInvitesPage = {},
+): Promise<EventPageResult<EventInviteWithRsvpOut, MyInvitesPage>> {
+  const items = await listMyInvitesWithRsvps({
+    ...cursor, limit: HOME_INVITE_PAGE_SIZE, view: "actionable",
+  });
+  const last = items[items.length - 1];
+  return { items, next: items.length === HOME_INVITE_PAGE_SIZE
+    ? { before: last.event.starts_at, beforeId: last.event.id } : null };
 }
 
 /** Headcounts for one event - mirrors backend EventRsvpCountsOut (c275). */
