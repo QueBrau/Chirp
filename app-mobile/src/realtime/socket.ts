@@ -4,17 +4,14 @@
  * `{"type": "<event_type>", ...payload}`. Events never carry ciphertext beyond
  * the opaque base64 `ciphertext` blob field (CONVENTIONS).
  *
- * c129 found this unwired entirely (grepped app/ and src/, zero hits on
- * `.connect()`) and fixed the 4403 handling without wiring a consumer, since
- * that was a separate, much larger feature than a suspension screen. c63 is
- * that feature: SessionProvider now calls `.connect()` once a session is
- * really authenticated (see its `status === "ready"` effect) and
- * `.disconnect()` otherwise — suspended included, since the gateway would
- * 4403 a suspended caller's connection attempt anyway (c126).
+ * SessionProvider starts one run for a ready account. c346 bounds transport
+ * retries and delegates terminal auth revalidation back to that same Provider;
+ * a transport outage never decides the Firebase account has signed out.
  */
 
 import { wsAuthProtocol, wsUrl } from "../api/client";
-import { currentIdentity, ownsIdentity, onIdentityChanged } from "../auth/identity";
+import { Operation } from "../api/operation";
+import { currentIdentity, ownsIdentity, onIdentityChanged, type AuthIdentity } from "../auth/identity";
 import type { MessageType } from "../api/messages";
 import type { PollOut } from "../api/polls";
 
@@ -68,116 +65,136 @@ export function isPollEvent(event: SocketEvent): event is PollSocketEvent {
   return event.type === "poll";
 }
 
-export type SocketStatus = "idle" | "connecting" | "open" | "closed" | "suspended";
-
-// Mirrors ws/gateway.py's WS_ACCOUNT_SUSPENDED (board c126/c129). No shared
-// constants file crosses the backend/mobile boundary in this repo, so this is
-// duplicated rather than imported — kept in sync by the comment on both sides
-// pointing at the same board card.
-const WS_CLOSE_ACCOUNT_SUSPENDED = 4403;
-
+export type SocketStatus = "idle" | "connecting" | "open" | "closed" | "suspended" | "revalidating" | "paused";
 export type SocketEventListener = (event: SocketEvent) => void;
 export type SocketStatusListener = (status: SocketStatus) => void;
 
+/** SessionProvider owns the one auth decision; the socket never signs Firebase out. */
+export interface SocketAuthHandlers {
+  revalidate: (owner: AuthIdentity, signal: AbortSignal) => Promise<boolean>;
+  exhausted: (owner: AuthIdentity) => void;
+}
+
 const BASE_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
-// c152: how long a connection has to stay open before it counts as a real
-// recovery for backoff-reset purposes, not just a handshake that happened to
-// complete before the server tore it down. Picked with margin on both sides:
-// the observed failure (auth+accept succeed, then pubsub.subscribe() fails
-// with 4503) closes in roughly 100-200ms, so 5s is nowhere near that; and 5s
-// is short enough that a connection which genuinely recovers isn't stuck
-// throttled at a stale attempt count for long afterward.
+const MAX_RECONNECT_ATTEMPTS = 6;
+const CONNECT_TIMEOUT_MS = 10_000;
+const AUTH_REVALIDATION_TIMEOUT_MS = 10_000;
+// c152: brief open/4503 cycles do not reset backoff. Only a stable connection does.
 const STABLE_CONNECTION_MS = 5_000;
+const WS_AUTH_FAILED = 4401;
+const WS_ACCOUNT_SUSPENDED = 4403;
 
-/** Single WS connection to the gateway; stream is server → client only. */
+/** One owned connection, one bounded retry run, and at most one auth recovery in it. */
 export class ChirpSocket {
   private ws: WebSocket | null = null;
   private unsubscribeIdentity: (() => void) | null = null;
   private status: SocketStatus = "idle";
   private shouldRun = false;
+  private paused = false;
+  private run = 0;
+  private runAbort: AbortController | null = null;
+  private authOperation: Operation | null = null;
+  private authAttempts = 0;
+  private authHandlers: SocketAuthHandlers | null = null;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  // c152: armed in onopen, fires STABLE_CONNECTION_MS later and is what
-  // actually resets reconnectAttempts — NOT onopen itself. Cleared on close or
-  // disconnect so a stale timer from a connection that already died can never
-  // reset the counter a later, still-failing attempt is relying on.
   private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private eventListeners = new Set<SocketEventListener>();
   private statusListeners = new Set<SocketStatusListener>();
 
-  getStatus(): SocketStatus {
-    return this.status;
-  }
+  getStatus(): SocketStatus { return this.status; }
 
-  /** Subscribe to decoded events; returns an unsubscribe function. */
   onEvent(listener: SocketEventListener): () => void {
     this.eventListeners.add(listener);
-    return () => this.eventListeners.delete(listener);
+    return () => { this.eventListeners.delete(listener); };
   }
 
-  /** Subscribe to connection status changes; returns an unsubscribe function. */
   onStatus(listener: SocketStatusListener): () => void {
     this.statusListeners.add(listener);
-    return () => this.statusListeners.delete(listener);
+    return () => { this.statusListeners.delete(listener); };
   }
 
-  /** Open the connection (token rides the subprotocol — see wsAuthProtocol()). */
+  setAuthHandlers(handlers: SocketAuthHandlers): () => void {
+    this.authHandlers = handlers;
+    return () => { if (this.authHandlers === handlers) this.authHandlers = null; };
+  }
+
+  /** Repeated connect calls never replenish a live or paused run's retry budget. */
   connect(): void {
+    if (this.shouldRun) return;
     this.shouldRun = true;
-    this.unsubscribeIdentity ??= onIdentityChanged(() => this.disconnect());
+    this.paused = false;
+    this.run += 1;
+    this.runAbort = new AbortController();
+    this.authAttempts = 0;
+    this.reconnectAttempts = 0;
+    this.unsubscribeIdentity = onIdentityChanged(() => this.disconnect());
     this.open();
   }
 
-  /** Close and stop reconnecting. */
+  /** Explicit user retry after Provider revalidates the current account. */
+  retry(): void { this.disconnect(); this.connect(); }
+
   disconnect(): void {
     this.shouldRun = false;
+    this.run += 1;
     this.unsubscribeIdentity?.();
     this.unsubscribeIdentity = null;
-    if (this.reconnectTimer !== null) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    if (this.stabilityTimer !== null) {
-      clearTimeout(this.stabilityTimer);
-      this.stabilityTimer = null;
-    }
-    const ws = this.ws;
-    this.ws = null; // Invalidate before close: some adapters invoke onclose synchronously.
-    ws?.close();
+    this.runAbort?.abort();
+    this.runAbort = null;
+    this.authOperation?.cancel();
+    this.authOperation = null;
+    if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    if (this.ws) this.retire(this.ws, true);
     this.setStatus("closed");
   }
 
-  private open(): void {
-    if (!this.shouldRun || this.ws) return;
-    this.setStatus("connecting");
-    // security-pass item 7: token goes in as a subprotocol, not the URL. No
-    // token yet (never signed in, or SessionProvider raced ahead of
-    // token resolution) means an anonymous handshake the server will 4401 — same
-    // failure as before, just no longer one that also wrote a bearer token
-    // into Cloud Run's request-url logging on the way.
-    const owner = currentIdentity();
-    const protocol = wsAuthProtocol();
-    const ws = new WebSocket(wsUrl(), protocol !== null ? [protocol] : undefined);
-    this.ws = ws;
-    const isCurrent = () => this.shouldRun && this.ws === ws && ownsIdentity(owner);
+  private ownsRun(run: number, owner: AuthIdentity): boolean {
+    return this.shouldRun && this.run === run && ownsIdentity(owner);
+  }
 
+  private retire(ws: WebSocket, close: boolean): void {
+    if (this.ws !== ws) return;
+    this.ws = null;
+    if (this.connectTimer !== null) clearTimeout(this.connectTimer);
+    if (this.stabilityTimer !== null) clearTimeout(this.stabilityTimer);
+    this.connectTimer = this.stabilityTimer = null;
+    // Detach real handlers as well as guarding callbacks already queued by a runtime.
+    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+    if (close) ws.close();
+  }
+
+  private pause(): void { this.paused = true; this.setStatus("paused"); }
+
+  private open(): void {
+    if (!this.shouldRun || this.paused || this.ws || this.authOperation) return;
+    const owner = currentIdentity(), run = this.run;
+    this.setStatus("connecting");
+    if (!this.ownsRun(run, owner)) return;
+    let ws: WebSocket;
+    try {
+      const protocol = wsAuthProtocol();
+      ws = new WebSocket(wsUrl(), protocol !== null ? [protocol] : undefined);
+    } catch {
+      this.scheduleReconnect(run, owner);
+      return;
+    }
+    this.ws = ws;
+    const isCurrent = () => this.ws === ws && this.ownsRun(run, owner);
+    const transientFailure = () => {
+      if (!isCurrent()) return;
+      this.retire(ws, true);
+      this.setStatus("closed");
+      this.scheduleReconnect(run, owner);
+    };
+    this.connectTimer = setTimeout(transientFailure, CONNECT_TIMEOUT_MS);
     ws.onopen = () => {
       if (!isCurrent()) return;
-      // c152: NOT an immediate reconnectAttempts reset — that was the bug.
-      // ws.onopen fires as soon as the browser's handshake completes, and the
-      // server's accept() genuinely succeeds before a downstream failure
-      // (pubsub.subscribe() against a down Redis, 4503) tears the connection
-      // back down ~100-200ms later. Resetting here meant every single one of
-      // those cycles reset the counter right before scheduleReconnect() used
-      // it, so the exponential math never actually grew: a client hammered a
-      // permanently-failing gateway at a flat ~2s cadence, observed as 1,863
-      // attempts in one hour against prod (board c152). The reset now only
-      // fires if the connection is still open STABLE_CONNECTION_MS later —
-      // proven via a throwaway harness porting this exact logic: the old
-      // reset-on-open shape reproduces the flat cadence at thousands of
-      // attempts/hour; requiring a survived duration instead drops it by
-      // roughly 25x and lets the delay actually reach the 30s cap.
+      if (this.connectTimer !== null) clearTimeout(this.connectTimer);
+      this.connectTimer = null;
       this.stabilityTimer = setTimeout(() => {
         if (!isCurrent()) return;
         this.reconnectAttempts = 0;
@@ -185,65 +202,65 @@ export class ChirpSocket {
       }, STABLE_CONNECTION_MS);
       this.setStatus("open");
     };
-
     ws.onmessage = (frame: { data: unknown }) => {
-      if (!isCurrent()) return;
-      if (typeof frame.data !== "string") return;
+      if (!isCurrent() || typeof frame.data !== "string") return;
       let event: SocketEvent;
-      try {
-        event = JSON.parse(frame.data) as SocketEvent;
-      } catch {
-        return; // malformed frame — drop it
-      }
+      try { event = JSON.parse(frame.data) as SocketEvent; } catch { return; }
       if (typeof event?.type !== "string") return;
       for (const listener of this.eventListeners) listener(event);
     };
-
     ws.onclose = (event: { code: number }) => {
       if (!isCurrent()) return;
-      this.ws = null;
-      // c152: this connection did not survive to reset the counter — cancel
-      // the pending timer rather than let it fire later. Without this, a
-      // stability timer armed by THIS attempt could still fire after a LATER
-      // attempt has already started counting, wiping out backoff progress
-      // that later attempt earned.
-      if (this.stabilityTimer !== null) {
-        clearTimeout(this.stabilityTimer);
-        this.stabilityTimer = null;
+      this.retire(ws, false);
+      if (event.code === WS_AUTH_FAILED || event.code === WS_ACCOUNT_SUSPENDED) {
+        void this.revalidate(run, owner);
+      } else {
+        this.setStatus("closed");
+        this.scheduleReconnect(run, owner);
       }
-      // c129: a suspended account is never going to succeed on retry — the
-      // condition that closed this connection doesn't clear on its own, only a
-      // moderator's unsuspend does. Reconnecting into it is pointless traffic
-      // and, if a future caller ever surfaces socket status directly, a
-      // confusing "still connecting..." indicator over a state that already
-      // has its own real screen (SessionProvider's "suspended" status, driven
-      // by the same MeOut.suspended_at this mirrors). No consumer reads this
-      // status today (see the module docstring), so this is currently a no-op
-      // in practice — fixed at the class level so it's correct the moment one
-      // does, rather than left for whoever wires this up to rediscover.
-      if (event.code === WS_CLOSE_ACCOUNT_SUSPENDED) {
-        this.setStatus("suspended");
-        return;
-      }
-      this.setStatus("closed");
-      this.scheduleReconnect();
     };
-
-    ws.onerror = () => {
-      // onclose fires next and drives the reconnect; nothing to do here.
-    };
+    ws.onerror = transientFailure;
   }
 
-  /** Exponential backoff with jitter: 1s, 2s, 4s ... capped at 30s. */
-  private scheduleReconnect(): void {
-    if (!this.shouldRun || this.reconnectTimer !== null) return;
-    const exponential = BASE_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempts;
-    const delay = Math.min(exponential, MAX_RECONNECT_DELAY_MS) * (0.5 + Math.random() * 0.5);
+  private async revalidate(run: number, owner: AuthIdentity): Promise<void> {
+    if (!this.ownsRun(run, owner)) return;
+    const handlers = this.authHandlers;
+    if (this.authAttempts >= 1 || !handlers) {
+      this.pause();
+      if (this.ownsRun(run, owner)) handlers?.exhausted(owner);
+      return;
+    }
+    this.authAttempts += 1;
+    const operation = new Operation({ timeoutMs: AUTH_REVALIDATION_TIMEOUT_MS, signal: this.runAbort?.signal }, owner);
+    this.authOperation = operation;
+    this.setStatus("revalidating");
+    let ready = false;
+    try { operation.assertCurrent(); ready = await operation.wait(handlers.revalidate(owner, operation.signal)); }
+    catch { /* Provider owns the account decision and retry UI. */ }
+    finally {
+      operation.dispose();
+      if (this.authOperation === operation) this.authOperation = null;
+    }
+    if (!this.ownsRun(run, owner)) return;
+    if (ready && !operation.signal.aborted) this.open();
+    else { this.pause(); if (this.ownsRun(run, owner)) handlers.exhausted(owner); }
+  }
+
+  /** Finite consecutive transport retries; reconnect success must survive five seconds. */
+  private scheduleReconnect(run: number, owner: AuthIdentity): void {
+    if (!this.ownsRun(run, owner) || this.paused || this.reconnectTimer !== null) return;
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) { this.pause(); return; }
+    const delay = Math.min(BASE_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempts, MAX_RECONNECT_DELAY_MS)
+      * (0.5 + Math.random() * 0.5);
     this.reconnectAttempts += 1;
-    this.reconnectTimer = setTimeout(() => {
+    const timer = setTimeout(() => {
+      // A callback already queued when clearTimeout ran belongs to its old run.
+      // It must not erase a replacement run's timer before checking ownership.
+      if (!this.ownsRun(run, owner) || this.reconnectTimer !== timer) return;
       this.reconnectTimer = null;
       this.open();
     }, delay);
+    this.reconnectTimer = timer;
   }
 
   private setStatus(status: SocketStatus): void {
@@ -253,5 +270,4 @@ export class ChirpSocket {
   }
 }
 
-/** App-wide singleton — one socket per app session. */
 export const chirpSocket = new ChirpSocket();

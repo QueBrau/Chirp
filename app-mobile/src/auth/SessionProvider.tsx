@@ -6,17 +6,20 @@ import { fetchMe, getCampus, getCampusVerification, type CampusOut, type CampusV
 import { ApiError, setDebugFirebaseUid } from "@/api/client";
 import { Operation } from "@/api/operation";
 import type { MembershipOut } from "@/api/chapters";
-import { chirpSocket } from "@/realtime/socket";
+import { chirpSocket, type SocketStatus } from "@/realtime/socket";
 import { hasFirebaseConfig } from "./config";
 import { devAuthUid } from "./devAuth";
 import { getFirebaseAuth } from "./firebase";
 import { captureSession, getIdToken, onAuthChanged } from "./session";
-import { currentIdentity, onIdentityChanged, ownsIdentity, replaceIdentity } from "./identity";
+import { currentIdentity, onIdentityChanged, ownsIdentity, replaceIdentity, type AuthIdentity } from "./identity";
 
 export type SessionStatus = "loading" | "recoverable" | "signedOut" | "unregistered" | "suspended" | "ready";
 
 export interface SessionContextValue {
   status: SessionStatus;
+  realtimeStatus: SocketStatus;
+  realtimeRetrying: boolean;
+  retryRealtime: () => Promise<void>;
   user: UserOut | null;
   memberships: MembershipOut[];
   /**
@@ -76,6 +79,12 @@ export interface SessionContextValue {
 const SessionContext = createContext<SessionContextValue | null>(null);
 const LOADING_TIMEOUT_MS = 10_000;
 const DEV_UID = devAuthUid();
+interface LoadOptions {
+  owner?: AuthIdentity;
+  signal?: AbortSignal;
+  forceToken?: boolean;
+  recoverOnFailure?: boolean;
+}
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SessionStatus>(DEV_UID !== null || hasFirebaseConfig() ? "loading" : "ready");
@@ -84,40 +93,46 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [campus, setCampus] = useState<CampusOut | null>(null);
   const [campusVerification, setCampusVerification] = useState<CampusVerificationStatus | null>(null);
   const [sessionGeneration, setSessionGeneration] = useState(currentIdentity().generation);
+  const [realtimeStatus, setRealtimeStatus] = useState<SocketStatus>(chirpSocket.getStatus());
+  const [realtimeRetrying, setRealtimeRetrying] = useState(false);
+  const realtimeRetryRef = useRef<Promise<void> | null>(null);
+  const realtimeRetrySequence = useRef(0);
   const genRef = useRef(0);
   const verificationGenRef = useRef(0);
   const loadRef = useRef<Operation | null>(null);
 
-  const loadMe = useCallback(async (): Promise<boolean> => {
-    const owner = DEV_UID !== null ? replaceIdentity(DEV_UID) : captureSession();
-    if (owner.uid === null) return false;
+  const loadMe = useCallback(async (options: LoadOptions = {}): Promise<SessionStatus | null> => {
+    const owner = options.owner ?? (DEV_UID !== null ? replaceIdentity(DEV_UID) : captureSession());
+    if (owner.uid === null || !ownsIdentity(owner) || options.signal?.aborted) return null;
     const gen = ++genRef.current;
     loadRef.current?.cancel();
-    const operation = new Operation({ timeoutMs: LOADING_TIMEOUT_MS }, owner);
+    const operation = new Operation({ timeoutMs: LOADING_TIMEOUT_MS, signal: options.signal }, owner);
     loadRef.current = operation;
     setStatus(prev => prev === "ready" || prev === "suspended" ? prev : "loading");
     try {
-      if (DEV_UID === null) await operation.wait(getIdToken(false, owner));
+      operation.assertCurrent();
+      if (DEV_UID === null) await operation.wait(getIdToken(options.forceToken ?? false, owner));
       operation.assertCurrent();
       const me = await fetchMe({ operation });
-      if (genRef.current !== gen || !ownsIdentity(owner)) return false;
+      if (genRef.current !== gen || !ownsIdentity(owner)) return null;
       if (me.user.firebase_uid !== owner.uid) throw new Error("Account changed. Please try again.");
       setUser(me.user);
       setMemberships(me.memberships);
-      setStatus(me.user.suspended_at !== null ? "suspended" : "ready");
-      return true;
+      const nextStatus = me.user.suspended_at !== null ? "suspended" : "ready";
+      setStatus(nextStatus);
+      return nextStatus;
     } catch (err) {
-      if (genRef.current !== gen || !ownsIdentity(owner)) return false;
+      if (genRef.current !== gen || !ownsIdentity(owner)) return null;
       if (err instanceof ApiError && err.status === 404 && err.detail === "user_not_registered") {
         setUser(null);
         setMemberships([]);
         setStatus("unregistered");
-        return true;
+        return "unregistered";
       }
       // A Firebase session still exists. Keep an already-resolved account usable,
       // or expose a retry screen; a backend outage is never a sign-out decision.
-      setStatus(prev => prev === "ready" || prev === "suspended" ? prev : "recoverable");
-      return false;
+      setStatus(prev => !options.recoverOnFailure && (prev === "ready" || prev === "suspended") ? prev : "recoverable");
+      return null;
     } finally {
       operation.dispose();
       if (loadRef.current === operation) loadRef.current = null;
@@ -165,6 +180,37 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setCampusVerification(verification);
   }, [renderOwner]);
 
+  // Register one session decision-maker. Socket status is separate from account
+  // status, so successful revalidation does not reset the socket run's auth budget.
+  useEffect(() => {
+    const unsubscribeStatus = chirpSocket.onStatus(setRealtimeStatus);
+    const unsubscribeAuth = chirpSocket.setAuthHandlers({
+      revalidate: async (owner, signal) => await loadMe({ owner, signal, forceToken: true, recoverOnFailure: true }) === "ready",
+      exhausted: owner => {
+        if (!ownsIdentity(owner)) return;
+        setStatus(prev => prev === "suspended" || prev === "unregistered" || prev === "signedOut" ? prev : "recoverable");
+      },
+    });
+    setRealtimeStatus(chirpSocket.getStatus());
+    return () => { unsubscribeStatus(); unsubscribeAuth(); };
+  }, [loadMe]);
+
+  const retryRealtime = useCallback((): Promise<void> => {
+    if (realtimeRetryRef.current) return realtimeRetryRef.current;
+    const owner = currentIdentity(), sequence = ++realtimeRetrySequence.current;
+    setRealtimeRetrying(true);
+    const retry = loadMe({ owner, forceToken: true, recoverOnFailure: true }).then(result => {
+      if (result === "ready" && ownsIdentity(owner) && sequence === realtimeRetrySequence.current) chirpSocket.retry();
+    }).finally(() => {
+      if (sequence === realtimeRetrySequence.current) {
+        realtimeRetryRef.current = null;
+        setRealtimeRetrying(false);
+      }
+    });
+    realtimeRetryRef.current = retry;
+    return retry;
+  }, [loadMe]);
+
   useEffect(() => {
     if (status === "ready") chirpSocket.connect();
     else chirpSocket.disconnect();
@@ -173,7 +219,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async (): Promise<boolean> => {
     if (DEV_UID === null && (!hasFirebaseConfig() || !getFirebaseAuth().currentUser)) return false;
-    return loadMe();
+    return await loadMe() !== null;
   }, [loadMe]);
 
   const applyBootstrap = useCallback((bootstrapped: UserOut) => {
@@ -193,6 +239,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const owner = DEV_UID !== null ? replaceIdentity(DEV_UID) : captureSession();
       if (owner.generation === observedGeneration) return;
       observedGeneration = owner.generation;
+      realtimeRetrySequence.current += 1;
+      realtimeRetryRef.current = null;
+      setRealtimeRetrying(false);
       genRef.current += 1;
       verificationGenRef.current += 1;
       loadRef.current?.cancel();
@@ -223,6 +272,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       clearTimeout(timeout);
       unsubscribeAuth();
       unsubscribeIdentity();
+      realtimeRetrySequence.current += 1;
+      realtimeRetryRef.current = null;
       genRef.current += 1;
       verificationGenRef.current += 1;
       loadRef.current?.cancel();
@@ -230,8 +281,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [loadMe]);
 
   const value = useMemo<SessionContextValue>(() => ({
-    status, user, memberships, campus, campusVerification, refresh, applyBootstrap, applyCampusVerification,
-  }), [status, user, memberships, campus, campusVerification, refresh, applyBootstrap, applyCampusVerification]);
+    status, user, memberships, campus, campusVerification, refresh, applyBootstrap, applyCampusVerification, realtimeStatus, realtimeRetrying, retryRealtime,
+  }), [status, user, memberships, campus, campusVerification, refresh, applyBootstrap, applyCampusVerification, realtimeStatus, realtimeRetrying, retryRealtime]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
