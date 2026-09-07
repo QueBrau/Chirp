@@ -21,6 +21,7 @@ from app.core.permissions import (
     MEMBERS_ADMIN,
     Role,
     capabilities_for,
+    require_platform_admin,
     require_role,
 )
 from app.core.rate_limits import (
@@ -32,6 +33,10 @@ from app.core.windows import meeting_window
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.middleware.org_scope import get_current_membership
+from app.schemas.moderation import (
+    ChapterModerationApprovalRequest,
+    ChapterModerationApprovalOut,
+)
 from app.schemas.identity import (
     AttendanceOverview,
     ChapterCreate,
@@ -150,6 +155,64 @@ async def update_chapter(
     await session.commit()
     await session.refresh(chapter)
     return ChapterOut.model_validate(chapter)
+
+
+@router.patch("/chapters/{chapter_id}/moderation-approval")
+async def set_chapter_moderation_approval(
+    chapter_id: uuid.UUID,
+    body: ChapterModerationApprovalRequest,
+    _admin: models.User = Depends(require_platform_admin),
+    session: AsyncSession = Depends(get_session),
+) -> ChapterModerationApprovalOut:
+    """Platform-admin setter for chapters.moderation_approved (board card c325).
+
+    c308 (migration 0031) added this column and gated GET /moderation/reports plus the
+    whole moderation router on it, but deliberately left nothing able to SET it except
+    a psql session — consistent with is_platform_admin's own no-API precedent (c28),
+    not a gap unique to this column (see the migration's docstring, "WHAT IS
+    DELIBERATELY NOT HERE"). c325 is the card that decides whether that stays true.
+    This route is the answer: gated the same way chapter creation and account
+    suspension already are, so approving a real org stops requiring a psql session.
+    That is also the sequencing this route exists to close: c308's own docstring
+    names this endpoint (or an explicit ruling that psql-approval IS the process) as
+    the prerequisite for ever ungating self-serve chapter creation — approving still
+    means direct DB access today, but the missing piece is now built rather than
+    merely flagged.
+
+    WHY THIS FILE, NOT moderation.py, next to suspend/unsuspend. moderation.py owns
+    the READ side of this column — three query sites there gate report/content access
+    on it — but this route MUTATES a chapters row, the same category of action as
+    update_chapter directly above it, on a table this file already owns end-to-end
+    (create_chapter, get_chapter, update_chapter, the roster/overview routes). The
+    path also follows every other sub-resource route in this file
+    (/chapters/{chapter_id}/*) instead of inventing a /moderation/chapters/* nesting
+    that exists nowhere else in this API.
+
+    WHY Depends(require_platform_admin) rather than create_chapter's inline
+    `if not user.is_platform_admin` check a few lines up: that inline check predates
+    the dependency — board card c76 promoted the shared version specifically so later
+    platform-admin routes would not re-derive it, and this is that later route.
+
+    NO AUDIT ROW: moderation_actions.action and .target_type are CHECK-constrained
+    (0011, already widened once by 0017 for resolve_report) to fixed value sets that
+    include neither a chapter-approval action nor a 'chapter' target_type. Logging one
+    here would need its own migration widening those constraints, the same shape as
+    0017 — c325 does not ask for that, so it is left undone rather than silently bent
+    to fit an unrelated table's audit trail.
+
+    IDEMPOTENT BY DESIGN, not merely tolerated: re-approving an already-approved
+    chapter (or re-revoking an already-unapproved one) is a plain 200 with the
+    unchanged state, not a 409. Unlike suspend/unsuspend's one-time transition, this
+    flips a standing flag that a platform admin may legitimately set to a value it
+    already holds — e.g. confirming approval survived some other change.
+    """
+    chapter = await session.get(models.Chapter, chapter_id)
+    if chapter is None:
+        raise not_found("chapter_not_found")
+    chapter.moderation_approved = body.approved
+    await session.commit()
+    await session.refresh(chapter)
+    return ChapterModerationApprovalOut.model_validate(chapter)
 
 
 @router.get("/chapters/{chapter_id}/members")

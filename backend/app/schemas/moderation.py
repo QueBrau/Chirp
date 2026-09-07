@@ -38,6 +38,28 @@ class SuspensionStateOut(_Schema):
     suspended_by: uuid.UUID | None = None
 
 
+# ---- chapter moderation approval (c308 / c325) ----
+
+
+class ChapterModerationApprovalRequest(_Schema):
+    """Body for PATCH /chapters/{chapter_id}/moderation-approval.
+
+    No `reason` field, unlike SuspendUserRequest above: this flips a boolean that
+    gates a CHAPTER's standing (chapters.moderation_approved, migration 0031), not a
+    logged action against a person, and c325 does not ask for an audit trail — see
+    the route's docstring for why moderation_actions can't carry one today anyway.
+    """
+
+    approved: bool
+
+
+class ChapterModerationApprovalOut(_Schema):
+    """Current moderation-approval state of a chapter row (board card c325)."""
+
+    id: uuid.UUID
+    moderation_approved: bool
+
+
 # ---- content removal ----
 
 
