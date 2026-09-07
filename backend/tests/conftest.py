@@ -578,8 +578,24 @@ def make_chapter_with(
     """Factory: create a chapter through the API and add a member with the given role.
 
     The creator becomes president; other roles join via an e-board invite code
-    (POST /chapters/{id}/invites then POST /chapters/join). The creator is granted
-    is_platform_admin directly in the DB first, since POST /chapters is admin-only.
+    (POST /chapters/{id}/invites then POST /chapters/join). POST /chapters is
+    self-serve since board card c378 — no more platform-admin grant to get past
+    that gate — but it does require the caller to be CAMPUS-VERIFIED
+    (core.campus_access.is_campus_verified) at the moment of the call, so the
+    creator is pinned to a fresh campus via `set_campus` just long enough to pass
+    it. No campus_id in the request body either: the schema has none any more
+    (c378), since the server now forces it from the caller's own campus_id.
+
+    THE CREATOR IS VERIFIED ONLY DURING THE CALL, THEN DROPPED BACK TO UNVERIFIED
+    (set_campus again, verified=False, same campus_id) immediately after — this
+    factory's members have always arrived unverified by default (see
+    verify_campus's docstring below: "chapter members must keep arriving
+    unverified by default, because that is the state test_campus_gate.py asserts
+    against"), and c378 must not quietly flip that for the 70-odd files that build
+    a chapter through this fixture. Pre-c378, POST /chapters set the founder's
+    campus_id but never touched campus_verified_at (the old c96 comment on that
+    route); this reproduces the exact same end state through the new gate instead
+    of through that now-removed code path.
 
     APPROVED FOR MODERATION BY DEFAULT (c308). Every chapter this factory built before
     c308 conferred campus moderation on its e-board, because every chapter did; after
@@ -603,12 +619,11 @@ def make_chapter_with(
         role: str = "member", *, approve_moderation: bool = True
     ) -> ChapterSetup:
         president = await make_user("Chapter President")
-        await _grant_platform_admin(president.id)
         campus_id = await make_campus()
+        await set_campus(president.id, campus_id)
         created = await client.post(
             "/chapters",
             json={
-                "campus_id": campus_id,
                 "org_name": f"Sigma Test {uuid.uuid4().hex[:6]}",
                 "chapter_name": "Alpha",
             },
@@ -616,6 +631,7 @@ def make_chapter_with(
         )
         assert created.status_code == 201, created.text
         chapter_id = created.json()["id"]
+        await set_campus(president.id, campus_id, verified=False)
         if approve_moderation:
             await approve_chapter_moderation(chapter_id)
 

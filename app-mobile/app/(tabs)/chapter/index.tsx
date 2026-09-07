@@ -958,19 +958,33 @@ function MemberOrgHub({
 
 /** Non-member state per DESIGN §6: "No orgs yet" EmptyState routing to the dedicated
  * /join-chapter screen (which already owns code redemption + error handling), plus a
- * browsable category section — greek registration stays opt-in here. */
+ * browsable category section — greek registration stays opt-in here.
+ *
+ * c378: a second, equally real path out of this dead end — a campus-verified
+ * student can found their OWN org instead of waiting on someone else's invite
+ * code. A plain ghost Button under the EmptyState rather than a second slot on
+ * EmptyState itself (that component renders exactly one action, per its own
+ * DESIGN §5 contract, and it has other callers this screen must not reshape).
+ */
 function FindYourOrg() {
   const router = useRouter();
   const [category, setCategory] = useState<Category>("Fraternities");
 
   return (
     <View style={{ gap: spacing.xl }}>
-      <EmptyState
-        title="No orgs yet"
-        message="Join a fraternity, sorority, or campus org with an invite code from their e-board."
-        actionLabel="Enter invite code"
-        onAction={() => router.push("/join-chapter")}
-      />
+      <View style={{ gap: spacing.sm }}>
+        <EmptyState
+          title="No orgs yet"
+          message="Join a fraternity, sorority, or campus org with an invite code from their e-board."
+          actionLabel="Enter invite code"
+          onAction={() => router.push("/join-chapter")}
+        />
+        <Button
+          label="Or start your own org"
+          variant="ghost"
+          onPress={() => router.push("/chapter/create")}
+        />
+      </View>
 
       <View>
         <SectionHeader title="Browse by category" caption="Every kind of org lives here" />
