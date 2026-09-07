@@ -237,11 +237,16 @@ CREATE TABLE user_blocks (
     blocker_id UUID NOT NULL REFERENCES users(id),
     blocked_id UUID NOT NULL REFERENCES users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- c279: WHY the block was made, because it decides WHAT it hides. 'named' hides
-    -- everything; 'by_chirp' hides chirp surfaces only, so blocking an anonymous
-    -- author cannot be detected by diffing the named feed before and after (which
-    -- would name them, defeating principle 6). Contact refusal enforces both.
+    -- c342: independent intents. 'named' hides named feed content; anonymous_created_at
+    -- hides Chirps. Named actions must not move anonymous visibility, or blocking
+    -- candidates by name reveals who wrote each Chirp. Both refuse incoming contact.
+    -- 'by_chirp' means no named intent remains. created_at is the named action time
+    -- when source='named'; the anonymous timestamp is never returned to the caller.
     source     TEXT NOT NULL DEFAULT 'named' CHECK (source IN ('named','by_chirp')),
+    -- New named-only writes explicitly supply NULL. The default protects legacy
+    -- writers during migration; existing rows retain their anonymous hides.
+    anonymous_created_at TIMESTAMPTZ DEFAULT now(),
+    CHECK (source = 'named' OR anonymous_created_at IS NOT NULL),
     PRIMARY KEY (blocker_id, blocked_id)
 );
 
