@@ -62,6 +62,21 @@ class ChapterModerationApprovalOut(_Schema):
     moderation_approved: bool
 
 
+class ChapterModerationApprovalHistoryEntry(_Schema):
+    """One approve_chapter / revoke_chapter audit row for a chapter (board card c340).
+
+    The read side of c337's write: actor identity comes from a join on users at read
+    time rather than being denormalised onto the audit row, so a display-name change
+    shows the person's current name without rewriting append-only history.
+    """
+
+    actor_id: uuid.UUID
+    actor_display_name: str
+    action: Literal["approve_chapter", "revoke_chapter"]
+    reason: str
+    created_at: datetime
+
+
 # ---- content removal ----
 
 
