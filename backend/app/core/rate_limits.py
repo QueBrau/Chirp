@@ -127,6 +127,16 @@ REPORT_CREATE_LIMIT = (20, 3600)
 # product. If c240 raises the Resend ceiling, this can rise with it.
 CAMPUS_VERIFY_TARGET_LIMIT = (30, 86_400)
 
+# Self-serve chapter creation (c378). Campus verification (c88) already keeps this
+# off never-proved and lapsed accounts, but the moment a human platform admin is no
+# longer in the loop for every row, the table is a spam target on its own terms — a
+# verified account looping this endpoint can still fill it with junk orgs. A real
+# student founds one org, maybe re-tries a typo'd name once or twice, and a transfer
+# or re-verified user might found a second one years apart. This is deliberately
+# tighter than every other write limit here: unlike a post or a comment, a chapter is
+# not something a real person composes in a burst.
+CHAPTER_CREATE_LIMIT = (5, 3600)
+
 # People search (c322): GET /users/search browses the same reachable set the
 # messaging validator enforces, which for a campus-verified caller can be an entire
 # verified campus. That makes it an enumeration surface even though every row it

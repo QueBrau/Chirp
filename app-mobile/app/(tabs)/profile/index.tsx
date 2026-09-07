@@ -17,6 +17,7 @@ import * as ImagePicker from "expo-image-picker";
 
 import { getMyAlumniProfile, type AlumniProfileOut } from "@/api/alumni";
 import { getCampus, updateProfile, type AccountType, type CampusOut } from "@/api/auth";
+import { ApiError } from "@/api/client";
 import {
   getMediaUploadUrl,
   uploadMediaBytes,
@@ -192,9 +193,22 @@ export default function ProfileScreen() {
     setAlumniLoadFailed(false);
     try {
       setAlumniProfile(await getMyAlumniProfile());
-    } catch {
+    } catch (error) {
       setAlumniProfile(null);
-      setAlumniLoadFailed(true);
+      // c377: GET /alumni/profile raises 404 alumni_profile_not_found when the caller
+      // hasn't created one yet (backend/app/routers/alumni.py:53-56) - that 404 IS the
+      // answer, not a failure to answer. The empty-state ListRows rendered below for
+      // alumniProfile === null (offering to fill in company / class year) already
+      // handle this case correctly, so it must NOT also raise alumniLoadFailed and
+      // show the error copy on top of it. Checking status AND detail (not status
+      // alone) means a 404 for any other reason still counts as a real failure - this
+      // endpoint has exactly one documented 404 case today, but the narrower check
+      // does not depend on that staying true.
+      const notYetCreated =
+        error instanceof ApiError &&
+        error.status === 404 &&
+        error.detail === "alumni_profile_not_found";
+      setAlumniLoadFailed(!notYetCreated);
     }
   }, []);
 

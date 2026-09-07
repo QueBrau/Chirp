@@ -81,8 +81,10 @@ async def test_approving_writes_an_approve_chapter_row_with_the_admin_as_actor(
             "reason": DEFAULT_REASON,
         }
     ]
-    # The actor is the ADMIN who called, not the chapter's president (who also holds
-    # is_platform_admin incidentally from POST /chapters) — see test_c325's docstring.
+    # The actor is the ADMIN who called, never the chapter's own president — distinct
+    # people by construction here (see test_c325's docstring: pre-c378, POST /chapters
+    # incidentally handed its creator is_platform_admin too; c378 removed that gate
+    # and make_chapter_with no longer grants it).
     assert rows[0]["actor_id"] != setup.president.id
 
 
