@@ -12,6 +12,7 @@
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  sendPasswordResetEmail,
   onIdTokenChanged as onFirebaseIdTokenChanged,
   signInWithEmailAndPassword,
   signOut,
@@ -34,6 +35,25 @@ export async function signUpWithEmail(email: string, password: string): Promise<
   const credential = await createUserWithEmailAndPassword(getFirebaseAuth(), email, password);
   setAuthToken(await credential.user.getIdToken());
   return credential.user;
+}
+
+/**
+ * Send Firebase's own password-reset email (c385). Added with the auth restyle,
+ * because that reference shot asks for a "Forgot password?" link and there was no
+ * recovery path in the app at all — a sign-in screen whose only answer to a
+ * forgotten password is "try again" is a dead end, not a design detail.
+ *
+ * Client-side only: Firebase sends and templates the mail, so there is no backend
+ * route, no new secret and nothing to redeploy.
+ *
+ * DELIBERATELY DOES NOT REPORT WHETHER THE ADDRESS EXISTS. Firebase throws
+ * auth/user-not-found here, and surfacing that to the UI would turn this box into
+ * an account-enumeration oracle for any address someone cares to type. The caller
+ * shows the same "check your inbox" either way — see the handler in sign-in.tsx,
+ * which swallows exactly this code and no others.
+ */
+export async function sendPasswordReset(email: string): Promise<void> {
+  await sendPasswordResetEmail(getFirebaseAuth(), email);
 }
 
 /** Sign out the current Firebase user and clear the API client's bearer token. */

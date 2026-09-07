@@ -19,7 +19,7 @@ anonymous-chirp guarantee (SPEC §8.3):
 
     POST /moderation/blocks/by-chirp/{id} lets someone block a chirp's author WITHOUT
     ever learning who that author is — the endpoint goes to real lengths to keep it that
-    way (no response body, unconditional upsert so even the LATENCY is constant; see the
+    way (no response body, unconditional upsert with no early existence response; see the
     comments on that handler). There is no endpoint that lists your own blocks.
 
     Under a symmetric rule the blocker could hand back the identity the by-chirp endpoint
@@ -33,11 +33,10 @@ blocks are never consulted when THEY are the one making contact. The residual ga
 that A, having blocked B, can still open a conversation with B; that is self-healing,
 because B blocking back is exactly the case this module does enforce.
 
-PROVENANCE NOW EXISTS, AND THIS MODULE STILL IGNORES IT ON PURPOSE (c279, migration
-0030). user_blocks.source records whether a block was made by name or through an
-anonymous chirp, and the READ filters use it: feed posts, comments and counts hide only
-on 'named', so a by-chirp block no longer moves a named surface and the feed diff that
-used to name the anonymous author has nothing to show.
+PROVENANCE EXISTS, AND THIS MODULE STILL IGNORES IT ON PURPOSE (c279/c342).
+user_blocks.source enables named-feed filtering; anonymous_created_at independently
+enables Chirps filtering. Neither kind of action changes the other surface's visibility,
+so candidate named-block operations cannot identify an anonymous author by a feed diff.
 
 CONTACT ENFORCEMENT DELIBERATELY DOES NOT MAKE THAT DISTINCTION. blockers_of matches on
 the pair alone, so both kinds still refuse contact, and that is load-bearing: the whole

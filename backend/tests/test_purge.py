@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 
@@ -250,3 +251,219 @@ async def test_purge_uses_settings_retention_when_not_overridden(
 
     assert result.posts == 1
     assert not await _row_exists("posts", expired_post)
+
+
+async def test_helper_rolls_back_all_cascades(
+    client: AsyncClient, make_chapter_with: MakeChapterWith,
+) -> None:
+    """The existing helper still never commits its caller's transaction."""
+    setup = await make_chapter_with("president")
+    now = datetime.now(timezone.utc)
+    post = await _insert_post(setup.chapter_id, setup.president.id,
+                              deleted_at=now - timedelta(days=31))
+    comment = await _insert_comment(post, setup.president.id, deleted_at=None)
+    await _insert_post_like(post, setup.president.id)
+    async with get_session_factory()() as session:
+        result = await purge_expired_soft_deletes(session, now=now)
+        assert result.total == 1
+        assert result.physical_rows == 3
+        await session.rollback()
+    assert await _row_exists("posts", post)
+    assert await _row_exists("post_comments", comment)
+    async with get_session_factory()() as session:
+        assert await session.scalar(text("SELECT count(*) FROM post_likes")) == 1
+
+
+async def test_exact_cutoff_survives_for_all_retention_columns(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_campus: MakeCampus,
+) -> None:
+    setup = await make_chapter_with("president")
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+    boundary = now - timedelta(days=RETENTION_DAYS)
+    post = await _insert_post(setup.chapter_id, setup.president.id, deleted_at=boundary)
+    comment = await _insert_comment(post, setup.president.id, deleted_at=boundary)
+    chirp = await _insert_chirp(await make_campus(), setup.president.id, removed_at=boundary)
+    result = await _run_purge(now=now)
+    assert result.physical_rows == 0
+    assert await _row_exists("posts", post)
+    assert await _row_exists("post_comments", comment)
+    assert await _row_exists("chirps", chirp)
+
+
+async def test_dry_run_is_read_only_and_capped_without_touching_children(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_campus: MakeCampus,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real PostgreSQL read-only mode plus an observed SQL stream prove no DML."""
+    from sqlalchemy import event
+    from app.db import get_engine
+    from app.jobs import purge
+
+    setup = await make_chapter_with("president")
+    now = datetime.now(timezone.utc)
+    expired = now - timedelta(days=31)
+    post = await _insert_post(setup.chapter_id, setup.president.id, deleted_at=expired)
+    for _ in range(3):
+        await _insert_comment(post, setup.president.id, deleted_at=None)
+    await _insert_post_like(post, setup.president.id)
+    live = await _insert_post(setup.chapter_id, setup.president.id, deleted_at=None)
+    await _insert_comment(live, setup.president.id, deleted_at=expired)
+    chirp = await _insert_chirp(await make_campus(), setup.president.id, removed_at=expired)
+    await _insert_chirp_vote(chirp, setup.president.id)
+    observed: list[str] = []
+
+    def record(_conn, _cursor, statement, _parameters, _context, _many):
+        observed.append(statement)
+
+    preview = purge.preview_expired_soft_deletes
+
+    async def check_read_only(session, **kwargs):
+        assert await session.scalar(text("SHOW transaction_read_only")) == "on"
+        assert await session.scalar(text("SHOW transaction_isolation")) == "repeatable read"
+        return await preview(session, **kwargs)
+
+    monkeypatch.setattr(purge, "preview_expired_soft_deletes", check_read_only)
+    engine = get_engine().sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        report = await purge.run_purge_job(now=now, batch_size=2, max_batches=1)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert report["status"] == "preview"
+    assert report["batches_committed"] == 0
+    assert report["counts"] == {
+        "posts": 1, "post_comments": 1, "chirps": 1, "post_likes": 1,
+        "cascaded_post_comments": 2, "chirp_votes": 1,
+    }
+    assert report["capped_counts"] == ["cascaded_post_comments"]
+    assert all(sql.lstrip().split()[0].upper() in {"SELECT", "SET", "SHOW"}
+               for sql in observed)
+    assert await _row_exists("posts", post)
+    assert await _row_exists("chirps", chirp)
+    async with get_session_factory()() as session:
+        for table, count in (("post_comments", 4), ("post_likes", 1), ("chirp_votes", 1)):
+            assert await session.scalar(text(f"SELECT count(*) FROM {table}")) == count
+
+
+async def test_batch_budget_counts_children_and_drains_large_parent_next_run(
+    client: AsyncClient, make_chapter_with: MakeChapterWith,
+) -> None:
+    from app.jobs.purge import run_purge_job
+
+    setup = await make_chapter_with("president")
+    now = datetime.now(timezone.utc)
+    post = await _insert_post(setup.chapter_id, setup.president.id,
+                              deleted_at=now - timedelta(days=31))
+    for _ in range(5):
+        await _insert_comment(post, setup.president.id, deleted_at=None)
+    await _insert_post_like(post, setup.president.id)
+
+    first = await run_purge_job(apply=True, now=now, batch_size=2, max_batches=1)
+    assert first["status"] == "incomplete"
+    assert first["remaining"] is True
+    assert first["batches_committed"] == 1
+    assert first["counts"]["posts"] == 0
+    assert first["counts"]["cascaded_post_comments"] == 2
+    assert first["physical_rows"] == 3
+    assert await _row_exists("posts", post)
+    async with get_session_factory()() as session:
+        assert await session.scalar(text("SELECT count(*) FROM post_comments")) == 3
+
+    second = await run_purge_job(apply=True, now=now, batch_size=2, max_batches=5)
+    assert second["status"] == "complete"
+    assert second["batches_committed"] == 2
+    assert second["counts"]["posts"] == 1
+    assert second["counts"]["cascaded_post_comments"] == 3
+    assert not await _row_exists("posts", post)
+    third = await run_purge_job(apply=True, now=now, batch_size=2, max_batches=1)
+    assert third["status"] == "complete"
+    assert third["physical_rows"] == 0
+
+
+async def test_each_reason_is_bounded_and_historical_reports_survive(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser,
+    make_campus: MakeCampus,
+) -> None:
+    from app.jobs.purge import purge_batch
+
+    setup = await make_chapter_with("president")
+    now = datetime.now(timezone.utc)
+    expired = now - timedelta(days=31)
+    post = await _insert_post(setup.chapter_id, setup.president.id, deleted_at=expired)
+    live = await _insert_post(setup.chapter_id, setup.president.id, deleted_at=None)
+    chirp = await _insert_chirp(await make_campus(), setup.president.id, removed_at=expired)
+    for index in range(3):
+        user = await make_user(f"Purge dependent {index}")
+        await _insert_post_like(post, user.id)
+        await _insert_comment(post, user.id, deleted_at=None)
+        await _insert_comment(live, user.id, deleted_at=expired)
+        await _insert_chirp_vote(chirp, user.id)
+    async with get_session_factory()() as session:
+        await session.execute(text(
+            "INSERT INTO content_reports (reporter_id, target_type, target_id, reason) "
+            "VALUES (:reporter, 'post', :post, 'purge test report')"
+        ), {"reporter": setup.president.id, "post": post})
+        await session.commit()
+    async with get_session_factory()() as session:
+        first = await purge_batch(session, cutoff=now - timedelta(days=30), batch_size=2)
+        await session.commit()
+    assert first.posts == first.chirps == 0
+    assert first.post_likes == first.cascaded_post_comments == first.chirp_votes == 2
+    assert first.post_comments == 2
+    assert first.physical_rows == 8
+    await _run_purge(now=now)
+    async with get_session_factory()() as session:
+        assert await session.scalar(text("SELECT count(*) FROM content_reports")) == 1
+        assert await session.scalar(text("SELECT count(*) FROM post_comments")) == 0
+        assert await session.scalar(text("SELECT count(*) FROM post_likes")) == 0
+        assert await session.scalar(text("SELECT count(*) FROM chirp_votes")) == 0
+
+
+async def test_locked_parent_is_reported_as_backlog_and_can_be_retried(
+    client: AsyncClient, make_chapter_with: MakeChapterWith,
+) -> None:
+    from app.jobs.purge import run_purge_job
+
+    setup = await make_chapter_with("president")
+    now = datetime.now(timezone.utc)
+    post = await _insert_post(setup.chapter_id, setup.president.id,
+                              deleted_at=now - timedelta(days=31))
+    async with get_session_factory()() as writer:
+        await writer.execute(text("SELECT id FROM posts WHERE id = :id FOR UPDATE"), {"id": post})
+        report = await run_purge_job(apply=True, now=now, batch_size=1, max_batches=2)
+        assert report["status"] == "blocked"
+        assert report["remaining"] is True
+        assert report["physical_rows"] == 0
+        await writer.rollback()
+    retry = await run_purge_job(apply=True, now=now, batch_size=1, max_batches=2)
+    assert retry["status"] == "complete"
+    assert retry["physical_rows"] == 1
+
+
+async def test_parent_lock_blocks_new_fk_children_until_batch_finishes(
+    client: AsyncClient, make_chapter_with: MakeChapterWith,
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+    from app.jobs.purge import purge_batch
+
+    setup = await make_chapter_with("president")
+    now = datetime.now(timezone.utc)
+    post = await _insert_post(setup.chapter_id, setup.president.id,
+                              deleted_at=now - timedelta(days=31))
+    for _ in range(2):
+        await _insert_comment(post, setup.president.id, deleted_at=None)
+    async with get_session_factory()() as purger:
+        batch = await purge_batch(purger, cutoff=now - timedelta(days=30), batch_size=1)
+        assert batch.posts == 0  # Still has a child, but holds the parent UPDATE lock.
+        async with get_session_factory()() as writer:
+            await writer.execute(text("SET LOCAL lock_timeout = 100"))
+            with pytest.raises(DBAPIError) as exc:
+                await writer.execute(text(
+                    "INSERT INTO post_comments(post_id, author_id, body) "
+                    "VALUES(:post, :author, 'concurrent child')"
+                ), {"post": post, "author": setup.president.id})
+            assert exc.value.orig.sqlstate == "55P03"  # Lock timeout, not FK corruption.
+            await writer.rollback()
+        await purger.commit()
+    await _run_purge(now=now)
+    assert not await _row_exists("posts", post)

@@ -45,7 +45,7 @@ async def list_chirps(
     the existing idx_chirps_campus_time index, so this does not add a new query
     shape the schema wasn't already built for.
 
-    Chirps whose (anonymous) author the caller has blocked are silently absent — no
+    Chirps whose author the caller has blocked through a Chirp are silently absent — no
     tombstone, no count — matching every other blocked chirp simply not existing for
     this caller (§8.3: nothing in the response may reveal that anything was hidden).
     """
@@ -59,7 +59,10 @@ async def list_chirps(
         .outerjoin(
             models.UserBlock,
             (models.UserBlock.blocked_id == models.Chirp.author_id)
-            & (models.UserBlock.blocker_id == user.id),
+            & (models.UserBlock.blocker_id == user.id)
+            # c342: named actions cannot change anonymous feed visibility. Otherwise
+            # blocking candidates by name turns this list into an authorship oracle.
+            & (models.UserBlock.anonymous_created_at.is_not(None)),
         )
         .where(
             models.Chirp.campus_id == campus_id,
