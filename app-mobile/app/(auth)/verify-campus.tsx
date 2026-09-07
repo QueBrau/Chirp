@@ -30,6 +30,17 @@
  * reached the student. No .edu mailbox the team controls has been watched to receive a
  * code yet (board c71), so the first real run on a device may still surface a delivery
  * problem that looks like success from here.
+ *
+ * RESEND IS A FIRST-CLASS ACTION, NOT "START OVER" (board c331). The likely failure on
+ * this screen is a code that does not arrive, and until c331 the only way back was the
+ * ghost "Use a different address" - the wrong verb for the common case, since it implies
+ * the address was the problem. "Send a new code" re-requests for the SAME address through
+ * the same send() path; the server retires the earlier pending code first
+ * (campus_verification.start_verification), so there is never more than one live code,
+ * and the same per-caller limiter answers a fourth request inside fifteen minutes with a
+ * 429 - which sendError() below already renders as the fifteen-minute line rather than a
+ * raw code. "Use a different address" stays as the secondary path, for the case it
+ * actually names.
  */
 import { useRouter } from "expo-router";
 import { useState } from "react";
@@ -59,22 +70,32 @@ export default function VerifyCampusScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sentTo, setSentTo] = useState<string | null>(null);
+  // c331: which button is mid-flight, and whether the code on screen is a re-send.
+  const [resending, setResending] = useState(false);
+  const [resent, setResent] = useState(false);
 
   // A lapsed verification is a different conversation from a first one.
   const lapsed = access === "lapsed";
 
-  const send = async () => {
+  // `resend` (c331) re-requests for the address already on file. Same request, same
+  // limiter, same error mapper; the only differences are which button reads
+  // "Sending..." and the confirmation line the code state shows afterwards.
+  const send = async (resend = false) => {
     setBusy(true);
+    setResending(resend);
+    setResent(false);
     setError(null);
     try {
       await startCampusVerification(eduEmail.trim());
       setSentTo(eduEmail.trim().toLowerCase());
       setCode("");
+      setResent(resend);
       setPhase("code");
     } catch (err) {
       setError(sendError(err));
     } finally {
       setBusy(false);
+      setResending(false);
     }
   };
 
@@ -144,9 +165,20 @@ export default function VerifyCampusScreen() {
                 </AppText>
               ) : null}
               <Button
-                label={busy ? "Checking..." : "Confirm"}
+                label={busy && !resending ? "Checking..." : "Confirm"}
                 disabled={code.trim().length === 0 || busy}
                 onPress={() => void redeem()}
+              />
+              {resent ? (
+                <AppText variant="caption" tone="tertiary">
+                  New code sent. The earlier one won't work anymore.
+                </AppText>
+              ) : null}
+              <Button
+                label={resending ? "Sending..." : "Send a new code"}
+                variant="secondary"
+                disabled={busy}
+                onPress={() => void send(true)}
               />
             </View>
           </Card>
@@ -158,6 +190,7 @@ export default function VerifyCampusScreen() {
             onPress={() => {
               setPhase("email");
               setError(null);
+              setResent(false);
             }}
           />
         </View>
