@@ -250,8 +250,19 @@ def test_0032_widens_the_audit_constraints_around_existing_rows() -> None:
         _alembic(url, "0031", down=True)
         assert asyncio.run(_rows(url)) == [(old_row, "resolve_report", "report", "seeded before 0032")]
         assert asyncio.run(_constraint_names(url)) == EXPECTED_CONSTRAINTS
+        # Three probes, because the first alone is NOT discriminating: (approve_chapter,
+        # chapter) is refused by EITHER narrowed constraint, so a downgrade that narrowed
+        # only one half would still pass it (manager review finding on #233). The next
+        # two each use an OLD value on one column so only the OTHER constraint can be the
+        # refuser — delete either narrowing half of downgrade() and exactly one fails.
         assert _refused(_insert_row(url, actor_id, "approve_chapter", "chapter")), (
             "downgrade did not narrow target_type/action back"
+        )
+        assert _refused(_insert_row(url, actor_id, "resolve_report", "chapter")), (
+            "downgrade did not narrow target_type back"
+        )
+        assert _refused(_insert_row(url, actor_id, "approve_chapter", "report")), (
+            "downgrade did not narrow action back"
         )
 
         # Idempotent re-run.
