@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +26,7 @@ from app.schemas.payments import (
     DuesIntentOut,
 )
 from app.services import stripe_service
+from app.services.settlement_binding import BoundSettlement, bind_settlement
 
 router = APIRouter(tags=["payments"])
 logger = logging.getLogger(__name__)
@@ -222,7 +224,7 @@ async def create_dues_payment_intent(
     # undesirable: uq_ledger_dues_payment_once allows at most one dues_payment row
     # per (cycle, member) EVER, so a second Stripe payment settling here would
     # capture real money at Stripe and then silently have no ledger row to show for
-    # it when the webhook's insert loses to that constraint (see _record_dues_payment
+    # it when the webhook's insert loses to that constraint (see stripe_webhook
     # and the RESIDUAL EDGE note below). An earlier version of this fix let net<=0
     # (a full refund) through to Stripe, which is exactly the money-loss path — closed
     # by going back to existence, not by NOT netting at all: dues_contributions_subquery
@@ -308,7 +310,7 @@ async def create_dues_payment_intent(
         # longer than this TTL - and a lost webhook can leave a succeeded intent
         # looking 'open' here indefinitely. Expiring either and minting a fresh
         # intent charges the member TWICE at Stripe, with the second capture only
-        # ever surfacing as _log_if_second_capture_unrecordable's ERROR line.
+        # ever surfacing as the settlement reconciliation log's ERROR line.
         #
         # So Stripe's cancel is used as the TEST, not as best-effort cleanup:
         # Stripe accepts cancellation exactly in the states where no money is
@@ -342,7 +344,7 @@ async def create_dues_payment_intent(
         if expire:
             # 'expired' is not a value the status CHECK constraint allows
             # (migration 0010), so this reuses 'canceled' - the same retryable
-            # bucket _resolve_reservation already puts a genuinely failed/canceled
+            # bucket stripe_webhook already puts a genuinely failed/canceled
             # payment in.
             reservation.status = "canceled"
             reservation.updated_at = datetime.now(timezone.utc)
@@ -352,8 +354,8 @@ async def create_dues_payment_intent(
     if reservation is not None:
         if reservation.status == "succeeded":
             # Effectively unreachable in normal operation (board c172): a reservation
-            # only reaches 'succeeded' via the webhook's _resolve_reservation, which
-            # commits in the SAME transaction as _record_dues_payment's ledger insert
+            # only reaches 'succeeded' via the webhook's stripe_webhook, which
+            # commits in the SAME transaction as stripe_webhook's ledger insert
             # — so whenever this is true, the existence check above has already
             # raised (with the honest already_paid/refunded_contact_treasurer split)
             # before this line runs. Left as a defensive backstop rather than removed,
@@ -369,7 +371,15 @@ async def create_dues_payment_intent(
         # have a stored intent id, created if we do not.
     else:
         reservation = models.DuesPaymentIntent(
-            chapter_id=chapter.id, dues_cycle_id=cycle.id, user_id=user.id, rail=body.rail
+            chapter_id=chapter.id,
+            dues_cycle_id=cycle.id,
+            user_id=user.id,
+            rail=body.rail,
+            # c349: snapshot what this intent is being created FOR, in the same
+            # transaction as the reservation. The webhook binds settlement to these
+            # two values (migration 0033) rather than to the cycle or the event.
+            amount_cents=cycle.amount_cents,
+            currency=stripe_service.CURRENCY,
         )
         session.add(reservation)
         try:
@@ -422,7 +432,8 @@ async def create_dues_payment_intent(
             intent = await stripe_service.create_dues_payment_intent(
                 account_id=account_id,
                 customer_id=customer_id,
-                amount_cents=cycle.amount_cents,
+                amount_cents=reservation.amount_cents,
+                currency=reservation.currency,
                 rail=body.rail,
                 cycle_id=cycle.id,
                 user_id=user.id,
@@ -490,139 +501,26 @@ async def create_dues_payment_intent(
         customer_id=customer_id,
         publishable_key=stripe_service.publishable_key(),
         stripe_account_id=account_id,
-        amount_cents=cycle.amount_cents,
+        amount_cents=reservation.amount_cents,
         application_fee_cents=stripe_service.platform_fee_cents(
-            cycle.amount_cents, body.rail
+            reservation.amount_cents, body.rail
         ),
         rail=body.rail,
         payment_intent_status=payment_intent_status,
     )
 
 
-async def _resolve_reservation(
-    session: AsyncSession, intent: dict, status: str
-) -> None:
-    """Move a dues reservation out of (or into) its terminal state (c51).
-
-    'succeeded' keeps holding uq_dues_intent_live — the cycle is paid, so a second
-    payment must stay blocked. 'failed'/'canceled' release it, because a member
-    whose payment genuinely failed has to be able to try again.
-    """
-    result = await session.execute(
-        select(models.DuesPaymentIntent).where(
-            models.DuesPaymentIntent.stripe_payment_intent_id == intent["id"]
-        )
-    )
-    reservation = result.scalar_one_or_none()
-    if reservation is None:
-        return
-    reservation.status = status
-    reservation.updated_at = datetime.now(timezone.utc)
-
-
-async def _record_dues_payment(session: AsyncSession, intent: dict) -> None:
-    """Append the dues_payment ledger entry for a succeeded PaymentIntent.
-
-    Intents we did not create (no Chirp metadata) are ignored rather than guessed at.
-    """
-    metadata = intent.get("metadata") or {}
-    cycle_id = metadata.get("chirp_dues_cycle_id")
-    user_id = metadata.get("chirp_user_id")
-    if not cycle_id or not user_id:
-        return
-
-    cycle = await session.get(models.DuesCycle, uuid.UUID(cycle_id))
-    if cycle is None:
-        return
-
-    session.add(
-        models.LedgerEntry(
-            chapter_id=cycle.chapter_id,
-            entry_type="dues_payment",
-            # From the cycle, not the event: the amount of record is what the chapter
-            # charges, and the event body is attacker-shaped input until proven otherwise.
-            amount_cents=cycle.amount_cents,
-            category="dues",
-            description=cycle.name,
-            related_user_id=uuid.UUID(user_id),
-            dues_cycle_id=cycle.id,
-            stripe_payment_intent_id=intent["id"],
-            # No acting user in a webhook; the payer is the closest true answer.
-            created_by=uuid.UUID(user_id),
-        )
-    )
-
-
-async def _log_if_second_capture_unrecordable(session: AsyncSession, intent: dict) -> None:
-    """After a commit loses to a constraint, tell whether real money just went
-    unrecorded (board c193, finding 5).
-
-    uq_ledger_dues_payment_once does not know WHY an insert lost to it — an exact
-    replay of the intent we already recorded hits it too (the index has no intent id
-    in its key), and that case is harmless: the ledger already holds the money. Only
-    a DIFFERENT intent id losing here is the dangerous case: Stripe captured real
-    money on a second, distinct PaymentIntent for this (cycle, member), and this
-    append-only ledger can structurally never hold a second dues_payment row for it
-    (board c172). That capture is now invisible unless this line exists. Only
-    internal ids are logged — never email, name, or the raw event payload.
-    """
-    metadata = intent.get("metadata") or {}
-    cycle_id = metadata.get("chirp_dues_cycle_id")
-    user_id = metadata.get("chirp_user_id")
-    if not cycle_id or not user_id:
-        return
-
-    recorded = await session.execute(
-        select(models.LedgerEntry.stripe_payment_intent_id).where(
-            models.LedgerEntry.dues_cycle_id == uuid.UUID(cycle_id),
-            models.LedgerEntry.related_user_id == uuid.UUID(user_id),
-            models.LedgerEntry.entry_type == "dues_payment",
-        )
-    )
-    recorded_intent_id = recorded.scalar_one_or_none()
-    if recorded_intent_id is not None and recorded_intent_id != intent["id"]:
-        logger.error(
-            "dues payment reconciliation: cycle=%s user=%s intent=%s captured but "
-            "NOT recorded on the ledger — a dues_payment for a DIFFERENT intent (%s) "
-            "is already there. Verify both against Stripe and reconcile manually.",
-            cycle_id,
-            user_id,
-            intent["id"],
-            recorded_intent_id,
-        )
-
-
-def _emit_stripe_webhook_event(event: dict) -> None:
-    """Board c227: payment_succeeded / payment_failed telemetry for a verified Stripe
-    webhook event - event type, rail, cycle_id, member user_id, all read back off the
-    SAME chirp_* metadata _record_dues_payment already trusts as the link to our own
-    rows (never the raw event payload otherwise, which carries Stripe customer PII -
-    see the docstring on stripe_webhook below). Dues are NOT anonymous, so pairing a
-    payment event with a member's user_id here is unrelated to app.core.analytics's
-    chirp-authorship rule, which is scoped to chirps only.
-
-    Only called from the `else:` of the outer try/except around session.commit() -
-    i.e. only on that specific commit's success. That gate matters: Stripe redelivers
-    the same event for days until it gets a 2xx, and a replay lands in the `except
-    IntegrityError` branch instead (the row already exists), so gating on the success
-    path is what keeps a replayed delivery from emitting payment_succeeded twice for
-    one real payment.
-    """
-    event_type = event["type"]
+def _emit_stripe_webhook_event(event_type: str, bound: BoundSettlement) -> None:
+    """Emit only committed, first-time transitions, using database-owned identity."""
     if event_type not in ("payment_intent.succeeded", "payment_intent.payment_failed"):
         return
-    metadata = event["data"]["object"].get("metadata") or {}
-    # c227 (skeptic catch): mirror _record_dues_payment's guard - an intent we did
-    # not create carries no chirp_* metadata and is ignored rather than emitted as
-    # a junk all-None row.
-    if not metadata.get("chirp_dues_cycle_id") or not metadata.get("chirp_user_id"):
-        return
+    reservation = bound.reservation
     emit(
         "payment_succeeded" if event_type == "payment_intent.succeeded" else "payment_failed",
         event_type=event_type,
-        rail=metadata.get("chirp_rail"),
-        cycle_id=metadata.get("chirp_dues_cycle_id"),
-        user_id=metadata.get("chirp_user_id"),
+        rail=reservation.rail,
+        cycle_id=str(reservation.dues_cycle_id),
+        user_id=str(reservation.user_id),
     )
 
 
@@ -632,46 +530,80 @@ async def stripe_webhook(
     stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Stripe webhook sink. No auth dependency — Stripe authenticates via the signature.
+    """Authenticate then bind settlement to its stored reservation (c349).
 
-    Returns 2xx for every verified event, including types we do not handle, because
-    a non-2xx makes Stripe retry that event for days.
-
-    Replay safety is layered: processed_stripe_events dedups at the event level, and
-    the unique partial index on ledger_entries.stripe_payment_intent_id dedups at the
-    payment level (two different events can describe the same intent). Both are DB
-    constraints rather than check-then-insert, which would race under concurrent
-    delivery. Event payloads are never logged — they carry customer PII.
+    The event receipt, quarantine or ledger change commit together. Only expected
+    uniqueness conflicts are acknowledged; failed database writes remain retryable.
+    No raw payload, customer details, or secret enters logs or quarantine.
     """
     if not stripe_signature:
         raise HTTPException(status_code=400, detail="missing_stripe_signature")
-    payload = await request.body()
-    event = stripe_service.verify_webhook_event(payload, stripe_signature)
+    event = stripe_service.verify_webhook_event(await request.body(), stripe_signature)
 
-    session.add(
-        models.ProcessedStripeEvent(event_id=event["id"], event_type=event["type"])
+    receipt = await session.scalar(
+        pg_insert(models.ProcessedStripeEvent)
+        .values(event_id=event["id"], event_type=event["type"])
+        .on_conflict_do_nothing(index_elements=["event_id"])
+        .returning(models.ProcessedStripeEvent.event_id)
     )
-    if event["type"] == "payment_intent.succeeded":
-        await _resolve_reservation(session, event["data"]["object"], "succeeded")
-        await _record_dues_payment(session, event["data"]["object"])
-    elif event["type"] == "payment_intent.payment_failed":
-        # Releases uq_dues_intent_live so the member can genuinely retry (c51).
-        await _resolve_reservation(session, event["data"]["object"], "failed")
-    elif event["type"] == "payment_intent.canceled":
-        await _resolve_reservation(session, event["data"]["object"], "canceled")
-
-    try:
-        await session.commit()
-    except IntegrityError:
-        # Replayed event id, or a second event for an intent already in the ledger —
-        # or (board c193, finding 5) a genuine second capture on a DIFFERENT intent
-        # that this append-only ledger can never hold. Distinguish and surface the
-        # dangerous case rather than swallowing it silently; still return 200 below
-        # either way, because a non-2xx just makes Stripe retry an event that can
-        # never succeed.
+    if receipt is None:
         await session.rollback()
-        if event["type"] == "payment_intent.succeeded":
-            await _log_if_second_capture_unrecordable(session, event["data"]["object"])
-    else:
-        _emit_stripe_webhook_event(event)
+        return {"received": True}
+
+    statuses = {
+        "payment_intent.succeeded": "succeeded",
+        "payment_intent.payment_failed": "failed",
+        "payment_intent.canceled": "canceled",
+    }
+    event_type = event["type"]
+    bound = await bind_settlement(session, event) if event_type in statuses else None
+    changed = False
+    reconciliation = None
+    if bound is not None:
+        reservation, cycle = bound.reservation, bound.cycle
+        if event_type == "payment_intent.succeeded":
+            # Both unique payment indexes arbitrate concurrent settlement. All
+            # non-unique failures propagate and roll back the event receipt too.
+            recorded = await session.scalar(
+                pg_insert(models.LedgerEntry).values(
+                    chapter_id=reservation.chapter_id, entry_type="dues_payment",
+                    amount_cents=reservation.amount_cents, category="dues",
+                    description=cycle.name, related_user_id=reservation.user_id,
+                    dues_cycle_id=reservation.dues_cycle_id,
+                    stripe_payment_intent_id=reservation.stripe_payment_intent_id,
+                    created_by=reservation.user_id,
+                ).on_conflict_do_nothing().returning(models.LedgerEntry.id)
+            )
+            if recorded is not None:
+                reservation.status = "succeeded"
+                reservation.updated_at = datetime.now(timezone.utc)
+                changed = True
+            else:
+                recorded_intent = await session.scalar(
+                    select(models.LedgerEntry.stripe_payment_intent_id).where(
+                        models.LedgerEntry.dues_cycle_id == reservation.dues_cycle_id,
+                        models.LedgerEntry.related_user_id == reservation.user_id,
+                        models.LedgerEntry.entry_type == "dues_payment",
+                    )
+                )
+                if recorded_intent != reservation.stripe_payment_intent_id:
+                    reconciliation = (
+                        str(reservation.dues_cycle_id), str(reservation.user_id),
+                        reservation.stripe_payment_intent_id, recorded_intent,
+                    )
+        elif reservation.status != "succeeded":
+            # An out-of-order failure must never release a successfully paid cycle.
+            changed = reservation.status != statuses[event_type]
+            reservation.status = statuses[event_type]
+            reservation.updated_at = datetime.now(timezone.utc)
+
+    await session.commit()
+    if reconciliation is not None:
+        logger.error(
+            "dues payment reconciliation: cycle=%s user=%s intent=%s captured but "
+            "NOT recorded on the ledger; recorded intent=%s. Verify both against "
+            "Stripe and reconcile manually.", *reconciliation,
+        )
+    if changed and bound is not None:
+        _emit_stripe_webhook_event(event_type, bound)
     return {"received": True}
