@@ -35,6 +35,8 @@ import {
   elevation,
   light,
   metrics,
+  onTintControl,
+  postTint,
   radii,
   spacing,
   typography,
@@ -431,7 +433,10 @@ export default function ChirpScreen() {
             <View style={{ gap: spacing.md }}>
               {(chirps ?? []).map((chirp, index) => {
                 const mine = myVotes[chirp.id];
-                const tint = light.chirpTints[index % light.chirpTints.length] ?? light.surface;
+                // Same rotating tint helper the FYP's cards use (c383) - these boards
+                // are meant to be the same card, and this used to be an open-coded
+                // copy of the modulo plus its own `?? surface` fallback.
+                const tint = postTint(light, index);
                 const isTop = chirp.score === topScore && chirp.score > 0;
                 return (
                   <View
@@ -446,43 +451,52 @@ export default function ChirpScreen() {
                     }}
                   >
                     <View style={{ flexDirection: "row", gap: spacing.md }}>
-                      {/* No identity, ever (SPEC §8.3) — a small tinted dot is the only marker. */}
-                      <View style={{ paddingTop: spacing.xs }}>
-                        <View
-                          style={{
-                            width: DOT_SIZE,
-                            height: DOT_SIZE,
-                            borderRadius: DOT_SIZE / 2,
-                            overflow: "hidden",
-                            backgroundColor: tint,
-                          }}
-                        >
-                          <View style={{ flex: 1, backgroundColor: light.ink, opacity: 0.28 }} />
-                        </View>
-                      </View>
                       <View style={{ flex: 1, gap: spacing.sm }}>
-                        <AppText style={{ color: light.ink }}>{chirp.body}</AppText>
-                        <View
-                          style={{
-                            flexDirection: "row",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                          }}
-                        >
-                          <AppText variant="caption" style={{ color: light.inkFaint }}>
-                            {age(chirp.created_at)} · anonymous
+                        {/* Header row in the shape a TintedPostCard's has (DESIGN §5,
+                            c383): identity on the left, circular overflow control at
+                            the right end, body underneath. The IDENTITY HALF IS THE ONE
+                            THING THAT CANNOT BE COPIED ACROSS - a feed card puts an
+                            avatar and a name here and this one never will (SPEC §8.3,
+                            DESIGN §6: no avatar, no mask, no name, ever). The tinted dot
+                            plus the word is the whole of it, and it stays lowercase on
+                            purpose so it reads as a state and not as somebody's handle. */}
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                          <View
+                            style={{
+                              width: DOT_SIZE,
+                              height: DOT_SIZE,
+                              borderRadius: DOT_SIZE / 2,
+                              overflow: "hidden",
+                              backgroundColor: tint,
+                            }}
+                          >
+                            <View style={{ flex: 1, backgroundColor: light.ink, opacity: 0.28 }} />
+                          </View>
+                          <AppText variant="caption" style={{ color: light.inkFaint, flex: 1 }}>
+                            anonymous · {age(chirp.created_at)}
                           </AppText>
-                          {/* Overflow control (report/block) — NOT an avatar, NOT a mask;
-                              as discreet as the timestamp it sits next to. */}
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel="More options"
                             hitSlop={spacing.sm}
+                            style={({ pressed }) => ({
+                              width: metrics.tintControlSize,
+                              height: metrics.tintControlSize,
+                              borderRadius: radii.pill,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              // `light`, like every other colour on this card - see the
+                              // file header. The board's canvas may be navy, the cards
+                              // never are.
+                              backgroundColor: onTintControl(light),
+                              opacity: pressed ? 0.7 : 1,
+                            })}
                             onPress={() => openMenu(chirp)}
                           >
-                            <Feather name="more-horizontal" size={14} color={light.inkFaint} />
+                            <Feather name="more-horizontal" size={16} color={light.inkSecondary} />
                           </Pressable>
                         </View>
+                        <AppText style={{ color: light.ink }}>{chirp.body}</AppText>
                       </View>
                       <VotePill
                         score={chirp.score}
