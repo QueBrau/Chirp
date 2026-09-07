@@ -16,6 +16,7 @@
  * shows the same `(e as FirebaseError)?.code` pattern for this reason.
  */
 
+import { operationErrorMessage } from "@/api/operation";
 import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from "@/lib/passwordPolicy";
 
 export type AuthErrorMode = "signin" | "signup";
@@ -105,6 +106,8 @@ export function isUserNotFoundError(error: unknown): boolean {
  * regardless of which form is showing.
  */
 export function getAuthErrorMessage(error: unknown, mode: AuthErrorMode): string {
+  const operationMessage = operationErrorMessage(error);
+  if (operationMessage) return operationMessage;
   let code: string | null;
   try {
     code = readErrorCode(error);

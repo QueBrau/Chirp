@@ -15,7 +15,7 @@ import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useSession } from "@/auth";
-import { AppText } from "@/components";
+import { AppText, EmptyState, Screen } from "@/components";
 import { TabBarVisibilityProvider, useTabBarVisibility } from "@/nav/TabBarVisibility";
 import { cardShadow, metrics, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
@@ -152,9 +152,15 @@ export default function TabsLayout() {
   // first real request. Demo/mock mode resolves straight to "ready" and never
   // gates. SessionProvider owns the loading timeout, so there's no local
   // fallback needed here.
-  const { status } = useSession();
+  const { status, refresh } = useSession();
 
   if (status === "loading") return null;
+  if (status === "recoverable") return (
+    <Screen showBack={false}>
+      <EmptyState title="Can't load your account" message="You're still signed in. Check your connection and try again."
+        actionLabel="Try again" onAction={() => { void refresh(); }} />
+    </Screen>
+  );
   if (status === "signedOut") return <Redirect href="/sign-in" />;
   if (status === "unregistered") return <Redirect href="/account-type" />;
   if (status === "suspended") return <Redirect href="/suspended" />;
