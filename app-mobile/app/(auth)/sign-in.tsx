@@ -481,7 +481,14 @@ export default function SignInScreen() {
 
   return (
     <Screen scroll>
-      <View style={{ flex: 1, gap: spacing.xl, paddingTop: spacing.xxl }}>
+      {/* NO `flex: 1` HERE. Screen's ScrollView contentContainerStyle sets no
+          flexGrow, so a flex:1 child collapses to ZERO HEIGHT on native and the
+          screen renders as a bare canvas. It survived the browser check because
+          react-native-web resolves that case differently, and it only appeared on
+          the simulator. The old layout could use flex:1 because it was
+          `scroll={false}` and needed it to centre the form vertically; scrolling
+          content just flows. */}
+      <View style={{ gap: spacing.xl, paddingTop: spacing.xxl }}>
         {/* The title IS the brand moment now (DESIGN section 7, c385) - it replaced
             an accentGradient HeroCard wordmark that was a block of chrome sitting
             above the screen's actual job. */}
