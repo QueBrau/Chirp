@@ -10,6 +10,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { Palette } from "./colors";
 import { resolvePalette, useAppearance } from "./appearance";
+import type { CampusColors } from "./appearance";
+import { contrastRatio, withAlpha } from "./colorUtils";
 import { applyOrgAccent, useOrgAccentColors } from "./orgScope";
 import { radii } from "./radii";
 import { spacing } from "./spacing";
@@ -38,6 +40,7 @@ export type {
   CampusColors,
 } from "./appearance";
 export {
+  contrastRatio,
   contrastWithWhite,
   darken,
   ensureAccentContrast,
@@ -85,6 +88,67 @@ export type ElevationToken = keyof typeof elevation;
 /** Card shadow per §4: soft shadow in light mode, none in dark (border carries the edge). */
 export function cardShadow(palette: Palette): ViewStyle {
   return palette.mode === "dark" ? {} : elevation.card;
+}
+
+/**
+ * The rotating pastel background every post card wears (DESIGN §5 TintedPostCard,
+ * c383) — Chirps, the FYP and the org feed all draw from the same four tints, keyed
+ * on the card's INDEX in its list so no two neighbours ever match.
+ *
+ * Index, deliberately, and not a hash of the post id: a hash is stable per post,
+ * which sounds better until two adjacent cards collide and there is nothing anyone
+ * can do about it. The tint's whole job is breaking up a scrolling column (§10.1),
+ * and only position can guarantee that.
+ *
+ * The `?? surface` is not dead code under `noUncheckedIndexedAccess` — it is how
+ * this returns a real color rather than `string | undefined` at every call site.
+ */
+export function postTint(palette: Palette, index: number): string {
+  const tints = palette.chirpTints;
+  return tints[((index % tints.length) + tints.length) % tints.length] ?? palette.surface;
+}
+
+/**
+ * Link/action TEXT colour on a bare canvas — text with no button behind it, like
+ * "Forgot password?" or the sign-in/sign-up footer toggle (c385).
+ *
+ * WHY THIS IS NOT SIMPLY `palette.accent`. The default accent source is CAMPUS
+ * PRIMARY (§8.5), and UNCG's is a navy so dark that on the DARK canvas it measures
+ * about 1.2:1 — an invisible link. `ensureAccentContrast` does not catch this and is
+ * not meant to: it guards the accent against WHITE, for accent-as-a-fill-under-
+ * white-text, which is the opposite arrangement to accent-as-text-on-the-canvas.
+ *
+ * So this MEASURES rather than assumes, and the order is a fallback chain, not a
+ * light/dark switch: accent when it clears AA for body text, else the campus
+ * SECONDARY (the §10.4 gold moment, bright and therefore legible exactly where a
+ * dark accent fails), else ink, which always clears. A mode switch would be wrong
+ * for the Chirp-violet accent source, which is perfectly legible in dark and would
+ * be needlessly replaced by gold.
+ *
+ * 4.5:1 rather than 3:1 because these are `caption`-sized links: body text by
+ * WCAG's reckoning, not large text.
+ */
+export function canvasActionColor(palette: Palette, campusColors: CampusColors): string {
+  const AA_BODY_TEXT = 4.5;
+  if (contrastRatio(palette.accent, palette.bg) >= AA_BODY_TEXT) return palette.accent;
+  if (contrastRatio(campusColors.secondary, palette.bg) >= AA_BODY_TEXT) return campusColors.secondary;
+  return palette.ink;
+}
+
+/**
+ * Background for a small control sitting ON a tinted post card — today the circular
+ * overflow button in a card header (§5 TintedPostCard).
+ *
+ * NOT `surface` in both modes, which is the obvious version and is wrong in dark:
+ * the dark tints are 12% pale washes that sit LIGHTER than `surface` (#15161F), so a
+ * surface-colored circle would sink into the card instead of floating on it. A light
+ * ink wash lifts it in dark exactly as white does on the pastels in light.
+ *
+ * Same role as cardShadow() above: a two-mode token pairing that has to move
+ * together, in one place, so the modes cannot drift.
+ */
+export function onTintControl(palette: Palette): string {
+  return palette.mode === "dark" ? withAlpha(palette.ink, 0.1) : palette.surface;
 }
 
 /**
@@ -144,6 +208,14 @@ export const metrics = {
   /** Fab's circle diameter (§7) — shared with `useOverlayClearance` so the
    * clearance a FAB screen reserves always matches the FAB actually rendered. */
   fabSize: 56,
+  /**
+   * The circular soft control in a TintedPostCard's header row (§5, c383) — the
+   * overflow button on a feed card and on a chirp. Shared rather than written twice
+   * because those two cards are supposed to look like the same card, and the Chirps
+   * board is hand-rolled: it is exactly the kind of pair that drifts by one edit.
+   * Its background comes from `onTintControl(palette)` above.
+   */
+  tintControlSize: 32,
   /**
    * Header accent bar LEADING an oversized screen title (§10.1: "zones, not card
    * soup"). Dimensions only — color is the screen's own accent (campus primary by

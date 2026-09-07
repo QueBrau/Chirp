@@ -33,7 +33,7 @@ never cluttered. Anonymous (Chirps) content gets playful pastel treatment.
 | like | #E5484D | a liked post's heart. Its OWN token, not `danger` (board c222) |
 | dangerSoft | #FDECEC | danger chip bg |
 | warning | #F5A623 | pending states |
-| chirpTints | #FFF3E9 / #EDF6FF / #F3EDFF / #EAF8F1 | rotating card tints on Chirps (by index % 4) |
+| chirpTints | #FFF3E9 / #EDF6FF / #F3EDFF / #EAF8F1 | rotating post-card tints by index % 4 - Chirps, the FYP and the org feed (see TintedPostCard, §5). Named for the surface that had them first; every post card wears them now (c383) |
 
 ### Dark
 | token | value |
@@ -49,7 +49,20 @@ never cluttered. Anonymous (Chirps) content gets playful pastel treatment.
 | accentSoft | rgba(124,124,255,0.16) |
 | accentGradient | #6366F1 → #8B5CF6 |
 | success/danger/warning | #2BD597 / #FF6369 / #FFB84D (softs = 16% alpha of each) |
-| chirpTints | 12% alpha versions of light tints |
+| chirpTints | 12% alpha versions of light tints. **These barely differ from each other in practice** and the rotation is effectively invisible in dark - see the note under the table (c383) |
+
+**Dark `chirpTints` are an open question, not a working set (measured Sep 7, c383).**
+Nothing rendered them until c383: Chirps pins its cards to the LIGHT palette (§10.5), so
+the FYP's post cards are the first real consumer this token has ever had. Composited over
+`bg`, the four land on #29292E / #272930 / #282830 / #27292F - a worst adjacent euclidean
+distance of **1.3/255**, which is no difference at all. That is inherent to the
+definition: all four light tints are near-white, so their differences are small in
+absolute terms and 12% alpha shrinks them a further 8x.
+A candidate replacement was derived and measured but NOT applied, because a dark palette
+is a design decision and the reference this card came from is a light design: take each
+light tint's own hue (27 / 210 / 260 / 150 degrees) at S 0.20, L 0.115 - #231D17 /
+#171D23 / #1B1723 / #17231D. Worst adjacent euclidean **7.0** (5x the current set), ink
+contrast 14.6:1 or better on all four. Board card for braul to accept or reject.
 
 Dark follows system (`useColorScheme`). Both palettes complete — no color defined
 in only one mode.
@@ -72,7 +85,10 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
 ## 4. Shape & space
 
 - Spacing scale (4-base): 4 / 8 / 12 / 16 / 20 / 24 / 32. Screen gutter = 20.
-- Radii: card 20, pill 999, input 14, avatar 16 (squircle feel), thumbnail 12.
+- Radii: card 20, pill 999, input 14, avatar 16 (squircle feel), thumbnail 12,
+  media 16 (a post's inset photo/video block, §5 TintedPostCard). Media is its own
+  token rather than borrowing `avatar`: they happen to share a number today, and a
+  later squircle tweak to avatars must not silently reshape every photo in the feed.
 - Cards: surface bg + 1px border token + shadow `0 2px 16px rgba(16,18,35,0.06)`
   (dark mode: no shadow, border only). Never heavy drop shadows.
 - Vertical rhythm: 12 between cards, 24 between sections, 8 title→content.
@@ -107,13 +123,52 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
     the header accent bar. Taken knowingly at braul's request; if it reads as
     too much gold, the cheap revert is gold on the icon with the label left on
     a tone token.
+- **TintedPostCard** (c383) — the one card every post wears, on Chirps, the FYP and
+  the org feed. `chirpTints[index % 4]` background (never `surface`), radius 20,
+  hairline border, §4 card shadow. Structure top to bottom: header row (author
+  identity on the left, a circular soft control on the right), body, optional inset
+  media, action row. In LIGHT mode the rotating tint is what keeps a scrolling column
+  from reading as a stack of identical rectangles (§10.1), which is the job density
+  contrast used to do alone (§10.3). **In dark mode it currently does nothing** - the
+  dark tints are within 1.3/255 of each other, measured, see §2 - so a dark feed leans
+  on the card's own edge and spacing instead. Do not write a rule that depends on the
+  tint being visible in both modes until §2's open question is settled.
+  - **Circular soft control** — the 32 circle behind an overflow glyph in the header
+    row. `surface` in light (white on a pastel tint, exactly the reference), a 10%
+    ink wash in dark, where `surface` would read DARKER than the lifted tint and the
+    button would sink instead of float. Both come from `onTintControl(palette)` in
+    `src/theme`, next to `cardShadow`, so the two modes cannot drift apart.
 - **Screen header** — display title + caption subtitle, no nav chrome, 24 top pad.
 - **EmptyState** — small geometric mark (outlined circle or squircle drawn with
   Views in accentSoft/accent — NEVER an emoji), headline, one-line caption,
   optional accent Button. Friendly, never blank screens.
 - **ListRow / Button / Card** — per tokens above; Button variants: primary (accent
   bg, white, pill, 52 tall), secondary (accentSoft/accent), ghost (transparent/
-  inkSecondary), destructive (dangerSoft/danger).
+  inkSecondary), destructive (dangerSoft/danger), **brand** (accent bg, campus
+  SECONDARY label — c385), **neutral** (surfaceAlt bg, ink label — c385).
+  - `brand` is the gold-moment CTA, and it is a NAMED VARIANT rather than a
+    `labelColor` prop on purpose: an arbitrary-colour escape hatch on the one
+    shared button is how a design system stops being one. It reads campus
+    secondary from `useAppearance()` itself, so there is no colour to pass and
+    none to get wrong. Solid accent + campus secondary is the SAME pairing the
+    floating tab bar already ships (§5, c310) and is UNCG's own; gold on navy
+    measures ~8.6:1 in both modes. One per screen (§10.4 rule 4).
+  - `neutral` is the quiet filled button, with no accent in it at all. It exists
+    because **`secondary` is unreadable in dark mode whenever the accent is dark**:
+    the default accent source is campus primary, and UNCG's navy label on the
+    accentSoft fill measures **1.18:1** in dark against 10.96:1 in light, so the
+    defect is dark-only and app-wide (board c386). surfaceAlt + ink is ~15:1 in
+    both modes by construction. Use it when a filled button should not be an accent
+    moment.
+- **UnderlineField** (c385) — the auth screens' text field: `caption`/secondary
+  label above, a value row in `body`, a 1px bottom border in `border` that becomes
+  `accent` on focus, and an optional trailing icon button (the password eye
+  toggle; the email `at-sign` is decorative and not a button).
+  - It does **NOT** replace `inputField()`. That filled `surfaceAlt` treatment is
+    what every other form in the app uses and stays the default; this one is
+    scoped to auth, where the reference's open, line-only fields are the look.
+    Two field treatments is a deliberate split, not drift — if a third appears,
+    something has gone wrong.
 
 ## 6. Product reframe (copy + structure)
 
@@ -149,19 +204,32 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
     segmented row — "For You" (active default) · "Campus" · "My Orgs". Active =
     accent bg white text; inactive = surfaceAlt inkSecondary. Mock: filters the
     post list by source.
-  - **MediaPostCard** variants by post type:
-    - *text*: current card style (avatar header, body, action row).
-    - *photo*: full-bleed image (radius 20, height ~260), bottom scrim overlay
-      (layered translucent ink Views, NOT a heavy black gradient) carrying author
-      GradientAvatar + name + time in white, body caption below the media inside
-      the card, action row.
-    - *video*: same as photo + centered play button (Feather play in a
-      surface-translucent 48 circle) + duration Chip top-right. Mock: static
-      thumbnail, no playback.
-  - Action row on ALL variants (ref-2 style): each action is a 36 circular
-    surfaceAlt chip holding the Feather icon (heart / message-circle / send),
-    with the count in a small attached Badge; active state = accentSoft chip +
-    accent icon. Simple, tappable, modern — no bare icon rows.
+  - **MediaPostCard** is a TintedPostCard (§5). ONE structure for every post type,
+    changed Sep 7 (braul, board c383) from a reference shot he supplied:
+    - header row: GradientAvatar 40 + name (headline) over time (caption), with the
+      circular overflow control at the right end. Any tier Chip ("Actives only")
+      sits between them.
+    - body text, then the media block (photo/video only), then the action row.
+    - *photo*: image INSET inside the card padding at radius `media`, height ~240.
+    - *video*: same block + centered play (Feather play in a translucent 48 circle)
+      + duration Chip top-right OF THE MEDIA.
+    - The author row is no longer floated over the photo on a translucent scrim, and
+      the scrim is gone with it. Two things that cost us go with it: the pinned-light
+      `onScrim` tone path through AuthorRow and OverflowButton, and the separate
+      unavailable-media tone branch (c140) that existed only because a failed image
+      left white scrim text on a pale surface. An unavailable photo is now just an
+      inset `surfaceAlt` block with the image glyph and its caption.
+  - Action row on ALL variants: Feather icon (heart / message-circle / send) beside
+    a caption label, generously spaced, no chip circle. The label is **the count when
+    there is one, and the action's name when there is not** — "Like" rather than a
+    meaningless "0", and a real number the moment one exists (§10.6). The
+    accessibility label is always the full action name, never the digits. Active like
+    = FilledHeart in `like` with its count in the same red (c222/c229 unchanged: only
+    an ACTIVE HEART ever becomes the filled shape, and an unliked post looks exactly
+    as it always did).
+    - Every action must clear a 44pt touch target (c307). These rows are icon+label,
+      ~21pt tall, so they carry hitSlop derived from `TOUCH_TARGET` rather than a
+      hand-picked number - the mistake c307 fixed was a hand-picked 8.
   - **FAB**: 56 accent circle, Feather plus, bottom-right, floats 12 above the
     tab bar; opens a mock "Create" sheet (Photo / Video / Text options as
     ListRows with Feather icons). One FAB, Home only.
@@ -185,8 +253,32 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
   chevron-up/down) and an eye/eye-off visibility toggle. Order + visibility
   persist in local state (mock persistence for now; real per-user prefs later).
   No drag-drop dependency — arrows only.
-- **Sign-in**: brand moment — accentGradient wordmark area, then Apple/Google/email
-  buttons full-width pill, caption legal line.
+- **Sign-in / sign-up**: ONE page, not two stages (c385, braul, Sep 7, from a
+  reference shot). Oversized `display` title + `caption` subtitle, then the email
+  form, then the CTA, then the social row, then the footer mode toggle. The title
+  IS the brand moment now: the accentGradient HeroCard wordmark it replaced was a
+  block of chrome above a screen whose actual job — the form — was hidden behind a
+  "Continue with Email" tap.
+  - Fields are UnderlineFields (§5): E-mail (decorative `at-sign`), Password (eye
+    toggle), and on sign-up only, Repeat password (eye toggle, real client-side
+    match check before Firebase is called).
+  - **Forgot password?** sits right-aligned above the CTA, sign-in mode only. It
+    is a real `sendPasswordResetEmail` call, added with this card. It is absent on
+    sign-up, where it means nothing, and the reference's own screen shows it there.
+  - **No "Remember for 30 days" checkbox**, which the reference has. Sessions
+    already persist INDEFINITELY (c166: AsyncStorage on native, browser
+    persistence on web), so the control would promise less than the truth and
+    unchecking it would have to do nothing. A checkbox that cannot change the
+    behaviour it names is worse than no checkbox.
+  - **Two social buttons, not three.** Chirp has Apple and Google; the reference's
+    third (Instagram) is not a provider this app has, and sign-in.tsx's own rule is
+    that a control which looks like authentication must never be one that isn't.
+    They keep short TEXT labels rather than the reference's icon-only circles:
+    Feather has no brand marks, mixing icon families is forbidden above, and a
+    lettered circle is the placeholder-letter UI §10.2 calls lazy. Apple and Google
+    both require their official marks for sign-in buttons, so icon-only is an asset
+    job, not a styling one.
+  - Caption legal line stays at the bottom.
 
 ## 8. Don'ts
 
@@ -274,9 +366,28 @@ Generic-clean is not enough. Every screen must pass these:
    seeded per user (GradientAvatar gains an optional photo uri, initials become
    the fallback only). Story tiles show the photo. Media posts use picsum photos.
    Placeholder-letter UI reads as lazy — kill it wherever a photo can live.
-3. **Density contrast.** Text posts are COMPACT (Twitter density: tight header
-   row, body, inline counts). Media posts breathe (Insta density). Identical
+3. **Density contrast.** Text posts are COMPACT, media posts breathe. Identical
    spacing everywhere is the slop tell.
+
+   *Narrowed Sep 7 (braul, board c383).* This used to mean two different CARDS: a
+   tight one-line header and inline counts for text, a roomy stacked header and 36px
+   action chips for media. The reference braul asked both feeds to resemble gives
+   both post types the same header and the same action row, and differs only in
+   whether a photo is present - so the chrome is now shared and the contrast lives
+   in the padding and the gaps alone (text `lg`/`sm`, media `lg`/`md` with the media
+   block itself doing the breathing).
+   The anti-slop job that rule 3 used to carry on its own has moved to the rotating
+   tint: four alternating pastels down a scrolling column break up the "unbroken
+   stack of identical white rectangles" rule 1 warns about more effectively than two
+   spacing densities ever did, because it works on a run of posts that are all the
+   same type - which is what a real feed usually is.
+
+   THAT SENTENCE IS TRUE IN LIGHT MODE ONLY, and the honest version is worth having in
+   writing rather than discovering later: the dark tints are visually identical to one
+   another (§2, measured), so in dark mode this rule currently has NO mechanism behind
+   it at all. Narrowing rule 3 and finding out the replacement does not work in dark is
+   the sequence that leaves a feed with neither device, so if §2's open question is
+   rejected, rule 3's density contrast should come back for dark mode specifically.
 4. **One gold moment per screen.** Spartan gold is the delight color: the accent
    bar, an active vote, the balance figure, an unread ring. Never gold-wash
    whole surfaces; never zero gold either.
@@ -291,6 +402,17 @@ Generic-clean is not enough. Every screen must pass these:
    Whatever the canvas, the header tone must move with it: the board's header is
    hand-rolled and white-on-navy, so a canvas change without a tone change ships
    invisible text.
+
+   *Pressure on this rule, recorded Sep 7 (braul, board c383) rather than glossed.*
+   The FYP now wears the same rotating tints (§5 TintedPostCard), so in LIGHT mode -
+   where c219 correctly gave Chirps the ordinary canvas - the two boards read as
+   siblings rather than as different places. That was braul's explicit call, from a
+   single reference shot for both screens. What still separates them is everything
+   that carries meaning rather than decoration: the navy canvas at night, no avatar
+   and no name ever (§6, SPEC §8.3), the anonymity dot, the VotePill and gold vote
+   states instead of like/comment, and the composer sitting at the top of the board.
+   If it ever reads as too alike, the cheap fix is a second tint quartet for the FYP,
+   NOT re-forcing the navy in light mode - that is the island c219 already removed.
 6. **Numbers have personality.** All counts/scores/money in the stat type,
    tabular; notable numbers (top chirp score, balance) get gold.
 7. **Copy is specific.** Mock content and microcopy name real things (UNCG,
