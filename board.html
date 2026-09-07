@@ -1065,6 +1065,15 @@
       "detail": ""
     },
     {
+      "id": "c379",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "",
+      "area": "auth",
+      "title": "c379 IN PROGRESS Sep 7 (Q lane, branch q/c379-verification-refresh) [braul, from the real device build, and he had to say it twice before the router stopped arguing from the code and actually looked: 'I also verify my .edu account and it doesnt change anything' / 'it definitely didnt work i just told you i saw it not work'] CAMPUS VERIFICATION SUCCEEDS ON THE SERVER AND THE APP NEVER FINDS OUT. MECHANISM, and it is a stale-cache bug, not a verification bug: SessionProvider.tsx:213 fetches getCampusVerification() in a useEffect keyed ONLY on `userId`, and lines 216/223/229 inside that effect are the ONLY places setCampusVerification is ever called (grepped, not assumed). verify-campus.tsx:114 calls refresh() after a successful redeem, but refresh() is loadMe(), which reloads /auth/me and sets user/memberships. VERIFYING DOES NOT CHANGE YOUR USER ID - you are the same person - so the effect's dependency is unchanged, the effect never re-runs, GET /auth/campus-verification is never re-issued, and campusVerification keeps its stale pre-redeem value. useCampusAccess() therefore keeps returning 'unverified' and Chirps stays locked behind its gate (chirps/index.tsx:136 requires campusId !== null AND access === 'ok'). Only a full app restart clears it, because a remount runs the effect fresh. THE SERVER SIDE IS FINE and should not be touched: services/campus_verification.py:303 sets user.campus_id, the redeem route returns a full CampusVerificationStatus, and redeem's own response already CARRIES the correct new state that the client then throws away. WHY THE KEYING IS NOT ITSELF THE BUG: the comment above that effect explains it was keyed on userId rather than campusId deliberately, so a user with campus_id NULL still gets a real answer - they are exactly who the verify screen exists for. That reasoning is sound. What is missing is any way to publish a NEW verification result into the session; the fix should add one rather than re-key the effect and regress that case. SEVERITY: this blocks the entire campus half of the product for every newly verified student, which is alpha gate c71's whole payoff. c71 was closed as verified from PROD LOGS - the server really did send and accept the code - and that is exactly why nobody caught the client half.",
+      "detail": ""
+    },
+    {
       "id": "c378",
       "col": "progress",
       "owner": "Q",
