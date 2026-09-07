@@ -45,6 +45,7 @@
  * containing the phrase it was looking for and failed on correct code.
  */
 import { readdirSync, readFileSync } from "node:fs";
+import "./payment-uncertainty-cases.mjs";
 
 const read = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 
