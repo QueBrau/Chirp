@@ -1,8 +1,7 @@
 # HANDOFF — where everything actually is
 
-_Last updated: Sep 1 2026 (ops-doc sweep, board card c262 — two more deploy windows,
-migration 0029, and ARCHITECTURE.html landed since the Aug 28 launch-hardening batch
-below)._
+_Last updated: Sep 7 2026 (c360/c361 verification guidance; the dated historical
+snapshot below is not current production evidence)._
 
 **This file deliberately contains almost no numbers.** The previous version rotted
 within a week because it hardcoded the prod revision, the open-PR list, the migration
@@ -44,7 +43,7 @@ Re-verify before promoting any of them.
 
 | Thing | State | How we know |
 | --- | --- | --- |
-| Serving revisions | **two services**: `chirp-api-00043-7ts` and `chirp-ws-00008`, deploy-verify reported 4/4 on both | **board-sourced, not verified this pass** — c269, deploy window #3 (Aug 31, deploy-only, no migration); confirm live with `gcloud run services describe` |
+| Serving revisions | **two services**: `chirp-api-00043-7ts` and `chirp-ws-00008`, historical routing-only deploy-verify reported 4/4 on both | **board-sourced, not verified this pass** — c269, deploy window #3 (Aug 31, deploy-only, no migration); confirm live with `gcloud run services describe` |
 | Why two services | open WebSockets were consuming chirp-api's HTTP concurrency budget, capping concurrently-online users near 320 (c209/c213) | see `INFRA-PRIVATE.html#chirpws`; **every image update must deploy BOTH** |
 | Prod DB `alembic_version` | **0029** (adds the `user_blocks` self-block CHECK constraint; migration 0028→0029), and both c230 triggers still present per the same window | **board-sourced, not verified this pass** — c260/c237, deploy window #2 (Aug 30, migrate-then-redeploy, closed clean); confirm live with `alembic current` through the Auth Proxy |
 | Alembic head (repo) | matches prod as of this line (0029) — **but run `alembic heads` yourself**, see the migrations section | **board-sourced, not verified this pass** — c260/c237 |
@@ -130,14 +129,18 @@ still unmerged.
   with no inline comments.
 - **The firebase CLI is logged in as `madden25boss1@gmail.com`**, which cannot see
   `chirps-prod`. Website deploys go through the gcloud ADC; runbook in `web/README.md`.
-- **Mobile CI is `tsc` only.** There is no mobile test harness at all, so a green mobile
-  check means "it compiles" and never "it works". Anything user-facing needs a real
-  render.
+- **Mobile CI runs TypeScript and discovered verifier commands.** Check
+  `app-mobile/package.json` and `.github/workflows/ci.yml` for the current set.
+  Some guards inspect source; others execute real API helpers, components or session
+  code with controlled dependencies. The contract gate also rejects representative
+  real-source mutations. Registration does not establish semantic coverage, and
+  controlled JavaScript execution does not replace native device/render acceptance.
+  See `app-mobile/CONTRACT-VERIFICATION.md` for the contract gate's exact limits.
 - **`npx tsc` in a worktree with no `node_modules` does not run the TypeScript compiler.**
   It fetches the npm placeholder package called `tsc` and prints "This is not the tsc
-  command you are looking for". Symlink `node_modules` from the main checkout before any
-  mobile check in a worktree (`.gitignore` already documents the symlink and why it must
-  never be committed). **Cite `tsc --version` in your evidence** — a type-check whose
+  command you are looking for". Copy `node_modules` from the main checkout using an APFS
+  clone (`cp -Rc`) and wait for it to finish before running checks. A symlink may
+  satisfy TypeScript but breaks Metro's server root; do not use it for worktree checks. **Cite `tsc --version` in your evidence** — a type-check whose
   output does not include a version number did not type-check anything.
   Measured, because the distinction changes what you watch for: the placeholder exits
   **1**, not 0, on npm 10.8.2 / node 20.20.0. So this is a loud failure, not a silent
@@ -148,15 +151,15 @@ still unmerged.
   RUN, not of the PR: it only protects a merge if the check is newer than both the gate's
   existence and the base's last move. When branches move fast, re-check the merge result
   rather than trusting a green tick.
-- **`scripts/deploy-verify` defaults to `localhost:8000` and says so, but that has still
-  fooled someone.** Run it bare after a prod deploy and you get a TOTAL red — `0 passed,
-  4 failed`, four `000` status codes — because nothing at `localhost:8000` answered, not
-  because prod is down (c250). `000` across every probe means **wrong target**, not a
-  broken deploy: check the `target:` line the script prints as its second line before you
-  re-run or start diagnosing. Don't confuse this with a cold-start flake, which is a
-  PARTIAL red against a real URL (e.g. 3/1) — they look nothing alike. Correct invocation
-  after a prod deploy is `scripts/deploy-verify --base-url <service URL>`; see `DEPLOY.md`
-  for where that URL lives.
+- **Unauthenticated routing probes do not prove deployment readiness.**
+  `scripts/deploy-verify --base-url <service URL>` remains an explicitly
+  `ROUTING_ONLY` check. Follow `DEPLOY-VERIFICATION.md` for authenticated release
+  verification of both services using fixed revisions, image digests, schema head,
+  and an owned fixture. Inspect the JSON `targets` before interpreting any result;
+  only the documented authenticated checks can produce `AUTHENTICATED_READY`.
+  Keep the bearer in `DEPLOY_VERIFY_BEARER`, never in command arguments or reports.
+  Even that verdict covers sampled HTTP/schema metadata, not WebSocket/Redis delivery,
+  native behavior, complete data correctness or a restore exercise.
 
 ## Multi-session rules (these are enforced, not advisory)
 
