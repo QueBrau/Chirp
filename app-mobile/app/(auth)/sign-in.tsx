@@ -1,10 +1,24 @@
 /**
- * Sign-in per DESIGN.md §7: brand block (HeroCard's layered-View gradient) with
- * the "Chirp" wordmark, full-width pill Apple/Google/email buttons, caption
- * legal line.
+ * Sign-in / sign-up per DESIGN.md §7: ONE page (c385, braul, from a reference
+ * shot) - oversized title, UnderlineField form, brand CTA, social row, footer
+ * mode toggle, legal caption.
  *
- * Real auth (milestone 1): "Continue with Email" reveals an email/password form
- * wired to src/auth/session.ts (Firebase Auth). Apple runs the real native
+ * WHAT c385 CHANGED IS THE MARKUP AND NOTHING ELSE. This screen carries a lot of
+ * hard-won correctness that is invisible in a screenshot, and all of it survives
+ * intact below: submittedMode captured AT SUBMIT rather than re-read from a live
+ * toggle (the c45 regression), the 15s session-settle timeout, routeAfterAuth's
+ * returning-vs-new split, signing out when backing out mid-wait, per-keystroke
+ * error clearing (c320), demo mode, and the independent Apple/Google availability
+ * checks with their honest-stub fallbacks. Read the comments before moving any of
+ * it; each one names a bug that actually shipped.
+ *
+ * The two-stage shape is gone: there is no "Continue with Email" reveal and no
+ * `showEmailForm`, because the reference puts the form, the CTA and the providers
+ * on one screen. `resetEmailForm`'s sign-out-on-back survives as the mode toggle's
+ * behaviour, which is now the only way to leave a pending wait.
+ *
+ * Real auth (milestone 1): the email/password form is wired to src/auth/session.ts
+ * (Firebase Auth). Apple runs the real native
  * flow (src/auth/appleSignIn.ts, c314) when isAppleSignInAvailable() is true —
  * iOS with the OS-level capability present. Google runs the real native flow
  * (src/auth/googleSignIn.ts, c169) when isGoogleSignInAvailable() is true —
@@ -20,7 +34,7 @@
 
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Pressable, TextInput, View } from "react-native";
+import { Pressable, View } from "react-native";
 
 import {
   getAuthErrorMessage,
@@ -28,6 +42,8 @@ import {
   hasFirebaseConfig,
   isAppleSignInAvailable,
   isGoogleSignInAvailable,
+  isUserNotFoundError,
+  sendPasswordReset,
   signInWithApple,
   signInWithEmail,
   signInWithGoogle,
@@ -38,8 +54,9 @@ import {
   useSession,
   withInviteCode,
 } from "@/auth";
-import { AppText, Button, HeroCard, Screen } from "@/components";
-import { inputField, spacing, useTheme } from "@/theme";
+import { AppText, Button, Screen, UnderlineField } from "@/components";
+import { MIN_PASSWORD_LENGTH } from "@/lib/passwordPolicy";
+import { canvasActionColor, spacing, useAppearance, useTheme } from "@/theme";
 
 type EmailAuthMode = "signin" | "signup";
 
@@ -53,19 +70,28 @@ const SESSION_SETTLE_TIMEOUT_MS = 15_000;
 export default function SignInScreen() {
   const router = useRouter();
   const palette = useTheme();
+  const { campusColors } = useAppearance();
   // c94: the guard on the far side of every post-sign-in route reads this.
   const { status } = useSession();
   // Carried through from an invite deep link that bounced an unauthenticated
   // visitor here via join-chapter's Redirect (chirp://join-chapter?code=...).
   const { code: inviteCode } = useLocalSearchParams<{ code?: string }>();
 
-  const [showEmailForm, setShowEmailForm] = useState(false);
   const [authMode, setAuthMode] = useState<EmailAuthMode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  /** Sign-up only. Cleared on every mode switch so a stale value can never be
+   *  compared against a password typed later. */
+  const [repeatPassword, setRepeatPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showRepeatPassword, setShowRepeatPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [socialError, setSocialError] = useState<string | null>(null);
+  /** Neutral confirmation after a reset request. Deliberately not an error and
+   *  deliberately the same text whether or not the address exists - see
+   *  handleForgotPassword. */
+  const [resetNotice, setResetNotice] = useState<string | null>(null);
   // Resolved asynchronously (expo-apple-authentication's own OS-level check),
   // so this starts false and the Apple button behaves like the honest stub
   // until it resolves — never a flash of "available" that isn't real yet.
@@ -282,23 +308,26 @@ export default function SignInScreen() {
   }, [submittedMode]);
 
   /**
-   * "Back" out of the email form. If the credential has already landed and we
-   * are only waiting on the session, backing out must also SIGN OUT: otherwise
-   * the user sits on the signed-out provider screen while genuinely
-   * authenticated, the 15s timer is cancelled so no error ever appears, and the
-   * Apple/Google buttons then walk a registered user through onboarding again.
-   * Found in review alongside the toggle bug; same c45 family, lower frequency.
+   * Abandon a pending credential. If the credential has already landed and we are
+   * only waiting on the session, leaving must also SIGN OUT: otherwise the user
+   * sits on the signed-out screen while genuinely authenticated, the 15s timer is
+   * cancelled so no error ever appears, and the Apple/Google buttons then walk a
+   * registered user through onboarding again. Found in review alongside the toggle
+   * bug; same c45 family, lower frequency.
+   *
+   * c385 KEPT THIS AND MOVED ITS CALLER. It used to hang off the email form's
+   * "Back" button, which the one-page layout deletes. The footer mode toggle is now
+   * the only way to walk away from a pending wait, so it inherits the sign-out -
+   * dropping this along with the Back button would have quietly reintroduced the
+   * exact bug the comment above describes.
    */
-  const resetEmailForm = () => {
+  const abandonPendingSession = () => {
     if (submittedMode !== null && hasFirebaseConfig()) {
       void signOutUser().catch(() => {
-        // Nothing useful to tell the user — they asked to go back and they are
-        // going back. SessionProvider's listener owns the state either way.
+        // Nothing useful to tell the user — they asked to leave and they are
+        // leaving. SessionProvider's listener owns the state either way.
       });
     }
-    setShowEmailForm(false);
-    setError(null);
-    setSocialError(null);
     setSubmitting(false);
     setSubmittedMode(null);
   };
@@ -320,9 +349,63 @@ export default function SignInScreen() {
     setError(null);
     setPassword(value);
   };
-  const toggleAuthMode = () => {
+  const editRepeatPassword = (value: string) => {
     setError(null);
+    setRepeatPassword(value);
+  };
+  const toggleAuthMode = () => {
+    // Order matters: abandon first, because it is the thing that can be waiting on
+    // a credential, and the rest of this is just clearing UI state.
+    abandonPendingSession();
+    setError(null);
+    setSocialError(null);
+    setResetNotice(null);
+    // Never carry a repeat-password across a mode switch. Left behind, it would be
+    // compared against a password typed afterwards.
+    setRepeatPassword("");
+    setShowPassword(false);
+    setShowRepeatPassword(false);
     setAuthMode(authMode === "signin" ? "signup" : "signin");
+  };
+
+  /**
+   * Password reset (c385). The reference shot asks for this link and the app had no
+   * recovery path at all, so it is a real sendPasswordResetEmail rather than a
+   * decorative link.
+   *
+   * THE SAME NOTICE IS SHOWN WHETHER OR NOT THE ADDRESS HAS AN ACCOUNT. Firebase
+   * throws auth/user-not-found and surfacing it would turn this into an
+   * account-enumeration oracle for any address someone cares to type - the same
+   * reasoning that already collapses user-not-found and wrong-password into one
+   * message on sign-in (src/auth/authErrors.ts). Every OTHER code is reported
+   * normally: auth/invalid-email is about the text they typed, not about who is
+   * registered, and silently swallowing it would leave a malformed address looking
+   * like a sent email.
+   */
+  const handleForgotPassword = async () => {
+    const address = email.trim();
+    setResetNotice(null);
+    if (address.length === 0) {
+      setError("Enter your email address first, then choose Forgot password.");
+      return;
+    }
+    if (!hasFirebaseConfig()) {
+      setResetNotice("Demo mode. No reset email was sent.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await sendPasswordReset(address);
+    } catch (err) {
+      if (!isUserNotFoundError(err)) {
+        setError(getAuthErrorMessage(err, "signin"));
+        setSubmitting(false);
+        return;
+      }
+    }
+    setSubmitting(false);
+    setResetNotice("If that address has an account, a reset link is on its way.");
   };
 
   const submitEmailForm = async () => {
@@ -337,6 +420,17 @@ export default function SignInScreen() {
     const lengthError = getPasswordLengthError(password, mode);
     if (lengthError !== null) {
       setError(lengthError);
+      return;
+    }
+
+    // c385, sign-up only. Checked AFTER length so somebody who typed the same too
+    // short password twice is told the useful thing ("at least 6 characters")
+    // rather than being sent to fix a mismatch that isn't there. Purely
+    // client-side: Firebase has no concept of a confirmation field, so this exists
+    // to catch a typo in a value the user cannot see, which is the whole reason the
+    // reference has the field.
+    if (mode === "signup" && password !== repeatPassword) {
+      setError("Those passwords don't match.");
       return;
     }
 
@@ -369,125 +463,211 @@ export default function SignInScreen() {
     }
   };
 
-  const canSubmit = email.trim().length > 0 && password.length > 0 && !submitting;
+  const canSubmit =
+    email.trim().length > 0 &&
+    password.length > 0 &&
+    // Non-EMPTY only, not matching: an empty confirmation is an unfinished form, but
+    // a mismatched one is a mistake the user deserves to be told about, and a
+    // disabled button says nothing. The match check lives in submitEmailForm.
+    (authMode === "signin" || repeatPassword.length > 0) &&
+    !submitting;
+
+  const isSignUp = authMode === "signup";
+  // Links sit on the bare canvas with no button behind them, so `accent` is not
+  // automatically legible - on the dark canvas a campus-primary accent (UNCG navy)
+  // measures about 1.2:1. canvasActionColor measures and falls back to the campus
+  // secondary. See its comment in src/theme.
+  const linkColor = canvasActionColor(palette, campusColors);
 
   return (
-    <Screen scroll={false}>
-      <View style={{ flex: 1, justifyContent: "center", gap: spacing.xl }}>
-        <HeroCard>
-          <View style={{ alignItems: "center", gap: spacing.xs, paddingVertical: spacing.lg }}>
-            <AppText variant="display" tone="onAccent" style={{ letterSpacing: -0.5 }}>
-              Chirp
-            </AppText>
-            <AppText variant="body" tone="onAccent" style={{ textAlign: "center" }}>
-              Your campus, in one place.
-            </AppText>
-          </View>
-        </HeroCard>
+    <Screen scroll>
+      {/* NO `flex: 1` HERE. Screen's ScrollView contentContainerStyle sets no
+          flexGrow, so a flex:1 child collapses to ZERO HEIGHT on native and the
+          screen renders as a bare canvas. It survived the browser check because
+          react-native-web resolves that case differently, and it only appeared on
+          the simulator. The old layout could use flex:1 because it was
+          `scroll={false}` and needed it to centre the form vertically; scrolling
+          content just flows. */}
+      <View style={{ gap: spacing.xl, paddingTop: spacing.xxl }}>
+        {/* The title IS the brand moment now (DESIGN section 7, c385) - it replaced
+            an accentGradient HeroCard wordmark that was a block of chrome sitting
+            above the screen's actual job. */}
+        <View style={{ gap: spacing.xs }}>
+          <AppText variant="display">
+            {isSignUp ? "Welcome to Chirp" : "Welcome back"}
+          </AppText>
+          <AppText variant="caption" tone="secondary">
+            {isSignUp ? "Create your account" : "Sign in to your account"}
+          </AppText>
+        </View>
 
-        {showEmailForm ? (
-          <View style={{ gap: spacing.md }}>
-            <TextInput
-              value={email}
-              onChangeText={editEmail}
-              placeholder="Email"
-              placeholderTextColor={palette.inkFaint}
-              keyboardType="email-address"
+        <View style={{ gap: spacing.lg }}>
+          <UnderlineField
+            label="E-mail"
+            value={email}
+            onChangeText={editEmail}
+            placeholder="you@school.edu"
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="emailAddress"
+            // Decorative, not a control: there is nothing to do with an at-sign, and
+            // an icon with no action must not announce itself as a button.
+            icon="at-sign"
+          />
+
+          <UnderlineField
+            label="Password"
+            value={password}
+            onChangeText={editPassword}
+            placeholder="Your password"
+            secureTextEntry={!showPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType={isSignUp ? "newPassword" : "password"}
+            // The hint is only true on sign-up: MIN_PASSWORD_LENGTH is Firebase's
+            // floor for CREATING an account, and telling a returning user their real
+            // password needs 6 characters would be both wrong and alarming.
+            hint={isSignUp ? `At least ${MIN_PASSWORD_LENGTH} characters` : undefined}
+            action={{
+              icon: showPassword ? "eye-off" : "eye",
+              label: showPassword ? "Hide password" : "Show password",
+              onPress: () => setShowPassword(!showPassword),
+            }}
+          />
+
+          {isSignUp ? (
+            <UnderlineField
+              label="Repeat password"
+              value={repeatPassword}
+              onChangeText={editRepeatPassword}
+              placeholder="Type it again"
+              secureTextEntry={!showRepeatPassword}
               autoCapitalize="none"
               autoCorrect={false}
-              textContentType="emailAddress"
-              style={inputField(palette)}
-            />
-            <TextInput
-              value={password}
-              onChangeText={editPassword}
-              placeholder="Password"
-              placeholderTextColor={palette.inkFaint}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              textContentType={authMode === "signin" ? "password" : "newPassword"}
-              style={inputField(palette)}
-            />
-
-            {error !== null ? (
-              <AppText variant="caption" tone="danger">
-                {error}
-              </AppText>
-            ) : null}
-
-            {!hasFirebaseConfig() ? (
-              <AppText variant="caption" tone="tertiary">
-                Demo mode. Firebase not configured
-              </AppText>
-            ) : null}
-
-            <Button
-              label={
-                submitting
-                  ? "Please wait..."
-                  : authMode === "signin"
-                    ? "Sign in"
-                    : "Create account"
-              }
-              disabled={!canSubmit}
-              onPress={() => void submitEmailForm()}
-            />
-
-            <Pressable
-              accessibilityRole="button"
-              disabled={submitting}
-              onPress={toggleAuthMode}
-              style={{ alignItems: "center", paddingVertical: spacing.xs, opacity: submitting ? 0.4 : 1 }}
-            >
-              <AppText variant="caption" tone="accent">
-                {authMode === "signin"
-                  ? "Need an account? Sign up"
-                  : "Already have an account? Sign in"}
-              </AppText>
-            </Pressable>
-
-            <Button label="Back" variant="ghost" onPress={resetEmailForm} />
-          </View>
-        ) : (
-          <View style={{ gap: spacing.md }}>
-            <Button
-              label="Continue with Apple"
-              variant="secondary"
-              disabled={submitting}
-              onPress={handleApplePress}
-            />
-            <Button
-              label="Continue with Google"
-              variant="secondary"
-              disabled={submitting}
-              onPress={handleGooglePress}
-            />
-            {appleAvailable && googleAvailable ? null : (
-              <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
-                {appleAvailable
-                  ? "Google sign-in is not connected in this build yet. Use Apple or Email."
-                  : googleAvailable
-                    ? "Apple sign-in is not connected in this build yet. Use Google or Email."
-                    : "Apple and Google sign-in are not connected in this build yet. Use Email instead."}
-              </AppText>
-            )}
-            {socialError !== null ? (
-              <AppText variant="caption" tone="danger" style={{ textAlign: "center" }}>
-                {socialError}
-              </AppText>
-            ) : null}
-            <Button
-              label="Continue with Email"
-              onPress={() => {
-                setSocialError(null);
-                setShowEmailForm(true);
+              textContentType="newPassword"
+              action={{
+                icon: showRepeatPassword ? "eye-off" : "eye",
+                label: showRepeatPassword ? "Hide repeated password" : "Show repeated password",
+                onPress: () => setShowRepeatPassword(!showRepeatPassword),
               }}
             />
-          </View>
-        )}
+          ) : null}
+        </View>
 
-        <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
+        {error !== null ? (
+          <AppText variant="caption" tone="danger">
+            {error}
+          </AppText>
+        ) : null}
+
+        {resetNotice !== null ? (
+          <AppText variant="caption" tone="secondary">
+            {resetNotice}
+          </AppText>
+        ) : null}
+
+        {!hasFirebaseConfig() ? (
+          <AppText variant="caption" tone="tertiary">
+            Demo mode. Firebase not configured
+          </AppText>
+        ) : null}
+
+        {/* Sign-in only. The reference puts "Forgot passward" on its create-account
+            screen, where it means nothing: there is no password to have forgotten
+            yet. */}
+        {!isSignUp ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Forgot password"
+            disabled={submitting}
+            onPress={() => void handleForgotPassword()}
+            hitSlop={spacing.sm}
+            style={{ alignSelf: "flex-end", opacity: submitting ? 0.4 : 1 }}
+          >
+            <AppText variant="caption" style={{ color: linkColor }}>
+              Forgot password?
+            </AppText>
+          </Pressable>
+        ) : null}
+
+        <Button
+          // The screen's one gold moment (DESIGN section 10.4 rule 4): solid accent
+          // fill, campus-secondary label. Same pairing the tab bar ships.
+          variant="brand"
+          label={submitting ? "Please wait..." : isSignUp ? "Create an account" : "Sign in"}
+          disabled={!canSubmit}
+          onPress={() => void submitEmailForm()}
+        />
+
+        <View style={{ gap: spacing.md }}>
+          <AppText variant="caption" tone="secondary">
+            {isSignUp ? "Or sign up with" : "Or sign in with"}
+          </AppText>
+          {/* TWO providers, not the reference's three: Chirp has Apple and Google,
+              and Instagram is not a provider this app has. A third button that
+              cannot authenticate is exactly what handleUnavailableSocialProvider
+              above exists to prevent.
+              Text labels rather than the reference's icon-only circles: Feather has
+              no brand marks, DESIGN forbids mixing icon families, and Apple and
+              Google both require their own official marks for sign-in buttons. */}
+          <View style={{ flexDirection: "row", gap: spacing.md }}>
+            {/* `neutral`, NOT `secondary` (c385). Caught by rendering this screen in
+                dark mode, where both buttons were all but invisible: secondary is
+                accentSoft fill + accent label, and with the default campus-primary
+                accent that measures 1.18:1 on the dark canvas. These are alternative
+                routes in, not accent moments, so a real neutral surface is also the
+                right semantics. The wider secondary-in-dark defect is board c386. */}
+            <Button
+              label="Apple"
+              variant="neutral"
+              disabled={submitting}
+              onPress={handleApplePress}
+              style={{ flex: 1 }}
+            />
+            <Button
+              label="Google"
+              variant="neutral"
+              disabled={submitting}
+              onPress={handleGooglePress}
+              style={{ flex: 1 }}
+            />
+          </View>
+          {appleAvailable && googleAvailable ? null : (
+            <AppText variant="caption" tone="tertiary">
+              {appleAvailable
+                ? "Google sign-in is not connected in this build yet. Use Apple or Email."
+                : googleAvailable
+                  ? "Apple sign-in is not connected in this build yet. Use Google or Email."
+                  : "Apple and Google sign-in are not connected in this build yet. Use Email instead."}
+            </AppText>
+          )}
+          {socialError !== null ? (
+            <AppText variant="caption" tone="danger">
+              {socialError}
+            </AppText>
+          ) : null}
+        </View>
+
+        {/* The reference's own footer says "Don't have an account? Sign Up" on a
+            screen titled "Create your account", which is self-contradictory. This one
+            reflects the mode actually showing. */}
+        <Pressable
+          accessibilityRole="button"
+          disabled={submitting}
+          onPress={toggleAuthMode}
+          hitSlop={spacing.sm}
+          style={{ flexDirection: "row", gap: spacing.xs, opacity: submitting ? 0.4 : 1 }}
+        >
+          <AppText variant="caption" tone="secondary">
+            {isSignUp ? "Already have an account?" : "Don't have an account?"}
+          </AppText>
+          <AppText variant="caption" style={{ color: linkColor, fontWeight: "700" }}>
+            {isSignUp ? "Sign in" : "Sign up"}
+          </AppText>
+        </Pressable>
+
+        <AppText variant="caption" tone="tertiary">
           By continuing, you agree to Chirp's Terms of Service and acknowledge our Privacy Policy.
         </AppText>
       </View>

@@ -81,6 +81,26 @@ export function contrastWithWhite(hex: string): number {
 }
 
 /**
+ * WCAG contrast ratio between any two opaque colors (range 1.0–21.0), c385.
+ *
+ * contrastWithWhite() above is the special case this generalises, and it is
+ * deliberately NOT reimplemented in terms of this one: it is called in a loop by
+ * ensureAccentContrast and its single-expression form is exactly right there.
+ *
+ * BOTH ARGUMENTS MUST BE OPAQUE. relativeLuminance parses `#rrggbb` and has no
+ * concept of alpha, so passing an rgba() token (accentSoft, dark chirpTints, the
+ * border tokens) silently measures nonsense rather than throwing. Composite first
+ * with mix() if you need the contrast of a translucent layer.
+ */
+export function contrastRatio(a: string, b: string): number {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  const lighter = Math.max(la, lb);
+  const darker = Math.min(la, lb);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/**
  * Contrast guard (DESIGN §8.5): campus colors are picked for school pride, not
  * button-text contrast, so a light one (e.g. a gold) can read poorly under white
  * text. Darkens in 8% steps — capped at 8 steps (a ~49% max darken) — until the

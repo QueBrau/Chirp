@@ -10,7 +10,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { Palette } from "./colors";
 import { resolvePalette, useAppearance } from "./appearance";
-import { withAlpha } from "./colorUtils";
+import type { CampusColors } from "./appearance";
+import { contrastRatio, withAlpha } from "./colorUtils";
 import { applyOrgAccent, useOrgAccentColors } from "./orgScope";
 import { radii } from "./radii";
 import { spacing } from "./spacing";
@@ -39,6 +40,7 @@ export type {
   CampusColors,
 } from "./appearance";
 export {
+  contrastRatio,
   contrastWithWhite,
   darken,
   ensureAccentContrast,
@@ -104,6 +106,33 @@ export function cardShadow(palette: Palette): ViewStyle {
 export function postTint(palette: Palette, index: number): string {
   const tints = palette.chirpTints;
   return tints[((index % tints.length) + tints.length) % tints.length] ?? palette.surface;
+}
+
+/**
+ * Link/action TEXT colour on a bare canvas — text with no button behind it, like
+ * "Forgot password?" or the sign-in/sign-up footer toggle (c385).
+ *
+ * WHY THIS IS NOT SIMPLY `palette.accent`. The default accent source is CAMPUS
+ * PRIMARY (§8.5), and UNCG's is a navy so dark that on the DARK canvas it measures
+ * about 1.2:1 — an invisible link. `ensureAccentContrast` does not catch this and is
+ * not meant to: it guards the accent against WHITE, for accent-as-a-fill-under-
+ * white-text, which is the opposite arrangement to accent-as-text-on-the-canvas.
+ *
+ * So this MEASURES rather than assumes, and the order is a fallback chain, not a
+ * light/dark switch: accent when it clears AA for body text, else the campus
+ * SECONDARY (the §10.4 gold moment, bright and therefore legible exactly where a
+ * dark accent fails), else ink, which always clears. A mode switch would be wrong
+ * for the Chirp-violet accent source, which is perfectly legible in dark and would
+ * be needlessly replaced by gold.
+ *
+ * 4.5:1 rather than 3:1 because these are `caption`-sized links: body text by
+ * WCAG's reckoning, not large text.
+ */
+export function canvasActionColor(palette: Palette, campusColors: CampusColors): string {
+  const AA_BODY_TEXT = 4.5;
+  if (contrastRatio(palette.accent, palette.bg) >= AA_BODY_TEXT) return palette.accent;
+  if (contrastRatio(campusColors.secondary, palette.bg) >= AA_BODY_TEXT) return campusColors.secondary;
+  return palette.ink;
 }
 
 /**
