@@ -12,7 +12,6 @@ import { Feather } from "@expo/vector-icons";
 import { useState, type ReactElement } from "react";
 import { Pressable, View } from "react-native";
 
-import { ApiError } from "@/api/client";
 import type { DuesPaymentPlanOut } from "@/api/finance";
 import {
   createDuesPaymentIntent,
@@ -27,6 +26,7 @@ import { calendarDay } from "@/lib/dates";
 import { radii, spacing, useTheme } from "@/theme";
 
 import { stripeSdk } from "./stripeSdk";
+import { duesPaymentError } from "./errors";
 
 export interface DuesPaymentScreenProps {
   cycleId: string;
@@ -350,13 +350,10 @@ export default function DuesPaymentScreen({
       }
       onPaid?.();
     } catch (error) {
-      const message =
-        error instanceof ApiError
-          ? error.detail
-          : stripeSdk === null
-            ? WEB_UNAVAILABLE
-            : "Payment could not be started. Try again.";
-      showAlert("Payment failed", message);
+      const presentation = stripeSdk === null
+        ? { title: "Payment unavailable", message: WEB_UNAVAILABLE }
+        : duesPaymentError(error);
+      showAlert(presentation.title, presentation.message);
     } finally {
       setPaying(false);
     }
