@@ -9,6 +9,7 @@ import pytest
 import stripe
 from httpx import AsyncClient
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from app.db import get_engine, get_session_factory
 from app.routers import payments
@@ -309,3 +310,68 @@ async def test_wrong_provider_intent_id_cannot_release_or_replace_stored_intent(
     assert len(rows) == 1 and str(rows[0]["id"]) == original
     assert rows[0]["status"] == "open" and rows[0]["stripe_payment_intent_id"] == "pi_stored"
     assert stripe_calls["payment_intent"] == []
+
+
+@pytest.mark.parametrize("sqlstate", ["23514", "23505"])
+async def test_unrelated_binding_constraint_failure_retains_reservation_and_original_key(
+    client: AsyncClient, make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch, stripe_env: None,
+    stripe_calls: dict[str, list[dict[str, Any]]], sqlstate: str,
+) -> None:
+    """Real PostgreSQL failures after provider success are not duplicate-ID proof."""
+    setup = await make_chapter_with(role="member")
+    await _onboard(client, setup)
+    cycle = await _create_dues_cycle(client, setup)
+    created: dict[str, str] = {}
+    keys: list[str] = []
+
+    async def create(**params: Any) -> FakeStripeObject:
+        key = params["idempotency_key"]
+        keys.append(key)
+        intent_id = created.setdefault(key, f"pi_created_{len(created) + 1}")
+        return FakeStripeObject(id=intent_id, client_secret=f"{intent_id}_secret")
+
+    monkeypatch.setattr(stripe.PaymentIntent, "create_async", create)
+    async with get_session_factory()() as session:
+        # Static test-only values: exercise actual asyncpg diagnostic wrapping,
+        # including another unique violation with the same SQLSTATE as c231.
+        await session.execute(text(
+            "CREATE FUNCTION c366_reject_binding() RETURNS trigger LANGUAGE plpgsql AS $$ "
+            "BEGIN RAISE EXCEPTION 'test binding constraint failure' "
+            f"USING ERRCODE='{sqlstate}', CONSTRAINT='c366_other_binding_constraint'; END $$"
+        ))
+        await session.execute(text(
+            "CREATE TRIGGER c366_reject_binding BEFORE UPDATE OF stripe_payment_intent_id "
+            "ON dues_payment_intents FOR EACH ROW EXECUTE FUNCTION c366_reject_binding()"
+        ))
+        await session.commit()
+
+    endpoint = f"/payments/dues/{cycle}/intent"
+    database_error: IntegrityError | None = None
+    try:
+        try:
+            await client.post(endpoint, json={"rail": "ach"}, headers=setup.member.headers)
+        except IntegrityError as exc:
+            database_error = exc
+        original = await _rows(cycle)
+        assert len(original) == 1
+        assert original[0]["status"] == "open", original
+        assert original[0]["stripe_payment_intent_id"] is None
+        assert database_error is not None, "unrelated database errors must propagate"
+        assert len(created) == 1, "the provider succeeded before PostgreSQL rejected binding"
+        assert get_engine().pool.checkedout() == 0
+    finally:
+        async with get_session_factory()() as session:
+            await session.execute(text("DROP TRIGGER c366_reject_binding ON dues_payment_intents"))
+            await session.execute(text("DROP FUNCTION c366_reject_binding()"))
+            await session.commit()
+
+    blocked = await client.post(endpoint, json={"rail": "card"}, headers=setup.member.headers)
+    assert blocked.status_code == 409
+    retry = await client.post(endpoint, json={"rail": "ach"}, headers=setup.member.headers)
+    assert retry.status_code == 200, retry.text
+    rows = await _rows(cycle)
+    assert len(rows) == 1 and rows[0]["id"] == original[0]["id"]
+    assert len(keys) == 2 and keys[0] == keys[1] and len(created) == 1
+    assert rows[0]["stripe_payment_intent_id"] == "pi_created_1"
+    assert retry.json()["payment_intent_client_secret"] == "pi_created_1_secret"

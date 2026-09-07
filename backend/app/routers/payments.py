@@ -508,7 +508,7 @@ async def _prepare_reserved_intent(
         try:
             reservation.stripe_payment_intent_id = intent.id
             await session.commit()
-        except IntegrityError:
+        except IntegrityError as exc:
             # Belt, not the primary fix (c231): uq_dues_intent_stripe_id spans every
             # status, so if the id Stripe just handed back is already claimed by a
             # DIFFERENT reservation row, this commit loses the race instead of
@@ -521,6 +521,18 @@ async def _prepare_reserved_intent(
             # safe per the invariant above — and the client's next retry reserves a
             # fresh row with a fresh idempotency key rather than hitting a 500.
             await session.rollback()
+            # Only this named unique violation proves the returned intent already
+            # belongs to a different reservation. A check/trigger failure (or a
+            # different unique violation) after provider success leaves an unknown
+            # outcome: keep the durable row/key open and propagate the DB failure.
+            # SQLAlchemy's asyncpg adapter keeps SQLSTATE on orig and the original
+            # driver's structured constraint metadata on its chained cause.
+            driver_error = getattr(exc.orig, "__cause__", None)
+            if (
+                getattr(exc.orig, "sqlstate", None) != "23505"
+                or getattr(driver_error, "constraint_name", None) != "uq_dues_intent_stripe_id"
+            ):
+                raise
             stale = await _lock_reservation(
                 session, select(models.DuesPaymentIntent).where(models.DuesPaymentIntent.id == reservation_id)
             )
