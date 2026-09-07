@@ -18,6 +18,7 @@ from app.routers import (
     auth,
     campus_verification,
     chapters,
+    deployment,
     events,
     feed,
     finance,
@@ -210,6 +211,7 @@ def create_app() -> FastAPI:
 
     for module in (
         auth,
+        deployment,
         campus_verification,
         chapters,
         keys,

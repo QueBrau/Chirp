@@ -1,70 +1,221 @@
-/**
- * Firebase Auth session helpers — email/password only for now. Google/Apple Sign-In
- * need native config (expo-auth-session / expo-apple-authentication) that only works
- * in a dev build, not this Expo Go-less JS-only setup; see /SETUP-FIREBASE.md and the
- * caption on sign-in.tsx. Every function here requires hasFirebaseConfig() to be true
- * (src/auth/config.ts) — callers gate on it and fall back to the mock flow otherwise.
- *
- * On successful sign-in/sign-up/sign-out, the ID token is pushed into src/api/client's
- * setAuthToken() so subsequent API calls carry `Authorization: Bearer <idToken>`.
- */
-
+/** Firebase adapter: every token belongs to one UID and auth generation (c343). */
 import {
+  beforeAuthStateChanged,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  sendPasswordResetEmail,
   onIdTokenChanged as onFirebaseIdTokenChanged,
   signInWithEmailAndPassword,
   signOut,
   type User,
 } from "firebase/auth";
 
-import { setAuthToken } from "@/api/client";
-
+import { Operation, OperationTimeoutError, REQUEST_TIMEOUT_MS } from "../api/operation";
+import {
+  currentIdentity, installToken, ownsIdentity, replaceIdentity, requireIdentity,
+  SessionChangedError, tokenFor, type AuthIdentity,
+} from "./identity";
 import { getFirebaseAuth } from "./firebase";
+import { devAuthUid } from "./devAuth";
 
-/** Sign in an existing user with email/password. Throws on invalid credentials. */
-export async function signInWithEmail(email: string, password: string): Promise<User> {
-  const credential = await signInWithEmailAndPassword(getFirebaseAuth(), email, password);
-  setAuthToken(await credential.user.getIdToken());
-  return credential.user;
+const DEV_UID = devAuthUid();
+
+let authIntent = 0;
+export interface AuthAttempt {
+  readonly id: number;
+  readonly baselineUid: string | null;
+  assertCurrent: () => void;
+}
+let transition: AuthAttempt | null = null;
+let transitionOutcome: boolean | null = null;
+let mutationQueue: Promise<unknown> = Promise.resolve();
+let activeMutation: (() => void) | null = null;
+let mutationGuardInstalled = false;
+const pendingMutations = new Set<AuthAttempt>();
+let tokenSequence = 0;
+let pending: { owner: AuthIdentity; force: boolean; sequence: number; promise: Promise<string | null> } | null = null;
+
+/** Read Firebase synchronously before capturing ownership; callbacks may arrive later. */
+export function captureSession(): AuthIdentity {
+  if (DEV_UID !== null) return replaceIdentity(DEV_UID);
+  // A native cancellation may finish without entering the mutation queue while
+  // an older SDK call is between its veto and currentUser commit. Do not release
+  // quarantine until EVERY queued/in-flight SDK mutation has actually settled.
+  if (transition && transitionOutcome !== null && pendingMutations.size === 0) {
+    const actualUid = getFirebaseAuth().currentUser?.uid ?? null;
+    if (transitionOutcome || actualUid === null || actualUid === transition.baselineUid) {
+      transition = null;
+      transitionOutcome = null;
+    }
+  }
+  if (transition) return currentIdentity();
+  return replaceIdentity(getFirebaseAuth().currentUser?.uid ?? null);
 }
 
-/** Create a new user with email/password. Throws if the email is already registered. */
-export async function signUpWithEmail(email: string, password: string): Promise<User> {
-  const credential = await createUserWithEmailAndPassword(getFirebaseAuth(), email, password);
-  setAuthToken(await credential.user.getIdToken());
-  return credential.user;
+/** Refresh is shared only by callers in the same generation, with its own finite lifetime. */
+export function getIdToken(forceRefresh = false, expected?: AuthIdentity): Promise<string | null> {
+  const owner = captureSession();
+  if (expected && !ownsIdentity(expected)) return Promise.reject(new SessionChangedError());
+  const user = getFirebaseAuth().currentUser;
+  if (transition || !user || user.uid !== owner.uid) return Promise.resolve(null);
+  if (pending && ownsIdentity(pending.owner) && (!forceRefresh || pending.force)) return pending.promise;
+  const sequence = ++tokenSequence;
+  const operation = new Operation({}, owner);
+  const promise = (async () => {
+    try {
+      const value = await operation.wait(Promise.resolve().then(() => {
+        operation.assertCurrent();
+        return user.getIdToken(forceRefresh);
+      }));
+      if (getFirebaseAuth().currentUser?.uid !== owner.uid || transition) throw new SessionChangedError();
+      requireIdentity(owner);
+      // A slower ordinary lookup cannot replace a newer forced refresh's token.
+      if (sequence === tokenSequence) installToken(owner, value);
+      return tokenFor(owner) ?? value;
+    } finally {
+      operation.dispose();
+      if (pending?.sequence === sequence) pending = null;
+    }
+  })();
+  pending = { owner, force: forceRefresh, sequence, promise };
+  return promise;
 }
 
-/** Sign out the current Firebase user and clear the API client's bearer token. */
-export async function signOutUser(): Promise<void> {
-  await signOut(getFirebaseAuth());
-  setAuthToken(null);
-}
-
-/** Subscribe to Firebase auth state changes; returns the unsubscribe function. */
-export function onAuthChanged(callback: (user: User | null) => void): () => void {
-  return onAuthStateChanged(getFirebaseAuth(), callback);
+/** Explicit auth actions invalidate ownership before any native/credential await. */
+export function beginSignIn(): AuthAttempt {
+  const id = ++authIntent;
+  const attempt = {
+    id, baselineUid: currentIdentity().uid,
+    assertCurrent: () => { if (id !== authIntent) throw new SessionChangedError(); },
+  };
+  transition = attempt;
+  transitionOutcome = null;
+  replaceIdentity(null, true);
+  return attempt;
 }
 
 /**
- * Subscribe to Firebase ID token changes — fires on sign-in, sign-out, AND the
- * silent background refresh Firebase performs roughly every hour (unlike
- * onAuthChanged above, which only fires on sign-in/out and misses the refresh).
- * Each change pushes the fresh token into src/api/client's setAuthToken(), or
- * clears it on sign-out, so requests never carry a stale ~1hr-expired token.
- * Returns the unsubscribe function. Call only when hasFirebaseConfig() is true.
+ * Send Firebase's own password-reset email (c385). Added with the auth restyle,
+ * because that reference shot asks for a "Forgot password?" link and there was no
+ * recovery path in the app at all — a sign-in screen whose only answer to a
+ * forgotten password is "try again" is a dead end, not a design detail.
+ *
+ * Client-side only: Firebase sends and templates the mail, so there is no backend
+ * route, no new secret and nothing to redeploy.
+ *
+ * DELIBERATELY DOES NOT REPORT WHETHER THE ADDRESS EXISTS. Firebase throws
+ * auth/user-not-found here, and surfacing that to the UI would turn this box into
+ * an account-enumeration oracle for any address someone cares to type. The caller
+ * shows the same "check your inbox" either way — see the handler in sign-in.tsx,
+ * which swallows exactly this code and no others.
  */
-export function onIdTokenChanged(callback?: (user: User | null) => void): () => void {
-  return onFirebaseIdTokenChanged(getFirebaseAuth(), async (user) => {
-    setAuthToken(user ? await user.getIdToken() : null);
-    callback?.(user);
+export async function sendPasswordReset(email: string): Promise<void> {
+  await sendPasswordResetEmail(getFirebaseAuth(), email);
+}
+
+
+function finishTransition(attempt: AuthAttempt, success: boolean): void {
+  if (transition !== attempt || attempt.id !== authIntent) return;
+  // Record a completed/cancelled intent even when another mutation still owns
+  // the SDK. captureSession reconciles it only after that owner settles, and
+  // only if its eventual UID is permitted by this intent's original baseline.
+  transitionOutcome = success;
+  captureSession();
+}
+
+/**
+ * Firebase commits currentUser BEFORE returning a credential. Serialize explicit
+ * SDK mutations and veto stale commits at that public SDK boundary. Caller waits
+ * are finite, but timing out does NOT release the mutex for an unabortable SDK
+ * call: a stalled credential can delay another login until it settles. Token
+ * refresh is deliberately outside this queue and remains generation scoped.
+ */
+export function runAuthMutation<T>(attempt: AuthAttempt, task: () => Promise<T>, allowLateLogout = false): Promise<T> {
+  if (!mutationGuardInstalled) {
+    beforeAuthStateChanged(getFirebaseAuth(), () => { activeMutation?.(); });
+    mutationGuardInstalled = true;
+  }
+  pendingMutations.add(attempt);
+  let expired = false;
+  const validate = () => {
+    attempt.assertCurrent();
+    if (expired && !allowLateLogout) throw new OperationTimeoutError();
+  };
+  const underlying = mutationQueue.then(async () => {
+    try {
+      validate();
+      activeMutation = validate;
+      const result = await task();
+      validate();
+      finishTransition(attempt, true);
+      return result;
+    } catch (error) {
+      finishTransition(attempt, false);
+      throw error;
+    } finally {
+      pendingMutations.delete(attempt);
+      if (activeMutation === validate) activeMutation = null;
+      captureSession();
+    }
+  });
+  // Only settlement of the underlying SDK mutation releases the queue.
+  mutationQueue = underlying.then(() => {}, () => {});
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => { expired = true; reject(new OperationTimeoutError()); }, REQUEST_TIMEOUT_MS);
+    underlying.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
   });
 }
 
-/** Current user's Firebase ID token, or null if signed out. Pass true to force a refresh. */
-export async function getIdToken(forceRefresh = false): Promise<string | null> {
-  const user = getFirebaseAuth().currentUser;
-  if (!user) return null;
-  return user.getIdToken(forceRefresh);
+/** Native cancellation/failure before an SDK mutation does not strand its owner. */
+export function cancelSignIn(attempt: AuthAttempt): void {
+  if (!pendingMutations.has(attempt)) finishTransition(attempt, false);
+}
+
+export async function prepareSignedInUser(user: User, attempt: AuthAttempt): Promise<void> {
+  attempt.assertCurrent();
+  if (getFirebaseAuth().currentUser?.uid !== user.uid) throw new SessionChangedError();
+  const owner = captureSession();
+  await getIdToken(false, owner);
+  attempt.assertCurrent();
+  requireIdentity(owner);
+}
+
+export async function signInWithEmail(email: string, password: string): Promise<User> {
+  const attempt = beginSignIn();
+  const credential = await runAuthMutation(attempt, () => signInWithEmailAndPassword(getFirebaseAuth(), email, password));
+  await prepareSignedInUser(credential.user, attempt);
+  return credential.user;
+}
+
+export async function signUpWithEmail(email: string, password: string): Promise<User> {
+  const attempt = beginSignIn();
+  const credential = await runAuthMutation(attempt, () => createUserWithEmailAndPassword(getFirebaseAuth(), email, password));
+  await prepareSignedInUser(credential.user, attempt);
+  return credential.user;
+}
+
+export async function signOutUser(): Promise<void> {
+  const attempt = beginSignIn();
+  // A requested logout may finish after its caller times out; it still cannot
+  // clear a newer login, because the intent guard applies at SDK publication.
+  await runAuthMutation(attempt, () => signOut(getFirebaseAuth()), true);
+}
+
+export function onAuthChanged(callback: (user: User | null) => void): () => void {
+  return onAuthStateChanged(getFirebaseAuth(), user => {
+    if ((user?.uid ?? null) !== (getFirebaseAuth().currentUser?.uid ?? null)) return;
+    captureSession();
+    callback(user);
+  });
+}
+
+export function onIdTokenChanged(callback?: (user: User | null) => void): () => void {
+  return onFirebaseIdTokenChanged(getFirebaseAuth(), user => {
+    if ((user?.uid ?? null) !== (getFirebaseAuth().currentUser?.uid ?? null)) return;
+    const owner = captureSession();
+    if (!user) { callback?.(null); return; }
+    void getIdToken(false, owner).then(() => {
+      if (ownsIdentity(owner)) callback?.(user);
+    }).catch(() => { /* Provider/request recovery owns token failures. */ });
+  });
 }

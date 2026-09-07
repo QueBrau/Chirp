@@ -16,6 +16,7 @@
  * shows the same `(e as FirebaseError)?.code` pattern for this reason.
  */
 
+import { operationErrorMessage } from "@/api/operation";
 import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from "@/lib/passwordPolicy";
 
 export type AuthErrorMode = "signin" | "signup";
@@ -73,6 +74,27 @@ function readErrorCode(error: unknown): string | null {
 }
 
 /**
+ * True when a thrown error is Firebase's "no account with that email" (c385).
+ *
+ * Exists for exactly ONE caller: the password-reset handler, which must swallow
+ * this code and show the same neutral "if that address has an account..." either
+ * way. Surfacing it would turn the reset box into an account-enumeration oracle
+ * for any address someone cares to type, which is the same reasoning that already
+ * collapses user-not-found and wrong-password into one message on sign-in above.
+ *
+ * A PREDICATE RATHER THAN A MESSAGE, deliberately: the safe behaviour is to say
+ * nothing about this case, and a function that returned copy for it would invite
+ * someone to render that copy. Never throws, same as getAuthErrorMessage.
+ */
+export function isUserNotFoundError(error: unknown): boolean {
+  try {
+    return readErrorCode(error) === "auth/user-not-found";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Maps a caught sign-in/sign-up error to human copy. Never throws: reading the
  * code is wrapped so a hostile or unusual error shape (e.g. a getter that itself
  * throws) degrades to genericMessage(mode) instead of taking down the catch block that
@@ -84,6 +106,8 @@ function readErrorCode(error: unknown): string | null {
  * regardless of which form is showing.
  */
 export function getAuthErrorMessage(error: unknown, mode: AuthErrorMode): string {
+  const operationMessage = operationErrorMessage(error);
+  if (operationMessage) return operationMessage;
   let code: string | null;
   try {
     code = readErrorCode(error);

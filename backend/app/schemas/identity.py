@@ -34,6 +34,17 @@ from app.schemas.base import _Schema
 # If you are about to gate something on this field: you want a membership role
 # (core/permissions.py), users.is_platform_admin, or campus_verified_at — the
 # things the server owns. Not this.
+#
+# AS OF c381, POST /auth/bootstrap is no longer this column's only writer:
+# PATCH /auth/me (ProfileUpdate.account_type, below) can change it after
+# signup too. A real user picked wrong at signup (or a tap on the right
+# option never registered) with no way back — Profile's alumni section is
+# keyed on this exact field (app/(tabs)/profile/index.tsx), so a wrong value
+# here was a PERMANENT mis-filing, not a cosmetic one. Being editable changes
+# nothing about the rules above: still self-declared, still presentation and
+# an analytics dimension, still never authorization. A change is its own
+# analytics event (account_type_changed) rather than a replayed
+# user_signed_up — the user did not sign up again.
 AccountType = Literal["greek", "non_greek", "alumni"]
 RoleName = Literal[
     "president",
@@ -118,10 +129,24 @@ class ProfileUpdate(_Schema):
     A field left out of the body never enters model_fields_set and is skipped; a field
     sent as null does enter it, with a value of None. So "no opinion" and "clear it" stay
     distinguishable without a sentinel.
+
+    account_type (board c381) follows the SAME model_fields_set convention for the
+    "omitted" half, but not the "explicit null" half — there is no "clear it" state to
+    reach, because users.account_type is NOT NULL. So its contract is display_name's
+    shape, not avatar_object_name's:
+
+        {}                          -> change nothing
+        {"account_type": null}      -> 422, same as display_name: null (nothing to fall
+                                        back to; refused rather than silently ignored)
+        {"account_type": "alumni"}  -> set it
+
+    A value outside the three literals (typo, or some future fourth type a client
+    invents) is rejected by ordinary pydantic validation before the route ever sees it.
     """
 
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
     avatar_object_name: str | None = None
+    account_type: AccountType | None = None
 
 
 class UserOut(_Schema):

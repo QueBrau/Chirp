@@ -112,6 +112,11 @@ class UserBlock(Base):
         # feed. The route refuses it (403 cannot_block_self at both block endpoints);
         # this is the same rule where it cannot be routed around.
         CheckConstraint("blocker_id <> blocked_id", name="ck_user_blocks_no_self_block"),
+        CheckConstraint("source IN ('named', 'by_chirp')", name="ck_user_blocks_source"),
+        CheckConstraint(
+            "source = 'named' OR anonymous_created_at IS NOT NULL",
+            name="ck_user_blocks_anonymous_intent",
+        ),
     )
 
     blocker_id: Mapped[uuid.UUID] = mapped_column(
@@ -123,18 +128,17 @@ class UserBlock(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
-    # c279, migration 0030. WHY the block was created, because it decides WHAT it hides.
-    #
-    #   'named'    - the caller chose a person they can see. Hides everything, exactly as
-    #                every block did before this column existed.
-    #   'by_chirp' - the caller blocked an anonymous chirp's author without learning who
-    #                that is. Hides CHIRP SURFACES ONLY.
-    #
-    # The distinction is the whole of c279: a by-chirp block that ALSO hid the author's
-    # named posts let a feed diff before/after the block name them - the exact identity
-    # POST /moderation/blocks/by-chirp refuses to return. Contact enforcement
-    # (app.core.blocks) deliberately ignores this column and refuses BOTH kinds; see that
-    # module's docstring for why that is not a probe channel.
+    # c342: named and anonymous intentions can coexist. source='named' enables the
+    # named feed filters; source='by_chirp' means ONLY anonymous intent remains.
+    # Anonymous Chirps visibility depends solely on anonymous_created_at. Otherwise
+    # named-blocking candidate accounts identifies their Chirps by a before/after diff.
+    # Every surviving row still refuses incoming contact (app.core.blocks).
     source: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'named'")
+    )
+    # The server default conservatively protects writes from older revisions during
+    # migrate-before-deploy. New named-only writes explicitly send SQL NULL; this
+    # column is never part of UserBlockOut, including after a named upgrade.
+    anonymous_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True).evaluates_none(), server_default=text("now()")
     )

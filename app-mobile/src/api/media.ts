@@ -1,6 +1,7 @@
 /** Signed upload URLs for post media (c70) — routers/media.py. */
 
-import { request } from "./client";
+import { request, type RequestOptions } from "./client";
+import { Operation, UPLOAD_TIMEOUT_MS } from "./operation";
 
 /** JPEG/PNG/WebP only, alpha scope. Keep in sync with backend's ALLOWED_CONTENT_TYPES. */
 export type AllowedMediaContentType = "image/jpeg" | "image/png" | "image/webp";
@@ -29,8 +30,10 @@ export interface MediaUploadUrlOut {
 export async function getMediaUploadUrl(
   contentType: AllowedMediaContentType,
   byteSize: number,
+  options: RequestOptions = {},
 ): Promise<MediaUploadUrlOut> {
   return request<MediaUploadUrlOut>("/media/upload-url", {
+    ...options,
     method: "POST",
     body: { content_type: contentType, byte_size: byteSize },
   });
@@ -54,16 +57,22 @@ export async function uploadMediaBytes(
   uploadUrl: string,
   bytes: Blob,
   contentType: AllowedMediaContentType,
+  options: RequestOptions = {},
 ): Promise<void> {
-  const response = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      "Content-Type": contentType,
-      "X-Goog-Content-Length-Range": `1,${MAX_UPLOAD_BYTES}`,
-    },
-    body: bytes,
-  });
-  if (!response.ok) {
-    throw new Error(`Upload failed: ${response.status}`);
+  const operation = options.operation ?? new Operation({ ...options, timeoutMs: options.timeoutMs ?? UPLOAD_TIMEOUT_MS });
+  try {
+    operation.assertCurrent();
+    const response = await operation.wait(fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": contentType,
+        "X-Goog-Content-Length-Range": `1,${MAX_UPLOAD_BYTES}`,
+      },
+      body: bytes,
+      signal: operation.signal,
+    }));
+    if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
+  } finally {
+    if (!options.operation) operation.dispose();
   }
 }

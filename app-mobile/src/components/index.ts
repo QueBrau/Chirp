@@ -26,6 +26,7 @@ export { GradientAvatar, type GradientAvatarProps } from "./GradientAvatar";
 export { HeroCard, type HeroCardProps } from "./HeroCard";
 export { ListRow, type ListRowProps } from "./ListRow";
 export { MediaPostCard, type MediaPostCardProps } from "./MediaPostCard";
+export { UnderlineField, type UnderlineFieldProps } from "./UnderlineField";
 export { PollCard, type PollCardProps } from "./PollCard";
 export { MomentsRow, type MomentsRowMoment, type MomentsRowProps } from "./MomentsRow";
 export { Screen, type ScreenProps } from "./Screen";

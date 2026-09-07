@@ -8,7 +8,7 @@ writing it should feel like the decision it is. See models/polls.py.
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
 
@@ -17,13 +17,16 @@ from app.schemas.base import _Schema
 PollStatus = Literal["open", "closed"]
 
 MAX_OPTIONS = 10
+MAX_OPTION_TEXT_LENGTH = 200
 
 
 class PollCreate(_Schema):
     question: str = Field(min_length=1, max_length=500)
     # Two is the floor because a one-option poll is not a question, and the UI
     # would render a vote with no alternative as if it were a real choice.
-    options: list[str] = Field(min_length=2, max_length=MAX_OPTIONS)
+    options: list[Annotated[str, Field(max_length=MAX_OPTION_TEXT_LENGTH)]] = Field(
+        min_length=2, max_length=MAX_OPTIONS
+    )
     meeting_id: uuid.UUID | None = None
 
     @field_validator("options")
