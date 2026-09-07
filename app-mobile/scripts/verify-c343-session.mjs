@@ -1,4 +1,4 @@
-/** Executed c343 regressions. Real TS handlers, fake clocks/Firebase/network/native boundaries.
+/** Executed c343/c346 regressions. Real TS handlers, fake clocks/Firebase/network/native boundaries.
  * No live credentials, network, emulator, or new test dependency. This proves client
  * ownership/deadline behavior; native provider/device integration remains a device check.
  */
@@ -21,6 +21,7 @@ function clock() {
   return {
     setTimeout: (fn, ms) => { const id = ++next; tasks.set(id, { fn, due: now + ms }); return id; },
     clearTimeout: id => tasks.delete(id),
+    snapshot: () => [...tasks].map(([id, task]) => ({ id, ...task })),
     async tick(ms) {
       const end = now + ms;
       while (true) {
@@ -107,7 +108,7 @@ function environment() {
     "expo-router": { Redirect: "Redirect", Tabs: Object.assign(() => {}, { Screen: "Tabs.Screen" }) },
     "react-native-reanimated": { default: {}, interpolate() {}, useAnimatedStyle() {} },
     [resolve(ROOT, "src/nav/TabBarVisibility.tsx")]: { TabBarVisibilityProvider: "TabBarVisibilityProvider" },
-    [resolve(ROOT, "src/components/index.ts")]: { AppText: "AppText", EmptyState: "EmptyState", Screen: "Screen" },
+    [resolve(ROOT, "src/components/index.ts")]: { AppText: "AppText", Button: "Button", EmptyState: "EmptyState", Screen: "Screen" },
     "expo-image-picker": { requestMediaLibraryPermissionsAsync: () => env.permission(), launchImageLibraryAsync: () => { env.pickerCalls++; return env.picker(); } },
     [resolve(ROOT, "src/auth/config.ts")]: { hasFirebaseConfig: () => true },
     [resolve(ROOT, "src/auth/firebase.ts")]: { getFirebaseAuth: () => auth },
@@ -116,7 +117,8 @@ function environment() {
     [resolve(ROOT, "src/auth/index.ts")]: { useCampusAccess: () => "verified", useSession: () => hook.value },
     [resolve(ROOT, "src/theme/index.ts")]: { useTheme: () => ({}), light: {}, radii: {}, spacing: {}, inputField: () => ({}), withAlpha: () => "color" },
   };
-  const context = vm.createContext({ AbortController, Headers, Promise, console, queueMicrotask,
+  const deterministicMath = Object.create(Math); deterministicMath.random = () => 1;
+  const context = vm.createContext({ AbortController, Headers, Promise, console, queueMicrotask, Math: deterministicMath,
     setTimeout: timer.setTimeout, clearTimeout: timer.clearTimeout, WebSocket,
     process: { env: {} }, fetch: (...args) => { calls.push(args); return env.fetch(...args); },
   });
@@ -272,9 +274,11 @@ await test("old socket open/message/close cannot overwrite B socket or schedule 
   e.emit(e.user("A")); await e.session.getIdToken();
   const socket = e.load("src/realtime/socket.ts").chirpSocket; const events = []; socket.onEvent(v => events.push(v));
   socket.connect(); const a = e.sockets[0]; a.onopen();
+  const retired = { open: a.onopen, message: a.onmessage, close: a.onclose, error: a.onerror };
   e.emit(e.user("B")); await e.session.getIdToken(); assert.equal(a.closed, true);
   socket.connect(); const b = e.sockets[1]; b.onopen();
-  a.onopen(); a.onmessage({ data: '{"type":"message"}' }); a.onclose({ code: 4403 });
+  assert.equal(a.onopen, null); assert.equal(a.onmessage, null); assert.equal(a.onclose, null); assert.equal(a.onerror, null);
+  retired.open(); retired.message({ data: '{"type":"message"}' }); retired.close({ code: 4403 }); retired.error();
   assert.equal(socket.getStatus(), "open"); assert.equal(events.length, 0);
   await e.timer.tick(35_000); assert.equal(e.sockets.length, 2);
   b.onmessage({ data: '{"type":"message"}' }); assert.equal(events.length, 1);
@@ -440,4 +444,178 @@ await test("native cancellation releases safely after an older SDK failure witho
   e.emit(e.user("B")); assert.equal(await e.session.getIdToken(), "token-B");
 });
 
-console.log(`ALL PASS: ${count} executed c343 behavior regressions (TypeScript ${ts.version}).`);
+const closeSocket = (socket, code) => { socket.closed = true; socket.onclose({ code }); };
+const retryDelays = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+async function exhaustTransport(e, code = 4503) {
+  for (let i = 0; i <= retryDelays.length; i++) {
+    const ws = e.sockets.at(-1); ws.onopen(); closeSocket(ws, code); await flush();
+    if (i < retryDelays.length) await e.timer.tick(retryDelays[i]);
+  }
+}
+
+await test("c346 4401 forces fresh bearer and authoritative /me once, without resetting its retry budget", async e => {
+  let forces = 0;
+  e.emit(e.user("A", async force => force ? (++forces, "fresh-A") : "old-A")); await e.mountProvider();
+  const socket = e.load("src/realtime/socket.ts").chirpSocket;
+  const first = e.sockets[0]; first.onopen(); closeSocket(first, 4401); await flush();
+  assert.equal(forces, 1); assert.equal(e.hook.value.status, "ready"); assert.equal(e.sockets.length, 2);
+  assert.deepEqual([...e.sockets[1].protocols], ["fresh-A"]);
+  const requests = e.calls.filter(([url]) => url.endsWith("/auth/me"));
+  assert.equal(requests.length, 2); assert.equal(requests[1][1].headers.Authorization, "Bearer fresh-A");
+  const retry = e.sockets[1]; retry.onopen(); await e.timer.tick(5_000);
+  socket.connect(); closeSocket(retry, 4401); await flush();
+  assert.equal(forces, 1); assert.equal(e.sockets.length, 2); assert.equal(e.hook.value.status, "recoverable");
+  await e.timer.tick(120_000); assert.equal(e.sockets.length, 2); assert.equal(e.signOutCalls, 0);
+});
+
+await test("c346 4403 revalidates /me and preserves backend-confirmed suspension", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  e.fetch = async () => response(200, { user: { ...account("A"), suspended_at: "2026-09-07T12:00:00Z" }, memberships: [] });
+  e.sockets[0].onopen(); closeSocket(e.sockets[0], 4403); await flush();
+  assert.equal(e.hook.value.status, "suspended"); assert.equal(e.sockets.length, 1);
+  const layout = e.load("app/(tabs)/_layout.tsx").default();
+  assert.equal(nodes(layout).find(n => n.type === "Redirect").props.href, "/suspended");
+  await e.timer.tick(120_000); assert.equal(e.sockets.length, 1); assert.equal(e.signOutCalls, 0);
+});
+
+await test("c346 4403 alone does not invent suspension when current /me says ready", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); closeSocket(e.sockets[0], 4403); await flush();
+  assert.equal(e.hook.value.status, "ready"); assert.equal(e.sockets.length, 2);
+  closeSocket(e.sockets[1], 4403); await flush();
+  assert.equal(e.hook.value.status, "recoverable"); assert.equal(e.sockets.length, 2); assert.equal(e.signOutCalls, 0);
+});
+
+await test("c346 terminal auth response can resolve unregistered without overwriting it as recoverable", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); e.fetch = async () => response(404, { detail: "user_not_registered" });
+  closeSocket(e.sockets[0], 4401); await flush();
+  assert.equal(e.hook.value.status, "unregistered"); assert.equal(e.sockets.length, 1); assert.equal(e.signOutCalls, 0);
+});
+
+await test("c346 expired credentials expose manual recovery without Firebase logout", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  e.auth.currentUser.getIdToken = async () => { throw new Error("auth/id-token-expired"); };
+  closeSocket(e.sockets[0], 4401); await flush();
+  assert.equal(e.hook.value.status, "recoverable"); assert.equal(e.signOutCalls, 0);
+  const retry = nodes(e.load("app/(tabs)/_layout.tsx").default()).find(n => n.type === "EmptyState");
+  e.auth.currentUser.getIdToken = async () => "restored"; retry.props.onAction(); await flush();
+  assert.equal(e.hook.value.status, "ready"); assert.equal(e.sockets.length, 2);
+});
+
+await test("c346 stalled revalidation has one ten-second budget; its late answer cannot reconnect", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); const body = deferred();
+  e.fetch = async () => ({ ...response(), json: () => body.promise });
+  closeSocket(e.sockets[0], 4401); await flush(); assert.equal(e.hook.value.realtimeStatus, "revalidating");
+  const request = e.calls.at(-1); await e.timer.tick(10_000);
+  assert.equal(request[1].signal.aborted, true); assert.equal(e.hook.value.status, "recoverable");
+  body.resolve({ user: account("A"), memberships: [] }); await flush();
+  assert.equal(e.sockets.length, 1); assert.equal(e.hook.value.status, "recoverable"); assert.equal(e.signOutCalls, 0);
+});
+
+await test("c346 backend outage during auth revalidation offers recovery rather than automatic logout", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); e.fetch = async () => response(503);
+  closeSocket(e.sockets[0], 4403); await flush();
+  assert.equal(e.hook.value.status, "recoverable"); assert.equal(e.signOutCalls, 0);
+  await e.timer.tick(120_000); assert.equal(e.sockets.length, 1);
+});
+
+await test("c346 4503 retries finitely while HTTP account stays ready; repeated connect cannot replenish it", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); await exhaustTransport(e);
+  const socket = e.load("src/realtime/socket.ts").chirpSocket;
+  assert.equal(e.sockets.length, 7); assert.equal(socket.getStatus(), "paused");
+  assert.equal(e.hook.value.status, "ready"); assert.equal(e.signOutCalls, 0);
+  socket.connect(); await e.timer.tick(120_000); assert.equal(e.sockets.length, 7);
+  assert.equal(e.calls.filter(([url]) => url.endsWith("/auth/me")).length, 1);
+});
+
+await test("c346 missing open/error/close callbacks hit a finite connect deadline", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  for (let i = 0; i <= retryDelays.length; i++) {
+    const ws = e.sockets.at(-1); await e.timer.tick(10_000); assert.equal(ws.closed, true);
+    if (i < retryDelays.length) await e.timer.tick(retryDelays[i]);
+  }
+  assert.equal(e.sockets.length, 7); assert.equal(e.hook.value.realtimeStatus, "paused");
+  assert.equal(e.hook.value.status, "ready");
+});
+
+await test("c346 onerror without following close releases its socket and cannot hang reconnect", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); const first = e.sockets[0], lateClose = first.onclose;
+  first.onerror(); await flush(); assert.equal(first.closed, true); assert.equal(first.onclose, null);
+  await e.timer.tick(1_000); const next = e.sockets[1]; next.onopen(); lateClose({ code: 4401 }); await flush();
+  assert.equal(e.hook.value.realtimeStatus, "open"); assert.equal(e.sockets.length, 2);
+  assert.equal(e.calls.filter(([url]) => url.endsWith("/auth/me")).length, 1);
+});
+
+await test("c346 five stable seconds replenish transient failures but preserve one active owner", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  closeSocket(e.sockets[0], 1006); await e.timer.tick(1_000);
+  e.sockets[1].onopen(); await e.timer.tick(5_000); closeSocket(e.sockets[1], 1006);
+  await e.timer.tick(999); assert.equal(e.sockets.length, 2);
+  await e.timer.tick(1); assert.equal(e.sockets.length, 3);
+  assert.equal(e.sockets.filter(ws => !ws.closed).length, 1);
+});
+
+await test("c346 paused live-updates button coalesces revalidation and explicitly starts a new run", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); await exhaustTransport(e);
+  const me = deferred(), normalFetch = e.fetch; e.fetch = url => url.endsWith("/auth/me") ? me.promise : normalFetch(url);
+  const layout = e.load("app/(tabs)/_layout.tsx").default();
+  const retry = nodes(layout).find(n => n.type === "Button" && n.props.label === "Retry live updates");
+  assert.ok(retry); assert.equal(nodes(layout).some(n => n.type === "Redirect"), false);
+  retry.props.onPress(); retry.props.onPress(); await flush();
+  assert.equal(e.hook.value.realtimeRetrying, true); assert.equal(e.sockets.length, 7);
+  assert.equal(e.calls.filter(([url]) => url.endsWith("/auth/me")).length, 2);
+  const trying = nodes(e.load("app/(tabs)/_layout.tsx").default()).find(n => n.type === "Button"); assert.equal(trying.props.disabled, true);
+  me.resolve(response(200, { user: account("A"), memberships: [] })); await flush();
+  assert.equal(e.sockets.length, 8); assert.equal(e.hook.value.realtimeRetrying, false);
+  closeSocket(e.sockets[7], 1006); await e.timer.tick(1_000); assert.equal(e.sockets.length, 9);
+});
+
+await test("c346 logout during auth refresh aborts all owned sockets and ignores late auth completion", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); const token = deferred(); e.auth.currentUser.getIdToken = () => token.promise;
+  const ws = e.sockets[0], late = { open: ws.onopen, message: ws.onmessage, close: ws.onclose };
+  closeSocket(ws, 4401); await flush(); await e.session.signOutUser(); await flush();
+  token.resolve("late-A"); late.open(); late.message({ data: '{"type":"message"}' }); late.close({ code: 4403 }); await flush();
+  assert.equal(e.hook.value.status, "signedOut"); assert.equal(e.identity.tokenFor(), null);
+  await e.timer.tick(120_000); assert.equal(e.sockets.length, 1); assert.equal(e.sockets.every(s => s.closed), true);
+});
+
+await test("c346 late A revalidation cannot publish over B or retire B's socket", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); const me = deferred(), normalFetch = e.fetch;
+  e.fetch = url => url.endsWith("/auth/me") ? me.promise : normalFetch(url);
+  const a = e.sockets[0], retiredClose = a.onclose; closeSocket(a, 4403); await flush();
+  const oldRequest = e.calls.at(-1); e.fetch = normalFetch; e.emit(e.user("B")); await flush();
+  assert.equal(oldRequest[1].signal.aborted, true); assert.equal(e.hook.value.user.firebase_uid, "B");
+  const b = e.sockets.at(-1); b.onopen(); const count = e.sockets.length;
+  me.resolve(response(200, { user: { ...account("A"), suspended_at: "2026-09-07T12:00:00Z" }, memberships: [] }));
+  retiredClose({ code: 4401 }); await flush(); await e.timer.tick(120_000);
+  assert.equal(e.hook.value.status, "ready"); assert.equal(e.hook.value.user.firebase_uid, "B");
+  assert.equal(e.hook.value.realtimeStatus, "open"); assert.equal(e.sockets.length, count); assert.equal(b.closed, undefined);
+});
+
+await test("c346 account switch during paused retry cannot start another socket for stale A", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); await exhaustTransport(e);
+  const me = deferred(), normalFetch = e.fetch; e.fetch = url => url.endsWith("/auth/me") ? me.promise : normalFetch(url);
+  const retry = e.hook.value.retryRealtime(); await flush(); e.fetch = normalFetch; e.emit(e.user("B")); await flush();
+  const count = e.sockets.length; e.sockets.at(-1).onopen();
+  me.resolve(response(200, { user: account("A"), memberships: [] })); await retry; await flush();
+  assert.equal(e.hook.value.user.firebase_uid, "B"); assert.equal(e.hook.value.realtimeRetrying, false);
+  assert.equal(e.sockets.length, count); assert.equal(e.sockets.filter(ws => !ws.closed).length, 1);
+});
+
+await test("c346 already-queued A reconnect cannot erase B's timer or prevent its cancellation", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  e.sockets[0].onopen(); await e.timer.tick(5_000); closeSocket(e.sockets[0], 1006);
+  const retired = e.timer.snapshot().find(task => task.due === 6_000); assert.ok(retired);
+  e.emit(e.user("B")); await flush();
+  const b = e.sockets.at(-1); b.onopen(); await e.timer.tick(5_000); closeSocket(b, 1006);
+  const current = e.timer.snapshot().find(task => task.due === 11_000); assert.ok(current);
+  // The runtime can already have queued A's callback before clearTimeout retires
+  // its timer. Execute that callback after B has scheduled its own reconnect.
+  retired.fn(); await flush();
+  await e.session.signOutUser(); await flush();
+  assert.equal(e.timer.snapshot().some(task => task.id === current.id), false,
+    "logout must still cancel B's owned timer after a retired A callback runs");
+  const count = e.sockets.length; await e.timer.tick(120_000);
+  assert.equal(e.sockets.length, count); assert.equal(e.hook.value.status, "signedOut");
+});
+
+console.log(`ALL PASS: ${count} executed c343/c346 behavior regressions (TypeScript ${ts.version}).`);
