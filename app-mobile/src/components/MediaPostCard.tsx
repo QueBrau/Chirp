@@ -1,36 +1,48 @@
 /**
- * MediaPostCard (DESIGN §7 FYP): renders a feed post per `post_type`.
- * - text: COMPACT per §10 rule 3 (Twitter density) — one tight header row
- *   (small avatar + name + time inline), body, inline icon+count actions.
- *   No 36px action chips here; that breathing-room treatment is reserved for
- *   media so the two densities read as deliberately different, not sloppy.
- * - photo: full-bleed image (radius 20, height ~260) with a layered
- *   translucent-ink scrim (NOT a heavy black gradient) carrying a white
- *   author row; caption sits below the media, inside the card.
- * - video: photo layout + centered Feather play in a translucent 48 circle +
- *   a static duration Chip top-right. Mock: thumbnail only, no playback.
- * Action row (photo/video only): 36 circular surfaceAlt chips (Feather heart /
- * message-circle / send) with a count Badge attached; active state =
- * accentSoft chip + accent icon, except the liked heart, which is palette.like
- * and FILLED (c229 — see FilledHeart.tsx for why that needs an SVG path and not
- * a colour prop).
+ * MediaPostCard (DESIGN §5 TintedPostCard, §7 FYP): the one card every post wears,
+ * on Home, on Chirps' neighbour surfaces and in an org's own feed.
  *
- * Comments (board c228): the message-circle in both densities opens CommentsSheet
- * on this card. It had carried a real count, a button role and a "Comment" label
- * with no onPress since the FYP landed, which is worse than no control at all.
- * A sheet rather than a post-detail route, because this component renders from two
- * screens with separate navigation and a sheet needs neither of them to change.
+ * ONE STRUCTURE FOR EVERY POST TYPE since c383 (braul, Sep 7, from a reference shot
+ * he supplied for Home and Chirps): rotating pastel tint, header row (avatar + name
+ * over time, with a circular overflow control at the right end), body, an INSET
+ * media block for photo/video, then the action row. `post_type` now changes only
+ * whether that media block is present and what floats on it, never the chrome.
  *
- * Overflow control (board c35, App Store Guideline 1.2): a discreet
- * more-horizontal icon in the header row of every variant, offering Report
- * and (unless `canBlock` is false) Block — mirrors the Chirps board's own
- * report/block affordance (app/(tabs)/chirps/index.tsx), rolled locally into
- * this component rather than the screen since every post here has a KNOWN
- * author (`authorName`/`post.author_id`), unlike Chirp where the client never
- * learns who posted. The sheet/report-reasons Modal is only ever mounted
- * while open for THIS card (`sheet !== null`), not one-per-card-always, so a
- * long feed doesn't carry N idle Modals. The screen owns the actual API
- * calls and any post-block local-state cleanup via `onReport`/`onBlock`.
+ * WHAT THAT REPLACED, and why the deletions are the good part. Media posts used to
+ * be full-bleed with the author row floated over the photo on a translucent ink
+ * scrim. That scrim was the sole reason for two awkward code paths, and both are
+ * gone with it:
+ *   - the `onScrim` tone flag threaded through AuthorRow and OverflowButton, which
+ *     existed to turn text white over a photo;
+ *   - the separate unavailable-media tone branch (c140) - a failed image left white
+ *     scrim text on a pale surface, so the fallback had to switch tones back. An
+ *     unavailable photo is now just an inset surfaceAlt block, and the header above
+ *     it never changed tone in the first place.
+ * Density contrast (§10.3) survives as padding and gaps only; the rotating tint is
+ * what now keeps a scrolling column from reading as identical rectangles.
+ *
+ * Action row: Feather icon + a caption label, no chip circle. The label is THE COUNT
+ * WHEN THERE IS ONE and the action's name when there is not - "Like" rather than a
+ * meaningless "0". The accessibility label is always the full action name, never the
+ * digits. Only an ACTIVE HEART becomes the filled shape in `like` red (c222/c229,
+ * carried over unchanged and still keyed on the ICON, not on `active` alone, so a
+ * future active comment or send chip cannot quietly turn red).
+ *
+ * Comments (board c228): the message-circle opens CommentsSheet on this card. It had
+ * carried a real count, a button role and a "Comment" label with no onPress since the
+ * FYP landed, which is worse than no control at all. A sheet rather than a post-detail
+ * route, because this component renders from two screens with separate navigation and
+ * a sheet needs neither of them to change.
+ *
+ * Overflow control (board c35, App Store Guideline 1.2): the circular button in the
+ * header row offers Report and (unless `canBlock` is false) Block — mirrors the Chirps
+ * board's own report/block affordance (app/(tabs)/chirps/index.tsx), rolled locally
+ * into this component rather than the screen since every post here has a KNOWN author
+ * (`authorName`/`post.author_id`), unlike a chirp where the client never learns who
+ * posted. The sheet/report-reasons Modal is only ever mounted while open for THIS card
+ * (`sheet !== null`), not one-per-card-always, so a long feed doesn't carry N idle
+ * Modals. The screen owns the actual API calls and any post-block local-state cleanup
+ * via `onReport`/`onBlock`.
  */
 
 import { Feather } from "@expo/vector-icons";
@@ -40,10 +52,9 @@ import { Image, Modal, Pressable, View, type ViewStyle } from "react-native";
 
 import type { PostOut } from "@/api/feed";
 import { confirmAction } from "@/lib/alert";
-import { cardShadow, light, radii, spacing, useTheme, withAlpha } from "@/theme";
+import { cardShadow, metrics, onTintControl, postTint, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
-import { Badge } from "./Badge";
 import { Chip } from "./Chip";
 import { CommentsSheet } from "./CommentsSheet";
 import { FilledHeart } from "./FilledHeart";
@@ -51,20 +62,23 @@ import { GradientAvatar } from "./GradientAvatar";
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
 
-const MEDIA_HEIGHT = 260;
+const MEDIA_HEIGHT = 240;
 const PLAY_CIRCLE = 48;
-const ACTION_CHIP = 36;
+const AVATAR = 40;
+/** Shared with the Chirps board's own overflow button so the two cards cannot drift. */
+const OVERFLOW_CIRCLE = metrics.tintControlSize;
 
-/** iOS HIG / WCAG 2.5.5 minimum tappable size. ActionChip already lands exactly here:
- *  a 36pt circle plus spacing.xs (4) of hitSlop top and bottom = 44. */
+/** iOS HIG / WCAG 2.5.5 minimum tappable size. */
 const TOUCH_TARGET = 44;
-/** InlineAction is a 15pt icon beside caption text (lineHeight 17), so its rendered row
- *  is 17pt tall - with spacing.sm (8) of hitSlop that came to 33pt, well under the
- *  minimum its own sibling meets (c307). Sized off the ICON rather than the text on
- *  purpose: 15 is the SHORTER of the two, so this stays >= 44 even if the caption metric
- *  changes later. 15 + 15 + 15 = 45. */
-const INLINE_ACTION_ICON = 15;
-const INLINE_ACTION_HIT_SLOP = Math.ceil((TOUCH_TARGET - INLINE_ACTION_ICON) / 2);
+/**
+ * Both hit slops below are DERIVED from the control they pad, never hand-picked -
+ * that is the whole lesson of c307, where an inline action's hand-picked slop of 8
+ * left a 33pt target next to a sibling that met 44. Sized off the taller of the icon
+ * and its caption in each case, so the arithmetic stays honest if either metric moves.
+ */
+const ACTION_ICON = 18;
+const ACTION_HIT_SLOP = Math.ceil((TOUCH_TARGET - ACTION_ICON) / 2);
+const OVERFLOW_HIT_SLOP = Math.ceil((TOUCH_TARGET - OVERFLOW_CIRCLE) / 2);
 
 /** Preset report reasons (backend requires a non-empty `reason` string) — same
  * three presets as the Chirps board's report sheet. */
@@ -84,19 +98,30 @@ interface SheetOption {
   onPress: () => void;
 }
 
-/** Discreet overflow trigger — as unobtrusive as the timestamp it sits next to. */
-function OverflowButton({ onPress, onScrim = false }: { onPress: () => void; onScrim?: boolean }) {
+/**
+ * Overflow trigger: the glyph in a circular soft control (DESIGN §5 TintedPostCard).
+ * `onTintControl` rather than `surface` because the dark tints sit LIGHTER than
+ * `surface` — see the token's own note.
+ */
+function OverflowButton({ onPress }: { onPress: () => void }) {
   const palette = useTheme();
-  const color = onScrim ? withAlpha(palette.onAccent, 0.85) : palette.inkFaint;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="More options"
       onPress={onPress}
-      hitSlop={spacing.sm}
-      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+      hitSlop={OVERFLOW_HIT_SLOP}
+      style={({ pressed }) => ({
+        width: OVERFLOW_CIRCLE,
+        height: OVERFLOW_CIRCLE,
+        borderRadius: radii.pill,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: onTintControl(palette),
+        opacity: pressed ? 0.7 : 1,
+      })}
     >
-      <Feather name="more-horizontal" size={16} color={color} />
+      <Feather name="more-horizontal" size={16} color={palette.inkSecondary} />
     </Pressable>
   );
 }
@@ -106,6 +131,12 @@ export interface MediaPostCardProps {
   authorName: string;
   /** Mock photo (§10.2), e.g. `https://i.pravatar.cc/150?u=<id>` — falls back to the initials gradient. */
   authorPhotoUrl?: string | null;
+  /**
+   * This card's position in its list, which picks the rotating tint (§5). REQUIRED
+   * rather than defaulted: a defaulted 0 would give a new call site a column of
+   * identically tinted cards and look deliberate, so the type makes you say it.
+   */
+  tintIndex: number;
   /** Precomputed relative-age label (e.g. "5m", "3h") — screen owns time formatting. */
   timeLabel: string;
   likeCount: number;
@@ -124,7 +155,7 @@ export interface MediaPostCardProps {
   canBlock: boolean;
 }
 
-/** Deterministic cosmetic count for the "send" chip — mock only, no share tracking yet. */
+/** Deterministic cosmetic count for the "send" action — mock only, no share tracking yet. */
 function mockShareCount(seed: string): number {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
@@ -137,87 +168,78 @@ function formatDuration(seconds: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-function ActionChip({
+/**
+ * One action in the card's bottom row (§7): icon beside a caption label, where the
+ * label is the count if there is one and `word` if there is not. `label` is what a
+ * screen reader says and is always the action's name — a button that announces "12"
+ * tells you nothing about what pressing it does.
+ */
+function PostAction({
   icon,
   count,
-  active = false,
+  word,
   label,
+  active = false,
   onPress,
 }: {
   icon: FeatherIconName;
   count: number;
-  active?: boolean;
+  word: string;
   label: string;
+  active?: boolean;
   onPress?: () => void;
 }) {
   const palette = useTheme();
+  // c222/c229, unchanged: keyed on the ICON, not on `active` alone. This row is shared
+  // by heart, message-circle and send, and only the heart ever passes active today —
+  // keying on active alone would work now and quietly turn a future active comment or
+  // send red. The INACTIVE heart also stays on the Feather glyph, which is the point:
+  // an unliked post must look exactly as it always did.
+  const activeHeart = active && icon === "heart";
+  const color = activeHeart ? palette.like : active ? palette.accent : palette.inkSecondary;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
       onPress={onPress}
-      hitSlop={spacing.xs}
+      hitSlop={ACTION_HIT_SLOP}
       style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
-        gap: spacing.xs,
+        gap: spacing.sm,
         opacity: pressed ? 0.7 : 1,
       })}
     >
-      <View
-        style={{
-          width: ACTION_CHIP,
-          height: ACTION_CHIP,
-          borderRadius: radii.pill,
-          backgroundColor: active ? palette.accentSoft : palette.surfaceAlt,
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {/* c222: keyed on the ICON, not on `active` alone. This chip is shared by
-            heart, message-circle and send, and only the heart ever passes active
-            today - keying on active alone would work now and quietly turn a future
-            active comment or send chip red.
-
-            c229 carries that rule over UNCHANGED rather than widening it: the swap to
-            a filled shape is still gated on `icon === "heart"`, so an active
-            message-circle or send keeps its Feather glyph and its accent tint. The
-            INACTIVE heart also stays on the font glyph, which is the whole point - an
-            unliked post must look exactly as it always did. */}
-        {active && icon === "heart" ? (
-          <FilledHeart size={18} color={palette.like} />
-        ) : (
-          <Feather
-            name={icon}
-            size={18}
-            color={active ? palette.accent : palette.inkSecondary}
-          />
-        )}
-      </View>
-      <Badge label={String(count)} tone={active ? "accent" : "neutral"} />
+      {activeHeart ? (
+        <FilledHeart size={ACTION_ICON} color={palette.like} />
+      ) : (
+        <Feather name={icon} size={ACTION_ICON} color={color} />
+      )}
+      <AppText variant="caption" style={{ color, fontVariant: ["tabular-nums"] }}>
+        {count > 0 ? String(count) : word}
+      </AppText>
     </Pressable>
   );
 }
 
+/** Header row of every variant (§5): avatar + name over time. */
 function AuthorRow({
   name,
   time,
   photoUrl,
-  onScrim = false,
 }: {
   name: string;
   time: string;
   photoUrl?: string | null;
-  onScrim?: boolean;
 }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
-      <GradientAvatar name={name} size={32} photoUrl={photoUrl} />
-      <View style={{ gap: 2 }}>
-        <AppText variant="headline" tone={onScrim ? "onAccent" : "primary"} numberOfLines={1}>
+      <GradientAvatar name={name} size={AVATAR} photoUrl={photoUrl} />
+      <View style={{ gap: 2, flexShrink: 1 }}>
+        <AppText variant="headline" numberOfLines={1}>
           {name}
         </AppText>
-        <AppText variant="caption" tone={onScrim ? "onAccent" : "tertiary"}>
+        <AppText variant="caption" tone="tertiary">
           {time}
         </AppText>
       </View>
@@ -225,79 +247,11 @@ function AuthorRow({
   );
 }
 
-/** Tight single-line header for the compact text-post density (§10 rule 3): small
- * avatar + name + time all inline, instead of the two-line stacked AuthorRow. */
-function CompactHeader({ name, time, photoUrl }: { name: string; time: string; photoUrl?: string | null }) {
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-      <GradientAvatar name={name} size={28} photoUrl={photoUrl} />
-      <View style={{ flexDirection: "row", alignItems: "baseline", gap: spacing.xs, flexShrink: 1 }}>
-        <AppText variant="bodyBold" numberOfLines={1}>
-          {name}
-        </AppText>
-        <AppText variant="caption" tone="tertiary" numberOfLines={1}>
-          · {time}
-        </AppText>
-      </View>
-    </View>
-  );
-}
-
-/** Inline icon + tabular count for the compact text-post action row (§10 rule 3/6) —
- * Twitter-density, no 36px chip circle (that's the media variant's breathing room). */
-function InlineAction({
-  icon,
-  count,
-  active = false,
-  label,
-  onPress,
-}: {
-  icon: FeatherIconName;
-  count: number;
-  active?: boolean;
-  label: string;
-  onPress?: () => void;
-}) {
-  const palette = useTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={onPress}
-      hitSlop={INLINE_ACTION_HIT_SLOP}
-      style={({ pressed }) => ({
-        flexDirection: "row",
-        alignItems: "center",
-        gap: spacing.xs,
-        opacity: pressed ? 0.7 : 1,
-      })}
-    >
-      {/* c222/c229: same icon-keyed rule as ActionChip above, and the same narrow
-          gate - only an ACTIVE HEART becomes the filled shape. */}
-      {active && icon === "heart" ? (
-        <FilledHeart size={INLINE_ACTION_ICON} color={palette.like} />
-      ) : (
-        <Feather
-          name={icon}
-          size={INLINE_ACTION_ICON}
-          color={active ? palette.accent : palette.inkFaint}
-        />
-      )}
-      <AppText
-        variant="caption"
-        tone={active ? "accent" : "tertiary"}
-        style={{ fontVariant: ["tabular-nums"] }}
-      >
-        {count}
-      </AppText>
-    </Pressable>
-  );
-}
-
 export function MediaPostCard({
   post,
   authorName,
   authorPhotoUrl,
+  tintIndex,
   timeLabel,
   likeCount,
   commentCount,
@@ -310,13 +264,13 @@ export function MediaPostCard({
   const palette = useTheme();
   const mediaUrl = post.media_urls?.[0];
   const type = mediaUrl ? post.post_type ?? "text" : "text";
+  const hasMedia = type !== "text";
   const [sheet, setSheet] = useState<{ title: string; options: SheetOption[] } | null>(null);
   // Media that failed to load (board c140). Before this existed, a photo the device
-  // could not fetch rendered as an EMPTY BOX with the author row floating over nothing —
-  // no error, no retry, nothing to tell the user or us that anything went wrong. That
-  // matters much more now that media urls are capability urls with a finite life: an
-  // expired one 403s, and silence is the worst possible response to a state we know how
-  // to explain.
+  // could not fetch rendered as an EMPTY BOX — no error, no retry, nothing to tell the
+  // user or us that anything went wrong. That matters much more now that media urls are
+  // capability urls with a finite life: an expired one 403s, and silence is the worst
+  // possible response to a state we know how to explain.
   const [mediaFailed, setMediaFailed] = useState(false);
   // Reset per url, not per mount. These cards are re-rendered constantly (the feed
   // replaces every post object on each load and this component is not memoized), and a
@@ -331,7 +285,7 @@ export function MediaPostCard({
   // The thread's real length once the sheet has loaded it, else null. Preferred over
   // the `commentCount` prop because both numbers are produced by the same server-side
   // rule (c109: comment_count and list_comments apply the identical blocked-author
-  // filter), so the loaded rows ARE the count - and the chip can then never read "3"
+  // filter), so the loaded rows ARE the count - and the row can then never read "3"
   // over a sheet showing two.
   const [loadedCommentCount, setLoadedCommentCount] = useState<number | null>(null);
   // Drop the local number whenever the screen hands down a fresh one, same
@@ -373,36 +327,21 @@ export function MediaPostCard({
   };
 
   const cardBase: ViewStyle = {
-    backgroundColor: palette.surface,
+    backgroundColor: postTint(palette, tintIndex),
     borderRadius: radii.card,
     borderWidth: 1,
     borderColor: palette.border,
     overflow: "hidden",
+    padding: spacing.lg,
+    // §10.3 as narrowed by c383: the chrome is identical for both densities now, so
+    // the contrast between a compact text post and a breathing media one lives here
+    // and in the media block's own height. Nowhere else.
+    gap: hasMedia ? spacing.md : spacing.sm,
     ...cardShadow(palette),
   };
 
-  const actions = (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.lg }}>
-      <ActionChip
-        icon="heart"
-        count={likeCount}
-        active={likedByMe}
-        label={likedByMe ? "Unlike" : "Like"}
-        onPress={onToggleLike}
-      />
-      <ActionChip
-        icon="message-circle"
-        count={shownCommentCount}
-        label="Comment"
-        onPress={() => setCommentsOpen(true)}
-      />
-      <ActionChip icon="send" count={mockShareCount(post.id)} label="Send" />
-    </View>
-  );
-
-  // Action sheet Modal shared by every variant below — only mounted while
-  // THIS card's menu is actually open (`sheet !== null`), not one idle Modal
-  // per card in a long feed.
+  // Action sheet Modal — only mounted while THIS card's menu is actually open
+  // (`sheet !== null`), not one idle Modal per card in a long feed.
   const sheetModal =
     sheet !== null ? (
       <Modal transparent visible animationType="fade" onRequestClose={() => setSheet(null)}>
@@ -462,9 +401,9 @@ export function MediaPostCard({
       </Modal>
     ) : null;
 
-  // c228: the other sheet this card owns. Rendered next to sheetModal in BOTH density
-  // branches below, which is what makes the comment chip work identically from the
-  // Home feed and the org Feed segment without either screen learning a new route.
+  // c228: the other sheet this card owns. It is what makes the comment action work
+  // identically from the Home feed and the org Feed segment without either screen
+  // learning a new route.
   const commentsModal = commentsOpen ? (
     <CommentsSheet
       postId={post.id}
@@ -473,168 +412,117 @@ export function MediaPostCard({
     />
   ) : null;
 
-  if (type === "text") {
-    // Compact/Twitter density (§10 rule 3): tight single-line header, body, inline counts —
-    // deliberately less breathing room than the photo/video cards below.
-    return (
-      <View style={[cardBase, { padding: spacing.md, gap: spacing.sm }]}>
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-          <View style={{ flexShrink: 1 }}>
-            <CompactHeader name={authorName} time={timeLabel} photoUrl={authorPhotoUrl} />
-          </View>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-            {/* Tier indicator (board c102): a viewer only ever receives this post
-                at all if they're active, so the badge is purely informative — it
-                tells them WHY this post reads differently, not a gate. */}
-            {post.audience === "org_actives" ? <Chip label="Actives only" variant="accent" /> : null}
-            <OverflowButton onPress={openMenu} />
-          </View>
-        </View>
-        <AppText>{post.body}</AppText>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.lg }}>
-          <InlineAction
-            icon="heart"
-            count={likeCount}
-            active={likedByMe}
-            label={likedByMe ? "Unlike" : "Like"}
-            onPress={onToggleLike}
-          />
-          <InlineAction
-            icon="message-circle"
-            count={shownCommentCount}
-            label="Comment"
-            onPress={() => setCommentsOpen(true)}
-          />
-          <InlineAction icon="send" count={mockShareCount(post.id)} label="Send" />
-        </View>
-        {sheetModal}
-        {commentsModal}
-      </View>
-    );
-  }
-
   return (
     <View style={cardBase}>
-      <View style={{ height: MEDIA_HEIGHT }}>
-        {mediaFailed ? (
-          /* Unavailable-photo state. Deliberately NOT the scrim treatment: the scrim
-             exists to float white text over a photo, and with no photo underneath it
-             would put low-contrast white on a pale surface. So this state drops the
-             scrim entirely and switches the author row back to normal ink tones
-             (`onScrim` below follows `!mediaFailed` for exactly that reason). */
-          <View
-            style={{
-              width: "100%",
-              height: "100%",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: spacing.sm,
-              backgroundColor: palette.surfaceAlt,
-            }}
-          >
-            <Feather name="image" size={22} color={palette.inkFaint} />
-            <AppText variant="caption" tone="tertiary">
-              Photo unavailable
-            </AppText>
-          </View>
-        ) : (
-          <Image
-            source={{ uri: mediaUrl }}
-            style={{ width: "100%", height: "100%" }}
-            resizeMode="cover"
-            onError={() => setMediaFailed(true)}
-          />
-        )}
-
-        {/* Layered translucent-ink scrim (NOT a heavy black gradient) — carries the white author row. */}
-        {!mediaFailed ? (
-          <>
-            <View
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height: 132,
-                backgroundColor: withAlpha(light.ink, 0.22),
-              }}
-            />
-            <View
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height: 76,
-                backgroundColor: withAlpha(light.ink, 0.34),
-              }}
-            />
-          </>
-        ) : null}
-        <View
-          style={{
-            position: "absolute",
-            left: spacing.lg,
-            right: spacing.lg,
-            bottom: spacing.lg,
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <View style={{ flexShrink: 1 }}>
-            <AuthorRow
-              name={authorName}
-              time={timeLabel}
-              photoUrl={authorPhotoUrl}
-              onScrim={!mediaFailed}
-            />
-          </View>
-          <OverflowButton onPress={openMenu} onScrim={!mediaFailed} />
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm }}>
+        {/* flexShrink so a long display name ellipsizes rather than pushing the control
+            off the card; the control itself never shrinks. */}
+        <View style={{ flexShrink: 1 }}>
+          <AuthorRow name={authorName} time={timeLabel} photoUrl={authorPhotoUrl} />
         </View>
+        <OverflowButton onPress={openMenu} />
+      </View>
 
-        {type === "video" && !mediaFailed ? (
-          <View
-            pointerEvents="none"
-            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center" }}
-          >
+      {/* Tier indicator (board c102): a viewer only ever receives this post at all if
+          they're active, so the badge is purely informative — it tells them WHY this
+          post reads differently, not a gate.
+          ON ITS OWN ROW, not in the header beside the overflow button, and that is a
+          real fix rather than a preference: at 375pt the chip plus a 40 avatar plus the
+          32 control left so little room that `numberOfLines={1}` truncated a perfectly
+          ordinary name to "Devon Cl...". Caught by rendering it, not by reading it. The
+          author's name is the one thing on this card that must never be abbreviated to
+          make space for chrome. */}
+      {post.audience === "org_actives" ? (
+        <View style={{ flexDirection: "row" }}>
+          <Chip label="Actives only" variant="accent" />
+        </View>
+      ) : null}
+
+      <AppText>{post.body}</AppText>
+
+      {hasMedia ? (
+        <View style={{ height: MEDIA_HEIGHT, borderRadius: radii.media, overflow: "hidden" }}>
+          {mediaFailed ? (
             <View
               style={{
-                width: PLAY_CIRCLE,
-                height: PLAY_CIRCLE,
-                borderRadius: radii.pill,
-                backgroundColor: withAlpha(palette.onAccent, 0.3),
+                width: "100%",
+                height: "100%",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: spacing.sm,
+                backgroundColor: palette.surfaceAlt,
+              }}
+            >
+              <Feather name="image" size={22} color={palette.inkFaint} />
+              <AppText variant="caption" tone="tertiary">
+                Photo unavailable
+              </AppText>
+            </View>
+          ) : (
+            <Image
+              source={{ uri: mediaUrl }}
+              style={{ width: "100%", height: "100%" }}
+              resizeMode="cover"
+              onError={() => setMediaFailed(true)}
+            />
+          )}
+
+          {type === "video" && !mediaFailed ? (
+            <View
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
                 alignItems: "center",
                 justifyContent: "center",
               }}
             >
-              <Feather name="play" size={22} color={palette.onAccent} />
+              <View
+                style={{
+                  width: PLAY_CIRCLE,
+                  height: PLAY_CIRCLE,
+                  borderRadius: radii.pill,
+                  backgroundColor: withAlpha(palette.onAccent, 0.3),
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Feather name="play" size={22} color={palette.onAccent} />
+              </View>
             </View>
-          </View>
-        ) : null}
+          ) : null}
 
-        {type === "video" && post.duration_sec && !mediaFailed ? (
-          <Chip
-            label={formatDuration(post.duration_sec)}
-            style={{ position: "absolute", top: spacing.md, right: spacing.md }}
-          />
-        ) : null}
+          {type === "video" && post.duration_sec && !mediaFailed ? (
+            <Chip
+              label={formatDuration(post.duration_sec)}
+              style={{ position: "absolute", top: spacing.md, right: spacing.md }}
+            />
+          ) : null}
+        </View>
+      ) : null}
 
-        {/* Tier indicator (board c102), top-left mirroring the duration Chip's
-            top-right — purely informative, see the text-variant comment above. */}
-        {post.audience === "org_actives" ? (
-          <Chip
-            label="Actives only"
-            variant="accent"
-            style={{ position: "absolute", top: spacing.md, left: spacing.md }}
-          />
-        ) : null}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xl }}>
+        <PostAction
+          icon="heart"
+          count={likeCount}
+          word="Like"
+          active={likedByMe}
+          label={likedByMe ? "Unlike" : "Like"}
+          onPress={onToggleLike}
+        />
+        <PostAction
+          icon="message-circle"
+          count={shownCommentCount}
+          word="Comment"
+          label="Comment"
+          onPress={() => setCommentsOpen(true)}
+        />
+        <PostAction icon="send" count={mockShareCount(post.id)} word="Send" label="Send" />
       </View>
 
-      <View style={{ padding: spacing.lg, gap: spacing.md }}>
-        <AppText>{post.body}</AppText>
-        {actions}
-      </View>
       {sheetModal}
       {commentsModal}
     </View>

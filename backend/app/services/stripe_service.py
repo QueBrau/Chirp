@@ -31,6 +31,10 @@ RAIL_PAYMENT_METHOD_TYPES: dict[str, list[str]] = {
 }
 
 
+class UnexpectedPaymentIntent(Exception):
+    """A provider response did not identify the intent requested (c366)."""
+
+
 def platform_fee_cents(amount_cents: int, rail: str) -> int:
     """Platform application fee for an amount on a given rail (floored to the cent)."""
     return amount_cents * PLATFORM_FEE_BPS[rail] // 10_000
@@ -66,6 +70,25 @@ def publishable_key() -> str:
     if not key:
         raise HTTPException(status_code=503, detail="stripe_not_configured")
     return key
+
+
+def intent_error_detail(error: Exception) -> str:
+    """Classify this response only; no error proves an earlier attempt absent.
+
+    Transport, server and idempotency conflicts are indeterminate. A typed
+    validation/auth rejection describes the current request, but still cannot
+    release a reservation that might protect an earlier lost response (c366).
+    Never expose provider messages, request bodies, secrets or customer data.
+    """
+    if isinstance(error, (stripe.AuthenticationError, stripe.PermissionError)):
+        return "payment_provider_rejected"
+    if (
+        isinstance(error, stripe.InvalidRequestError)
+        and error.http_status in (400, 404)
+        and error.code != "idempotency_key_in_use"
+    ):
+        return "payment_provider_rejected"
+    return "payment_outcome_unconfirmed"
 
 
 async def create_express_account(chapter_id: uuid.UUID, org_name: str) -> str:
@@ -149,10 +172,11 @@ async def create_dues_payment_intent(
     across that reservation boundary and handed the new row back the dead
     reservation's OLD intent id, which collides with uq_dues_intent_stripe_id
     (that index spans every status, including 'failed') and 500s. A retry against
-    the SAME reservation — the retrieve path in payments.py, taken whenever a
-    stripe_payment_intent_id is already on file — never calls this function again,
-    so it does not need this key to be stable across calls; it only needs to be
-    unique per reservation, which including the row's own id guarantees.
+    the SAME reservation with a stored provider ID retrieves it. When an earlier
+    response was lost before that ID was stored, c366 retries this create with
+    the SAME key and immutable amount/currency. Such retries stop before Stripe's
+    minimum 24h retention expires; they never replace an unresolved reservation
+    or silently mint a new key.
     """
     return await stripe.PaymentIntent.create_async(
         api_key=_secret_key(),
@@ -185,23 +209,27 @@ async def retrieve_payment_intent(account_id: str, intent_id: str) -> stripe.Pay
     intent we already created is the only safe way to hand the client its
     client_secret again.
     """
-    return await stripe.PaymentIntent.retrieve_async(
+    intent = await stripe.PaymentIntent.retrieve_async(
         intent_id, api_key=_secret_key(), stripe_account=account_id
     )
+    if getattr(intent, "id", None) != intent_id:
+        raise UnexpectedPaymentIntent()
+    return intent
 
 
 async def cancel_payment_intent(account_id: str, intent_id: str) -> stripe.PaymentIntent:
-    """Best-effort cancel of an intent behind an abandoned reservation (board c234).
+    """Ask Stripe to cancel an aged intent (board c234).
 
-    Callers must treat failure here as non-fatal: Stripe rejects cancellation once
-    an intent is already 'processing' or 'succeeded' (exactly the states where
-    abandoning our side is safe regardless — the money is already moving), and a
-    network error must not be allowed to block expiring the reservation, which is
-    what actually reopens the rail for the member.
+    Only a confirmed canceled status releases its reservation. Refusal, a
+    transport failure or an unknown outcome keeps the rail locked because
+    a still-usable intent or money in motion must never allow a second charge.
     """
-    return await stripe.PaymentIntent.cancel_async(
+    intent = await stripe.PaymentIntent.cancel_async(
         intent_id, api_key=_secret_key(), stripe_account=account_id
     )
+    if getattr(intent, "id", None) != intent_id:
+        raise UnexpectedPaymentIntent()
+    return intent
 
 
 def verify_webhook_event(payload: bytes, signature: str) -> dict:

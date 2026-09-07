@@ -1120,12 +1120,13 @@ async def test_a_failed_stripe_call_on_retry_does_not_cancel_a_reservation_holdi
     monkeypatch.setattr(stripe.PaymentIntent, "create_async", boom_create)
     monkeypatch.setattr(stripe.PaymentIntent, "retrieve_async", boom_retrieve)
 
-    with pytest.raises(stripe.APIConnectionError):
-        await client.post(
-            f"/payments/dues/{cycle_id}/intent",
-            json={"rail": "ach"},
-            headers=setup.member.headers,
-        )
+    retry = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "ach"},
+        headers=setup.member.headers,
+    )
+    assert retry.status_code == 503
+    assert retry.json()["detail"] == "payment_outcome_unconfirmed"
 
     assert await _reservation_status(cycle_id, setup.member.id) == "open"
     assert await _reserved_intent_id(cycle_id, setup.member.id) == intent_id_before
