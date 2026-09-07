@@ -3286,6 +3286,11 @@
       "id": "c337",
       "col": "backlog",
       "title": "c337 [FILED Sep 7 from the c325 build, post-alpha] AUDIT ROW FOR CHAPTER APPROVALS needs its own migration: moderation_actions.action and .target_type are CHECK-constrained (0011, widened once by 0017 for resolve_report) to fixed sets that include neither a chapter-approval action nor a 'chapter' target_type. c325's route documents the omission rather than bending an unrelated table's constraint. When wanted: widen both constraints (0017's shape), log approve/revoke with the acting admin, and read it back on the chapter."
+    },
+    {
+      "id": "c338",
+      "col": "done",
+      "title": "c338 [DEPLOY WINDOW #10 - Sep 7, CLOSED CLEAN, manager] No migration (schema stays 0031, verified head file unchanged). chirp-api-00053-5cz from source + chirp-ws-00016-lnk pinned to the same image; deploy-verify 4/4 BOTH; timeout=3600 + concurrency=80 confirmed surviving. Prod now carries main through 54e7f6d: c325's approval endpoint + c331's resend (mobile, rides the next build). Tenth window, tenth 4/4, zero rollbacks."
     }
   ],
   "decisions": [
