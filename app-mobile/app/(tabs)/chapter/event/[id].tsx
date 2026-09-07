@@ -19,24 +19,28 @@
 
 import { Feather } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
-import { Image, Modal, Pressable, ScrollView, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Image, Modal, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { listMembers, type MemberOut } from "@/api/chapters";
 import {
   cancelEvent,
   getEvent,
+  getMyRsvp,
   getRsvpCounts,
   inviteToEvent,
   listEventInvites,
-  listRsvps,
+  listRsvpPage,
+  listUnansweredInvitePage,
+  EVENT_GUEST_PAGE_SIZE,
   setRsvp,
   updateEvent,
   type EventInviteOut,
   type EventOut,
   type EventRsvpCountsOut,
   type EventRsvpOut,
+  type GuestListPage,
   type RsvpStatus,
 } from "@/api/events";
 import { useSession } from "@/auth";
@@ -101,38 +105,60 @@ export default function EventDetailScreen() {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [rsvps, setRsvpsState] = useState<EventRsvpOut[]>([]);
   const [invites, setInvites] = useState<EventInviteOut[]>([]);
+  const [awaiting, setAwaiting] = useState<EventInviteOut[]>([]);
+  const [myStatus, setMyStatus] = useState<RsvpStatus | null | undefined>(undefined);
+  const [rsvpNext, setRsvpNext] = useState<GuestListPage | null>(null);
+  const [awaitingNext, setAwaitingNext] = useState<GuestListPage | null>(null);
+  const [guestError, setGuestError] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const moreBusy = useRef(false);
+  const loadGeneration = useRef(0);
   const [counts, setCounts] = useState<EventRsvpCountsOut | null>(null);
   const [members, setMembers] = useState<MemberOut[]>([]);
   const [inviting, setInviting] = useState(false);
+  const [loadingInvites, setLoadingInvites] = useState(false);
   const [editing, setEditing] = useState(false);
 
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
+    setLoadState("loading");
+    setMyStatus(undefined);
+    setRsvpNext(null);
+    setAwaitingNext(null);
+    setInvites([]);
     // Fetch the event by id rather than finding it in the chapter's list: an invited
     // outsider has no chapter list to find it in, and that is exactly who invites exist
     // for.
-    const found = await getEvent(String(id));
-    setEvent(found);
-
-    // Membership in THIS event's chapter, not merely having a chapter of your own.
-    const isMember = membership?.chapter_id === found.chapter_id;
-    // c275: the /guests wrapper split into paged routes plus a counts endpoint.
-    // Each call fails soft INDEPENDENTLY - a guest-list failure must not blank the
-    // event header, and a counts failure falls back to list-derived numbers below.
-    // limit 200 is the route cap; the chips read TRUE numbers from counts, so a
-    // 200-row page under a bigger event shows a complete-enough roster while the
-    // headcount stays exact.
-    const [rsvpPage, invitePage, headcounts, roster] = await Promise.all([
-      listRsvps(found.id, { limit: 200 }).catch(() => [] as EventRsvpOut[]),
-      listEventInvites(found.id, { limit: 200 }).catch(() => [] as EventInviteOut[]),
-      getRsvpCounts(found.id).catch(() => null),
-      isMember ? listMembers(found.chapter_id) : Promise.resolve<MemberOut[]>([]),
-    ]);
-    setRsvpsState(rsvpPage);
-    setInvites(invitePage);
-    setCounts(headcounts);
-    setMembers(roster);
-    setLoadState("loaded");
-  }, [id, membership]);
+    try {
+      const found = await getEvent(String(id));
+      const isMember = membership?.chapter_id === found.chapter_id;
+      // Own answer and authoritative counts do not depend on roster pages. A
+      // failed count stays unknown; partial lists never become replacement totals.
+      const [mine, rsvpPage, invitePage, headcounts, roster] = await Promise.all([
+        getMyRsvp(found.id).catch(() => undefined),
+        listRsvpPage(found.id).catch(() => null),
+        listUnansweredInvitePage(found.id).catch(() => null),
+        getRsvpCounts(found.id).catch(() => null),
+        isMember ? listMembers(found.chapter_id).catch(() => []) : Promise.resolve<MemberOut[]>([]),
+      ]);
+      if (generation !== loadGeneration.current) return;
+      setEvent(found);
+      setMyStatus(mine?.status);
+      setRsvpsState(rsvpPage?.items ?? []);
+      setRsvpNext(rsvpPage?.next ?? null);
+      setAwaiting(invitePage?.items ?? []);
+      setAwaitingNext(invitePage?.next ?? null);
+      setCounts(headcounts);
+      setGuestError(rsvpPage === null || invitePage === null || headcounts === null);
+      setMembers(roster);
+      setLoadState("loaded");
+    } catch (error: unknown) {
+      if (generation !== loadGeneration.current) return;
+      setEvent(null);
+      const denied = error instanceof ApiError && (error.status === 404 || error.status === 403);
+      setLoadState(denied ? "loaded" : "error");
+    }
+  }, [id, membership, user?.id]);
 
   useEffect(() => {
     // Session-status gating (matches members.tsx): don't fetch - and don't fall through
@@ -148,17 +174,69 @@ export default function EventDetailScreen() {
     //
     // 404/403 ARE that message - gone, or genuinely not yours to see. Anything else is
     // our problem, not theirs, and says so with a retry.
-    load().catch((error: unknown) => {
-      setEvent(null);
-      const denied = error instanceof ApiError && (error.status === 404 || error.status === 403);
-      setLoadState(denied ? "loaded" : "error");
-    });
+    void load();
+    return () => { loadGeneration.current += 1; };
   }, [load, sessionStatus, membership, chapterLoading]);
+
+  const loadMoreGuests = async (kind: "rsvps" | "awaiting") => {
+    const cursor = kind === "rsvps" ? rsvpNext : awaitingNext;
+    if (!event || !cursor || moreBusy.current) return;
+    moreBusy.current = true;
+    setLoadingMore(true);
+    const generation = loadGeneration.current;
+    try {
+      if (kind === "rsvps") {
+        const page = await listRsvpPage(event.id, cursor);
+        if (generation !== loadGeneration.current) return;
+        setRsvpsState((old) => [...new Map([...old, ...page.items].map((r) => [r.user_id, r])).values()]);
+        setRsvpNext(page.next);
+      } else {
+        const page = await listUnansweredInvitePage(event.id, cursor);
+        if (generation !== loadGeneration.current) return;
+        setAwaiting((old) => [...new Map([...old, ...page.items].map((r) => [r.invited_user_id, r])).values()]);
+        setAwaitingNext(page.next);
+      }
+    } catch (error) {
+      if (generation === loadGeneration.current) showApiError(error, "Couldn't load more guests");
+    } finally {
+      moreBusy.current = false;
+      setLoadingMore(false);
+    }
+  };
+
+  const openInvites = async () => {
+    if (!event || loadingInvites) return;
+    setLoadingInvites(true);
+    const generation = loadGeneration.current;
+    try {
+      // The picker must know existing invitations beyond page one too. Fetch only
+      // when opened, through bounded requests; ordinary detail never drains pages.
+      let cursor: GuestListPage = {};
+      const rows: EventInviteOut[] = [];
+      for (;;) {
+        const page = await listEventInvites(event.id, { ...cursor, limit: EVENT_GUEST_PAGE_SIZE });
+        if (generation !== loadGeneration.current) return;
+        rows.push(...page);
+        if (page.length < EVENT_GUEST_PAGE_SIZE) break;
+        const last = page[page.length - 1];
+        cursor = { after: last.created_at, afterUserId: last.invited_user_id };
+      }
+      setInvites(rows);
+      setInviting(true);
+    } catch (error) {
+      if (generation === loadGeneration.current) showApiError(error, "Couldn't load existing invitations");
+    } finally {
+      setLoadingInvites(false);
+    }
+  };
 
   const handleRsvp = async (status: RsvpStatus) => {
     if (!event) return;
+    const generation = loadGeneration.current;
     try {
-      await setRsvp(event.id, status);
+      const saved = await setRsvp(event.id, status);
+      if (generation !== loadGeneration.current) return;
+      setMyStatus(saved.status);
       await load();
     } catch (error) {
       showApiError(error, "Couldn't save your answer");
@@ -168,9 +246,9 @@ export default function EventDetailScreen() {
   const handleInvite = async (userIds: string[]) => {
     if (!event || userIds.length === 0) return;
     try {
-      const updated = await inviteToEvent(event.id, userIds);
-      setInvites(updated);
+      await inviteToEvent(event.id, userIds);
       setInviting(false);
+      await load();
     } catch (error) {
       showApiError(error, "Couldn't send those invites");
     }
@@ -292,17 +370,12 @@ export default function EventDetailScreen() {
     event.canceled_at === null &&
     (user?.id === event.host_id || EBOARD_ROLES.includes(membership?.role ?? ""));
   const host = findMember(members, event.host_id);
-  const myStatus = user ? (rsvps.find((rsvp) => rsvp.user_id === user.id)?.status ?? null) : null;
   const canceled = event.canceled_at !== null;
-
-  // Invited, but has not answered. Its own group rather than folded into "Can't go":
-  // silence is not a no, and a host reading the list needs to see who to chase.
-  const answered = new Set(rsvps.map((rsvp) => rsvp.user_id));
-  const awaiting = invites.filter((invite) => !answered.has(invite.invited_user_id));
 
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg }}>
       <ScrollView
+        refreshControl={<RefreshControl refreshing={false} onRefresh={() => void load()} />}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: spacing.xxxl }}
       >
@@ -416,14 +489,15 @@ export default function EventDetailScreen() {
           {!canceled ? (
             <View style={{ gap: spacing.sm }}>
               <SectionHeader title="Are you going?" />
+              {myStatus === undefined ? (
+                <AppText variant="caption" tone="secondary">
+                  Your answer couldn't be loaded. Pull to refresh, or choose an answer below.
+                </AppText>
+              ) : null}
               <View style={{ flexDirection: "row", gap: spacing.sm }}>
                 {RSVP_OPTIONS.map((option) => {
                   const selected = myStatus === option.key;
-                  // True headcount from the counts endpoint (c275); list-derived
-                  // only when that call failed soft.
-                  const count =
-                    counts?.[option.key] ??
-                    rsvps.filter((rsvp) => rsvp.status === option.key).length;
+                  const count = counts?.[option.key] ?? "Unavailable";
                   // Going count gets the "one gold moment" per §10 rule 4 - the org's
                   // own accentGradient secondary stop (Sigma Chi's old gold, e.g.).
                   const countColor =
@@ -463,6 +537,14 @@ export default function EventDetailScreen() {
           ) : null}
 
           <View style={{ gap: spacing.lg }}>
+            {guestError ? (
+              <EmptyState
+                title="Guest details unavailable"
+                message="Try again to load the guest list and totals. Some events require an RSVP first."
+                actionLabel="Try again"
+                onAction={() => void load()}
+              />
+            ) : null}
             {RSVP_OPTIONS.map((option) => {
               const guests = rsvps.filter((rsvp) => rsvp.status === option.key);
               if (guests.length === 0) return null;
@@ -470,7 +552,9 @@ export default function EventDetailScreen() {
                 <View key={option.key}>
                   <SectionHeader
                     title={GUEST_GROUP_TITLES[option.key]}
-                    caption={`${guests.length} ${guests.length === 1 ? "guest" : "guests"}`}
+                    caption={counts
+                      ? `${counts[option.key]} guests · ${guests.length} shown`
+                      : `${guests.length} shown · total unavailable`}
                   />
                   <Card>
                     {guests.map((rsvp, index) => {
@@ -495,11 +579,22 @@ export default function EventDetailScreen() {
               );
             })}
 
+            {rsvpNext ? (
+              <Button
+                label={loadingMore ? "Loading guests..." : "Load more replies"}
+                variant="secondary"
+                disabled={loadingMore}
+                onPress={() => void loadMoreGuests("rsvps")}
+              />
+            ) : null}
+
             {awaiting.length > 0 ? (
               <View>
                 <SectionHeader
                   title="Invited"
-                  caption={`${awaiting.length} ${awaiting.length === 1 ? "person hasn't" : "people haven't"} answered`}
+                  caption={counts
+                    ? `${counts.invited_unanswered} unanswered · ${awaiting.length} shown`
+                    : `${awaiting.length} shown · total unavailable`}
                 />
                 <Card>
                   {awaiting.map((invite, index) => {
@@ -523,11 +618,23 @@ export default function EventDetailScreen() {
                 </Card>
               </View>
             ) : null}
+            {awaitingNext ? (
+              <Button
+                label={loadingMore ? "Loading guests..." : "Load more unanswered invitations"}
+                variant="secondary"
+                disabled={loadingMore}
+                onPress={() => void loadMoreGuests("awaiting")}
+              />
+            ) : null}
           </View>
 
           {canManage ? (
             <View style={{ gap: spacing.sm }}>
-              <Button label="Invite" variant="secondary" onPress={() => setInviting(true)} />
+              <Button
+                label={loadingInvites ? "Loading invitations..." : "Invite"}
+                variant="secondary" disabled={loadingInvites}
+                onPress={() => void openInvites()}
+              />
               <Button label="Edit event" variant="secondary" onPress={() => setEditing(true)} />
               <Button label="Call it off" variant="ghost" onPress={handleCancel} />
             </View>
