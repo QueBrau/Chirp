@@ -15,7 +15,7 @@ import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useSession } from "@/auth";
-import { AppText } from "@/components";
+import { AppText, Button, EmptyState, Screen } from "@/components";
 import { TabBarVisibilityProvider, useTabBarVisibility } from "@/nav/TabBarVisibility";
 import { cardShadow, metrics, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
@@ -152,9 +152,17 @@ export default function TabsLayout() {
   // first real request. Demo/mock mode resolves straight to "ready" and never
   // gates. SessionProvider owns the loading timeout, so there's no local
   // fallback needed here.
-  const { status } = useSession();
+  const { status, refresh, realtimeStatus, realtimeRetrying, retryRealtime } = useSession();
+  const palette = useTheme();
+  const insets = useSafeAreaInsets();
 
   if (status === "loading") return null;
+  if (status === "recoverable") return (
+    <Screen showBack={false}>
+      <EmptyState title="Can't load your account" message="You're still signed in. Check your connection and try again."
+        actionLabel="Try again" onAction={() => { void refresh(); }} />
+    </Screen>
+  );
   if (status === "signedOut") return <Redirect href="/sign-in" />;
   if (status === "unregistered") return <Redirect href="/account-type" />;
   if (status === "suspended") return <Redirect href="/suspended" />;
@@ -164,6 +172,16 @@ export default function TabsLayout() {
     // and every screen pushed inside it — otherwise each stack would animate its
     // own copy of the bar and they'd disagree.
     <TabBarVisibilityProvider>
+      <View style={{ flex: 1 }}>
+        {realtimeStatus === "paused" ? (
+          <View style={{ paddingTop: insets.top, paddingHorizontal: spacing.gutter, backgroundColor: palette.surface }}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <AppText variant="caption" tone="secondary">Live updates paused</AppText>
+              <Button label={realtimeRetrying ? "Trying again..." : "Retry live updates"} variant="ghost"
+                disabled={realtimeRetrying} onPress={() => { void retryRealtime(); }} />
+            </View>
+          </View>
+        ) : null}
       <Tabs
         tabBar={(props) => <FloatingTabBar {...props} />}
         screenOptions={{ headerShown: false }}
@@ -174,6 +192,7 @@ export default function TabsLayout() {
         <Tabs.Screen name="chapter" options={{ title: "Orgs" }} />
         <Tabs.Screen name="profile" options={{ title: "Profile" }} />
       </Tabs>
+      </View>
     </TabBarVisibilityProvider>
   );
 }

@@ -18,6 +18,7 @@
  * a live web QA pass.
  */
 
+import { operationErrorMessage } from "@/api/operation";
 import { Alert, Platform, type AlertButton } from "react-native";
 
 import { ApiError } from "@/api/client";
@@ -333,6 +334,8 @@ const SYSTEM_MESSAGE = "Something went wrong on our end. Try again in a moment."
  * hide the remaining work.
  */
 export function apiErrorMessage(error: unknown): string {
+  const operationMessage = operationErrorMessage(error);
+  if (operationMessage) return operationMessage;
   if (!(error instanceof ApiError)) return "Something went wrong. Try again.";
   if (SYSTEM_CODES.has(error.detail)) return SYSTEM_MESSAGE;
   return DETAIL_COPY[error.detail] ?? error.detail;
