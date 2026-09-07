@@ -1,142 +1,327 @@
-"""Hard-delete job for soft-deleted content (board c69; /privacy section 14).
-
-Posts, comments and chirps are soft-deleted in place: the API sets deleted_at /
-removed_at and every read path filters the row out, but until this job existed
-nothing ever issued a DELETE FROM for them. This module is that job. It finds rows
-whose soft-delete timestamp is older than Settings.purge_retention_days and erases
-them for good.
-
-Models covered — every soft-deleting model in app/models/, found by grepping for
-deleted_at / removed_at:
-  - Post          (app.models.social)  -- deleted_at
-  - PostComment   (app.models.social)  -- deleted_at
-  - Chirp           (app.models.chirp)     -- removed_at
-
-Nothing else in app/models/ soft-deletes (no other deleted_at/removed_at column
-exists), so there is nothing else for this job to cover.
-
-Purging a Post or a Chirp also removes its PostLike / ChirpVote rows first. Those
-tables have a plain `REFERENCES posts(id)` / `REFERENCES chirps(id)` FK with no
-ON DELETE CASCADE at the DB level (see alembic/versions/0001_initial.py), so
-deleting the parent while a like/vote still points at it would raise a foreign key
-violation, not silently cascade. A purged post's comments are removed the same way
-regardless of the comment's own deleted_at — once the post is gone forever there is
-no route that can ever surface those comments again, so keeping them around only to
-honor their own not-yet-expired window would just delay an inevitable orphan.
-content_reports.target_id is intentionally not a foreign key (it is polymorphic
-across chirp/post/comment/message_forward/user), so a report that named purged
-content is left as-is: a dangling but harmless historical record, matching
-/privacy section 13's existing promise to keep report records reviewable.
-"""
+"""Bounded hard deletion of expired soft deletes; the CLI previews unless --apply is set."""
 from __future__ import annotations
 
+import argparse
 import asyncio
-from dataclasses import dataclass
+import json
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, func, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Delete, Select
 
 from app.config import get_settings
-from app.models.social import Post, PostComment, PostLike
 from app.models.chirp import Chirp, ChirpVote
+from app.models.social import Post, PostComment, PostLike
 
 
 @dataclass(frozen=True)
 class PurgeResult:
-    """Row counts hard-deleted per table, returned so callers/tests can assert on them."""
+    """Counts by deletion reason; total preserves the original helper's contract."""
 
-    posts: int
-    post_comments: int
-    chirps: int
+    posts: int = 0
+    post_comments: int = 0
+    chirps: int = 0
+    post_likes: int = 0
+    cascaded_post_comments: int = 0
+    chirp_votes: int = 0
 
     @property
     def total(self) -> int:
+        """Legacy count: excludes likes, votes and comments removed with their post."""
         return self.posts + self.post_comments + self.chirps
+
+    @property
+    def physical_rows(self) -> int:
+        return sum(asdict(self).values())
+
+    def __add__(self, other: PurgeResult) -> PurgeResult:
+        return PurgeResult(**{
+            field.name: getattr(self, field.name) + getattr(other, field.name)
+            for field in fields(self)
+        })
+
+
+def _positive(value: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _cutoff(now: datetime | None, retention_days: int | None) -> tuple[datetime, int]:
+    days = _positive(
+        retention_days if retention_days is not None else get_settings().purge_retention_days,
+        "retention_days",
+    )
+    instant = now if now is not None else datetime.now(timezone.utc)
+    if instant.tzinfo is None or instant.utcoffset() is None:
+        raise ValueError("now must include a timezone")
+    try:
+        return instant.astimezone(timezone.utc) - timedelta(days=days), days
+    except OverflowError as exc:
+        raise ValueError("retention_days is outside the supported date range") from exc
+
+
+def _expired_posts(cutoff: datetime) -> Select:
+    return select(Post.id).where(Post.deleted_at < cutoff)
+
+
+def _expired_chirps(cutoff: datetime) -> Select:
+    return select(Chirp.id).where(Chirp.removed_at < cutoff)
+
+
+def _independent_comments(cutoff: datetime) -> Select:
+    # Expired parents own their comments' cleanup, including recently deleted/live
+    # comments. Keep the legacy independent-comment count disjoint from that cascade.
+    return select(PostComment.id).where(
+        PostComment.deleted_at < cutoff,
+        ~exists(select(Post.id).where(
+            Post.id == PostComment.post_id, Post.deleted_at < cutoff,
+        )),
+    )
+
+
+async def _delete_count(session: AsyncSession, statement: Delete) -> int:
+    result = await session.execute(statement)
+    return result.rowcount or 0
+
+
+async def purge_batch(
+    session: AsyncSession, *, cutoff: datetime, batch_size: int = 100,
+) -> PurgeResult:
+    """Delete at most batch_size rows per reason (six reasons); caller commits.
+
+    Parent UPDATE locks conflict with FK KEY SHARE locks, so a concurrent child
+    insert cannot slip between child cleanup and parent deletion. SKIP LOCKED
+    leaves occupied parents for a later execution. Large parents retain their
+    remaining children and are revisited oldest-first in the next batch.
+    No schema cascade is assumed. Historical polymorphic content_reports remain.
+    """
+    _positive(batch_size, "batch_size")
+    post_ids = list((await session.scalars(
+        _expired_posts(cutoff).order_by(Post.deleted_at, Post.id)
+        .limit(batch_size).with_for_update(skip_locked=True)
+    )).all())
+    likes = cascaded_comments = posts = 0
+    if post_ids:
+        likes = await _delete_count(session, delete(PostLike).where(
+            tuple_(PostLike.post_id, PostLike.user_id).in_(
+                select(PostLike.post_id, PostLike.user_id)
+                .where(PostLike.post_id.in_(post_ids))
+                .order_by(PostLike.post_id, PostLike.user_id).limit(batch_size)
+            )
+        ).execution_options(synchronize_session=False))
+        cascaded_comments = await _delete_count(session, delete(PostComment).where(
+            PostComment.id.in_(select(PostComment.id)
+                .where(PostComment.post_id.in_(post_ids))
+                .order_by(PostComment.post_id, PostComment.id).limit(batch_size))
+        ).execution_options(synchronize_session=False))
+        posts = await _delete_count(session, delete(Post).where(
+            Post.id.in_(post_ids),
+            ~exists(select(PostLike.post_id).where(PostLike.post_id == Post.id)),
+            ~exists(select(PostComment.id).where(PostComment.post_id == Post.id)),
+        ).execution_options(synchronize_session=False))
+
+    comments = await _delete_count(session, delete(PostComment).where(
+        PostComment.id.in_(
+            _independent_comments(cutoff).order_by(PostComment.deleted_at, PostComment.id)
+            .limit(batch_size).with_for_update(skip_locked=True)
+        )
+    ).execution_options(synchronize_session=False))
+
+    chirp_ids = list((await session.scalars(
+        _expired_chirps(cutoff).order_by(Chirp.removed_at, Chirp.id)
+        .limit(batch_size).with_for_update(skip_locked=True)
+    )).all())
+    votes = chirps = 0
+    if chirp_ids:
+        # The existing vote trigger also updates chirps.score. The job identity
+        # needs UPDATE(score), and counts below describe deletes, not trigger updates.
+        votes = await _delete_count(session, delete(ChirpVote).where(
+            tuple_(ChirpVote.chirp_id, ChirpVote.user_id).in_(
+                select(ChirpVote.chirp_id, ChirpVote.user_id)
+                .where(ChirpVote.chirp_id.in_(chirp_ids))
+                .order_by(ChirpVote.chirp_id, ChirpVote.user_id).limit(batch_size)
+            )
+        ).execution_options(synchronize_session=False))
+        chirps = await _delete_count(session, delete(Chirp).where(
+            Chirp.id.in_(chirp_ids),
+            ~exists(select(ChirpVote.chirp_id).where(ChirpVote.chirp_id == Chirp.id)),
+        ).execution_options(synchronize_session=False))
+    return PurgeResult(posts, comments, chirps, likes, cascaded_comments, votes)
 
 
 async def purge_expired_soft_deletes(
-    session: AsyncSession,
-    *,
-    now: datetime | None = None,
-    retention_days: int | None = None,
+    session: AsyncSession, *, now: datetime | None = None, retention_days: int | None = None,
 ) -> PurgeResult:
-    """Hard-delete posts/comments/chirps whose soft-delete timestamp is past the window.
+    """Preserve the full-run helper and caller-owned transaction (including rollback).
 
-    Pass `now` / `retention_days` to make the boundary deterministic in tests; both
-    default to real time / Settings.purge_retention_days for the real job. Does not
-    commit — the caller owns the transaction, so a caller that wraps this in a
-    savepoint or rolls back on error leaves every row untouched.
-
-    Safe to call twice in a row: a second call's WHERE clauses simply match nothing
-    that the first call already removed, so it deletes 0 additional rows rather than
-    erroring or double-counting.
+    Uses bounded statements but has no execution budget; use the CLI for scheduled
+    work with per-batch commits and a finite run budget. Locked rows are left for
+    the next call. Repeated calls are idempotent; exact cutoff timestamps survive.
     """
-    resolved_now = now if now is not None else datetime.now(timezone.utc)
-    resolved_retention_days = (
-        retention_days if retention_days is not None else get_settings().purge_retention_days
-    )
-    cutoff = resolved_now - timedelta(days=resolved_retention_days)
-
-    expired_post_ids = (
-        await session.execute(
-            select(Post.id).where(Post.deleted_at.is_not(None), Post.deleted_at < cutoff)
-        )
-    ).scalars().all()
-
-    posts_deleted = 0
-    if expired_post_ids:
-        await session.execute(delete(PostLike).where(PostLike.post_id.in_(expired_post_ids)))
-        await session.execute(
-            delete(PostComment).where(PostComment.post_id.in_(expired_post_ids))
-        )
-        post_result = await session.execute(delete(Post).where(Post.id.in_(expired_post_ids)))
-        posts_deleted = post_result.rowcount or 0
-
-    # Comments soft-deleted on their own (post still live, or the post's own window
-    # hasn't expired yet) rather than swept up by the post cascade above.
-    comments_result = await session.execute(
-        delete(PostComment).where(
-            PostComment.deleted_at.is_not(None), PostComment.deleted_at < cutoff
-        )
-    )
-
-    expired_chirp_ids = (
-        await session.execute(
-            select(Chirp.id).where(Chirp.removed_at.is_not(None), Chirp.removed_at < cutoff)
-        )
-    ).scalars().all()
-
-    chirps_deleted = 0
-    if expired_chirp_ids:
-        await session.execute(delete(ChirpVote).where(ChirpVote.chirp_id.in_(expired_chirp_ids)))
-        chirp_result = await session.execute(delete(Chirp).where(Chirp.id.in_(expired_chirp_ids)))
-        chirps_deleted = chirp_result.rowcount or 0
-
-    return PurgeResult(
-        posts=posts_deleted,
-        post_comments=comments_result.rowcount or 0,
-        chirps=chirps_deleted,
-    )
+    cutoff, _ = _cutoff(now, retention_days)
+    total = PurgeResult()
+    while True:
+        batch = await purge_batch(session, cutoff=cutoff)
+        total += batch
+        if batch.physical_rows == 0:
+            return total
 
 
-async def _run_and_report() -> PurgeResult:
-    """Open one session against the configured DB, purge, commit, and return the counts."""
+async def preview_expired_soft_deletes(
+    session: AsyncSession, *, cutoff: datetime, count_limit: int,
+) -> tuple[PurgeResult, list[str]]:
+    """SELECT-only aggregate preview; capped counts are lower bounds, never exact.
+
+    Each subquery returns at most count_limit + 1 rows to COUNT. PostgreSQL may
+    still scan to locate them; the CLI additionally sets a statement timeout.
+    The caller must supply a fresh read-only transaction for database enforcement.
+    """
+    _positive(count_limit, "count_limit")
+    queries = {
+        "posts": _expired_posts(cutoff),
+        "post_comments": _independent_comments(cutoff),
+        "chirps": _expired_chirps(cutoff),
+        "post_likes": select(PostLike.post_id).where(
+            PostLike.post_id.in_(_expired_posts(cutoff))),
+        "cascaded_post_comments": select(PostComment.id).where(
+            PostComment.post_id.in_(_expired_posts(cutoff))),
+        "chirp_votes": select(ChirpVote.chirp_id).where(
+            ChirpVote.chirp_id.in_(_expired_chirps(cutoff))),
+    }
+    counts: dict[str, int] = {}
+    capped: list[str] = []
+    for name, query in queries.items():
+        observed = int(await session.scalar(select(func.count()).select_from(
+            query.limit(count_limit + 1).subquery()
+        )) or 0)
+        counts[name] = min(observed, count_limit)
+        if observed > count_limit:
+            capped.append(name)
+    return PurgeResult(**counts), capped
+
+
+async def _has_remaining(session: AsyncSession, cutoff: datetime) -> bool:
+    return bool(await session.scalar(select(
+        exists(_expired_posts(cutoff))
+        | exists(select(PostComment.id).where(PostComment.deleted_at < cutoff))
+        | exists(_expired_chirps(cutoff))
+    )))
+
+
+async def _transaction_limits(session: AsyncSession, remaining_seconds: float) -> None:
+    # Values are validated/generated integers, not user-provided SQL strings.
+    milliseconds = max(1, min(30_000, int(remaining_seconds * 1000)))
+    await session.execute(text(f"SET LOCAL statement_timeout = {milliseconds}"))
+    await session.execute(text(f"SET LOCAL lock_timeout = {min(2000, milliseconds)}"))
+
+
+async def run_purge_job(
+    *, apply: bool = False, retention_days: int | None = None, batch_size: int = 100,
+    max_batches: int = 10, max_seconds: int = 120, now: datetime | None = None,
+) -> dict[str, object]:
+    """Run one finite job, reporting only aggregate counts and acknowledged commits."""
+    cutoff, days = _cutoff(now, retention_days)
+    for name, value in (("batch_size", batch_size), ("max_batches", max_batches),
+                        ("max_seconds", max_seconds)):
+        _positive(value, name)
     from app.db import get_session_factory
 
-    async with get_session_factory()() as session:
-        result = await purge_expired_soft_deletes(session)
-        await session.commit()
-    return result
+    total = PurgeResult()
+    report: dict[str, object] = {
+        "mode": "apply" if apply else "dry_run", "cutoff": cutoff.isoformat(),
+        "retention_days": days, "batch_size": batch_size, "max_batches": max_batches,
+        "max_seconds": max_seconds, "batches_committed": 0, "status": "incomplete",
+        "remaining": None, "capped_counts": [], "commit_outcome_unknown": False,
+    }
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max_seconds
+    committing = False
+    committed_batches = 0
+    try:
+        async with asyncio.timeout(max_seconds):
+            async with get_session_factory()() as session:
+                if not apply:
+                    # First statement: enforce no DML even if a future edit regresses
+                    # the preview. Repeatable read gives all six counts one snapshot.
+                    await session.execute(text(
+                        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+                    ))
+                    await _transaction_limits(session, deadline - loop.time())
+                    total, capped = await preview_expired_soft_deletes(
+                        session, cutoff=cutoff, count_limit=batch_size * max_batches,
+                    )
+                    report.update(status="preview", capped_counts=capped,
+                                  remaining=total.physical_rows > 0)
+                    await session.rollback()
+                else:
+                    for _ in range(max_batches):
+                        await _transaction_limits(session, deadline - loop.time())
+                        batch = await purge_batch(session, cutoff=cutoff, batch_size=batch_size)
+                        committing = True
+                        await session.commit()
+                        committing = False
+                        total += batch
+                        committed_batches += 1
+                        report["batches_committed"] = committed_batches
+                        await _transaction_limits(session, deadline - loop.time())
+                        remaining = await _has_remaining(session, cutoff)
+                        await session.rollback()
+                        report["remaining"] = remaining
+                        if not remaining:
+                            report["status"] = "complete"
+                            break
+                        if batch.physical_rows == 0:
+                            # SKIP LOCKED can return no progress despite a backlog.
+                            report["status"] = "blocked"
+                            break
+    except TimeoutError:
+        report.update(status="timed_out", remaining=None, commit_outcome_unknown=committing)
+    except Exception as exc:
+        # Database errors can contain SQL parameters and connection details. Do not
+        # emit raw exceptions or tracebacks into the job log. Preserve prior commits.
+        report.update(status="failed", remaining=None, commit_outcome_unknown=committing,
+                      error_type=type(exc).__name__)
+    # Only acknowledged commits are counted on apply. A deadline during COMMIT may
+    # have reached the server; report that uncertainty instead of asserting rollback.
+    report["counts"] = asdict(total)
+    report["physical_rows"] = total.physical_rows
+    return report
 
 
-def main() -> None:
-    """CLI entry point: `python -m app.jobs.purge` — one run, prints counts, exits."""
-    result = asyncio.run(_run_and_report())
-    print(
-        f"purge: posts={result.posts} post_comments={result.post_comments} "
-        f"chirps={result.chirps} total={result.total}"
-    )
+def _positive_arg(value: str) -> int:
+    try:
+        return _positive(int(value), "value")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Preview by default; explicit --apply enables bounded deletion and commits."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="preview only (default)")
+    mode.add_argument("--apply", action="store_true", help="hard-delete eligible rows")
+    parser.add_argument("--retention-days", type=_positive_arg, default=None)
+    parser.add_argument("--batch-size", type=_positive_arg, default=100)
+    parser.add_argument("--max-batches", type=_positive_arg, default=10)
+    parser.add_argument("--max-seconds", type=_positive_arg, default=120)
+    args = parser.parse_args(argv)
+    # Resolve even the environment-sourced retention before constructing an engine.
+    try:
+        _, days = _cutoff(None, args.retention_days)
+    except ValueError as exc:
+        parser.error(str(exc))
+    result = asyncio.run(run_purge_job(
+        apply=args.apply, retention_days=days, batch_size=args.batch_size,
+        max_batches=args.max_batches, max_seconds=args.max_seconds,
+    ))
+    print(json.dumps(result, sort_keys=True))
+    if result["status"] not in ("preview", "complete"):
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
