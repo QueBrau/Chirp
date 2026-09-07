@@ -33,9 +33,10 @@ its own card.
 """
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +57,7 @@ from app.schemas.events import (
     EventInviteOut,
     EventInviteWithRsvpOut,
     EventOut,
+    EventOwnRsvpOut,
     EventRsvpCountsOut,
     EventRsvpOut,
     EventRsvpUpdate,
@@ -612,6 +614,7 @@ async def list_my_invites_with_rsvps(
     before: datetime | None = None,
     before_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
+    view: Literal["all", "actionable", "history"] = "all",
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[EventInviteWithRsvpOut]:
@@ -647,6 +650,20 @@ async def list_my_invites_with_rsvps(
         )
         .where(models.EventInvite.invited_user_id == user.id)
     )
+    # c352: choose the action set BEFORE the cursor and LIMIT. A caller's old
+    # answered invitations must not consume the first page of Home. Ongoing events
+    # with a known end remain actionable; unknown-end events become history once
+    # they start. Keep upcoming cancellations even after an answer, so guests learn
+    # the party is off. The legacy default still exposes all invited events.
+    if view == "actionable":
+        stmt = stmt.where(
+            func.coalesce(models.Event.ends_at, models.Event.starts_at) >= func.now(),
+            or_(models.EventRsvp.user_id.is_(None), models.Event.canceled_at.is_not(None)),
+        )
+    elif view == "history":
+        stmt = stmt.where(
+            func.coalesce(models.Event.ends_at, models.Event.starts_at) < func.now()
+        )
     if before is not None and before_id is not None:
         stmt = stmt.where(
             tuple_(models.Event.starts_at, models.Event.id) > (before, before_id)
@@ -668,6 +685,18 @@ async def list_my_invites_with_rsvps(
         )
         for event, chapter, rsvp in result.all()
     ]
+
+
+@router.get("/events/{event_id}/rsvps/mine")
+async def own_rsvp(
+    event_id: uuid.UUID,
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> EventOwnRsvpOut:
+    """Read only the caller's answer, without scanning or exposing the guest list."""
+    await _readable_event(event_id, user, session)
+    mine = await session.get(models.EventRsvp, (event_id, user.id))
+    return EventOwnRsvpOut(status=mine.status if mine is not None else None)
 
 
 @router.get("/events/{event_id}/rsvps")
@@ -714,6 +743,7 @@ async def list_event_invites(
     after: datetime | None = None,
     after_user_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
+    unanswered_only: bool = False,
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[EventInviteOut]:
@@ -726,6 +756,13 @@ async def list_event_invites(
     """
     await _require_guest_list_access(event_id, user, session)
     stmt = select(models.EventInvite).where(models.EventInvite.event_id == event_id)
+    if unanswered_only:
+        # c351: subtracting partial RSVP/invite pages labels answered people as
+        # silent. Resolve the anti-join before paging, scoped to BOTH event and user.
+        stmt = stmt.where(~select(models.EventRsvp.user_id).where(
+            models.EventRsvp.event_id == models.EventInvite.event_id,
+            models.EventRsvp.user_id == models.EventInvite.invited_user_id,
+        ).exists())
     if after is not None and after_user_id is not None:
         stmt = stmt.where(
             tuple_(models.EventInvite.created_at, models.EventInvite.invited_user_id)
