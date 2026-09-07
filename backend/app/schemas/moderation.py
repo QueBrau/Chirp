@@ -44,13 +44,15 @@ class SuspensionStateOut(_Schema):
 class ChapterModerationApprovalRequest(_Schema):
     """Body for PATCH /chapters/{chapter_id}/moderation-approval.
 
-    No `reason` field, unlike SuspendUserRequest above: this flips a boolean that
-    gates a CHAPTER's standing (chapters.moderation_approved, migration 0031), not a
-    logged action against a person, and c325 does not ask for an audit trail — see
-    the route's docstring for why moderation_actions can't carry one today anyway.
+    `reason` is OPTIONAL, unlike SuspendUserRequest above: c325 shipped this body
+    without one and its callers send {"approved": bool}; c337 added the audit row
+    (migration 0032) without breaking them. When absent, the row carries the route's
+    fixed placeholder rather than an empty string — blank is refused (min_length=1),
+    because an audit row whose reason is "" is worse than one that says none was given.
     """
 
     approved: bool
+    reason: str | None = Field(default=None, min_length=1, max_length=MAX_REASON_LENGTH)
 
 
 class ChapterModerationApprovalOut(_Schema):

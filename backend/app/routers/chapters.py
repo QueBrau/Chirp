@@ -65,6 +65,11 @@ from app.services.role_term_service import apply_role_change, open_initial_term
 router = APIRouter(tags=["chapters"])
 logger = logging.getLogger(__name__)
 
+# c337: moderation_actions.reason is NOT NULL and the c325 request body predates the
+# audit row, so a call that gives no reason still records that fact honestly rather
+# than storing "" on an audit row.
+DEFAULT_CHAPTER_APPROVAL_REASON = "platform admin decision, no reason given"
+
 _EBOARD_ROLE_VALUES: frozenset[str] = frozenset(role.value for role in EBOARD)
 
 
@@ -161,10 +166,11 @@ async def update_chapter(
 async def set_chapter_moderation_approval(
     chapter_id: uuid.UUID,
     body: ChapterModerationApprovalRequest,
-    _admin: models.User = Depends(require_platform_admin),
+    admin: models.User = Depends(require_platform_admin),
     session: AsyncSession = Depends(get_session),
 ) -> ChapterModerationApprovalOut:
     """Platform-admin setter for chapters.moderation_approved (board card c325).
+    Every call also writes a moderation_actions row (board card c337).
 
     c308 (migration 0031) added this column and gated GET /moderation/reports plus the
     whole moderation router on it, but deliberately left nothing able to SET it except
@@ -193,23 +199,37 @@ async def set_chapter_moderation_approval(
     the dependency — board card c76 promoted the shared version specifically so later
     platform-admin routes would not re-derive it, and this is that later route.
 
-    NO AUDIT ROW: moderation_actions.action and .target_type are CHECK-constrained
-    (0011, already widened once by 0017 for resolve_report) to fixed value sets that
-    include neither a chapter-approval action nor a 'chapter' target_type. Logging one
-    here would need its own migration widening those constraints, the same shape as
-    0017 — c325 does not ask for that, so it is left undone rather than silently bent
-    to fit an unrelated table's audit trail.
+    AUDIT ROW (c337; before it, c325 documented "NO AUDIT ROW"): moderation_actions'
+    CHECK constraints admitted neither a chapter-approval action nor a 'chapter' target
+    until migration 0032 widened them. Each call now appends one row — actor = the
+    platform admin who called, target = the chapter, action = approve_chapter or
+    revoke_chapter (two values, not one with a flag: the log must not blur what
+    happened, and the table has no details column to hide a direction in). The row's
+    reason is the caller's when given, else a fixed placeholder that says so — never an
+    empty string on an audit row.
 
     IDEMPOTENT BY DESIGN, not merely tolerated: re-approving an already-approved
     chapter (or re-revoking an already-unapproved one) is a plain 200 with the
     unchanged state, not a 409. Unlike suspend/unsuspend's one-time transition, this
     flips a standing flag that a platform admin may legitimately set to a value it
-    already holds — e.g. confirming approval survived some other change.
+    already holds — e.g. confirming approval survived some other change. The audit row
+    is STILL written on those calls (c337): an admin confirming an approval is an
+    action someone took, and "who last confirmed this org" is answerable only if it
+    was recorded.
     """
     chapter = await session.get(models.Chapter, chapter_id)
     if chapter is None:
         raise not_found("chapter_not_found")
     chapter.moderation_approved = body.approved
+    session.add(
+        models.ModerationAction(
+            actor_id=admin.id,
+            action="approve_chapter" if body.approved else "revoke_chapter",
+            target_type="chapter",
+            target_id=chapter.id,
+            reason=body.reason if body.reason is not None else DEFAULT_CHAPTER_APPROVAL_REASON,
+        )
+    )
     await session.commit()
     await session.refresh(chapter)
     return ChapterModerationApprovalOut.model_validate(chapter)

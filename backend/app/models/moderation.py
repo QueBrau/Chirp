@@ -21,12 +21,17 @@ from app.db import Base
 class ModerationAction(Base):
     __tablename__ = "moderation_actions"
     __table_args__ = (
+        # Value sets mirror migration 0032 (0011 -> 0017 -> 0022 -> 0032). The NAMES here
+        # are documentation only: the database's action constraint is the 0011 auto-name
+        # moderation_actions_action_check, not ck_ — read pg_constraint, never this
+        # block, before writing a migration that drops one (0017's and 0032's docstrings).
         CheckConstraint(
-            "action IN ('suspend_user', 'unsuspend_user', 'remove_content')",
+            "action IN ('suspend_user', 'unsuspend_user', 'remove_content', "
+            "'resolve_report', 'approve_chapter', 'revoke_chapter')",
             name="ck_moderation_actions_action",
         ),
         CheckConstraint(
-            "target_type IN ('user', 'chirp', 'post', 'comment')",
+            "target_type IN ('user', 'chirp', 'post', 'comment', 'report', 'chapter')",
             name="ck_moderation_actions_target_type",
         ),
         Index("idx_moderation_actions_target", "target_type", "target_id"),
