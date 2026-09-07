@@ -102,6 +102,11 @@ export async function blockChirpAuthor(chirpId: string): Promise<void> {
   return request<void>(`/moderation/blocks/by-chirp/${chirpId}`, { method: "POST" });
 }
 
+/** Undo only an anonymous block, using the original Chirp reference, never a user ID. */
+export async function unblockChirpAuthor(chirpId: string): Promise<void> {
+  return request<void>(`/moderation/blocks/by-chirp/${chirpId}`, { method: "DELETE" });
+}
+
 /** Admin removal of a chirp (moderator action, distinct from author delete). */
 export async function removeChirp(chirpId: string, reason: string): Promise<void> {
   return request<void>(`/moderation/chirps/${chirpId}/remove`, { method: "POST", body: { reason } });
