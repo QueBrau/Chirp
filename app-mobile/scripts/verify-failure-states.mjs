@@ -398,10 +398,79 @@ console.log("\n-- profile/index.tsx: the third instance (c319) --");
   const start = src.indexOf("const loadAlumniProfile = useCallback(");
   const end = src.indexOf("\n  }, [", start);
   const body = start === -1 || end === -1 ? "" : src.slice(start, end);
-  if (body.includes("setAlumniLoadFailed(true)")) {
+  if (body.includes("setAlumniLoadFailed(")) {
     pass("profile: the catch lives inside loadAlumniProfile(), so the retry is handled");
   } else {
-    fail("profile: setAlumniLoadFailed(true) must be inside loadAlumniProfile()'s own catch");
+    fail("profile: setAlumniLoadFailed(...) must be inside loadAlumniProfile()'s own catch");
+  }
+}
+
+console.log("\n-- profile/index.tsx: a 404 IS the answer, not a failure (c377) --");
+
+// GET /alumni/profile raises 404 alumni_profile_not_found for a brand-new alumni
+// (backend/app/routers/alumni.py get_own_profile) - that is the normal "haven't filled
+// it in yet" state, not a dropped request. Before c377 the catch was bare, so that 404
+// landed exactly like a 500 or a network drop: alumniLoadFailed=true, and the screen
+// showed "Couldn't load your alumni profile ... this isn't a statement that you
+// haven't filled it in" - which is exactly what it was. Executed, not matched, for the
+// same reason as member/[id].tsx's notAMember: the difference between checking status
+// alone and checking status+detail is invisible in a diff.
+{
+  const src = sources[PROFILE];
+  const start = src.indexOf("const notYetCreated =");
+  const end = src.indexOf(";", start);
+  const expression = start === -1 ? null : src.slice(start + "const notYetCreated =".length, end);
+  if (expression === null) {
+    fail(`${PROFILE}: could not find the notYetCreated classification`);
+  } else {
+    console.log(`   notYetCreated =${expression}`);
+    class ApiError extends Error {
+      constructor(status, detail) {
+        super("api");
+        this.status = status;
+        this.detail = detail;
+      }
+    }
+    const evaluate = (error) =>
+      new Function("ApiError", "error", `return (${expression});`)(ApiError, error);
+
+    const cases = [
+      [
+        "a 404 with the documented detail is the real not-yet-created answer",
+        new ApiError(404, "alumni_profile_not_found"),
+        true,
+      ],
+      [
+        "a 404 with a DIFFERENT detail is still our failure, not the known-empty case",
+        new ApiError(404, "something_else"),
+        false,
+      ],
+      ["a 500 is our failure, not the alum's empty profile", new ApiError(500, "server_error"), false],
+      ["a 401 is our failure, not the alum's empty profile", new ApiError(401, "unauthorized"), false],
+      ["a transport error is not the alum's empty profile either", new TypeError("network"), false],
+    ];
+    for (const [name, error, want] of cases) {
+      let got;
+      try {
+        got = evaluate(error);
+      } catch (thrown) {
+        got = `threw ${thrown.constructor.name}`;
+      }
+      if (got === want) pass(`profile: ${name}`);
+      else fail(`profile: ${name}`, `got ${JSON.stringify(got)}, expected ${want}`);
+    }
+  }
+
+  // And the wiring: classifying correctly is useless if alumniLoadFailed is set from
+  // the wrong side of it (this is the exact shape member/[id].tsx's setLoadFailed(!
+  // notAMember) check guards, applied to this screen's own flag).
+  if (src.includes("setAlumniLoadFailed(!notYetCreated)")) {
+    pass("profile: alumniLoadFailed is set from the NEGATION - the documented 404 does not raise it");
+  } else {
+    fail(
+      "profile: alumniLoadFailed must be set to !notYetCreated",
+      "a 404-not-yet-created raising alumniLoadFailed would show the error copy over the correct empty state, and vice versa for a real failure",
+    );
   }
 }
 

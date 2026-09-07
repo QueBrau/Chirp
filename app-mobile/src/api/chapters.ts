@@ -15,8 +15,14 @@ export type RoleName =
 
 export type MembershipStatus = "active" | "inactive" | "removed";
 
+/** Body for POST /chapters (board c378: self-serve, campus-verification gated).
+ *
+ * No campus_id: the server owns it (mirrors auth.ts's UserCreate, board c85). The
+ * new chapter is forced onto the CALLER's own verified campus, server-side —
+ * routers/chapters.py's create_chapter never reads one from the body, so there is
+ * nothing here for a client to get right or wrong.
+ */
 export interface ChapterCreate {
-  campus_id: string;
   org_name: string;
   chapter_name?: string | null;
 }

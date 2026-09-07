@@ -8,14 +8,18 @@ true before self-serve chapter creation ships; this file exercises the endpoint 
 answers it: PATCH /chapters/{chapter_id}/moderation-approval, gated the same way
 account suspension already is (Depends(require_platform_admin)).
 
-THE TRAP EVERY 403 TEST HERE IS BUILT TO AVOID, same family as test_c308's own
-warning: make_chapter_with's creator is handed is_platform_admin directly in the DB,
-because POST /chapters is itself platform-admin-gated (c28). A "president -> 403"
-test that used that creator unmodified would actually be exercising a platform admin
-who happens to also be a president, and would pass for the wrong reason — or fail to
-catch a bug where require_platform_admin was replaced with something role-based.
-_revoke_platform_admin below undoes that incidental grant so the president case tests
-exactly what it claims to.
+THE TRAP EVERY 403 TEST HERE WAS BUILT TO AVOID, same family as test_c308's own
+warning, UNTIL BOARD CARD c378: make_chapter_with's creator used to be handed
+is_platform_admin directly in the DB, because POST /chapters was itself
+platform-admin-gated (c28). A "president -> 403" test that used that creator
+unmodified would actually have been exercising a platform admin who happens to
+also be a president, and would have passed for the wrong reason. c378 removed
+that gate entirely (POST /chapters is self-serve, campus-verification-gated
+now) and make_chapter_with no longer grants is_platform_admin at all, so the
+trap this file guarded against is gone at the source. _revoke_platform_admin
+is kept below as a no-op safety net (revoking a grant that no longer happens)
+rather than deleted, so a future re-introduction of an incidental admin grant
+fails safe instead of silently reopening this exact trap.
 
 THE BEHAVIORAL TEST (test 7) reuses test_c308_moderation_decoupled.py's own pattern
 (GET /moderation/reports, asserting the exact 403 body) so the two files agree on what
@@ -48,11 +52,12 @@ async def _make_platform_admin(make_user: MakeUser, name: str = "Platform Admin"
 
 
 async def _revoke_platform_admin(user_id: str) -> None:
-    """Undo the platform-admin grant make_chapter_with's president incidentally holds
-    (POST /chapters is itself platform-admin-gated, c28) — same raw-SQL shape as
-    conftest's _grant_platform_admin, inverse direction. Without this, a "president"
-    test subject is secretly also a platform admin and a 403 assertion against them
-    would pass (or fail) for the wrong reason.
+    """No-op safety net since board card c378 (see the module docstring): this used
+    to undo the platform-admin grant make_chapter_with's president incidentally held
+    (POST /chapters was itself platform-admin-gated, c28). make_chapter_with grants
+    no such thing any more, so this now revokes a flag that was never set — kept
+    rather than deleted so a regression reintroducing that incidental grant still
+    gets cleaned up here instead of silently reopening the old trap.
     """
     from app.db import get_session_factory
 
@@ -137,8 +142,8 @@ async def test_a_president_is_refused_platform_admin_required(
     client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
     setup = await make_chapter_with("member", approve_moderation=False)
-    # See the module docstring: undo the incidental platform-admin grant so this
-    # actually isolates the president role.
+    # See the module docstring / _revoke_platform_admin: a no-op since c378, kept as
+    # a safety net rather than deleted.
     await _revoke_platform_admin(setup.president.id)
 
     resp = await client.patch(
