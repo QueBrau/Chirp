@@ -144,7 +144,31 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
   optional accent Button. Friendly, never blank screens.
 - **ListRow / Button / Card** — per tokens above; Button variants: primary (accent
   bg, white, pill, 52 tall), secondary (accentSoft/accent), ghost (transparent/
-  inkSecondary), destructive (dangerSoft/danger).
+  inkSecondary), destructive (dangerSoft/danger), **brand** (accent bg, campus
+  SECONDARY label — c385), **neutral** (surfaceAlt bg, ink label — c385).
+  - `brand` is the gold-moment CTA, and it is a NAMED VARIANT rather than a
+    `labelColor` prop on purpose: an arbitrary-colour escape hatch on the one
+    shared button is how a design system stops being one. It reads campus
+    secondary from `useAppearance()` itself, so there is no colour to pass and
+    none to get wrong. Solid accent + campus secondary is the SAME pairing the
+    floating tab bar already ships (§5, c310) and is UNCG's own; gold on navy
+    measures ~8.6:1 in both modes. One per screen (§10.4 rule 4).
+  - `neutral` is the quiet filled button, with no accent in it at all. It exists
+    because **`secondary` is unreadable in dark mode whenever the accent is dark**:
+    the default accent source is campus primary, and UNCG's navy label on the
+    accentSoft fill measures **1.18:1** in dark against 10.96:1 in light, so the
+    defect is dark-only and app-wide (board c386). surfaceAlt + ink is ~15:1 in
+    both modes by construction. Use it when a filled button should not be an accent
+    moment.
+- **UnderlineField** (c385) — the auth screens' text field: `caption`/secondary
+  label above, a value row in `body`, a 1px bottom border in `border` that becomes
+  `accent` on focus, and an optional trailing icon button (the password eye
+  toggle; the email `at-sign` is decorative and not a button).
+  - It does **NOT** replace `inputField()`. That filled `surfaceAlt` treatment is
+    what every other form in the app uses and stays the default; this one is
+    scoped to auth, where the reference's open, line-only fields are the look.
+    Two field treatments is a deliberate split, not drift — if a third appears,
+    something has gone wrong.
 
 ## 6. Product reframe (copy + structure)
 
@@ -229,8 +253,32 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
   chevron-up/down) and an eye/eye-off visibility toggle. Order + visibility
   persist in local state (mock persistence for now; real per-user prefs later).
   No drag-drop dependency — arrows only.
-- **Sign-in**: brand moment — accentGradient wordmark area, then Apple/Google/email
-  buttons full-width pill, caption legal line.
+- **Sign-in / sign-up**: ONE page, not two stages (c385, braul, Sep 7, from a
+  reference shot). Oversized `display` title + `caption` subtitle, then the email
+  form, then the CTA, then the social row, then the footer mode toggle. The title
+  IS the brand moment now: the accentGradient HeroCard wordmark it replaced was a
+  block of chrome above a screen whose actual job — the form — was hidden behind a
+  "Continue with Email" tap.
+  - Fields are UnderlineFields (§5): E-mail (decorative `at-sign`), Password (eye
+    toggle), and on sign-up only, Repeat password (eye toggle, real client-side
+    match check before Firebase is called).
+  - **Forgot password?** sits right-aligned above the CTA, sign-in mode only. It
+    is a real `sendPasswordResetEmail` call, added with this card. It is absent on
+    sign-up, where it means nothing, and the reference's own screen shows it there.
+  - **No "Remember for 30 days" checkbox**, which the reference has. Sessions
+    already persist INDEFINITELY (c166: AsyncStorage on native, browser
+    persistence on web), so the control would promise less than the truth and
+    unchecking it would have to do nothing. A checkbox that cannot change the
+    behaviour it names is worse than no checkbox.
+  - **Two social buttons, not three.** Chirp has Apple and Google; the reference's
+    third (Instagram) is not a provider this app has, and sign-in.tsx's own rule is
+    that a control which looks like authentication must never be one that isn't.
+    They keep short TEXT labels rather than the reference's icon-only circles:
+    Feather has no brand marks, mixing icon families is forbidden above, and a
+    lettered circle is the placeholder-letter UI §10.2 calls lazy. Apple and Google
+    both require their official marks for sign-in buttons, so icon-only is an asset
+    job, not a styling one.
+  - Caption legal line stays at the bottom.
 
 ## 8. Don'ts
 
