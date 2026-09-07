@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#
+# Apply the repository's alembic head to PROD through the Cloud SQL Auth Proxy,
+# then read the revision back as the proof step (INFRA-PRIVATE.html #migrate).
+#
+# Why a script: the runbook one-liner extracts the prod password inline with a
+# command substitution, and the manager session's permission classifier blocks
+# that form (Sep 7, window #11). A fixed, reviewable command with no inline
+# credential is the thing an allow rule can name. The connection string is read
+# from the gitignored INFRA-PRIVATE.html at run time and is never printed.
+#
+# Usage (from the repo root, proxy already listening on 5433):
+#   scripts/prod-migrate            upgrade head, then print `alembic current`
+#   scripts/prod-migrate current    read-only: print `alembic current` only
+#
+# READ THE SECOND LINE. On Aug 16 a failed migration was followed by a successful
+# redeploy because nobody read the revision that came back. The proof step is
+# the point, not decoration. Migrate FIRST, then redeploy BOTH Cloud Run services.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+INFRA="$ROOT/INFRA-PRIVATE.html"
+BACKEND="$ROOT/backend"
+MODE="${1:-upgrade}"
+
+[ -f "$INFRA" ] || { echo "prod-migrate: $INFRA missing (machine-local, gitignored)" >&2; exit 2; }
+[ -x "$BACKEND/.venv/bin/alembic" ] || { echo "prod-migrate: backend/.venv/bin/alembic missing" >&2; exit 2; }
+nc -z localhost 5433 2>/dev/null || { echo "prod-migrate: nothing listening on 5433 - start ~/cloud-sql-proxy first (INFRA-PRIVATE #proxy)" >&2; exit 2; }
+
+# Extracted into a variable only; never echoed. Uses the system python3 so the
+# extraction does not depend on the backend venv being importable.
+DATABASE_URL="$(python3 - "$INFRA" <<'PY'
+import html, re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r"postgresql\+asyncpg://chirp:[^@'\"<\s]+@localhost:5433/chirp", s)
+if not m:
+    sys.exit("prod-migrate: no 5433 proxy URL found in INFRA-PRIVATE.html")
+sys.stdout.write(html.unescape(m.group(0)))
+PY
+)"
+export DATABASE_URL
+
+cd "$BACKEND"
+case "$MODE" in
+  upgrade)
+    echo "prod-migrate: repository head is $(.venv/bin/alembic heads 2>/dev/null | tail -1)"
+    echo "prod-migrate: prod before -> $(.venv/bin/alembic current 2>/dev/null | grep -v '^INFO' | tail -1)"
+    .venv/bin/alembic upgrade head
+    echo "prod-migrate: prod after  -> $(.venv/bin/alembic current 2>/dev/null | grep -v '^INFO' | tail -1)"
+    ;;
+  current)
+    .venv/bin/alembic current 2>/dev/null | grep -v '^INFO'
+    ;;
+  *)
+    echo "prod-migrate: unknown mode '$MODE' (upgrade|current)" >&2; exit 2
+    ;;
+esac
