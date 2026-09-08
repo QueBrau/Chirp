@@ -18,6 +18,11 @@ const checks = [
   ["QR encodes the public invite URL", /<QRCode[\s\S]*?value=\{inviteShareUrl\(invite\.code\)\}/s, chapterScreen],
   ["shared URL uses the https hand-off helper", /inviteShareUrl\(invite\.code\)/, chapterScreen],
   ["custom-scheme links are not shared", (text) => !/Share\.share\([\s\S]*?chirp:\/\//s.test(text), chapterScreen],
+  // Board c359: this list was a flat 200-code cap with no continuation, so a code
+  // past that ceiling was neither visible nor revocable here at all.
+  ["listInvites is called with a page-shaped options object", /listInvites\(chapterId,\s*\{/, chapterScreen],
+  ["a hasOlder-or-equivalent continuation flag exists", /\bhasOlder\b/, chapterScreen],
+  ["a load-older-codes handler and button label exist", /loadOlderCodes|Load older codes/, chapterScreen],
 ];
 
 let failures = 0;
