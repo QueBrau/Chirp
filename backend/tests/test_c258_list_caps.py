@@ -116,14 +116,22 @@ async def test_member_list_below_the_cap_returns_everyone(
 
 # ---------------------------------------------------------------------------
 # GET /chapters/{chapter_id}/invites  (history-bounded)
+#
+# c359: this route left the hard-cap-and-warn group above. Past 200 codes used to
+# be neither visible nor revocable at all (only a log line said so); it is now
+# cursor-paginated on (expires_at, id) instead, so "never silently" is now proven
+# by a client-supplied `limit` being honored exactly and a cursor reaching the
+# rest, not by a warning log - MAX_HISTORY_PAGE is the query param's upper bound
+# (`le=`), not an unconditional truncation point, so monkeypatching it no longer
+# changes what an un-paged request returns. The full cursor-walk coverage (200+
+# codes, a tied-expires_at page boundary, revocability of a code past the old
+# 200-row ceiling) lives in test_c359_invite_list.py; this test only pins that a
+# caller-supplied limit is respected rather than silently ignored.
 # ---------------------------------------------------------------------------
 
 
-async def test_invite_list_is_capped_and_says_so(
-    client: AsyncClient,
-    make_chapter_with: MakeChapterWith,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+async def test_invite_list_respects_an_explicit_limit_and_a_cursor_reaches_the_rest(
+    client: AsyncClient, make_chapter_with: MakeChapterWith
 ) -> None:
     setup = await make_chapter_with("member")
     for _ in range(3):
@@ -134,15 +142,30 @@ async def test_invite_list_is_capped_and_says_so(
         )
         assert minted.status_code == 201, minted.text
 
-    monkeypatch.setattr("app.routers.chapters.MAX_HISTORY_PAGE", 2)
-    with caplog.at_level(logging.WARNING):
-        response = await client.get(
-            f"/chapters/{setup.chapter_id}/invites", headers=setup.president.headers
-        )
+    first_page = await client.get(
+        f"/chapters/{setup.chapter_id}/invites?limit=2", headers=setup.president.headers,
+    )
+    assert first_page.status_code == 200, first_page.text
+    assert len(first_page.json()) == 2, "the caller-supplied limit must be honored exactly"
 
-    assert response.status_code == 200, response.text
-    assert len(response.json()) == 2
-    assert _capped_warnings(caplog)
+    last = first_page.json()[-1]
+    second_page = await client.get(
+        f"/chapters/{setup.chapter_id}/invites"
+        f"?limit=2&before={last['expires_at']}&before_id={last['id']}",
+        headers=setup.president.headers,
+    )
+    assert second_page.status_code == 200, second_page.text
+    all_codes = {row["code"] for row in first_page.json()} | {
+        row["code"] for row in second_page.json()
+    }
+    unpaged = await client.get(
+        f"/chapters/{setup.chapter_id}/invites", headers=setup.president.headers,
+    )
+    assert all_codes == {row["code"] for row in unpaged.json()}, (
+        "walking the cursor must reach every code a bare request also returns - "
+        "nothing may be lost behind an explicit limit the old cap-and-warn route "
+        "would have silently enforced anyway"
+    )
 
 
 async def test_invite_list_below_the_cap_returns_all_of_them(
