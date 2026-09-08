@@ -480,15 +480,14 @@ export default function SignInScreen() {
   const linkColor = canvasActionColor(palette, campusColors);
 
   return (
-    <Screen scroll>
-      {/* NO `flex: 1` HERE. Screen's ScrollView contentContainerStyle sets no
-          flexGrow, so a flex:1 child collapses to ZERO HEIGHT on native and the
-          screen renders as a bare canvas. It survived the browser check because
-          react-native-web resolves that case differently, and it only appeared on
-          the simulator. The old layout could use flex:1 because it was
-          `scroll={false}` and needed it to centre the form vertically; scrolling
-          content just flows. */}
-      <View style={{ gap: spacing.xl, paddingTop: spacing.xxl }}>
+    /* `fillHeight` makes the content grow to the viewport so the spacer below can
+       push the footer down (braul: "too much white space on the bottom"). It is
+       ALSO what makes the `flex: 1` on this View legal - without flexGrow on the
+       scroll container a flex child collapses to zero height on native and this
+       screen renders as a bare canvas, which is exactly what it did before c385's
+       device pass. The two go together; do not remove one and keep the other. */
+    <Screen scroll fillHeight>
+      <View style={{ flex: 1, gap: spacing.xl, paddingTop: spacing.xxl }}>
         {/* The title IS the brand moment now (DESIGN section 7, c385) - it replaced
             an accentGradient HeroCard wordmark that was a block of chrome sitting
             above the screen's actual job. */}
@@ -648,6 +647,13 @@ export default function SignInScreen() {
             </AppText>
           ) : null}
         </View>
+
+        {/* Absorbs the slack on a screen taller than the form, so the footer and the
+            legal line sit near the bottom the way the reference has them, instead of
+            the whole page hugging the top under a block of empty canvas. Collapses to
+            nothing once the content is tall enough to scroll, so a small phone and a
+            keyboard-up layout are unaffected. */}
+        <View style={{ flex: 1, minHeight: spacing.lg }} />
 
         {/* The reference's own footer says "Don't have an account? Sign Up" on a
             screen titled "Create your account", which is self-contradictory. This one

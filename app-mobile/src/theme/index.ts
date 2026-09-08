@@ -252,15 +252,32 @@ export const metrics = {
  * breathing room — never eyeballed, and there is exactly one place to update
  * if the tab bar or FAB ever change size.
  *
- * `Screen` is the only intended call site (via its `hasFab` prop) — pass
- * `hasFab: true` when the screen also renders a sibling `<Fab/>` so its
- * content clears both overlays instead of just the tab bar.
+ * `Screen` is the only intended call site — it passes `hasFab` when the screen
+ * renders a sibling `<Fab/>`, and `hasTabBar` derived from the route.
+ *
+ * hasTabBar EXISTS BECAUSE THIS USED TO RESERVE TAB-BAR SPACE ON SCREENS WITH NO
+ * TAB BAR (c385, braul: "too much white space on the bottom of the sign in page").
+ * The whole `(auth)` group — sign-in, account-type, join-chapter, verify-campus,
+ * suspended — is a plain Stack with no floating bar, and every one of them was
+ * padding the bottom by `insets.bottom + 64 + 16`. On an iPhone 15 Pro that is
+ * 114pt of dead space under the last control, and the failure is SILENT: nothing
+ * looks broken, the page just sits oddly high, which is why it survived until
+ * someone looked at it on a phone and said so.
+ *
+ * DERIVED FROM THE ROUTE RATHER THAN PASSED AS A PROP, deliberately. A
+ * `hasTabBar={false}` prop would have to be remembered by every future auth or
+ * onboarding screen, and forgetting it reproduces exactly this bug with no
+ * symptom to notice. The router already knows the answer.
  */
-export function useOverlayClearance(hasFab: boolean = false): number {
+export function useOverlayClearance(hasFab: boolean = false, hasTabBar: boolean = true): number {
   const insets = useSafeAreaInsets();
-  const tabBarTop = Math.max(insets.bottom, metrics.tabBarInsetBottom) + metrics.tabBarBoxHeight;
+  // Without a tab bar the only thing to clear is the home indicator, which
+  // SafeAreaView does NOT cover here (Screen takes edges={["top"]} only).
+  const overlayTop = hasTabBar
+    ? Math.max(insets.bottom, metrics.tabBarInsetBottom) + metrics.tabBarBoxHeight
+    : insets.bottom;
   const fabExtra = hasFab ? spacing.md + metrics.fabSize : 0;
-  return tabBarTop + fabExtra + spacing.lg;
+  return overlayTop + fabExtra + spacing.lg;
 }
 
 /**
