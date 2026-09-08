@@ -53,6 +53,7 @@ from app.middleware.auth import get_current_user
 from app.middleware.org_scope import get_current_membership
 from app.schemas.events import (
     EventCreate,
+    EventInviteBatchOut,
     EventInviteCreate,
     EventInviteOut,
     EventInviteWithRsvpOut,
@@ -426,13 +427,19 @@ async def invite_to_event(
     body: EventInviteCreate,
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> list[EventInviteOut]:
+) -> EventInviteBatchOut:
     """Invite people. Host or e-board only.
 
     ON CONFLICT DO NOTHING rather than a check-then-insert: inviting the roster twice is
     an ordinary double-tap, and the primary key is what makes the second one harmless.
-    Returns the event's full invite list so the caller does not have to guess which of
-    its ids were new.
+
+    Returns only the rows THIS CALL actually inserted (board c359), via
+    ON CONFLICT DO NOTHING ... RETURNING, not the event's whole accumulated invite
+    history — that used to grow the response without bound as an event aged, on every
+    invite send. GET /events/{event_id}/invites (c351) is the paginated route for "what
+    does the whole list look like"; this route answers "what did I just do", which does
+    not grow with the event's history. A duplicate/all-blocked/no-op batch comes back
+    with an empty `created` and `created_count == 0`.
 
     AN INVITE GRANTS READ ACCESS (see `_readable_event`), so this endpoint is a
     permission grant and is gated like one - a rank-and-file member cannot use somebody
@@ -462,8 +469,9 @@ async def invite_to_event(
     blockers = await blockers_of(session, subject_id=user.id, candidate_ids=known_ids)
     invitable_ids = known_ids - blockers
 
+    created: list[models.EventInvite] = []
     if invitable_ids:
-        await session.execute(
+        result = await session.execute(
             pg_insert(models.EventInvite)
             .values(
                 [
@@ -476,15 +484,15 @@ async def invite_to_event(
                 ]
             )
             .on_conflict_do_nothing(constraint="pk_event_invites")
+            .returning(models.EventInvite)
         )
+        created = list(result.scalars().all())
         await session.commit()
 
-    rows = await session.execute(
-        select(models.EventInvite)
-        .where(models.EventInvite.event_id == event_id)
-        .order_by(models.EventInvite.created_at)
+    return EventInviteBatchOut(
+        created=[EventInviteOut.model_validate(i) for i in created],
+        created_count=len(created),
     )
-    return [EventInviteOut.model_validate(i) for i in rows.scalars().all()]
 
 
 async def _require_guest_list_access(

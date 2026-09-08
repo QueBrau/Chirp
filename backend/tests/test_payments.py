@@ -778,12 +778,13 @@ async def test_customer_is_per_chapter_not_per_user(
 
 async def _succeeded_event(
     cycle_id: str, user_id: str, intent_id: str = "pi_test_1", event_id: str = "evt_1",
-    *, rail: str = "card",
+    *, rail: str = "card", reservation_status: str = "failed",
 ) -> dict[str, Any]:
     """Seed a stored provider reservation when absent and describe its settlement.
 
-    Direct webhook tests model a previously abandoned provider intent with a failed
-    reservation; route tests reuse their actual reservation. New binding-negative
+    Direct webhook tests model a retryable failed provider intent; route tests
+    reuse their actual reservation. Legacy double-capture fixtures explicitly
+    seed a previously canceled row. New binding-negative
     tests mutate the resulting signed event WITHOUT changing database authority.
     """
     from app import models
@@ -800,7 +801,7 @@ async def _succeeded_event(
         if reservation is None:
             reservation = models.DuesPaymentIntent(
                 chapter_id=chapter.id, dues_cycle_id=cycle.id, user_id=uuid.UUID(user_id),
-                rail=rail, status="failed", stripe_payment_intent_id=intent_id,
+                rail=rail, status=reservation_status, stripe_payment_intent_id=intent_id,
                 amount_cents=cycle.amount_cents, currency="usd",
             )
             session.add(reservation)
@@ -975,7 +976,7 @@ async def _reserved_intent_id(cycle_id: str, user_id: str) -> str | None:
             text(
                 "SELECT stripe_payment_intent_id FROM dues_payment_intents "
                 "WHERE dues_cycle_id = :c AND user_id = :u "
-                "AND status IN ('open', 'succeeded')"
+                "AND status IN ('open', 'failed', 'succeeded')"
             ),
             {"c": cycle_id, "u": user_id},
         )
@@ -1120,24 +1121,25 @@ async def test_a_failed_stripe_call_on_retry_does_not_cancel_a_reservation_holdi
     monkeypatch.setattr(stripe.PaymentIntent, "create_async", boom_create)
     monkeypatch.setattr(stripe.PaymentIntent, "retrieve_async", boom_retrieve)
 
-    with pytest.raises(stripe.APIConnectionError):
-        await client.post(
-            f"/payments/dues/{cycle_id}/intent",
-            json={"rail": "ach"},
-            headers=setup.member.headers,
-        )
+    retry = await client.post(
+        f"/payments/dues/{cycle_id}/intent",
+        json={"rail": "ach"},
+        headers=setup.member.headers,
+    )
+    assert retry.status_code == 503
+    assert retry.json()["detail"] == "payment_outcome_unconfirmed"
 
     assert await _reservation_status(cycle_id, setup.member.id) == "open"
     assert await _reserved_intent_id(cycle_id, setup.member.id) == intent_id_before
 
 
-async def test_a_failed_payment_releases_the_reservation_so_the_member_can_retry(
+async def test_a_failed_payment_holds_the_reservation_and_retries_the_same_intent(
     client: AsyncClient,
     make_chapter_with: MakeChapterWith,
     stripe_env: None,
     stripe_calls: dict[str, list[dict[str, Any]]],
 ) -> None:
-    """The guard must not strand a member whose payment genuinely failed."""
+    """A decline is retryable on the existing intent; another rail stays blocked."""
     setup = await make_chapter_with(role="member")
     await _onboard(client, setup)
     cycle_id = await _create_dues_cycle(client, setup)
@@ -1163,8 +1165,16 @@ async def test_a_failed_payment_releases_the_reservation_so_the_member_can_retry
         headers=setup.member.headers,
     )
 
-    assert retry.status_code == 200, retry.text
-    assert len(stripe_calls["payment_intent"]) == 2
+    assert retry.status_code == 409, retry.text
+    assert retry.json()["detail"] == "payment_already_in_progress"
+    same_rail = await client.post(
+        f"/payments/dues/{cycle_id}/intent", json={"rail": "ach"},
+        headers=setup.member.headers,
+    )
+    assert same_rail.status_code == 200, same_rail.text
+    assert await _reserved_intent_id(cycle_id, setup.member.id) == intent_id
+    assert await _reservation_status(cycle_id, setup.member.id) == "failed"
+    assert len(stripe_calls["payment_intent"]) == 1
 
 
 async def test_two_distinct_intents_for_one_cycle_cannot_both_reach_the_ledger(
@@ -1185,7 +1195,9 @@ async def test_two_distinct_intents_for_one_cycle_cannot_both_reach_the_ledger(
         client, await _succeeded_event(cycle_id, setup.member.id, "pi_ach", "evt_ach")
     )
     second = await _post_webhook(
-        client, await _succeeded_event(cycle_id, setup.member.id, "pi_card", "evt_card")
+        client, await _succeeded_event(
+            cycle_id, setup.member.id, "pi_card", "evt_card", reservation_status="canceled"
+        )
     )
 
     assert first.status_code == 200
@@ -1218,7 +1230,9 @@ async def test_a_second_distinct_capture_that_cannot_be_recorded_logs_a_reconcil
 
     with caplog.at_level("ERROR", logger="app.routers.payments"):
         second = await _post_webhook(
-            client, await _succeeded_event(cycle_id, setup.member.id, "pi_card", "evt_card")
+            client, await _succeeded_event(
+                cycle_id, setup.member.id, "pi_card", "evt_card", reservation_status="canceled"
+            )
         )
 
     assert second.status_code == 200  # still 2xx — Stripe must not retry this forever
@@ -1375,15 +1389,15 @@ def _install_caching_payment_intent_create(
     monkeypatch.setattr(stripe.PaymentIntent, "create_async", fake_create)
 
 
-async def test_a_declined_card_retry_gets_a_genuinely_fresh_intent(
+async def test_a_canceled_intent_retry_gets_a_genuinely_fresh_intent(
     client: AsyncClient,
     make_chapter_with: MakeChapterWith,
     monkeypatch: pytest.MonkeyPatch,
     stripe_env: None,
     stripe_calls: dict[str, list[dict[str, Any]]],
 ) -> None:
-    """The primary c231 fix: seed a FAILED reservation (R1) that still carries
-    pi_123 (exactly what _resolve_reservation leaves behind), then retry. The old
+    """The primary c231 fix: seed a CANCELED reservation (R1) that still carries
+    pi_123 after confirmed provider cancellation, then retry. The old
     (cycle, member, rail) key is pre-seeded to resolve to pi_123 in the fake — if
     the retry's create() call still computed that key, it would get pi_123 back
     and collide with R1's row. It must not: the new reservation's key includes its
@@ -1398,7 +1412,7 @@ async def test_a_declined_card_retry_gets_a_genuinely_fresh_intent(
     )
 
     await _seed_reservation(
-        setup.chapter_id, cycle_id, setup.member.id, "card", "failed",
+        setup.chapter_id, cycle_id, setup.member.id, "card", "canceled",
         stripe_payment_intent_id="pi_123",
     )
 
@@ -1423,7 +1437,7 @@ async def test_a_stale_cached_key_collision_is_a_409_not_a_500(
     stripe_calls: dict[str, list[dict[str, Any]]],
 ) -> None:
     """The c231 belt: even with the per-reservation nonce, force Stripe to hand
-    back an id (pi_123) that's already claimed by a DIFFERENT row (R1, 'failed').
+    back an id (pi_123) that's already claimed by a DIFFERENT row (R1, 'canceled').
     uq_dues_intent_stripe_id then loses the assignment commit — this must resolve
     as an honest 409 the client can retry, not the unhandled 500 the bug report
     describes, and it must not leave the member stuck: the new reservation this
@@ -1435,7 +1449,7 @@ async def test_a_stale_cached_key_collision_is_a_409_not_a_500(
     _install_caching_payment_intent_create(monkeypatch, stripe_calls, force_id="pi_123")
 
     await _seed_reservation(
-        setup.chapter_id, cycle_id, setup.member.id, "card", "failed",
+        setup.chapter_id, cycle_id, setup.member.id, "card", "canceled",
         stripe_payment_intent_id="pi_123",
     )
 

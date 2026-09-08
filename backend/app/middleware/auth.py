@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.config import get_settings
 from app.db import get_session
+from app.services.identity_verification import run_verification
 
 
 async def _verify_identity(
@@ -51,7 +52,7 @@ async def _verify_identity(
         firebase_admin.initialize_app(options=options)
 
     try:
-        decoded = firebase_auth.verify_id_token(token)
+        decoded = await run_verification(firebase_auth.verify_id_token, token)
     except Exception:  # invalid/expired token
         raise HTTPException(status_code=401, detail="invalid_token")
     uid = decoded.get("uid")

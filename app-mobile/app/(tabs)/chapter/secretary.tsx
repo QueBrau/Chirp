@@ -11,10 +11,12 @@
  * sees an EmptyState instead of a wall of 403s.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
 import { listMembers, myMemberships, type MemberOut, type MyMembershipOut } from "@/api/chapters";
+import { useSession } from "@/auth";
+import { currentIdentity, ownsIdentity, type AuthIdentity } from "@/auth/identity";
 import {
   createMeeting,
   deleteMeeting,
@@ -48,6 +50,7 @@ import {
   type PollOut,
 } from "@/api/polls";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
+import { acceptPage, beginOlderPage, collectionPage, meetingOrder, mergePageRows, mergePollPage, pollOrder } from "@/lib/collectionPages";
 import { calendarDay } from "@/lib/dates";
 import { shareCsv } from "@/lib/export";
 import { currentSemesterWindow } from "@/org/semester";
@@ -69,6 +72,8 @@ type ExpandedPanel = { meetingId: string; kind: "minutes" | "attendance" } | nul
  * change here and needs nothing on the backend.
  */
 const POLL_OPTION_SLOTS = 4;
+// Matches the server's poll option text ceiling (c345).
+const POLL_OPTION_MAX_LENGTH = 200;
 
 const ATTENDANCE_OPTIONS: { key: AttendanceStatus; label: string; short: string }[] = [
   { key: "present", label: "present", short: "P" },
@@ -143,7 +148,22 @@ function FieldLabel({ children }: { children: string }) {
 const MEETING_PAGE_SIZE = 50;
 const POLL_PAGE_SIZE = 50;
 
+function dashboardQuery(owner: AuthIdentity) {
+  return {
+    owner, active: true, chapterId: null as string | null,
+    meetings: collectionPage(), polls: collectionPage(),
+    ownVoteKnown: new Set<string>(), summaryRequest: 0, windowKey: "semester" as WindowKey,
+  };
+}
+type DashboardQuery = ReturnType<typeof dashboardQuery>;
+
 export default function SecretaryScreen() {
+  useSession();
+  const renderOwner = currentIdentity();
+  const queryRef = useRef(dashboardQuery(renderOwner));
+  const renderQuery = queryRef.current;
+  const currentQuery = (query: DashboardQuery) =>
+    query === queryRef.current && query.owner === renderOwner && query.active && ownsIdentity(query.owner);
   const palette = useTheme();
 
   // undefined = /me/memberships hasn't resolved yet; null = signed-in user has
@@ -200,20 +220,23 @@ export default function SecretaryScreen() {
    * totals call must not take the minutes and attendance surfaces down with it, which
    * is what happens if this rejects inside init() below.
    */
-  const loadSummary = useCallback(async (id: string, key: WindowKey) => {
+  const loadSummary = useCallback(async (id: string, key: WindowKey, query = queryRef.current) => {
+    if (!currentQuery(query) || query.chapterId !== id || query.windowKey !== key) return;
+    const request = ++query.summaryRequest;
     try {
       const totals = await getAttendanceSummary(
         id,
         key === "semester" ? currentSemesterWindow(new Date()) : {},
       );
-      setSummary(totals);
+      if (currentQuery(query) && query.summaryRequest === request) setSummary(totals);
     } catch (error) {
+      if (!currentQuery(query) || query.summaryRequest !== request) return;
       showApiError(error, "Couldn't load attendance totals");
     }
-  }, []);
+  }, [renderOwner]);
 
   /**
-   * Exactly two requests, whatever the chapter's history looks like (board c156).
+   * Three collection requests, whatever the chapter's history looks like (c156/c162).
    * This used to be listMeetings followed by getAttendance PER MEETING inside a
    * Promise.all — a semester of meetings meant a semester of requests every time the
    * dashboard opened, and it grew with the archive rather than with anything the
@@ -221,73 +244,118 @@ export default function SecretaryScreen() {
    * here any more; the create path below still sorts, because a meeting logged for a
    * past date must not jump to the top.
    */
-  const loadDashboard = useCallback(async (id: string) => {
+  const loadDashboard = useCallback(async (id: string, query: DashboardQuery) => {
     const [withAttendance, members, chapterPolls] = await Promise.all([
       listMeetingsWithAttendance(id, { limit: MEETING_PAGE_SIZE }),
       listMembers(id),
       listPolls(id, { limit: POLL_PAGE_SIZE }),
     ]);
+    if (!currentQuery(query)) return;
     setRoster(members.filter((m) => m.status === "active"));
-    setItems(withAttendance);
-    setHasOlderMeetings(withAttendance.length === MEETING_PAGE_SIZE);
-    setPolls(chapterPolls);
-    setHasOlderPolls(chapterPolls.length === POLL_PAGE_SIZE);
-  }, []);
+    const meeting = withAttendance.at(-1)?.meeting, poll = chapterPolls.at(-1);
+    acceptPage(query.meetings, withAttendance.length, MEETING_PAGE_SIZE,
+      meeting ? { before: meeting.meeting_date, beforeId: meeting.id } : null);
+    acceptPage(query.polls, chapterPolls.length, POLL_PAGE_SIZE,
+      poll ? { before: poll.created_at, beforeId: poll.id } : null);
+    const removedMeetings = new Set(query.meetings.removed), removedPolls = new Set(query.polls.removed);
+    const ownVoteKnown = new Set(query.ownVoteKnown);
+    for (const row of chapterPolls) query.ownVoteKnown.add(row.id);
+    setItems(current => mergePageRows(current, withAttendance, row => row.meeting.id, meetingOrder, removedMeetings));
+    setHasOlderMeetings(query.meetings.more);
+    setPolls(current => mergePollPage(current, chapterPolls, ownVoteKnown, removedPolls));
+    setHasOlderPolls(query.polls.more);
+  }, [renderOwner]);
 
   /** Append the page of meetings after the oldest held. Each sheet still arrives whole,
    * so the present/absent/excused counts below stay counts of the real sheet (c258). */
   const loadOlderMeetings = async () => {
-    const current = items ?? [];
-    const oldest = current[current.length - 1];
-    if (chapterId === null || oldest === undefined || loadingOlderMeetings) return;
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId) return;
+    const request = beginOlderPage(query.meetings), cursor = query.meetings.cursor;
+    if (request === null || cursor === null) return;
     setLoadingOlderMeetings(true);
     try {
       const older = await listMeetingsWithAttendance(chapterId, {
-        before: oldest.meeting.meeting_date,
-        beforeId: oldest.meeting.id,
+        ...cursor,
         limit: MEETING_PAGE_SIZE,
       });
-      setHasOlderMeetings(older.length === MEETING_PAGE_SIZE);
-      setItems([...current, ...older]);
+      if (!currentQuery(query) || query.meetings.pending !== request) return;
+      const meeting = older.at(-1)?.meeting;
+      acceptPage(query.meetings, older.length, MEETING_PAGE_SIZE,
+        meeting ? { before: meeting.meeting_date, beforeId: meeting.id } : null);
+      const removed = new Set(query.meetings.removed);
+      setHasOlderMeetings(query.meetings.more);
+      setItems(current => mergePageRows(current, older, row => row.meeting.id, meetingOrder, removed));
     } catch (error) {
+      if (!currentQuery(query) || query.meetings.pending !== request) return;
       showApiError(error, "Couldn't load earlier meetings");
     } finally {
-      setLoadingOlderMeetings(false);
+      if (currentQuery(query) && query.meetings.pending === request) {
+        query.meetings.pending = null;
+        setLoadingOlderMeetings(false);
+      }
     }
   };
 
   const loadOlderPolls = async () => {
-    const current = polls ?? [];
-    const oldest = current[current.length - 1];
-    if (chapterId === null || oldest === undefined || loadingOlderPolls) return;
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId) return;
+    const request = beginOlderPage(query.polls), cursor = query.polls.cursor;
+    if (request === null || cursor === null) return;
     setLoadingOlderPolls(true);
     try {
       const older = await listPolls(chapterId, {
-        before: oldest.created_at,
-        beforeId: oldest.id,
+        ...cursor,
         limit: POLL_PAGE_SIZE,
       });
-      setHasOlderPolls(older.length === POLL_PAGE_SIZE);
-      setPolls([...current, ...older]);
+      if (!currentQuery(query) || query.polls.pending !== request) return;
+      const poll = older.at(-1);
+      acceptPage(query.polls, older.length, POLL_PAGE_SIZE,
+        poll ? { before: poll.created_at, beforeId: poll.id } : null);
+      const ownVoteKnown = new Set(query.ownVoteKnown), removed = new Set(query.polls.removed);
+      for (const row of older) query.ownVoteKnown.add(row.id);
+      setHasOlderPolls(query.polls.more);
+      setPolls(current => mergePollPage(current, older, ownVoteKnown, removed));
     } catch (error) {
+      if (!currentQuery(query) || query.polls.pending !== request) return;
       showApiError(error, "Couldn't load earlier polls");
     } finally {
-      setLoadingOlderPolls(false);
+      if (currentQuery(query) && query.polls.pending === request) {
+        query.polls.pending = null;
+        setLoadingOlderPolls(false);
+      }
     }
   };
 
   useEffect(() => {
+    const query = dashboardQuery(renderOwner);
+    queryRef.current.active = false;
+    queryRef.current = query;
+    setMembership(undefined);
+    setItems(null); setPolls(null); setRoster(null); setSummary(null);
+    setHasOlderMeetings(false); setHasOlderPolls(false);
+    setLoadingOlderMeetings(false); setLoadingOlderPolls(false);
+    setCreatingMeeting(false); setCreatingPoll(false); setBusyPollId(null);
+    setSavingMinutes(false); setSavingAttendance(false); setDeletingMeetingId(null);
+    setExportingCsv(false);
+    setExpanded(null); setMinutesDraft(""); setAttendanceDraft({});
+    setNewTitle(""); setNewDateText(""); setNewQuestion("");
+    setNewOptions(Array.from({ length: POLL_OPTION_SLOTS }, () => ""));
+    setCreateError(null); setPollError(null); setWindowKey("semester");
     const init = async () => {
       setLoadFailed(false);
       try {
         const memberships = await myMemberships();
+        if (!currentQuery(query)) return;
         const eligible =
           memberships.find((m) => m.role === "secretary" || m.role === "president") ?? null;
         setMembership(eligible);
         if (eligible === null) return; // role-gated: no meetings/attendance calls
-        await loadDashboard(eligible.chapter_id);
-        await loadSummary(eligible.chapter_id, "semester");
+        query.chapterId = eligible.chapter_id;
+        await loadDashboard(eligible.chapter_id, query);
+        await loadSummary(eligible.chapter_id, query.windowKey, query);
       } catch (error) {
+        if (!currentQuery(query)) return;
         showApiError(error, "Couldn't load the secretary dashboard");
         // c313: a FAILED load must not render as "Secretary/president only" -
         // that is the revoked-role lie c299 removed from treasurer.tsx. The
@@ -297,7 +365,8 @@ export default function SecretaryScreen() {
       }
     };
     void init();
-  }, [loadDashboard, loadSummary, retryKey]);
+    return () => { query.active = false; };
+  }, [loadDashboard, loadSummary, retryKey, renderOwner]);
 
   /**
    * Live poll updates (c162). Somebody else voting is the ONLY thing that moves a
@@ -315,29 +384,33 @@ export default function SecretaryScreen() {
    */
   useEffect(() => {
     if (chapterId === null) return;
+    const query = queryRef.current;
     return chirpSocket.onEvent((event) => {
-      if (!isPollEvent(event) || event.chapter_id !== chapterId) return;
+      if (!currentQuery(query) || query.chapterId !== chapterId || !isPollEvent(event) || event.chapter_id !== chapterId) return;
 
       if (event.action === "deleted") {
+        query.polls.removed.add(event.poll_id);
         setPolls((prev) => (prev ?? []).filter((p) => p.id !== event.poll_id));
         return;
       }
       const incoming = event.poll;
-      if (incoming === undefined) return;
+      if (incoming === undefined || query.polls.removed.has(incoming.id)) return;
 
       setPolls((prev) => {
         const current = prev ?? [];
         const existing = current.find((p) => p.id === incoming.id);
         if (existing === undefined) {
           // A poll opened by someone else. Nobody here has voted in it yet.
-          return [{ ...incoming, my_option_id: null }, ...current];
+          return [{ ...incoming, my_option_id: null }, ...current].sort(pollOrder);
         }
         return current.map((p) =>
           p.id === incoming.id ? { ...incoming, my_option_id: p.my_option_id } : p,
         );
       });
     });
-  }, [chapterId]);
+  }, [chapterId, renderOwner, retryKey]);
+
+  if (!currentQuery(queryRef.current)) return null;
 
   // c313: the failure gate outranks the role gate - on a failed load the role
   // is UNKNOWN, and "Secretary/president only" to a real secretary is the
@@ -388,7 +461,8 @@ export default function SecretaryScreen() {
   const inputStyle = inputField(palette);
 
   const handleCreateMeeting = async () => {
-    if (chapterId === null || creatingMeeting) return; // double-submit guard
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId || creatingMeeting) return;
     const title = newTitle.trim();
     if (title.length === 0) {
       setCreateError("Give the meeting a title.");
@@ -403,25 +477,21 @@ export default function SecretaryScreen() {
     setCreatingMeeting(true);
     try {
       const created = await createMeeting(chapterId, { title, meeting_date: isoDate });
-      setItems((current) => {
-        const next = [
-          { meeting: created, attendance: [] as MeetingAttendanceOut[] },
-          ...(current ?? []),
-        ];
-        // Re-sort rather than assume the new meeting is newest — a secretary
-        // logging a past meeting shouldn't jump the most-recent-first order.
-        next.sort((a, b) => b.meeting.meeting_date.localeCompare(a.meeting.meeting_date));
-        return next;
-      });
+      if (!currentQuery(query)) return;
+      setItems(current => mergePageRows(
+        [{ meeting: created, attendance: [] as MeetingAttendanceOut[] }],
+        current ?? [], row => row.meeting.id, meetingOrder,
+      ));
       setNewTitle("");
       setNewDateText("");
       // The totals' denominator counts meetings in the window; refetch rather than
       // try to add this one in locally (mirrors removeMeeting below).
-      await loadSummary(chapterId, windowKey);
+      await loadSummary(chapterId, query.windowKey, query);
     } catch (error) {
+      if (!currentQuery(query)) return;
       showApiError(error, "Couldn't create meeting");
     } finally {
-      setCreatingMeeting(false);
+      if (currentQuery(query)) setCreatingMeeting(false);
     }
   };
 
@@ -445,7 +515,8 @@ export default function SecretaryScreen() {
   const closeExpanded = () => setExpanded(null);
 
   const saveMinutes = async (meeting: MeetingOut) => {
-    if (chapterId === null || savingMinutes) return; // double-submit guard
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId || savingMinutes) return;
     setSavingMinutes(true);
     try {
       const trimmed = minutesDraft.trim();
@@ -455,40 +526,47 @@ export default function SecretaryScreen() {
       const updated = await updateMeeting(chapterId, meeting.id, {
         minutes_md: trimmed.length > 0 ? trimmed : null,
       });
+      if (!currentQuery(query)) return;
       setItems((current) =>
         (current ?? []).map((it) => (it.meeting.id === meeting.id ? { ...it, meeting: updated } : it)),
       );
       setExpanded(null);
     } catch (error) {
+      if (!currentQuery(query)) return;
       showApiError(error, "Couldn't save minutes");
     } finally {
-      setSavingMinutes(false);
+      if (currentQuery(query)) setSavingMinutes(false);
     }
   };
 
   const saveAttendance = async (meeting: MeetingOut) => {
-    if (chapterId === null || savingAttendance) return; // double-submit guard
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId || savingAttendance) return;
     setSavingAttendance(true);
     try {
       const entries = Object.entries(attendanceDraft).map(([user_id, status]) => ({ user_id, status }));
       // putAttendance is a full-sheet bulk upsert — safe to re-save.
       const saved = await putAttendance(chapterId, meeting.id, { entries });
+      if (!currentQuery(query)) return;
       setItems((current) =>
         (current ?? []).map((it) => (it.meeting.id === meeting.id ? { ...it, attendance: saved } : it)),
       );
       setExpanded(null);
     } catch (error) {
+      if (!currentQuery(query)) return;
       showApiError(error, "Couldn't save attendance");
     } finally {
-      setSavingAttendance(false);
+      if (currentQuery(query)) setSavingAttendance(false);
     }
   };
 
   const changeWindow = (key: WindowKey) => {
-    if (chapterId === null || key === windowKey) return;
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId || key === query.windowKey) return;
+    query.windowKey = key;
     setWindowKey(key);
     setSummary(null); // never show the previous window's numbers under the new label
-    void loadSummary(chapterId, key);
+    void loadSummary(chapterId, key, query);
   };
 
   /**
@@ -499,7 +577,7 @@ export default function SecretaryScreen() {
    * exists to let them fix, and it must not become a second unfixable mistake.
    */
   const confirmDeleteMeeting = (meeting: MeetingOut) => {
-    if (chapterId === null || deletingMeetingId !== null) return;
+    if (!currentQuery(renderQuery) || chapterId === null || deletingMeetingId !== null) return;
     confirmAction({
       title: "Delete this meeting?",
       message:
@@ -514,33 +592,40 @@ export default function SecretaryScreen() {
   };
 
   const removeMeeting = async (meeting: MeetingOut) => {
-    if (chapterId === null || deletingMeetingId !== null) return; // double-submit guard
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId || deletingMeetingId !== null) return;
     setDeletingMeetingId(meeting.id);
     try {
       await deleteMeeting(chapterId, meeting.id);
+      if (!currentQuery(query)) return;
+      query.meetings.removed.add(meeting.id);
       setItems((current) => (current ?? []).filter((it) => it.meeting.id !== meeting.id));
       // Close any editor still pointed at the meeting that no longer exists.
       setExpanded((current) => (current?.meetingId === meeting.id ? null : current));
       // The totals counted this meeting in their denominator; refetch rather than
       // try to subtract it locally.
-      await loadSummary(chapterId, windowKey);
+      await loadSummary(chapterId, query.windowKey, query);
     } catch (error) {
+      if (!currentQuery(query)) return;
       showApiError(error, "Couldn't delete meeting");
     } finally {
-      setDeletingMeetingId(null);
+      if (currentQuery(query)) setDeletingMeetingId(null);
     }
   };
 
   const exportCsv = async () => {
-    if (chapterId === null || exportingCsv) return;
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId || exportingCsv) return;
     setExportingCsv(true);
     try {
       const csv = await exportMeetingsCsv(chapterId);
+      if (!currentQuery(query)) return;
       const today = new Date().toISOString().slice(0, 10);
       const filename = `${membership?.chapter_name ?? "chapter"} meetings ${today}`;
       try {
         await shareCsv(filename, csv);
       } catch {
+        if (!currentQuery(query)) return;
         // expo-file-system/expo-sharing are newly-added native modules — until the
         // EAS dev build is rebuilt, shareCsv fails at native-module resolution even
         // though the CSV text above resolved fine. Surface that plainly instead of
@@ -552,14 +637,16 @@ export default function SecretaryScreen() {
         );
       }
     } catch (error) {
+      if (!currentQuery(query)) return;
       showApiError(error, "Couldn't export meeting minutes");
     } finally {
-      setExportingCsv(false);
+      if (currentQuery(query)) setExportingCsv(false);
     }
   };
 
   const handleCreatePoll = async () => {
-    if (chapterId === null) return;
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId || creatingPoll) return;
     const question = newQuestion.trim();
     const options = newOptions.map((o) => o.trim()).filter((o) => o.length > 0);
     // Validated here as well as on the server so the common mistakes answer
@@ -581,42 +668,54 @@ export default function SecretaryScreen() {
     setCreatingPoll(true);
     try {
       const created = await createPoll(chapterId, { question, options });
-      setPolls((prev) => [created, ...(prev ?? [])]);
+      if (!currentQuery(query)) return;
+      const ownVoteKnown = new Set(query.ownVoteKnown), removed = new Set(query.polls.removed);
+      query.ownVoteKnown.add(created.id);
+      // The opened event can beat this POST response and already include votes.
+      setPolls(current => mergePollPage(current, [created], ownVoteKnown, removed));
       setNewQuestion("");
       setNewOptions(Array.from({ length: POLL_OPTION_SLOTS }, () => ""));
     } catch (error) {
+      if (!currentQuery(query)) return;
       showApiError(error, "Couldn't open the poll");
     } finally {
-      setCreatingPoll(false);
+      if (currentQuery(query)) setCreatingPoll(false);
     }
   };
 
   /** Both vote and close return the whole poll, so the card re-renders from the
    * server's tally rather than from a guess made locally. */
-  const replacePoll = (updated: PollOut) =>
+  const replacePoll = (updated: PollOut, query: DashboardQuery) => {
+    if (!currentQuery(query) || query.polls.removed.has(updated.id)) return;
+    query.ownVoteKnown.add(updated.id);
     setPolls((prev) => (prev ?? []).map((p) => (p.id === updated.id ? updated : p)));
+  };
 
   const handleVote = async (pollId: string, optionId: string) => {
-    if (chapterId === null) return;
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId) return;
     setBusyPollId(pollId);
     try {
-      replacePoll(await castVote(chapterId, pollId, optionId));
+      replacePoll(await castVote(chapterId, pollId, optionId), query);
     } catch (error) {
+      if (!currentQuery(query)) return;
       showApiError(error, "Couldn't record your vote");
     } finally {
-      setBusyPollId(null);
+      if (currentQuery(query)) setBusyPollId(null);
     }
   };
 
   const handleClosePoll = async (pollId: string) => {
-    if (chapterId === null) return;
+    const query = renderQuery;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId) return;
     setBusyPollId(pollId);
     try {
-      replacePoll(await closePoll(chapterId, pollId));
+      replacePoll(await closePoll(chapterId, pollId), query);
     } catch (error) {
+      if (!currentQuery(query)) return;
       showApiError(error, "Couldn't close the poll");
     } finally {
-      setBusyPollId(null);
+      if (currentQuery(query)) setBusyPollId(null);
     }
   };
 
@@ -684,6 +783,7 @@ export default function SecretaryScreen() {
                   <TextInput
                     key={index}
                     value={value}
+                    maxLength={POLL_OPTION_MAX_LENGTH}
                     onChangeText={(text) =>
                       setNewOptions((prev) =>
                         prev.map((existing, i) => (i === index ? text : existing)),

@@ -33,7 +33,7 @@
 import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import type { ComponentProps } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -48,6 +48,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { createCampusPost, createPost, type PostAudience } from "@/api/feed";
 import { useCampusAccess } from "@/auth";
+import { currentIdentity, ownsIdentity, onIdentityChanged } from "@/auth/identity";
+import { Operation, UPLOAD_TIMEOUT_MS } from "@/api/operation";
 import {
   getMediaUploadUrl,
   uploadMediaBytes,
@@ -249,6 +251,18 @@ export function CreateSheet({
   // re-render still can't both pass the guard — a hard double-submit guard,
   // not just a disabled-prop that lags one render behind.
   const postingRef = useRef(false);
+  const photoFlowRef = useRef(0);
+  const uploadRef = useRef<Operation | null>(null);
+  const cancelPhoto = () => {
+    photoFlowRef.current += 1;
+    uploadRef.current?.cancel();
+    uploadRef.current = null;
+  };
+  useEffect(() => {
+    if (!visible) cancelPhoto();
+    const unsubscribe = onIdentityChanged(() => { cancelPhoto(); reset(); });
+    return () => { unsubscribe(); cancelPhoto(); };
+  }, [visible]);
 
   const reset = () => {
     setStep("options");
@@ -260,6 +274,7 @@ export function CreateSheet({
   };
 
   const close = () => {
+    cancelPhoto();
     reset();
     onClose();
   };
@@ -281,10 +296,15 @@ export function CreateSheet({
    * of round-tripping to the server to be told the same thing.
    */
   const pickPhoto = async () => {
+    cancelPhoto();
+    const flow = photoFlowRef.current;
+    const owner = currentIdentity();
+    const isCurrent = () => photoFlowRef.current === flow && ownsIdentity(owner);
     let permission: ImagePicker.PermissionResponse;
     let result: ImagePicker.ImagePickerResult;
     try {
       permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!isCurrent()) return;
       if (!permission.granted) {
         showAlert(
           "Photo access needed",
@@ -299,6 +319,7 @@ export function CreateSheet({
         selectionLimit: 1,
       });
     } catch {
+      if (!isCurrent()) return;
       // c139: expo-image-picker is a newly-added native module (c70) - until the EAS
       // dev build is rebuilt (c39), these calls fail at native-module resolution
       // rather than resolving to a picker. Previously this was an unhandled
@@ -310,6 +331,7 @@ export function CreateSheet({
       );
       return;
     }
+    if (!isCurrent()) return;
     if (result.canceled || result.assets.length === 0) return;
     const asset = result.assets[0];
 
@@ -323,23 +345,32 @@ export function CreateSheet({
       return;
     }
 
+    // One network budget covers the local read, URL request, refresh/retry and PUT.
+    // Time spent choosing a photo in the OS sheet is not a network timeout.
+    const operation = new Operation({ timeoutMs: UPLOAD_TIMEOUT_MS }, owner);
+    uploadRef.current = operation;
     setUploadingPhoto(true);
     try {
       const typedContentType = contentType as AllowedMediaContentType;
-      const bytes = await (await fetch(asset.uri)).blob();
+      operation.assertCurrent();
+      const local = await operation.wait(fetch(asset.uri, { signal: operation.signal }));
+      const bytes = await operation.wait(local.blob());
       const { upload_url, object_name } = await getMediaUploadUrl(
         typedContentType,
         bytes.size,
+        { operation },
       );
-      await uploadMediaBytes(upload_url, bytes, typedContentType);
+      await uploadMediaBytes(upload_url, bytes, typedContentType, { operation });
+      if (!isCurrent()) return;
       // asset.uri, not the response's preview_url — see the photoUrl declaration.
       setPhotoUrl(asset.uri);
       setPhotoObjectName(object_name);
       setStep("compose");
     } catch (error) {
-      showApiError(error, "Couldn't upload that photo");
+      if (isCurrent()) showApiError(error, "Couldn't upload that photo");
     } finally {
-      setUploadingPhoto(false);
+      operation.dispose();
+      if (isCurrent()) { uploadRef.current = null; setUploadingPhoto(false); }
     }
   };
 

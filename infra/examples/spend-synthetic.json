@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "basis": "reported",
+  "currency": "USD",
+  "period": {"start": "2026-08-01", "end": "2026-08-07"},
+  "amounts": [
+    {"category": "api_compute", "gross": "30.005", "credits": "-5.005"},
+    {"category": "cloud_sql", "gross": "10.00", "credits": "0"}
+  ],
+  "adjustments": "1.00",
+  "forecast": {
+    "method": "linear_calendar_days",
+    "assumes_complete_covered_days": true,
+    "assumes_daily_net_rate_continues": true
+  },
+  "denominators": [
+    {"metric": "accepted_writes", "unit": "count", "value": "1000", "period": {"start": "2026-08-01", "end": "2026-08-07"}},
+    {"metric": "socket_hours", "unit": "hours", "value": "20", "period": {"start": "2026-08-01", "end": "2026-08-07"}}
+  ]
+}

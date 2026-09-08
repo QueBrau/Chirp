@@ -596,6 +596,8 @@ export const MOCK_CONVERSATIONS: ConversationOut[] = [
     title: "Chapter Chat",
     protocol_version: 2,
     created_at: "2025-01-15T20:00:00Z",
+    last_message_at: "2026-08-11T15:20:00Z",
+    has_messages: true,
     members: ["usr-jake", "usr-tyler", "usr-maria", "usr-devon", "usr-priya", "usr-chris", "usr-sam"].map(
       (userId) => ({
         conversation_id: "cnv-group-chapter",
@@ -612,6 +614,8 @@ export const MOCK_CONVERSATIONS: ConversationOut[] = [
     title: null,
     protocol_version: 2,
     created_at: "2026-03-02T17:30:00Z",
+    last_message_at: "2026-08-10T19:26:00Z",
+    has_messages: true,
     members: [
       { conversation_id: "cnv-dm-maria", user_id: "usr-jake", joined_at: "2026-03-02T17:30:00Z", left_at: null },
       { conversation_id: "cnv-dm-maria", user_id: "usr-maria", joined_at: "2026-03-02T17:30:00Z", left_at: null },

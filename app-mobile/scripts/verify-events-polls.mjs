@@ -17,6 +17,7 @@
  */
 import { readFileSync } from "node:fs";
 import { runEventPaginationCases } from "./event-pagination-cases.mjs";
+import { runSecretaryCollectionCases } from "./collection-race-cases.mjs";
 
 const EVENT = new URL("../app/(tabs)/chapter/event/[id].tsx", import.meta.url);
 const SHEET = new URL("../src/components/CreateEventSheet.tsx", import.meta.url);
@@ -113,5 +114,6 @@ check(
 );
 
 await runEventPaginationCases();
+await runSecretaryCollectionCases();
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

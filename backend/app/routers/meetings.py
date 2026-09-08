@@ -210,6 +210,19 @@ async def list_meetings_with_attendance(
             MeetingAttendanceOut.model_validate(row)
         )
 
+    # Defense-in-depth observability, matching GET (board c359): a true .limit() is
+    # not directly expressible here since this is several meetings' rows grouped in
+    # Python, not one bounded query - but the same MAX_ROSTER_PAGE invariant the PUT
+    # side now enforces applies per meeting, so a meeting still over it (pre-existing
+    # data from before the invariant existed) should be observable the same way GET's
+    # own cap already is.
+    for meeting_id, rows in by_meeting.items():
+        warn_if_capped(
+            logger, rows, MAX_ROSTER_PAGE,
+            "GET /chapters/{chapter_id}/meetings/with-attendance",
+            meeting_id=str(meeting_id),
+        )
+
     return [
         MeetingWithAttendanceOut(
             meeting=MeetingOut.model_validate(meeting),
@@ -420,12 +433,16 @@ async def get_attendance(
         select(models.MeetingAttendance)
         .where(models.MeetingAttendance.meeting_id == meeting.id)
         .order_by(models.MeetingAttendance.user_id)
-        # Cap-only, and here it DOCUMENTS AN INVARIANT THAT ALREADY EXISTS rather
-        # than imposing a new one: c264 capped the write side
-        # (MeetingAttendanceUpdate.entries) at this same MAX_ROSTER_PAGE, and every
-        # entry must name an active member of this chapter (c151). So this read cannot
-        # exceed what a write was allowed to store, and a cursor would page a list that
-        # cannot outgrow one page (c258).
+        # Cap-only, and here it DOCUMENTS AN INVARIANT THAT IS NOW ENFORCED rather
+        # than inferred: c264 capped a single write at MAX_ROSTER_PAGE entries and
+        # c151 requires every entry to name an active member, but rows survive a
+        # membership going inactive (c258), so neither of those alone actually
+        # bounded the TOTAL distinct users a sheet could accumulate over time - the
+        # bundle's own docstring proved as much. c359 closes that: upsert_attendance
+        # now refuses (422 attendance_sheet_full) any write that would push a
+        # meeting's distinct-user count past MAX_ROSTER_PAGE, so this read really
+        # cannot exceed one page going forward, and a cursor would page a list that
+        # cannot outgrow it.
         .limit(MAX_ROSTER_PAGE)
     )
     rows = [MeetingAttendanceOut.model_validate(a) for a in result.scalars().all()]
@@ -501,6 +518,25 @@ async def upsert_attendance(
                 detail="not_chapter_members: "
                 + ", ".join(str(uid) for uid in not_members),
             )
+
+        # THE SHEET CANNOT GROW PAST MAX_ROSTER_PAGE DISTINCT USERS (board c359).
+        # GET's own docstring already claimed this read is bounded because the write
+        # is - which was only true for a chapter that never reaches the cap. A batch
+        # that only touches rows already on the sheet must always succeed, even on a
+        # legacy meeting that already exceeds the cap (rows survive a membership
+        # going inactive, per c258, so a long-lived chapter can already be over):
+        # the rule is "the sheet cannot GROW past the cap", never "a big sheet is
+        # frozen". So the count below is scoped to NEW distinct users only - existing
+        # rows this batch merely updates never count against the refusal.
+        existing_result = await session.execute(
+            select(models.MeetingAttendance.user_id).where(
+                models.MeetingAttendance.meeting_id == meeting.id
+            )
+        )
+        existing_ids = set(existing_result.scalars().all())
+        new_distinct = set(collapsed) - existing_ids
+        if new_distinct and len(existing_ids) + len(new_distinct) > MAX_ROSTER_PAGE:
+            raise HTTPException(status_code=422, detail="attendance_sheet_full")
 
         await session.execute(
             pg_insert(models.MeetingAttendance)

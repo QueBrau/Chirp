@@ -5,7 +5,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +14,12 @@ from app import models
 from app.core.analytics import emit
 from app.core.blocks import blockers_of
 from app.core.errors import forbidden, not_found
-from app.core.rate_limits import MESSAGE_SEND_LIMIT, USER_SEARCH_LIMIT, limit_per_user
+from app.core.rate_limits import (
+    CONVERSATION_CREATE_LIMIT,
+    MESSAGE_SEND_LIMIT,
+    USER_SEARCH_LIMIT,
+    limit_per_user,
+)
 from app.core.reachability import reachable_off_chapter_ids
 from app.db import get_session
 from app.middleware.auth import get_current_user
@@ -34,6 +39,38 @@ from app.ws.pubsub import publish_to_user
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["messages"])
+
+MESSAGE_LOOKUP_MAX_IDS = 50
+MESSAGE_LOOKUP_MAX_CSV_LENGTH = MESSAGE_LOOKUP_MAX_IDS * 36 + MESSAGE_LOOKUP_MAX_IDS - 1
+
+
+async def _lookup_message_ids(
+    request: Request,
+    ids: str | None = Query(default=None, description="1 to 50 comma-separated canonical UUIDs"),
+) -> list[uuid.UUID]:
+    """Reject bounded-query errors before the route's auth/SQL dependencies.
+
+    FastAPI accumulates ordinary Query validation errors while continuing to
+    resolve other dependencies. Raise the fixed 422 here instead, and keep this
+    dependency first on the lookup route. No raw input is included in errors.
+    """
+    if (ids is None or not ids or len(ids) > MESSAGE_LOOKUP_MAX_CSV_LENGTH
+            or len(request.query_params.getlist("ids")) != 1):
+        raise HTTPException(status_code=422, detail="invalid_message_ids")
+    tokens = ids.split(",")
+    if len(tokens) > MESSAGE_LOOKUP_MAX_IDS:
+        raise HTTPException(status_code=422, detail="invalid_message_ids")
+    parsed = []
+    for token in tokens:
+        try:
+            value = uuid.UUID(token)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="invalid_message_ids") from None
+        if str(value) != token.lower():
+            raise HTTPException(status_code=422, detail="invalid_message_ids")
+        parsed.append(value)
+    # Enforce the raw count before deduplication; duplicate hints cost no rows.
+    return list(dict.fromkeys(parsed))
 
 # ---- GET /users/search (board c322) ----
 #
@@ -118,23 +155,147 @@ async def _require_reachable_off_chapter(
 
 
 def _conversation_out(
-    conversation: models.Conversation, members: list[models.ConversationMember]
+    conversation: models.Conversation,
+    members: list[models.ConversationMember],
+    *,
+    last_message_at: datetime | None = None,
+    has_messages: bool = False,
 ) -> ConversationOut:
-    """Serialize a conversation together with its member rows."""
+    """Serialize a conversation together with its member rows and summary fields.
+
+    `last_message_at`/`has_messages` default to "no messages" — the right answer for
+    a caller that has not looked up message presence at all (create_conversation: a
+    brand-new conversation always starts empty), and every caller that HAS a real
+    answer (list_conversations, get_conversation) passes it explicitly rather than
+    relying on the default meaning something it doesn't.
+    """
     out = ConversationOut.model_validate(conversation)
     out.members = [ConversationMemberOut.model_validate(m) for m in members]
+    out.last_message_at = last_message_at
+    out.has_messages = has_messages
     return out
 
 
+def _dm_key(chapter_id: uuid.UUID | None, member_ids: set[uuid.UUID]) -> str | None:
+    """Canonical DM identity (board c344): f"{chapter_id or NIL_UUID}:{sorted pair}".
+
+    Only for exactly two members — the creator plus one other. A group, or an
+    already-unvalidated multi-recipient "dm" request, gets no key and no dedup,
+    matching the route's existing looseness on that shape rather than silently
+    tightening it here.
+
+    Partitioned on chapter_id (NIL_UUID standing in for NULL — see models.messaging)
+    so a chapter-scoped DM and a chapterless/cross-campus DM between the SAME two
+    people stay two distinct conversations. Both are valid, differently-reachable
+    requests today (compare tests/test_conversation_authz.py's chapter-scoped and
+    cross-chapter-within-campus cases) — collapsing them into one row the first time
+    either exists would be a real behavior change this card does not ask for.
+
+    sorted(..., key=str) matches migration 0037's SQL `ORDER BY user_id` — a UUID's
+    canonical hyphenated-hex text form sorts identically to its raw byte value, so
+    the two never disagree on which id comes first.
+    """
+    if len(member_ids) != 2:
+        return None
+    chapter_part = str(chapter_id) if chapter_id is not None else str(models.NIL_UUID)
+    first_id, second_id = sorted(member_ids, key=str)
+    return f"{chapter_part}:{first_id}:{second_id}"
+
+
+async def _reuse_dm(session: AsyncSession, dm_key: str) -> ConversationOut | None:
+    """Return the existing DM for `dm_key`, or None if no such conversation exists.
+
+    Clears left_at on BOTH member rows when reuse fires, rather than leaving a
+    departed member's row untouched. list_conversations filters on left_at IS NULL
+    to build a user's inbox, so an untouched left_at would make the "reused"
+    conversation invisible to whoever left it, even though the other party just
+    "successfully" re-contacted them — a silent dead end from the departed party's
+    side (board c344 decision).
+    """
+    result = await session.execute(
+        select(models.Conversation).where(models.Conversation.dm_key == dm_key)
+    )
+    conversation = result.scalar_one_or_none()
+    if conversation is None:
+        return None
+
+    member_rows = await session.execute(
+        select(models.ConversationMember).where(
+            models.ConversationMember.conversation_id == conversation.id
+        )
+    )
+    members = list(member_rows.scalars().all())
+    rejoined = False
+    for member in members:
+        if member.left_at is not None:
+            member.left_at = None
+            rejoined = True
+    if rejoined:
+        await session.commit()
+
+    presence = await _message_presence(session, [conversation.id])
+    return _conversation_out(
+        conversation,
+        members,
+        last_message_at=presence.get(conversation.id),
+        has_messages=conversation.id in presence,
+    )
+
+
+async def _message_presence(
+    session: AsyncSession, conversation_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, datetime]:
+    """conversation_id -> its most recent message's created_at, for exactly the ids
+    given. A conversation absent from the returned dict has no messages at all — the
+    caller renders that as has_messages=False / last_message_at=None rather than
+    treating the missing key as an error (board c344).
+
+    ONE query regardless of how many ids are passed — DISTINCT ON keeps the whole
+    inbox load at a constant, small number of statements (this, the conversations
+    page, and the member rows) rather than growing with the page size, which is the
+    literal "eliminate per-row history requests" acceptance criterion. Reads only
+    conversation_id and created_at — never ciphertext, never a sender id beyond what
+    ConversationMemberOut already exposes.
+    """
+    if not conversation_ids:
+        return {}
+    result = await session.execute(
+        select(models.Message.conversation_id, models.Message.created_at)
+        .distinct(models.Message.conversation_id)
+        .where(models.Message.conversation_id.in_(conversation_ids))
+        .order_by(
+            models.Message.conversation_id,
+            models.Message.created_at.desc(),
+            models.Message.id.desc(),
+        )
+    )
+    return dict(result.all())
+
+
 @router.post(
-    "/conversations", response_model=ConversationOut, status_code=status.HTTP_201_CREATED
+    "/conversations",
+    response_model=ConversationOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(limit_per_user("conversation_create", CONVERSATION_CREATE_LIMIT))],
 )
 async def create_conversation(
     body: ConversationCreate,
+    response: Response,
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ConversationOut:
-    """Create a dm/group conversation; the creator is always added as a member."""
+    """Create a dm/group conversation; the creator is always added as a member.
+
+    DM reuse (board c344): a kind="dm" conversation between exactly two people is
+    canonically identified by dm_key (models.messaging.Conversation). A repeat POST
+    for the same pair returns HTTP 200 with the EXISTING conversation instead of a
+    new row. Dedup runs strictly AFTER every eligibility/membership/block check
+    below — it changes only whether a second row gets created for people who are
+    already allowed to talk, never who is allowed to. Two layers close both the
+    sequential case (a pre-check SELECT via _reuse_dm) and the concurrent case (an
+    IntegrityError on the unique index, caught below, falling back to the same
+    _reuse_dm lookup).
+    """
     member_ids = {user.id, *body.member_user_ids}
     users_result = await session.execute(
         select(models.User.id, models.User.is_ghost).where(models.User.id.in_(member_ids))
@@ -177,11 +338,32 @@ async def create_conversation(
     if await blockers_of(session, subject_id=user.id, candidate_ids=member_ids):
         raise forbidden("recipient_not_reachable")
 
+    dm_key = _dm_key(body.chapter_id, member_ids) if body.kind == "dm" else None
+    if dm_key is not None:
+        reused = await _reuse_dm(session, dm_key)
+        if reused is not None:
+            response.status_code = status.HTTP_200_OK
+            return reused
+
     conversation = models.Conversation(
-        chapter_id=body.chapter_id, kind=body.kind, title=body.title
+        chapter_id=body.chapter_id, kind=body.kind, title=body.title, dm_key=dm_key
     )
     session.add(conversation)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        # The concurrent-request race the pre-check above cannot close: two POSTs
+        # for the same pair both passed the SELECT above before either committed.
+        # The unique index (migration 0037) is what actually catches this — rollback
+        # and re-run the same lookup rather than surfacing a 500 for what is, from
+        # the caller's perspective, a completely ordinary "someone already talked to
+        # this person" outcome.
+        await session.rollback()
+        reused = await _reuse_dm(session, dm_key) if dm_key is not None else None
+        if reused is None:
+            raise
+        response.status_code = status.HTTP_200_OK
+        return reused
     await session.refresh(conversation)
 
     joined_at = datetime.now(timezone.utc)
@@ -198,11 +380,27 @@ async def create_conversation(
 
 @router.get("/conversations", response_model=list[ConversationOut])
 async def list_conversations(
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=30, ge=1, le=100),
     user: models.User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[ConversationOut]:
-    """List the caller's active conversations, each with its member rows."""
-    result = await session.execute(
+    """List the caller's active conversations, newest first, each with its member
+    rows and summary fields.
+
+    Cursor-paginated on (created_at, id), the same tuple_ pattern list_messages
+    already uses — pass both `before` and `before_id` (the last row's values from
+    the previous page) for an exact tie-break so rows sharing a timestamp at a page
+    boundary are never skipped. Response stays a bare list (board c344); the client
+    derives the next cursor from the last item's created_at/id.
+
+    Ordering stays on Conversation.created_at, not a maintained "last activity"
+    column — send_message (this same file) is another card's active edit region,
+    and touching it to bump a conversation on every message is explicitly out of
+    scope here.
+    """
+    stmt = (
         select(models.Conversation)
         .join(
             models.ConversationMember,
@@ -212,8 +410,18 @@ async def list_conversations(
             models.ConversationMember.user_id == user.id,
             models.ConversationMember.left_at.is_(None),
         )
-        .order_by(models.Conversation.created_at.desc())
     )
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.Conversation.created_at, models.Conversation.id)
+            < (before, before_id)
+        )
+    elif before is not None:
+        stmt = stmt.where(models.Conversation.created_at < before)
+    stmt = stmt.order_by(
+        models.Conversation.created_at.desc(), models.Conversation.id.desc()
+    ).limit(limit)
+    result = await session.execute(stmt)
     conversations = list(result.scalars().all())
 
     members_by_conversation: dict[uuid.UUID, list[models.ConversationMember]] = {}
@@ -228,10 +436,49 @@ async def list_conversations(
         for member in member_rows.scalars():
             members_by_conversation.setdefault(member.conversation_id, []).append(member)
 
+    presence = await _message_presence(session, [c.id for c in conversations])
+
     return [
-        _conversation_out(c, members_by_conversation.get(c.id, []))
+        _conversation_out(
+            c,
+            members_by_conversation.get(c.id, []),
+            last_message_at=presence.get(c.id),
+            has_messages=c.id in presence,
+        )
         for c in conversations
     ]
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationOut)
+async def get_conversation(
+    conversation_id: uuid.UUID,
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ConversationOut:
+    """One conversation's summary, same shape as a row from GET /conversations.
+
+    Added alongside the cursor on GET /conversations (board c344): once that list is
+    bounded, a client that reached an older conversation — a deep link, or one that
+    has scrolled past the first page — has no other way to resolve its title/kind.
+    Gated by _require_active_member exactly like send_message/list_messages below.
+    """
+    await _require_active_member(session, conversation_id, user.id)
+    conversation = await session.get(models.Conversation, conversation_id)
+    if conversation is None:
+        raise not_found("conversation_not_found")
+    member_rows = await session.execute(
+        select(models.ConversationMember).where(
+            models.ConversationMember.conversation_id == conversation_id
+        )
+    )
+    members = list(member_rows.scalars().all())
+    presence = await _message_presence(session, [conversation_id])
+    return _conversation_out(
+        conversation,
+        members,
+        last_message_at=presence.get(conversation_id),
+        has_messages=conversation_id in presence,
+    )
 
 
 @router.post(
@@ -317,9 +564,62 @@ async def send_message(
     return MessageOut.model_validate(message)
 
 
-@router.get(
-    "/conversations/{conversation_id}/messages", response_model=list[MessageOut]
-)
+def _visible_message_query(conversation_id: uuid.UUID, reader_id: uuid.UUID):
+    # c348: hide messages from a sender the READER currently holds a named block
+    # against, live at query time (not snapshotted at send time, so an unblock
+    # restores visibility with no further action). This is the reverse of
+    # blockers_of (app/core/blocks.py), which answers "who has blocked ME" for
+    # the CONTACT direction used by send_message above — history instead needs
+    # "who have I, the reader, blocked", the same question feed.py's blocked-
+    # author anti-join answers for posts/comments (routers/feed.py:225-239,
+    # :266-272). Deliberately NOT calling blockers_of here: reusing it would
+    # filter the wrong direction, and it is a Python-side set lookup that can't
+    # compose into a paginated SQL WHERE evaluated before LIMIT anyway.
+    # NAMED blocks only (matches feed.py's c279/c342 precedent) — message
+    # history is a named surface (senders are known contacts), so a by-chirp
+    # block, whose target the blocker never learns, must not make that one
+    # named person's messages vanish from a thread; that before/after diff on a
+    # specific named contact IS the anonymous author's identity, reopening the
+    # oracle c279 closed on feed/chirps. Do not widen this to match on
+    # (blocker, blocked) regardless of source.
+    return (
+        select(models.Message)
+        .join(models.Device, models.Device.id == models.Message.sender_device_id)
+        .outerjoin(
+            models.UserBlock,
+            (models.UserBlock.blocked_id == models.Device.user_id)
+            & (models.UserBlock.blocker_id == reader_id)
+            & (models.UserBlock.source == "named"),
+        )
+        .where(
+            models.Message.conversation_id == conversation_id,
+            models.UserBlock.blocker_id.is_(None),
+        )
+    )
+
+
+@router.get("/conversations/{conversation_id}/messages/by-id", response_model=list[MessageOut])
+async def lookup_messages(
+    conversation_id: uuid.UUID,
+    message_ids: list[uuid.UUID] = Depends(_lookup_message_ids),
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[MessageOut]:
+    """Resolve live event IDs through the same current visibility as history.
+
+    Unknown, hidden and off-conversation IDs are simply absent. Only canonical
+    stored rows are returned, in exact history order. This is not a timestamp
+    watermark or an immediate revocation guarantee for already cached content.
+    """
+    await _require_active_member(session, conversation_id, user.id)
+    stmt = _visible_message_query(conversation_id, user.id).where(
+        models.Message.id.in_(message_ids),
+    ).order_by(models.Message.created_at.desc(), models.Message.id.desc()).limit(MESSAGE_LOOKUP_MAX_IDS)
+    result = await session.execute(stmt)
+    return [MessageOut.model_validate(message) for message in result.scalars().all()]
+
+
+@router.get("/conversations/{conversation_id}/messages", response_model=list[MessageOut])
 async def list_messages(
     conversation_id: uuid.UUID,
     before: datetime | None = None,
@@ -336,9 +636,7 @@ async def list_messages(
     guarantee tied-timestamp rows won't be dropped at the boundary.
     """
     await _require_active_member(session, conversation_id, user.id)
-    stmt = select(models.Message).where(
-        models.Message.conversation_id == conversation_id
-    )
+    stmt = _visible_message_query(conversation_id, user.id)
     if before is not None and before_id is not None:
         stmt = stmt.where(
             tuple_(models.Message.created_at, models.Message.id) < (before, before_id)

@@ -32,6 +32,11 @@ export interface ConversationOut {
   protocol_version: number;
   created_at: string;
   members: ConversationMemberOut[] | null;
+  // Presence/recency metadata only (board c344) — no ciphertext, no message count,
+  // no unread indicator. has_messages drives the inbox preview text so the client
+  // no longer has to fetch history per row just to know whether any exists.
+  last_message_at: string | null;
+  has_messages: boolean;
 }
 
 /** Ciphertext in — the server never parses ciphertext_b64 (SPEC §8.1). */
@@ -65,8 +70,29 @@ export async function createConversation(body: ConversationCreate): Promise<Conv
   return request<ConversationOut>("/conversations", { method: "POST", body });
 }
 
-export async function listConversations(): Promise<ConversationOut[]> {
-  return request<ConversationOut[]>("/conversations");
+/** Cursor options for the inbox list, newest-first — same (before, before_id) shape
+ * as ListMessagesOptions below. */
+export interface ListConversationsOptions {
+  /** created_at cursor — conversations older than this. */
+  before?: string;
+  /** id tie-break for rows sharing the same created_at as `before`. */
+  before_id?: string;
+  limit?: number;
+}
+
+export async function listConversations(
+  options: ListConversationsOptions = {},
+): Promise<ConversationOut[]> {
+  return request<ConversationOut[]>("/conversations", {
+    query: { before: options.before, before_id: options.before_id, limit: options.limit },
+  });
+}
+
+/** One conversation's summary — added so a screen that only has a conversation id
+ * (a deep link, or one reached after paging past the first inbox page) can still
+ * resolve its title/kind without listConversations() being guaranteed to include it. */
+export async function getConversation(conversationId: string): Promise<ConversationOut> {
+  return request<ConversationOut>(`/conversations/${conversationId}`);
 }
 
 export async function sendMessage(

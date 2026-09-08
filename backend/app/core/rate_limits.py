@@ -101,6 +101,22 @@ CHIRP_CREATE_LIMIT = (30, 600)
 # back-and-forth does not approach it; a flood loop passes it immediately.
 MESSAGE_SEND_LIMIT = (300, 600)
 
+# Conversation creation (c344). Before this limit, POST /conversations had none at
+# all, and DM reuse (models.messaging.Conversation.dm_key) only collapses REPEAT
+# requests for the SAME pair — a script naming a new recipient on every call still
+# grows one row per call, which is the abuse surface this closes. A real person
+# starting conversations in one sitting — working through a chapter roster, retrying
+# a few different names for a group — is a handful of calls, nowhere near 20.
+#
+# CHECKED AGAINST THE SUITE BEFORE PICKING THIS NUMBER (POST_CREATE_LIMIT and
+# ACCOUNT_BOOTSTRAP_LIMIT both had to be raised after a real fixture tripped the
+# original number): no existing test fixture creates more than a handful of
+# conversations for one caller inside a single test — test_conversation_authz.py's 11
+# calls to POST /conversations are spread across separate test functions, each with
+# its own fresh caller and its own rate-limit window (_reset_rate_limits resets
+# between tests).
+CONVERSATION_CREATE_LIMIT = (20, 600)
+
 # Moderation abuse — mass-reporting one user to bury them. A real reporter files one to
 # five reports in a sitting.
 REPORT_CREATE_LIMIT = (20, 3600)

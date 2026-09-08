@@ -1,71 +1,112 @@
-"""Structured behavioral analytics events to stdout (board c227), for a Cloud Logging
--> BigQuery sink the manager sets up separately, outside this repo.
+"""Allowlisted, content-free product events for the Cloud Logging analytics sink.
 
-THE HARD PRIVACY RULE, enforced in code AND in test, per Jose's approval of c227:
-nothing in this pipeline may carry or link chirp authorship. The API deliberately
-withholds who posted a chirp (SPEC §8.3) - analytics must be structurally unable to
-undo that. Two enforcement points:
-
-  1. No call anywhere in app/routers/chirps.py - creation, voting, or reporting -
-     may reach this module at all. tests/test_analytics.py source-scans that file's
-     text for the literal string "analytics" and fails the build if it appears,
-     which also catches an `import ... as` alias or a re-exported wrapper - anything
-     that would let a chirp route reach `emit` without the string "analytics"
-     appearing in its own source is a bug in the scan, not a loophole to use.
-  2. No `emit()` call anywhere in this codebase may pair a chirp id with a user id -
-     there is no chirp_id parameter in use anywhere outside chirps.py to make that
-     pairing possible in the first place. A poll vote is the adjacent case (secret
-     ballot, not chirp anonymity, but the same shape of guarantee): its emit call
-     carries poll_id and a scope id, never the voter's user_id.
-
-Everything else in the pipeline is normal product analytics and may carry a user_id
-freely (signup, posts, messages, event RSVPs, dues payments - none of those are
-anonymous features).
+Anonymous Chirps are excluded entirely; poll events cannot carry voter identity.
+The router source guard is a regression tripwire, not a proof of the whole call
+graph. Runtime schemas below also reject unknown events/properties and free text.
+Events describe accepted operations/transitions, not every app visit or provider
+attempt. Logging is best-effort; the ledger remains the source of payment truth.
 """
 from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
 logger = logging.getLogger("app.analytics")
+diagnostics = logging.getLogger("app.analytics_diagnostics")
+
+# Every accepted property is either a UUID, a bounded count or an explicit enum.
+# A nullable scope is retained as null, never replaced with an invented campus.
+_ID = "uuid"
+_OPTIONAL_ID = "nullable_uuid"
+_COUNT = "count"
+_ACCOUNT = ("greek", "non_greek", "alumni")
+_RAIL = ("card", "ach")
+_SCHEMAS: dict[str, dict[str, str | tuple[str, ...]]] = {
+    "user_signed_up": {"user_id": _ID, "account_type": _ACCOUNT},
+    "account_type_changed": {
+        "user_id": _ID, "previous_account_type": _ACCOUNT, "account_type": _ACCOUNT,
+    },
+    "campus_verification_started": {"user_id": _ID, "campus_id": _OPTIONAL_ID},
+    "campus_verification_redeemed": {"user_id": _ID, "campus_id": _ID},
+    "post_created": {
+        "user_id": _ID, "chapter_id": _OPTIONAL_ID, "campus_id": _OPTIONAL_ID,
+        "audience": ("org", "org_actives", "campus"), "post_type": ("text", "photo", "video"),
+    },
+    "message_sent": {
+        "user_id": _ID, "conversation_id": _ID,
+        "message_type": ("signal", "sender_key_distribution"), "recipient_count": _COUNT,
+    },
+    "event_created": {
+        "user_id": _ID, "chapter_id": _ID, "event_id": _ID,
+        "visibility": ("chapter", "campus", "verified", "public"),
+    },
+    "event_rsvp": {
+        "user_id": _ID, "chapter_id": _ID, "event_id": _ID, "status": ("going", "maybe", "cant"),
+    },
+    "poll_voted": {"poll_id": _ID, "chapter_id": _ID},
+    "payment_intent_created": {"chapter_id": _ID, "cycle_id": _ID, "user_id": _ID, "rail": _RAIL},
+    "payment_succeeded": {
+        "event_type": ("payment_intent.succeeded",), "cycle_id": _ID, "user_id": _ID, "rail": _RAIL,
+    },
+    "payment_failed": {
+        "event_type": ("payment_intent.payment_failed",), "cycle_id": _ID, "user_id": _ID, "rail": _RAIL,
+    },
+    # An operator-generated delivery check has no user, domain object or content.
+    # It is excluded from all product denominators in ANALYTICS-VERIFICATION.md.
+    "pipeline_probe": {"probe_id": _ID},
+}
+
+
+def _property(value: object, rule: str | tuple[str, ...]) -> object:
+    if rule == _OPTIONAL_ID and value is None:
+        return None
+    if rule in (_ID, _OPTIONAL_ID):
+        if isinstance(value, UUID):
+            # asyncpg returns its own UUID subclass. Rebuild from the numeric
+            # value instead of invoking a subclass's arbitrary __str__ method.
+            return str(UUID(int=value.int))
+        if type(value) is str:
+            return str(UUID(value))
+        raise ValueError("invalid identifier")
+    if rule == _COUNT:
+        if type(value) is not int or not 0 <= value <= 2**31 - 1:
+            raise ValueError("invalid count")
+        return value
+    if type(value) is not str or value not in rule:
+        raise ValueError("invalid enum")
+    return value
 
 
 def emit(event: str, **props: object) -> None:
-    """Log one structured analytics event as a single JSON line.
+    """Emit one bounded JSON line; never propagate a telemetry failure.
 
-    Written on the "app.analytics" logger, a child of "app" by Python's dotted-name
-    logging convention. It carries no handler of its own and needs none: verified by
-    reading app/core/logging_config.py (board c176), which configures exactly one
-    logger - "app" - with an INFO-level StreamHandler to stdout, and deliberately
-    leaves `propagate` at its default (True) rather than setting it False. A record
-    built here has no handler on "app.analytics" itself, so Logger.callHandlers walks
-    up the ancestor chain to "app" and invokes that handler - the same mechanism that
-    already carries every other `app.*` module logger (email_service, the WS gateway,
-    ...) to stdout today. No new wiring is required for this module to reach Cloud
-    Run's log collection; it rides the c176 fix that already covers all of `app.*`.
-
-    NEVER RAISES. A telemetry pipeline is best-effort by design (board c227): a prop
-    that turns out not to be JSON-serializable, or any other internal failure, is
-    caught here and reported as a `logger.warning` instead of propagating - the
-    request that triggered the event must never fail because analytics did. This is
-    also why every call site in the routers is a plain one-liner with no try/except
-    of its own; the safety is centralized here, once, rather than repeated at each of
-    the fifteen-odd call sites.
-
-    PROPS ARE ALWAYS COARSE. Ids (user_id, chapter_id, campus_id, event_id, poll_id,
-    cycle_id, ...), enums, booleans, and counts (whole cents is the finest money
-    granularity) only - never free text, never a message or post body, never an email
-    address, never a token. See the module docstring for the one further restriction
-    that applies specifically to chirps.
-
-    `default=str` on the json.dumps call is deliberate, not decorative: every id
-    passed in from a router is a live `uuid.UUID` object (or occasionally an enum),
-    neither of which `json.dumps` can serialize on its own - without this, EVERY
-    call site would 500-safe into a silent `logger.warning` and no event would ever
-    actually reach stdout. `default=str` turns each into its ordinary text form the
-    same way `str(some_uuid)` already does everywhere else in this codebase.
+    Unknown fields reject the whole event. UUID conversion is explicit: arbitrary
+    __str__ methods, nested metadata, amounts, tokens and bodies cannot be logged.
+    emission_id identifies this emission for downstream transport deduplication;
+    it does not make the domain write/log atomic or recover a missing emission.
     """
     try:
-        logger.info(json.dumps({"analytics": True, "event": event, **props}, default=str))
+        if type(event) is not str:
+            raise ValueError("invalid event")
+        schema = _SCHEMAS[event]
+        if set(props) != set(schema):
+            raise ValueError("invalid fields")
+        safe = {key: _property(props[key], rule) for key, rule in schema.items()}
+        payload = json.dumps({
+            "analytics": True, "schema_version": 1, "event": event,
+            "emission_id": str(uuid4()), "emitted_at": datetime.now(timezone.utc).isoformat(),
+            "severity": "INFO", **safe,
+        }, separators=(",", ":"), allow_nan=False)
+        if len(payload.encode("utf-8")) > 4096:
+            raise ValueError("oversized event")
+        logger.info(payload)
     except Exception:
-        logger.warning("analytics emit failed event=%s", event, exc_info=True)
+        # Diagnostics must not stringify the event, props or exception: even an
+        # unknown event name/error can contain private content. A second logging
+        # failure must not turn an already committed domain operation into a 500.
+        try:
+            diagnostics.warning("analytics emit failed: event dropped")
+        except Exception:
+            pass

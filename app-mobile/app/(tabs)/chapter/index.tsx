@@ -16,7 +16,7 @@
 import { useRouter, type Href } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import type { ComponentProps } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Image, Pressable, Share, View, type ViewStyle } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 
@@ -55,9 +55,24 @@ import {
 } from "@/components";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { compactAge as age, eventWhen } from "@/lib/dates";
+import { acceptPage, beginOlderPage, collectionPage, mergePageRows, orderByNewest } from "@/lib/collectionPages";
 import { ROLE_LABELS, roleLabel } from "@/lib/roleTerms";
 import { findMember } from "@/lib/roster";
 import { cardShadow, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
+
+/** One page of the Feed, Events and invite-code lists (board c359) - all three
+ * fetched only page one before this card, so a chapter with more history than one
+ * page silently could not reach the rest. PAGE_SIZE also doubles as the "was that
+ * page full" signal collectionPages.ts's acceptPage uses to set `more`. */
+const FEED_PAGE_SIZE = 20;
+const EVENTS_PAGE_SIZE = 20;
+const INVITE_PAGE_SIZE = 50;
+
+const feedPostOrder = orderByNewest<FeedPostOut>((p) => p.created_at, (p) => p.id);
+const chapterEventOrder = orderByNewest<EventWithRsvpSummaryOut>(
+  (row) => row.event.starts_at, (row) => row.event.id,
+);
+const chapterInviteOrder = orderByNewest<ChapterInviteOut>((row) => row.expires_at, (row) => row.id);
 
 type FeatherIconName = ComponentProps<typeof Feather>["name"];
 type OrgSegment = "feed" | "events" | "tools";
@@ -205,6 +220,7 @@ function OrgFeedSegment({
   refreshKey: number;
 }) {
   const { user } = useSession();
+  const palette = useTheme();
   const [items, setItems] = useState<OrgFeedItem[] | null>(null);
   /** The org-feed fetch failed. Distinct from a genuinely empty chapter feed (c299). */
   const [loadFailed, setLoadFailed] = useState(false);
@@ -212,6 +228,15 @@ function OrgFeedSegment({
   // chapter genuinely has actives-only content they cannot see. Never true for an
   // active member, who already sees everything.
   const [activesOnlyHidden, setActivesOnlyHidden] = useState(false);
+  // A full first page means older posts exist behind it (c359 - the server has
+  // taken a cursor here since c210; this segment never sent one).
+  const pageRef = useRef(collectionPage());
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+
+  const toItem = (post: FeedPostOut): OrgFeedItem => ({
+    post, likeCount: post.like_count, likedByMe: post.liked_by_me,
+  });
 
   // ONE round trip: GET /chapters/{id}/posts returns FeedPostOut, which already
   // carries the author's display identity and batched like/comment counts (c43).
@@ -222,15 +247,14 @@ function OrgFeedSegment({
   // blockAuthor's refetch below without that refetch masquerading as a block failure.
   const load = useCallback(async () => {
     try {
-      const { posts, activesOnlyHidden: hidden } = await listPosts(chapterId);
+      pageRef.current = collectionPage();
+      const { posts, activesOnlyHidden: hidden } = await listPosts(chapterId, { limit: FEED_PAGE_SIZE });
       setActivesOnlyHidden(hidden);
-      setItems(
-        posts.map((post) => ({
-          post,
-          likeCount: post.like_count,
-          likedByMe: post.liked_by_me,
-        })),
-      );
+      const last = posts.at(-1);
+      acceptPage(pageRef.current, posts.length, FEED_PAGE_SIZE,
+        last ? { before: last.created_at, beforeId: last.id } : null);
+      setHasOlder(pageRef.current.more);
+      setItems(posts.map(toItem));
     } catch {
       // NOT setItems([]) (c299): an empty array is the chapter genuinely having posted
       // nothing, and a failed fetch is not an answer at all. This component's own
@@ -245,6 +269,35 @@ function OrgFeedSegment({
     setLoadFailed(false);
     void load();
   }, [load, refreshKey]);
+
+  /** Append the page behind the oldest post held, deduplicated by post id (c359). */
+  const loadOlder = async () => {
+    const request = beginOlderPage(pageRef.current), cursor = pageRef.current.cursor;
+    if (request === null || cursor === null) return;
+    setLoadingOlder(true);
+    try {
+      const { posts: older } = await listPosts(chapterId, {
+        before: cursor.before, before_id: cursor.beforeId, limit: FEED_PAGE_SIZE,
+      });
+      if (pageRef.current.pending !== request) return;
+      const last = older.at(-1);
+      acceptPage(pageRef.current, older.length, FEED_PAGE_SIZE,
+        last ? { before: last.created_at, beforeId: last.id } : null);
+      setHasOlder(pageRef.current.more);
+      setItems((current) => mergePageRows(
+        current, older.map(toItem), (item) => item.post.id,
+        (a, b) => feedPostOrder(a.post, b.post),
+      ));
+    } catch (error) {
+      if (pageRef.current.pending !== request) return;
+      showApiError(error, "Couldn't load earlier posts");
+    } finally {
+      if (pageRef.current.pending === request) {
+        pageRef.current.pending = null;
+        setLoadingOlder(false);
+      }
+    }
+  };
 
   const reportPost = async (item: OrgFeedItem, reason: string) => {
     try {
@@ -357,6 +410,28 @@ function OrgFeedSegment({
           canBlock={user !== null && item.post.author_id !== user.id}
         />
       ))}
+      {hasOlder ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Load older posts"
+          accessibilityState={{ disabled: loadingOlder, busy: loadingOlder }}
+          disabled={loadingOlder}
+          onPress={() => void loadOlder()}
+          style={({ pressed }) => ({
+            alignSelf: "center",
+            marginTop: spacing.md,
+            paddingVertical: spacing.sm,
+            paddingHorizontal: spacing.lg,
+            borderRadius: radii.pill,
+            backgroundColor: palette.surfaceAlt,
+            opacity: loadingOlder ? 0.6 : pressed ? 0.8 : 1,
+          })}
+        >
+          <AppText variant="micro" tone="secondary">
+            {loadingOlder ? "Loading…" : "Load older posts"}
+          </AppText>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -479,10 +554,21 @@ function OrgEventsSegment({
   // Fetched once here, not per card: the roster is the only way to turn a
   // host_id/rsvp.user_id into a name (no GET /users/{id} exists).
   const [members, setMembers] = useState<MemberOut[]>([]);
+  // A full first page means older events exist behind it (c359 - the server has
+  // taken a cursor here since c201; this segment never sent one).
+  const pageRef = useRef(collectionPage());
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   const reload = useCallback(async () => {
     // One round trip (c43) — the old shape here was listEvents + listRsvps per event.
-    setEvents(await listEventsWithRsvps(chapterId));
+    pageRef.current = collectionPage();
+    const page = await listEventsWithRsvps(chapterId, { limit: EVENTS_PAGE_SIZE });
+    const last = page.at(-1)?.event;
+    acceptPage(pageRef.current, page.length, EVENTS_PAGE_SIZE,
+      last ? { before: last.starts_at, beforeId: last.id } : null);
+    setHasOlder(pageRef.current.more);
+    setEvents(page);
   }, [chapterId]);
 
   useEffect(() => {
@@ -497,6 +583,32 @@ function OrgEventsSegment({
     setEventsFailed(false);
     reload().catch(() => setEventsFailed(true));
   }, [reload, refreshKey]);
+
+  /** Append the page behind the oldest event held, deduplicated by event id (c359). */
+  const loadOlder = async () => {
+    const request = beginOlderPage(pageRef.current), cursor = pageRef.current.cursor;
+    if (request === null || cursor === null) return;
+    setLoadingOlder(true);
+    try {
+      const older = await listEventsWithRsvps(chapterId, {
+        before: cursor.before, beforeId: cursor.beforeId, limit: EVENTS_PAGE_SIZE,
+      });
+      if (pageRef.current.pending !== request) return;
+      const last = older.at(-1)?.event;
+      acceptPage(pageRef.current, older.length, EVENTS_PAGE_SIZE,
+        last ? { before: last.starts_at, beforeId: last.id } : null);
+      setHasOlder(pageRef.current.more);
+      setEvents((current) => mergePageRows(current, older, (row) => row.event.id, chapterEventOrder));
+    } catch (error) {
+      if (pageRef.current.pending !== request) return;
+      showApiError(error, "Couldn't load earlier events");
+    } finally {
+      if (pageRef.current.pending === request) {
+        pageRef.current.pending = null;
+        setLoadingOlder(false);
+      }
+    }
+  };
 
   useEffect(() => {
     // Deliberately still soft, and the asymmetry is the point (c299): this roster only
@@ -571,6 +683,28 @@ function OrgEventsSegment({
               onPress={() => router.push(`/chapter/event/${event.id}`)}
             />
           ))}
+          {hasOlder ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Load older events"
+              accessibilityState={{ disabled: loadingOlder, busy: loadingOlder }}
+              disabled={loadingOlder}
+              onPress={() => void loadOlder()}
+              style={({ pressed }) => ({
+                alignSelf: "center",
+                marginTop: spacing.md,
+                paddingVertical: spacing.sm,
+                paddingHorizontal: spacing.lg,
+                borderRadius: radii.pill,
+                backgroundColor: palette.surfaceAlt,
+                opacity: loadingOlder ? 0.6 : pressed ? 0.8 : 1,
+              })}
+            >
+              <AppText variant="micro" tone="secondary">
+                {loadingOlder ? "Loading…" : "Load older events"}
+              </AppText>
+            </Pressable>
+          ) : null}
         </View>
       )}
 
@@ -618,13 +752,26 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
   const [revoking, setRevoking] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
   const [sharing, setSharing] = useState(false);
+  // A full first page means older codes exist behind it (c359 - past 200, a code
+  // was neither visible nor revocable from here at all).
+  const pageRef = useRef(collectionPage());
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   // c111: the codes already out there. Fails soft to absent rather than showing a
   // broken shell — the mint half of this card has to keep working if the list
-  // call dies, since minting is what an e-board came here to do.
+  // call dies, since minting is what an e-board came here to do. Always the FIRST
+  // page: a mint or revoke can change which code sorts first, so re-establishing
+  // page one from scratch is correct here, unlike loadOlderCodes below.
   const refreshExisting = useCallback(async () => {
     try {
-      setExisting(await listInvites(chapterId));
+      pageRef.current = collectionPage();
+      const page = await listInvites(chapterId, { limit: INVITE_PAGE_SIZE });
+      const last = page.at(-1);
+      acceptPage(pageRef.current, page.length, INVITE_PAGE_SIZE,
+        last ? { before: last.expires_at, beforeId: last.id } : null);
+      setHasOlder(pageRef.current.more);
+      setExisting(page);
     } catch {
       setExisting(null);
     }
@@ -633,6 +780,34 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
   useEffect(() => {
     void refreshExisting();
   }, [refreshExisting]);
+
+  /** Append the page behind the furthest-from-expiry code held, deduplicated by
+   * invite id (c359). */
+  const loadOlderCodes = async () => {
+    const request = beginOlderPage(pageRef.current), cursor = pageRef.current.cursor;
+    if (request === null || cursor === null) return;
+    setLoadingOlder(true);
+    try {
+      const older = await listInvites(chapterId, {
+        before: cursor.before, beforeId: cursor.beforeId, limit: INVITE_PAGE_SIZE,
+      });
+      if (pageRef.current.pending !== request) return;
+      const last = older.at(-1);
+      acceptPage(pageRef.current, older.length, INVITE_PAGE_SIZE,
+        last ? { before: last.expires_at, beforeId: last.id } : null);
+      setHasOlder(pageRef.current.more);
+      setExisting((current) => mergePageRows(current, older, (row) => row.id, chapterInviteOrder));
+    } catch {
+      // Fails soft, matching refreshExisting above: a stuck "Load older codes"
+      // button is recoverable by tapping it again, and this card's error banner is
+      // reserved for the mint/revoke actions a president is actually here to take.
+    } finally {
+      if (pageRef.current.pending === request) {
+        pageRef.current.pending = null;
+        setLoadingOlder(false);
+      }
+    }
+  };
 
   const create = async () => {
     setCreating(true);
@@ -823,6 +998,28 @@ function InviteCard({ chapterId, options }: { chapterId: string; options: RoleNa
                 </View>
               );
             })}
+            {hasOlder ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Load older codes"
+                accessibilityState={{ disabled: loadingOlder, busy: loadingOlder }}
+                disabled={loadingOlder}
+                onPress={() => void loadOlderCodes()}
+                style={({ pressed }) => ({
+                  alignSelf: "center",
+                  marginTop: spacing.xs,
+                  paddingVertical: spacing.sm,
+                  paddingHorizontal: spacing.lg,
+                  borderRadius: radii.pill,
+                  backgroundColor: palette.surfaceAlt,
+                  opacity: loadingOlder ? 0.6 : pressed ? 0.8 : 1,
+                })}
+              >
+                <AppText variant="micro" tone="secondary">
+                  {loadingOlder ? "Loading…" : "Load older codes"}
+                </AppText>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
       </View>

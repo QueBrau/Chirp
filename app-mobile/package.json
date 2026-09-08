@@ -12,7 +12,8 @@
     "verify:auth": "node scripts/verify-auth.mjs",
     "verify:invites": "node scripts/verify-invites.mjs",
     "verify:charts": "tsc -p tsconfig.chart-verify.json && node scripts/verify-charts.mjs",
-    "verify:contract": "node scripts/verify-contract.mjs",
+    "verify:button-contrast": "tsc -p tsconfig.chart-verify.json && node scripts/verify-button-contrast.mjs",
+    "verify:contract": "node scripts/verify-contract.mjs && node scripts/verify-contract.mjs --self-test",
     "verify:dates": "node scripts/verify-dates.mjs",
     "verify:ws-url": "node scripts/verify-ws-url.mjs",
     "verify:content-limits": "node scripts/verify-content-limits.mjs",
@@ -22,7 +23,11 @@
     "verify:a11y-touch": "node scripts/verify-a11y-touch.mjs",
     "verify:events-polls": "node scripts/verify-events-polls.mjs",
     "verify:failure-states": "node scripts/verify-failure-states.mjs",
-    "verify:ci-coverage": "node scripts/verify-ci-coverage.mjs"
+    "verify:ci-coverage": "node scripts/verify-ci-coverage.mjs",
+    "verify:c343-session": "node scripts/verify-c343-session.mjs",
+    "verify:moderation-queue": "node scripts/verify-moderation-queue.mjs",
+    "verify:messages-inbox": "node scripts/verify-messages-inbox.mjs",
+    "verify:c359-continuation": "node scripts/verify-c359-continuation.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/muli": "^0.1.0",

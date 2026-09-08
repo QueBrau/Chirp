@@ -18,6 +18,7 @@
  * a live web QA pass.
  */
 
+import { operationErrorMessage } from "@/api/operation";
 import { Alert, Platform, type AlertButton } from "react-native";
 
 import { ApiError } from "@/api/client";
@@ -246,6 +247,9 @@ const DETAIL_COPY: Record<string, string> = {
   payment_already_in_progress: "A payment is already in progress. Give it a moment to finish.",
   payment_in_progress: "A payment is already in progress. Give it a moment to finish.",
   payment_intent_conflict: "A payment for this is already being processed. Give it a moment.",
+  payment_outcome_unconfirmed: "We couldn't confirm this payment attempt. Retry with the same payment method. If it stays unresolved, contact your treasurer.",
+  payment_provider_rejected: "We couldn't prepare this payment. Contact your treasurer before starting another payment.",
+  payment_reconciliation_required: "This payment attempt needs review. Contact your treasurer before starting another payment.",
   plan_not_active: "That payment plan isn't active anymore.",
   platform_admin_required: "Only platform admins can do that.",
   poll_closed: "This poll has closed.",
@@ -330,6 +334,8 @@ const SYSTEM_MESSAGE = "Something went wrong on our end. Try again in a moment."
  * hide the remaining work.
  */
 export function apiErrorMessage(error: unknown): string {
+  const operationMessage = operationErrorMessage(error);
+  if (operationMessage) return operationMessage;
   if (!(error instanceof ApiError)) return "Something went wrong. Try again.";
   if (SYSTEM_CODES.has(error.detail)) return SYSTEM_MESSAGE;
   return DETAIL_COPY[error.detail] ?? error.detail;

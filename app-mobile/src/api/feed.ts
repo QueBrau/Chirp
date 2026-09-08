@@ -60,7 +60,8 @@ export interface PostOut {
  * server-side, so screens never have to fan out to a per-post likes or
  * comments request.
  */
-export interface FeedPostOut extends PostOut {
+// List responses exclude removed posts and do not serialize deleted_at.
+export interface FeedPostOut extends Omit<PostOut, "deleted_at"> {
   display_name: string;
   avatar_url: string | null;
   like_count: number;
@@ -137,10 +138,18 @@ export interface ChapterFeedResult {
  * assertion) — `activesOnlyHidden` rides the X-Actives-Only-Hidden response
  * header instead, via requestWithHeaders, precisely so this stays a drop-in
  * shape and the only thing that changes is one new field on the result.
+ *
+ * c359: the server has accepted before/before_id/limit on this route since c210;
+ * this client just never sent them, so the chapter tab's Feed segment silently
+ * stopped at page one. `opts` reuses ListFeedOptions - same shape as listCampusFeed.
  */
-export async function listPosts(chapterId: string): Promise<ChapterFeedResult> {
+export async function listPosts(
+  chapterId: string,
+  opts: ListFeedOptions = {},
+): Promise<ChapterFeedResult> {
   const { data, headers } = await requestWithHeaders<FeedPostOut[]>(
     `/chapters/${chapterId}/posts`,
+    { query: { limit: opts.limit, before: opts.before, before_id: opts.before_id } },
   );
   return { posts: data, activesOnlyHidden: headers.get("x-actives-only-hidden") === "true" };
 }

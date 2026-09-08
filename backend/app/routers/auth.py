@@ -155,32 +155,32 @@ async def update_me(
     for the duration of a copy.
     """
     fields = body.model_fields_set
+    if "display_name" in fields and body.display_name is None:
+        raise HTTPException(status_code=422, detail="display_name_cannot_be_cleared")
+    if "account_type" in fields and body.account_type is None:
+        raise HTTPException(status_code=422, detail="account_type_cannot_be_cleared")
+
+    avatar_url = None
+    if body.avatar_object_name is not None:
+        user_id, uid = user.id, user.firebase_uid
+        validate_media_object_names(str(user_id), [body.avatar_object_name])
+        # Stage every profile field until the copy and fresh authorization finish.
+        # This commit contains only the initial authentication reads.
+        await session.commit()
+        session.expire_all()
+        avatar_url = await asyncio.to_thread(
+            finalize_media_object, str(user_id), body.avatar_object_name,
+            destination_prefix=AVATAR_PREFIX,
+        )
+        user = await get_current_user(uid=uid, session=session)
 
     if "display_name" in fields:
-        if body.display_name is None:
-            # display_name is NOT NULL on the row and is the only name anything renders,
-            # so clearing it is refused rather than quietly ignored.
-            raise HTTPException(status_code=422, detail="display_name_cannot_be_cleared")
         user.display_name = body.display_name
-
     if "avatar_object_name" in fields:
-        if body.avatar_object_name is None:
-            # Removing the picture. The old object is deliberately NOT deleted here:
-            # chirp-api-run has no delete grant outside tmp/ by design (c132), and
-            # widening it is the exact thing that card exists to prevent.
-            user.avatar_url = None
-        else:
-            # Same gate post create uses: the name must be THIS caller's own tmp/
-            # upload. Object names are opaque UUIDs but not secret, and the bucket is
-            # public-read, so without this one caller could claim another's upload.
-            validate_media_object_names(str(user.id), [body.avatar_object_name])
-            user.avatar_url = await asyncio.to_thread(
-                finalize_media_object,
-                str(user.id),
-                body.avatar_object_name,
-                destination_prefix=AVATAR_PREFIX,
-            )
+        # An explicit null clears the reference; never delete the old object here.
+        user.avatar_url = avatar_url
 
+    account_type_event = None
     if "account_type" in fields:
         if body.account_type is None:
             # NOT NULL on the row, and there is no "back to nothing" state for it the
@@ -193,14 +193,15 @@ async def update_me(
             # A CHANGE, not a signup - user_signed_up already fired once, at
             # bootstrap, and must not fire again here (see the schemas/identity.py
             # AccountType docstring). Own event, own name.
-            emit(
-                "account_type_changed",
-                user_id=user.id,
-                previous_account_type=previous_account_type,
-                account_type=user.account_type,
-            )
+            account_type_event = {
+                "user_id": user.id,
+                "previous_account_type": previous_account_type,
+                "account_type": user.account_type,
+            }
 
     await session.commit()
+    if account_type_event is not None:
+        emit("account_type_changed", **account_type_event)
     await session.refresh(user)
     return UserOut.model_validate(user)
 
