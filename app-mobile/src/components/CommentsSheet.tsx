@@ -36,7 +36,10 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, TextInput, View } from
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { createComment, listComments, type PostCommentOut } from "@/api/feed";
+import { useSession } from "@/auth";
+import { currentIdentity, ownsIdentity } from "@/auth/identity";
 import { showApiError } from "@/lib/alert";
+import { acceptPage, beginOlderPage, collectionPage, commentOrder, mergePageRows } from "@/lib/collectionPages";
 import { isOverLimit, MAX_COMMENT_BODY_LENGTH } from "@/lib/contentLimits";
 import { compactAge as age } from "@/lib/dates";
 import { inputField, light, radii, spacing, useTheme, withAlpha } from "@/theme";
@@ -96,6 +99,8 @@ export interface CommentsSheetProps {
 }
 
 export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetProps) {
+  useSession(); // Re-render when the account changes, even if the post stays the same.
+  const renderOwner = currentIdentity();
   const palette = useTheme();
   const insets = useSafeAreaInsets();
   const [comments, setComments] = useState<PostCommentOut[]>([]);
@@ -105,101 +110,137 @@ export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetP
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [countKnown, setCountKnown] = useState(false);
+  const queryRef = useRef({ postId, owner: renderOwner, active: true, initialLoaded: false, page: collectionPage() });
+  const renderQuery = queryRef.current;
+  const countCallback = useRef(onCountChange);
+  countCallback.current = onCountChange;
+  const currentQuery = (query: typeof queryRef.current) =>
+    query === queryRef.current && query.owner === renderOwner && query.active && query.postId === postId && ownsIdentity(query.owner);
   // Same hard guard CreateSheet's submit uses: a ref is read and written
   // synchronously, so two taps landing inside one render can't both get through the
   // way a `disabled` prop one render behind would let them.
   const sendingRef = useRef(false);
 
-  const load = async () => {
+  const load = async (query = renderQuery) => {
+    if (!currentQuery(query)) return;
+    const request = Symbol("initial comments");
+    query.page.pending = request;
+    query.initialLoaded = false;
     setLoadState("loading");
+    setLoadingOlder(false);
+    setCountKnown(false);
     try {
       const rows = await listComments(postId, { limit: COMMENT_PAGE_SIZE });
-      setComments(rows);
-      const more = rows.length === COMMENT_PAGE_SIZE;
-      setHasOlder(more);
+      if (!currentQuery(query) || query.page.pending !== request) return;
+      const oldest = rows[0];
+      acceptPage(query.page, rows.length, COMMENT_PAGE_SIZE,
+        oldest ? { before: oldest.created_at, beforeId: oldest.id } : null);
+      setComments(current => mergePageRows(current, rows, row => row.id, commentOrder));
+      query.initialLoaded = true;
+      setHasOlder(query.page.more);
+      setCountKnown(true);
       setLoadState("loaded");
-      // Only when this IS the whole thread - see onCountChange's docstring.
-      if (!more) onCountChange(rows.length);
     } catch {
+      if (!currentQuery(query) || query.page.pending !== request) return;
       setLoadState("error");
+    } finally {
+      if (currentQuery(query) && query.page.pending === request) query.page.pending = null;
     }
   };
 
   /** Fetch the page immediately before the oldest comment held, and prepend it. */
   const loadOlder = async () => {
-    const oldest = comments[0];
-    if (oldest === undefined || loadingOlder) return;
+    const query = renderQuery;
+    if (!currentQuery(query)) return;
+    const request = beginOlderPage(query.page), cursor = query.page.cursor;
+    if (request === null || cursor === null) return;
     setLoadingOlder(true);
     try {
       const rows = await listComments(postId, {
-        before: oldest.created_at,
-        beforeId: oldest.id,
+        ...cursor,
         limit: COMMENT_PAGE_SIZE,
       });
-      const more = rows.length === COMMENT_PAGE_SIZE;
-      const next = [...rows, ...comments];
-      setHasOlder(more);
-      setComments(next);
-      // NOT inside a setComments updater. An updater runs during render, and calling
-      // the parent's onCountChange from there is a setState-while-rendering - React
-      // logs "Cannot update a component while rendering a different component" and
-      // the live QA pass caught exactly that. Safe to read `comments` directly here:
-      // this is an async handler, not a render, and loadingOlder gates re-entry.
-      if (!more) onCountChange(next.length);
+      if (!currentQuery(query) || query.page.pending !== request) return;
+      const oldest = rows[0];
+      acceptPage(query.page, rows.length, COMMENT_PAGE_SIZE,
+        oldest ? { before: oldest.created_at, beforeId: oldest.id } : null);
+      setHasOlder(query.page.more);
+      setComments(current => mergePageRows(current, rows, row => row.id, commentOrder));
     } catch (error) {
+      if (!currentQuery(query) || query.page.pending !== request) return;
       showApiError(error, "Couldn't load earlier comments");
     } finally {
-      setLoadingOlder(false);
+      if (currentQuery(query) && query.page.pending === request) {
+        query.page.pending = null;
+        setLoadingOlder(false);
+      }
     }
   };
 
   useEffect(() => {
-    void load();
-    // Mounted only while open and only for one post, so this runs exactly once per
-    // opening. postId cannot change under a mounted sheet.
+    const query = { postId, owner: renderOwner, active: true, initialLoaded: false, page: collectionPage() };
+    queryRef.current.active = false;
+    queryRef.current = query;
+    setComments([]);
+    setHasOlder(false);
+    setCountKnown(false);
+    setLoadingOlder(false);
+    setDraft("");
+    sendingRef.current = false;
+    setSending(false);
+    void load(query);
+    return () => { query.active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [postId]);
+  }, [postId, renderOwner]);
+
+  // Notify only from committed state. Updaters must stay pure, including when
+  // React replays them. Sending one row never proves an initially failed thread complete.
+  useEffect(() => {
+    if (currentQuery(queryRef.current) && queryRef.current.initialLoaded && countKnown && !hasOlder && loadState === "loaded") {
+      countCallback.current(comments.length);
+    }
+  }, [comments.length, countKnown, hasOlder, loadState, postId, renderOwner]);
 
   const canSend =
     draft.trim().length > 0 && !isOverLimit(draft, MAX_COMMENT_BODY_LENGTH) && !sending;
 
   const send = async () => {
-    if (!canSend || sendingRef.current) return;
+    const query = renderQuery;
+    if (!currentQuery(query) || !canSend || sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
     try {
       const created = await createComment(postId, { body: draft.trim() });
+      if (!currentQuery(query)) return;
       // Appended rather than refetched: list_comments orders oldest-first, so a new
       // comment belongs exactly here, and the POST response is the same shape the
       // list returns (pinned by a backend test) including the author's name.
-      // Same shape as loadOlder, and for the same reason: the count is reported
-      // OUTSIDE the state updater. This call site pre-dates c258 and had the
-      // side-effect-in-updater bug already; it is fixed here rather than left in
-      // place, because c258 adds a second path that makes it fire.
-      const next = [...comments, created];
-      setComments(next);
-      // Only claim a total when the whole thread is held (see onCountChange).
-      if (!hasOlder) onCountChange(next.length);
+      setComments(current => mergePageRows([created], current, row => row.id, commentOrder));
       setDraft("");
-      // A thread that failed to load and then got a comment sent into it is no longer
-      // in an error state - the send proves the post is readable and the one row we
-      // now hold is real. Leaving it on "error" would hide the comment just written.
-      setLoadState("loaded");
+      // Recover an initially failed page without treating the new row as a total.
+      if (!query.initialLoaded) void load(query);
     } catch (error) {
+      if (!currentQuery(query)) return;
       // The draft deliberately survives: same reasoning as CreateSheet's failed post,
       // where clearing the body turns "try again" into a lie.
       showApiError(error, "Couldn't post that comment");
     } finally {
-      sendingRef.current = false;
-      setSending(false);
+      if (currentQuery(query)) {
+        sendingRef.current = false;
+        setSending(false);
+      }
     }
   };
 
+  const close = () => { if (!currentQuery(renderQuery)) return; renderQuery.active = false; onClose(); };
+  if (!currentQuery(queryRef.current)) return null;
+
   return (
-    <Modal transparent visible animationType="slide" onRequestClose={onClose}>
+    <Modal transparent visible animationType="slide" onRequestClose={close}>
       {/* c131: onPress only, no accessibilityRole - see the file header. */}
       <Pressable
-        onPress={onClose}
+        onPress={close}
         style={{ flex: 1, backgroundColor: withAlpha(light.ink, 0.4), justifyContent: "flex-end" }}
       >
         {/* Inner Pressable with no onPress: swallows taps so they don't bubble to the backdrop close. */}
@@ -229,7 +270,7 @@ export function CommentsSheet({ postId, onClose, onCountChange }: CommentsSheetP
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Close"
-            onPress={onClose}
+            onPress={close}
             hitSlop={spacing.sm}
             style={{
               position: "absolute",
