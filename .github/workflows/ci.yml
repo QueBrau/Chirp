@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # c389: board-only coordination updates are checked by scripts/board-check.
+    # Any other changed path still runs application CI; PRs stay unfiltered.
+    paths-ignore:
+      - board.html
   pull_request:
 
 # Explicit least-privilege regardless of org/repo Actions defaults (c185 - the
