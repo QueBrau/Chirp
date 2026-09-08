@@ -348,12 +348,12 @@ async def _prepare_reserved_intent(
         session, select(models.DuesPaymentIntent).where(
             models.DuesPaymentIntent.dues_cycle_id == cycle.id,
             models.DuesPaymentIntent.user_id == user.id,
-            models.DuesPaymentIntent.status.in_(("open", "succeeded")),
+            models.DuesPaymentIntent.status.in_(("open", "failed", "succeeded")),
         )
     )
     if (
         reservation is not None
-        and reservation.status == "open"
+        and reservation.status in ("open", "failed")
         and reservation.stripe_payment_intent_id is not None
         and reservation.created_at < datetime.now(timezone.utc) - RESERVATION_TTL
     ):
@@ -395,9 +395,9 @@ async def _prepare_reserved_intent(
                     )
         if expire:
             # 'expired' is not a value the status CHECK constraint allows
-            # (migration 0010), so this reuses 'canceled' - the same retryable
-            # bucket stripe_webhook already puts a genuinely failed/canceled
-            # payment in.
+            # (migration 0010), so confirmed cancellation uses 'canceled'. A
+            # declined attempt remains held as 'failed' until Stripe confirms
+            # cancellation; its client secret can otherwise still be retried.
             reservation.status = "canceled"
             reservation.updated_at = datetime.now(timezone.utc)
             await session.commit()
@@ -461,7 +461,7 @@ async def _prepare_reserved_intent(
                 models.DuesPaymentIntent.id == reservation.id
             ),
         )
-        if reservation is None or reservation.status not in ("open", "succeeded"):
+        if reservation is None or reservation.status not in ("open", "failed", "succeeded"):
             raise conflict("payment_already_in_progress")
         if reservation.status == "succeeded":
             raise conflict("already_paid")
@@ -645,8 +645,17 @@ async def stripe_webhook(
                         str(reservation.dues_cycle_id), str(reservation.user_id),
                         reservation.stripe_payment_intent_id, recorded_intent,
                     )
+        elif event_type == "payment_intent.payment_failed":
+            # A declined attempt remains retryable at Stripe (c387). `failed`
+            # holds the same reservation/index slot as `open`; late failures
+            # must never revive an intent already canceled or succeeded.
+            if reservation.status in ("open", "failed"):
+                changed = reservation.status != "failed"
+                reservation.status = "failed"
+                reservation.updated_at = datetime.now(timezone.utc)
         elif reservation.status != "succeeded":
-            # An out-of-order failure must never release a successfully paid cycle.
+            # Only confirmed cancellation releases a held attempt. Never demote
+            # a successfully paid cycle on an out-of-order cancellation.
             changed = reservation.status != statuses[event_type]
             reservation.status = statuses[event_type]
             reservation.updated_at = datetime.now(timezone.utc)

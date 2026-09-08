@@ -823,7 +823,7 @@ async def create_dues_payment_plan(
     still needs. Also 409 if the member already has an ACTIVE plan for it
     (uq_dues_payment_plans_active_per_member, migration 0023, is the real guard
     under concurrency — the read here only picks the honest 409 reason before the
-    race), or has a LIVE self-serve reservation in flight (an open/succeeded
+    race), or has a LIVE self-serve reservation in flight (an open/failed/succeeded
     DuesPaymentIntent with no ledger row yet — see the reservation check below).
     """
     cycle = await session.get(models.DuesCycle, cycle_id)
@@ -884,14 +884,14 @@ async def create_dues_payment_plan(
     # Without this, a plan gets created underneath the in-flight payment; the ACH
     # later settles into a full dues_payment AND the treasurer keeps recording
     # installments on top of it, over-collecting the cycle. uq_dues_intent_live
-    # caps this at exactly one open/succeeded row per (cycle, member), so
+    # caps this at exactly one open/failed/succeeded row per (cycle, member), so
     # scalar_one_or_none() is safe here without a LIMIT, same as payments.py's own
     # use of this query shape.
     live_reservation = await session.execute(
         select(models.DuesPaymentIntent.id).where(
             models.DuesPaymentIntent.dues_cycle_id == cycle_id,
             models.DuesPaymentIntent.user_id == body.user_id,
-            models.DuesPaymentIntent.status.in_(("open", "succeeded")),
+            models.DuesPaymentIntent.status.in_(("open", "failed", "succeeded")),
         )
     )
     if live_reservation.scalar_one_or_none() is not None:
@@ -944,7 +944,7 @@ async def create_dues_payment_plan(
         raise conflict("on_payment_plan") from None
     except DBAPIError as exc:
         # c230: cross_table_dues_guard_plans (migration 0028) — a member's
-        # self-serve reservation went live (an open/succeeded DuesPaymentIntent)
+        # self-serve reservation went live (an open/failed/succeeded DuesPaymentIntent)
         # for this (cycle, member) between the live_reservation read-guard above
         # and this plan's INSERT actually landing. Same cross-table TOCTOU that
         # read-guard exists to close, now backstopped at the database; raise the

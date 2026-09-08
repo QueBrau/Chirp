@@ -164,14 +164,14 @@ class DuesPaymentIntent(Base):
 
     The row is inserted BEFORE Stripe is called, so a second attempt loses the
     race against uq_dues_intent_live at the database rather than at Stripe.
-    Only 'open' and 'succeeded' hold the reservation: a genuinely failed or
-    canceled payment must stay retryable, which is why payment_failed and
-    payment_intent.canceled move the row out of those states.
+    Open, failed and succeeded hold the reservation (c387): a declined attempt
+    can still be retried with the same Stripe intent. Only confirmed cancellation
+    invalidates its secret and releases the slot for a fresh reservation.
 
     uq_dues_intent_live only guards THIS table. The cross_table_dues_guard_intents
     trigger (migration 0028, board c230) is where the OTHER half of this row's
-    invariant lives: a row entering 'open' or 'succeeded' here is refused if the
-    same (dues_cycle_id, user_id) already has an ACTIVE DuesPaymentPlan, closing
+    invariant lives: a row entering 'open', 'failed' or 'succeeded' here is refused
+    if the same (dues_cycle_id, user_id) already has an ACTIVE DuesPaymentPlan, closing
     the TOCTOU a plain read-then-insert left between this table and that one.
     """
 

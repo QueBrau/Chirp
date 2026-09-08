@@ -34,9 +34,9 @@ WHAT EACH GROUP OF TESTS PROVES, tied to the c230 board card's own test list:
 (d) test_resolving_*_succeeds_despite_a_coexisting_* — the c230 x c234 interaction
     named on the board card: a reservation resolving to failed/canceled, or a plan
     being canceled/completed, must never be blocked by this guard even when the
-    OTHER table happens to hold a live row for the same pair — because both are
-    transitions OUT of the live state, which the trigger's own first check exists
-    to exempt.
+    OTHER table happens to hold a live row for the same pair. Since c387 a failed
+    intent remains held: open -> failed is a transition WITHIN the held set;
+    cancellation/completion release it. Neither transition enters a new obligation.
 
 Existing HTTP-level tests already cover the read-guard's own honest 409s
 (test_dues_payment_plans.py's test_a_live_self_serve_reservation_blocks_plan_creation
@@ -452,13 +452,13 @@ async def _plan_status(cycle_id: str, user_id: str) -> str:
 async def test_resolving_a_reservation_succeeds_despite_a_coexisting_active_plan(
     client: AsyncClient, make_chapter_with: MakeChapterWith, resolved_status: str
 ) -> None:
-    """c230 x c234, pinned exactly as the board card names it: c234's webhook
-    resolution of an open reservation to failed/canceled — a transition OUT of the
-    live set — must succeed even when an active plan coexists with it. The trigger's
-    own first check (NEW.status NOT IN ('open','succeeded') -> RETURN NEW,
-    untouched) is what makes this true regardless of what the other table holds;
-    this test proves it against the least forgiving case, where the OTHER table's
-    conflicting row is actually sitting right there.
+    """Existing inconsistent pairs must still accept provider state updates.
+
+    This fixture explicitly bypasses the guards to create an illegal pair.
+    Cancellation releases the slot. Since c387, open -> failed stays WITHIN the
+    held set and does not introduce a new conflicting reservation; the trigger's
+    OLD-held predicate permits that update. New failed entries and new active
+    plans are separately refused, including under concurrency in the c387 tests.
     """
     setup = await make_chapter_with(role="member")
     cycle_id = await _create_dues_cycle(client, setup, amount_cents=30_000)
