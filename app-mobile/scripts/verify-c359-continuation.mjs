@@ -1,15 +1,23 @@
 /**
- * Offline regression guard for the mobile half of board c359's collection
- * continuations: the chapter tab's Feed and Events segments used to fetch only
- * page one and never continue, even though the backend had already accepted a
- * cursor on both routes for a card or more. Source-level, like
- * verify-messages-pagination.mjs and verify-invites.mjs - no network, no auth, no
- * database - so a future edit that quietly drops the cursor plumbing fails here
- * instead of silently truncating a chapter's feed or calendar again.
+ * Regression guard for the mobile half of board c359's collection continuations:
+ * the chapter tab's Feed, Events and invite-code lists used to fetch only page one
+ * and never continue, even though the backend had already accepted a cursor on all
+ * three routes.
+ *
+ * The Feed and Events segments are checked by EXECUTING the real component logic
+ * (chapter-continuation-cases.mjs, in the collection-race-cases.mjs style): it
+ * drives the real load/loadOlder handlers and asserts the actual next request
+ * carries the before/beforeId of the last row genuinely held, and that an
+ * overlapping row cannot render twice - not just that a `before:` token appears
+ * somewhere in the source. InviteCard falls back to source-level checks: its
+ * continuation is entangled with the QR/mint/revoke UI (react-native-qrcode-svg,
+ * native Share), which the executed harness does not stub, and its own
+ * before/beforeId plumbing is identical code to the two executed segments.
  *
  *   npm run verify:c359-continuation
  */
 import { readFileSync } from "node:fs";
+import { runChapterFeedContinuationCases, runChapterEventsContinuationCases } from "./chapter-continuation-cases.mjs";
 
 const feed = readFileSync(new URL("../src/api/feed.ts", import.meta.url), "utf8");
 const events = readFileSync(new URL("../src/api/events.ts", import.meta.url), "utf8");
@@ -28,19 +36,15 @@ const checks = [
   ["listEventsWithRsvps gains typed before/beforeId page options", /interface ChapterEventsPage \{[\s\S]*?beforeId\?: string/, events],
   ["listEventsWithRsvps threads before_id through to the request", /listEventsWithRsvps\([\s\S]{0,400}?before_id: paired \? page\.beforeId/, events],
 
-  // The UI continuation itself - OrgFeedSegment and OrgEventsSegment must actually
-  // hold a cursor/more/pending state and pass it back on the next call, not just
-  // reference `hasOlder` cosmetically.
-  ["OrgFeedSegment calls listPosts with a page-shaped options object", /listPosts\(chapterId,\s*\{/, chapterScreen],
-  ["OrgFeedSegment has a load-older-posts continuation", /loadOlder[\s\S]{0,20}=[\s\S]*?listPosts\(chapterId,\s*\{[\s\S]*?before:/, chapterScreen],
-  ["OrgEventsSegment calls listEventsWithRsvps with a page-shaped options object", /listEventsWithRsvps\(chapterId,\s*\{/, chapterScreen],
-  ["OrgEventsSegment has a load-older-events continuation", /listEventsWithRsvps\(chapterId,\s*\{[\s\S]*?before: cursor\.before/, chapterScreen],
-  ["a load-older-events button label exists", /Load older events/, chapterScreen],
-  ["a load-older-posts button label exists", /Load older posts/, chapterScreen],
+  // InviteCard: fallback to source-level checks (see module docstring for why).
+  ["listInvites gains typed before/beforeId page options", /interface ChapterInvitePage \{[\s\S]*?beforeId\?: string/,
+    readFileSync(new URL("../src/api/chapters.ts", import.meta.url), "utf8")],
+  ["InviteCard has a load-older-codes continuation", /loadOlderCodes[\s\S]{0,20}=[\s\S]*?listInvites\(chapterId,\s*\{[\s\S]*?before:/, chapterScreen],
+  ["a load-older-codes button label exists", /Load older codes/, chapterScreen],
 
   // c358 (PR #254) added collectionPages.ts's cursor/more/pending page shape
   // precisely so a new continuation would not hand-roll its own hasOlder booleans;
-  // this proves the three c359 continuations actually adopted it rather than
+  // this proves all three c359 continuations actually adopted it rather than
   // reinventing the state machine a fourth time.
   ["chapter/index.tsx uses collectionPages.ts's page primitives", /from "@\/lib\/collectionPages"/, chapterScreen],
   ["appended pages are merged through mergePageRows (no duplicate rows)", /mergePageRows\(/, chapterScreen],
@@ -55,6 +59,14 @@ for (const [label, check, source] of checks) {
     failures++;
     console.log(`  FAIL  ${label}`);
   }
+}
+
+try {
+  await runChapterFeedContinuationCases();
+  await runChapterEventsContinuationCases();
+} catch (error) {
+  failures++;
+  console.log(`  FAIL  executed chapter-continuation-cases: ${error.message}`);
 }
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);

@@ -143,6 +143,32 @@ async def test_exactly_500_sheet_refuses_a_new_distinct_user_but_allows_pure_upd
     )
 
 
+async def test_growing_to_exactly_the_cap_succeeds(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
+) -> None:
+    """The boundary check must be `>` MAX_ROSTER_PAGE, not `>=`: landing EXACTLY on
+    the cap by adding one new distinct user to a 499-row sheet is still growth that
+    fits, and must succeed - only crossing past 500 may be refused. Neither test
+    above exercises this: both seed the sheet already AT (or past) the cap and only
+    ever add a user that pushes it OVER, so an off-by-one that refused at 500
+    instead of 501 would pass both of them undetected."""
+    setup = await make_chapter_with("member")
+    meeting_id = await _create_meeting(client, setup, "Grows To Exactly 500")
+    await _seed_attendance(setup.chapter_id, meeting_id, MAX_ROSTER_PAGE - 1)
+    assert await _attendance_row_count(meeting_id) == MAX_ROSTER_PAGE - 1
+
+    new_member_id = await _real_active_member(client, setup, make_user)
+    grown = await client.put(
+        f"/chapters/{setup.chapter_id}/meetings/{meeting_id}/attendance",
+        json={"entries": [{"user_id": new_member_id, "status": "present"}]},
+        headers=setup.president.headers,
+    )
+    assert grown.status_code == 200, grown.text
+    assert await _attendance_row_count(meeting_id) == MAX_ROSTER_PAGE, (
+        "landing exactly on the cap must be allowed, not refused"
+    )
+
+
 async def test_a_legacy_meeting_already_over_the_cap_allows_updates_but_refuses_growth(
     client: AsyncClient, make_chapter_with: MakeChapterWith, make_user: MakeUser
 ) -> None:
