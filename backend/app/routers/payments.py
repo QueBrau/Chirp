@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import stripe
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +60,30 @@ def _onboarding_urls() -> tuple[str, str]:
     return f"{base}/stripe/connect/return", f"{base}/stripe/connect/refresh"
 
 
+async def _onboarding_chapter(
+    session: AsyncSession, user: models.User, chapter_id: uuid.UUID,
+) -> models.Chapter:
+    """Check current onboarding role and return the chapter in this transaction."""
+    result = await session.execute(
+        select(models.Membership.role).where(
+            models.Membership.user_id == user.id,
+            models.Membership.chapter_id == chapter_id,
+            models.Membership.status == "active",
+        )
+    )
+    role = result.scalar_one_or_none()
+    if role is None:
+        raise forbidden("not_a_member")
+    if role not in (Role.treasurer.value, Role.president.value):
+        raise forbidden("insufficient_role")
+
+    chapter = await session.get(models.Chapter, chapter_id)
+    if chapter is None:
+        raise not_found("chapter_not_found")
+
+    return chapter
+
+
 @router.post("/payments/connect/onboarding-link")
 async def create_connect_onboarding_link(
     body: ConnectOnboardingRequest,
@@ -71,33 +95,34 @@ async def create_connect_onboarding_link(
     Creates the Express account on first call and reuses it afterwards, so a member
     who abandons onboarding halfway resumes the same account instead of orphaning it.
     """
-    result = await session.execute(
-        select(models.Membership.role).where(
-            models.Membership.user_id == user.id,
-            models.Membership.chapter_id == body.chapter_id,
-            models.Membership.status == "active",
-        )
-    )
-    role = result.scalar_one_or_none()
-    if role is None:
-        raise forbidden("not_a_member")
-    if role not in (Role.treasurer.value, Role.president.value):
-        raise forbidden("insufficient_role")
-
-    chapter = await session.get(models.Chapter, body.chapter_id)
-    if chapter is None:
-        raise not_found("chapter_not_found")
-
+    chapter = await _onboarding_chapter(session, user, body.chapter_id)
+    uid, chapter_id, org_name = user.firebase_uid, chapter.id, chapter.org_name
     account_id = chapter.stripe_account_id
-    if account_id is None:
-        account_id = await stripe_service.create_express_account(
-            chapter.id, chapter.org_name
-        )
-        chapter.stripe_account_id = account_id
-        await session.commit()
-
     return_url, refresh_url = _onboarding_urls()
+    await session.commit()
+    session.expire_all()
+
+    if account_id is None:
+        candidate = await stripe_service.create_express_account(chapter_id, org_name)
+        user = await get_current_user(uid=uid, session=session)
+        chapter = await _onboarding_chapter(session, user, chapter_id)
+        # Never overwrite a competing onboarding winner's account association.
+        await session.execute(
+            update(models.Chapter).where(
+                models.Chapter.id == chapter_id, models.Chapter.stripe_account_id.is_(None),
+            ).values(stripe_account_id=candidate).execution_options(synchronize_session=False)
+        )
+        account_id = (await session.execute(
+            select(models.Chapter.stripe_account_id).where(models.Chapter.id == chapter_id)
+        )).scalar_one()
+        await session.commit()
+        session.expire_all()
+
     link = await stripe_service.create_account_link(account_id, return_url, refresh_url)
+    user = await get_current_user(uid=uid, session=session)
+    chapter = await _onboarding_chapter(session, user, chapter_id)
+    if chapter.stripe_account_id != account_id:
+        raise conflict("chapter_not_onboarded")
     return ConnectOnboardingOut(
         url=link.url,
         expires_at=datetime.fromtimestamp(link.expires_at, tz=timezone.utc),
@@ -109,6 +134,7 @@ async def get_chapter_payments_status(
     chapter_id: uuid.UUID,
     _membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
+    user: models.User = Depends(get_current_user),
 ) -> ChapterPaymentsStatusOut:
     """Whether the chapter can accept dues yet; read live from Stripe, any member.
 
@@ -124,7 +150,17 @@ async def get_chapter_payments_status(
             onboarded=False, charges_enabled=False, details_submitted=False
         )
 
-    account = await stripe_service.retrieve_account(chapter.stripe_account_id)
+    account_id, uid = chapter.stripe_account_id, user.firebase_uid
+    await session.commit()
+    session.expire_all()
+    account = await stripe_service.retrieve_account(account_id)
+    user = await get_current_user(uid=uid, session=session)
+    await get_current_membership(chapter_id=chapter_id, user=user, session=session)
+    chapter = await session.get(models.Chapter, chapter_id)
+    if chapter is None:
+        raise not_found("chapter_not_found")
+    if chapter.stripe_account_id != account_id:
+        raise conflict("chapter_not_onboarded")
     charges_enabled = bool(account.charges_enabled)
     details_submitted = bool(account.details_submitted)
     return ChapterPaymentsStatusOut(
@@ -134,53 +170,37 @@ async def get_chapter_payments_status(
     )
 
 
-async def _get_or_create_customer(
-    session: AsyncSession, user: models.User, chapter_id: uuid.UUID, account_id: str
-) -> str:
-    """Stripe Customer for this (member, chapter) pair, creating it on first payment."""
-    existing = await session.get(
-        models.ChapterStripeCustomer, {"user_id": user.id, "chapter_id": chapter_id}
-    )
-    if existing is not None:
-        return existing.stripe_customer_id
+async def _bind_customer(
+    session: AsyncSession, user_id: uuid.UUID, chapter_id: uuid.UUID, candidate_id: str,
+) -> tuple[str, bool]:
+    """Bind a provider result after revalidation, retaining a concurrent winner.
 
-    customer_id = await stripe_service.create_customer(
-        account_id, user.email, user.display_name
-    )
-    session.add(
-        models.ChapterStripeCustomer(
-            user_id=user.id, chapter_id=chapter_id, stripe_customer_id=customer_id
-        )
-    )
-    try:
-        await session.commit()
-    except IntegrityError:
-        # Concurrent first payment (double-tap, or a client retry on a flaky
-        # connection) raced us to insert the same (user, chapter) row. Defer to
-        # the winner rather than 500ing; our own Stripe Customer is left unused
-        # on the connected account, which is harmless and inert.
-        await session.rollback()
-        winner = await session.get(
-            models.ChapterStripeCustomer, {"user_id": user.id, "chapter_id": chapter_id}
-        )
-        if winner is None:
-            raise
-        return winner.stripe_customer_id
-    return customer_id
-
-
-@router.post("/payments/dues/{cycle_id}/intent")
-async def create_dues_payment_intent(
-    cycle_id: uuid.UUID,
-    body: DuesIntentCreate,
-    user: models.User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> DuesIntentOut:
-    """Create a dues PaymentIntent for the caller; active members of the cycle's chapter.
-
-    The amount comes from the dues cycle, never the client. The rail arrives in the
-    body because application_fee_amount is fixed at creation time.
+    Commit a new binding before reservation ownership so its unique-key lock does
+    not queue another request ahead of c366's NOWAIT guard. The caller revalidates
+    after that commit. Competing unused Customers remain inert, as before.
     """
+    lookup = select(models.ChapterStripeCustomer.stripe_customer_id).where(
+        models.ChapterStripeCustomer.user_id == user_id,
+        models.ChapterStripeCustomer.chapter_id == chapter_id,
+    )
+    existing = await session.scalar(lookup)
+    if existing is not None:
+        return existing, False
+    await session.execute(
+        pg_insert(models.ChapterStripeCustomer)
+        .values(user_id=user_id, chapter_id=chapter_id, stripe_customer_id=candidate_id)
+        .on_conflict_do_nothing(index_elements=["user_id", "chapter_id"])
+    )
+    winner = (await session.execute(lookup)).scalar_one()
+    await session.commit()
+    session.expire_all()
+    return winner, True
+
+
+async def _load_dues_context(
+    session: AsyncSession, user: models.User, cycle_id: uuid.UUID,
+) -> tuple[models.DuesCycle, models.Chapter]:
+    """Apply the same eligibility checks before and after provider preparation."""
     cycle = await session.get(models.DuesCycle, cycle_id)
     if cycle is None:
         raise not_found("dues_cycle_not_found")
@@ -272,12 +292,51 @@ async def create_dues_payment_intent(
     chapter = await session.get(models.Chapter, cycle.chapter_id)
     if chapter is None or chapter.stripe_account_id is None:
         raise conflict("chapter_not_onboarded")
-    account_id = chapter.stripe_account_id
+    return cycle, chapter
+
+
+@router.post("/payments/dues/{cycle_id}/intent")
+async def create_dues_payment_intent(
+    cycle_id: uuid.UUID,
+    body: DuesIntentCreate,
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DuesIntentOut:
+    """Create a dues PaymentIntent for the caller; active members of the cycle's chapter.
+
+    The amount comes from the dues cycle, never the client. The rail arrives in the
+    body because application_fee_amount is fixed at creation time.
+    """
+    cycle, chapter = await _load_dues_context(session, user, cycle_id)
+    chapter_id, account_id = chapter.id, chapter.stripe_account_id
+    uid, email, display_name = user.firebase_uid, user.email, user.display_name
+    customer_id = await session.scalar(
+        select(models.ChapterStripeCustomer.stripe_customer_id).where(
+            models.ChapterStripeCustomer.user_id == user.id,
+            models.ChapterStripeCustomer.chapter_id == chapter_id,
+        )
+    )
+    await session.commit()  # only eligibility reads precede external preparation
+    session.expire_all()
     account = await stripe_service.retrieve_account(account_id)
     if not account.charges_enabled:
         raise conflict("chapter_not_onboarded")
 
-    customer_id = await _get_or_create_customer(session, user, chapter.id, account_id)
+    if customer_id is None:
+        customer_id = await stripe_service.create_customer(account_id, email, display_name)
+
+    # Permissions, obligations and routing may have changed while no transaction
+    # was held. Expired ORM state must not authorize a write after that gap.
+    user = await get_current_user(uid=uid, session=session)
+    cycle, chapter = await _load_dues_context(session, user, cycle_id)
+    if chapter.id != chapter_id or chapter.stripe_account_id != account_id:
+        raise conflict("chapter_not_onboarded")
+    customer_id, committed_binding = await _bind_customer(session, user.id, chapter_id, customer_id)
+    if committed_binding:
+        user = await get_current_user(uid=uid, session=session)
+        cycle, chapter = await _load_dues_context(session, user, cycle_id)
+        if chapter.id != chapter_id or chapter.stripe_account_id != account_id:
+            raise conflict("chapter_not_onboarded")
 
     # Customer/account setup above precedes reservation ownership. The bounded
     # section below owns a money row across provider I/O; this is deliberately
