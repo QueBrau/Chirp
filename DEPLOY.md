@@ -160,72 +160,38 @@ DATABASE_URL="postgresql+asyncpg://chirp:${PGPASS}@127.0.0.1:5433/chirp" .venv/b
 Run `alembic current` and read the revision it prints. **Do not read "no errors" as
 "applied"** — that is the other half of the Aug 16 incident.
 
-## 6. FIRST deploy to Cloud Run
+## 6. Intended API and WebSocket configuration
 
-This is the **initial** deploy only — it is the one time the env block is empty and
-`--set-env-vars` is the right flag. Replace `YOUR_APP_ORIGIN` with the real web
-origin before running it. **For every deploy after this one, use section 7 instead.**
+Production has two existing services. Both run the full application; every backend
+release deploys the same immutable image to both. The reviewed source is
+[infra/deployment.json](infra/deployment.json), and the complete stage, promote,
+drain and verification procedure is in
+[DEPLOY-CONFIGURATION.md](DEPLOY-CONFIGURATION.md). Use that procedure for this
+existing deployment. First provisioning of a new environment still requires its
+own reviewed identities, secrets, Firebase settings, CORS and IAM; the old
+single-service initial command is not a production redeploy recipe.
 
-`--timeout=3600` below is load-bearing, on this service and on `chirp-ws` alike
-(this file only carries the `chirp-api` deploy; `chirp-ws`'s lives in
-`INFRA-PRIVATE.html`). Cloud Run's default request timeout is 300s, and it
-silently severs every open WebSocket at exactly that mark — invisible until you
-measure it, because nothing about a healthy-looking deploy tells you sockets are
-dying five minutes in. c247 measured it directly: 17 of 30 upgrades across 14 days
-cut at 301.001919s / 301.001959s / 301.000626s, identical to the millisecond
-across different days and revisions, and confirmed the fix live afterward
-(`chirp-api-00041-tjt` and `chirp-ws-00006-vb8` both report `timeoutSeconds=3600`).
-```bash
-cd backend
-gcloud run deploy chirp-api --source . --region=$REGION --allow-unauthenticated \
-  --add-cloudsql-instances=$PROJECT:$REGION:chirp-db \
-  --vpc-connector=chirp-vpc \
-  --timeout=3600 \
-  --set-secrets=DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest \
-  --set-env-vars=ENV=production,AUTH_MODE=firebase,FIREBASE_PROJECT_ID=$PROJECT,CORS_ORIGINS='["https://YOUR_APP_ORIGIN"]'
+## 7. Redeploying the pair
+
+Migrate and verify the schema first (section 5). Prepare the reviewed release JSON
+as documented in [DEPLOY-CONFIGURATION.md](DEPLOY-CONFIGURATION.md), then print the
+pair of commands from the intended source:
+
+```sh
+scripts/deployment-config plan --release /tmp/chirp-release.json --gcloud "$HOME/google-cloud-sdk/bin/gcloud" --report /tmp/chirp-paired-plan.json
 ```
 
-## 7. Redeploying (the everyday command)
+This prints commands; it executes none. Review the exact output before the operator
+runs it. Both stage commands carry the intended timeout and use the same pinned
+image, explicit sizing/pools and merge-only environment/secret updates. The API and
+WS rollout is serialized with jobs quiescent and old revision drain confirmed
+between services. `--set-env-vars` replaces the entire environment block and must
+not be substituted for the generated `--update-env-vars`.
 
-Migrate first (section 5). Then ship code with **no env flags at all**, but do
-carry `--timeout=3600`:
-```bash
-cd backend
-gcloud run deploy chirp-api --source . --region=$REGION --timeout=3600
-```
-Env vars, secrets, Cloud SQL instances and the VPC connector **all persist** across
-a `--source` deploy — c247 re-confirmed this live, not just from gcloud's docs: all
-15 env vars, including `EMAIL_FROM` and `EMAIL_PROVIDER`, survived an everyday
-`--source` redeploy untouched. Carrying them again buys nothing and risks
-everything. `--timeout=3600` is the one flag worth pasting explicitly anyway: it is
-the setting c247 had to restore after a real production incident (every WebSocket
-silently cut at 301s, see section 6), so it stays in the command text rather than
-resting on persistence alone.
-
-> **GOTCHA #3 — `--set-env-vars` REPLACES the whole env block; it does not merge.**
-> Pasting section 6's line as a redeploy resets `CORS_ORIGINS` to the literal string
-> `https://YOUR_APP_ORIGIN` and re-breaks phone login (board c64), and blanks every
-> env var added since this doc was written. Worse, it **fails in the browser, not at
-> deploy time**: the deploy reports success and the bug surfaces later as "sign-up
-> does nothing". **To change one env var, use `--update-env-vars`**, which merges:
-> ```bash
-> gcloud run services update chirp-api --region=$REGION \
->   --update-env-vars=CORS_ORIGINS='["https://chirps-prod.web.app"]'
-> ```
-> Reach for `--set-env-vars` only when you genuinely intend to clear everything you
-> did not list.
-
-After any redeploy, verify with a **real signed-in request**, not the health
-endpoint — see the warning in section 5.
-
-> **GOTCHA #4 — the production safety guard (SECURITY-REVIEW finding 5).** When
-> `ENV` is not `local`, the app REFUSES to start unless `AUTH_MODE=firebase` AND
-> `CORS_ORIGINS` has no `"*"`. This is intentional — it stops the emulated-auth
-> debug bypass from ever reaching a public URL. So: **set up Firebase (step 3)
-> BEFORE deploying with `ENV=production`.** `CORS_ORIGINS` must be JSON-array text.
-> If you want a quick private test before Firebase is ready, deploy with
-> `ENV=staging` is NOT enough (same guard) — either finish Firebase first, or test
-> locally behind ngrok with `ENV=local` (never expose ENV=local publicly).
+After convergence, require the generated authenticated verification command to
+pass for both services. A configuration match or unauthenticated health response
+is not authenticated readiness. For the non-local startup safety guard, retain
+Firebase authentication and a CORS allowlist without a wildcard.
 
 ## Coordinated window (schema-rename deploys)
 
@@ -262,9 +228,10 @@ without gaps between the steps below. Do not migrate and then walk away.
 2. **(Jose → manager) Signal.** Say the migration landed and `alembic current`
    read back `0022`. This is what starts the clock on the error gap below —
    step 3 should follow within minutes, not whenever the manager gets to it.
-3. **(manager) Redeploy the API.** Section 7's everyday command, no env flags but
-   with `--timeout=3600`:
-   `cd backend && gcloud run deploy chirp-api --source . --region=$REGION --timeout=3600`.
+3. **(manager) Redeploy both services.** Use section 7's generated paired
+   procedure with the reviewed immutable image and schema-compatible release
+   record. The original historical window predated the split; current windows
+   must include both API and WS, their capacity/drain controls and verification.
    Between step 1 finishing and this step finishing, the live backend is old
    code serving against renamed tables — every request that touches
    yaks/chirps, content_reports, moderation_actions, house_ballots or

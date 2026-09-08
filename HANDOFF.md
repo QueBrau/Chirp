@@ -14,7 +14,7 @@ this file points at the source instead of copying it.
 | What is being worked on, by whom, what is blocked | `board.html`, open it in a browser |
 | Which PRs are open right now | `gh pr list` |
 | What the migration head is | `cd backend && alembic heads` |
-| What prod is serving | `gcloud run services describe chirp-api --region us-central1` |
+| Intended API/WS settings, paired release commands and observed drift | `infra/deployment.json`, `scripts/deployment-config`; procedure and evidence limits in `DEPLOY-CONFIGURATION.md` |
 | Alpha readiness | the bar at the top of `board.html`, recomputed from the cards on every render |
 | Credentials, runbooks, live fixture ids | `INFRA-PRIVATE.html` at the repo root (gitignored, never commit it) |
 | System architecture — deployment topology, domain model, dues and message sequences | `ARCHITECTURE.html` at the repo root (UML reference, drawn from live prod) |
@@ -197,7 +197,8 @@ The old "give yourself your own DB" recipe is gone — just run `pytest`.
 ## Deploys
 
 Backend changes need a Cloud Run redeploy to go live. The command and credentials are in
-`INFRA-PRIVATE.html`; `DEPLOY.md` carries the procedure. Deploys and prod DB migrations
+`INFRA-PRIVATE.html`; `DEPLOY.md` and `DEPLOY-CONFIGURATION.md` carry the paired
+API/WS procedure derived from `infra/deployment.json`. Deploys and prod DB migrations
 are **not** a worker session's call — they run through Jose and the manager session.
 
 Order is always **migrate, then deploy**, and the post-deploy check must exercise a real
