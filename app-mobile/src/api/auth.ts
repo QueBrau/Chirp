@@ -84,8 +84,12 @@ export async function getCampus(campusId: string): Promise<CampusOut> {
  * yet — callers (SessionProvider) treat that as an "unregistered" state, not
  * an error.
  */
-export async function fetchMe(options: RequestOptions = {}): Promise<{ user: UserOut; memberships: MembershipOut[] }> {
-  return request<{ user: UserOut; memberships: MembershipOut[] }>("/auth/me", options);
+export async function fetchMe(
+  options: Pick<RequestOptions, "operation" | "signal" | "timeoutMs"> = {},
+): Promise<{ user: UserOut; memberships: MembershipOut[] }> {
+  return request<{ user: UserOut; memberships: MembershipOut[] }>("/auth/me", {
+    method: "GET", operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs,
+  });
 }
 
 /**

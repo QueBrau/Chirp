@@ -1,227 +1,183 @@
 /**
- * Verifies every app-mobile/src/api/*.ts request() call against a real backend
- * route — method AND path, not just that the code compiles.
- *
- *   npm run verify:contract
- *
- * Board card c121. c115 shipped broken for days because the like button called
- * POST /posts/{post_id}/likes and the backend only ever registered PUT. tsc
- * cannot catch that: the HTTP verb is a string literal on both sides, and mobile
- * has no integration test that actually asks the backend whether it agrees.
- *
- * This does not boot FastAPI, does not need Python, and does not need a live
- * server. Both sides are read as plain text and compared statically, same
- * philosophy as scripts/board-check: cheap, offline, fails loud. The backend
- * job already asserts routes work; this asserts the CLIENT is asking for the
- * right ones, which is the half nothing else checks.
- *
- * Scope is deliberately one-directional: for every client call, does a
- * matching backend route exist? A backend route the client never calls is not
- * a bug this script cares about - that's unused API surface, not a broken one.
+ * c121/c360: static HTTP method/path, query-key and required response/event-field
+ * presence checks using Python AST and the TypeScript compiler. No server, DB or
+ * backend dependency imports. This is not runtime JSON/value-type validation.
+ * npm run verify:contract also executes representative real-source mutations.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import ts from "typescript";
+import { MUTATIONS } from "./contract-mutations.mjs";
 
-const HERE = fileURLToPath(new URL(".", import.meta.url));
 const API_DIR = new URL("../src/api/", import.meta.url);
-const ROUTERS_DIR = new URL("../../backend/app/routers/", import.meta.url);
+const APP_DIR = fileURLToPath(new URL("../", import.meta.url));
+const mutationName = process.argv[2];
+if (mutationName === "--self-test") {
+  for (const [name, mutation] of Object.entries(MUTATIONS)) {
+    const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), name], { encoding: "utf8", timeout: 60_000 });
+    const output = result.stdout + result.stderr;
+    if (result.status !== 1 || !output.includes(mutation.expected)) {
+      console.error(`FAIL mutation ${name}: expected contract rejection ${mutation.expected}\n${output}`);
+      process.exit(1);
+    }
+    console.log(`PASS discriminating mutation: ${name}`);
+  }
+  console.log(`${Object.keys(MUTATIONS).length} contract mutations rejected`);
+  process.exit(0);
+}
+if (mutationName && !MUTATIONS[mutationName]) throw new Error("Unknown contract mutation");
+const mutation = MUTATIONS[mutationName];
+const exported = spawnSync("python3", [fileURLToPath(new URL("backend-contracts.py", import.meta.url))], { encoding: "utf8" });
+if (exported.status !== 0) throw new Error("Backend contract extraction failed: " + exported.stderr);
+const inventory = JSON.parse(exported.stdout);
+mutation?.inventory?.(inventory);
+const configFile = ts.readConfigFile(APP_DIR + "tsconfig.json", ts.sys.readFile);
+if (configFile.error) throw new Error("Cannot read TypeScript configuration");
+const config = ts.parseJsonConfigFileContent(configFile.config, ts.sys, APP_DIR);
+const host = ts.createCompilerHost(config.options);
+const readSource = host.readFile.bind(host);
+let mutated = false;
+host.readFile = path => {
+  const source = readSource(path);
+  if (!mutation?.file || !path.endsWith(mutation.file) || source === undefined) return source;
+  const changed = mutation.source(source);
+  if (changed === source) throw new Error("Mutation anchor no longer matches: " + mutationName);
+  mutated = true;
+  return changed;
+};
+const program = ts.createProgram(config.fileNames, config.options, host);
+if (mutation?.file && !mutated) throw new Error("Mutation source not loaded: " + mutationName);
+const checker = program.getTypeChecker();
+const calls = [];
+const unresolved = [];
+let responseChecks = 0;
+let queryChecks = 0;
+let eventChecks = 0;
 
-// client.ts is the request() wrapper itself, not a caller. index.ts only
-// re-exports the other files - scanning it would double-count every call.
-const SKIP_API_FILES = new Set(["client.ts", "index.ts"]);
-
-const WILDCARD = "*";
-
-/** Split a normalized path into segments, turning any param slot into WILDCARD. */
-function segments(path) {
-  return path.split("/").filter((s) => s.length > 0);
+function shape(path) {
+  return path.split("/").filter(Boolean).map(part => /^\{[^}]+\}$/.test(part) ? "*" : part);
+}
+function equalShape(a, b) { return a.length === b.length && a.every((value, i) => value === b[i]); }
+function property(node, key) {
+  return node?.properties?.find(p => p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === key);
+}
+function literalPath(node) {
+  if (ts.isStringLiteralLike(node)) return node.text;
+  if (ts.isTemplateExpression(node)) {
+    const path = node.head.text + node.templateSpans.map(span => "*" + span.literal.text).join("");
+    return path.split("/").every(part => !part.includes("*") || part === "*") ? path : null;
+  }
+  return null;
+}
+function fieldsOfSchema(name, seen = new Set()) {
+  if (seen.has(name)) throw new Error("Cyclic backend schema: " + name);
+  const schema = inventory.schemas[name];
+  if (!schema) return null;
+  seen.add(name);
+  return Object.assign({}, ...schema.bases.map(base => fieldsOfSchema(base, new Set(seen)) ?? {}), schema.fields);
 }
 
-/** Backend: "/posts/{post_id}/likes" -> ["posts", "*", "likes"]. */
-function backendSegments(literalPath) {
-  return segments(literalPath).map((s) => (/^\{[^}]+\}$/.test(s) ? WILDCARD : s));
-}
-
-/**
- * Client template literal source (between backticks, or a plain quoted
- * string) -> segments, with each ${...} interpolation collapsed to WILDCARD
- * BEFORE splitting on "/". Every real call site in this codebase puts one
- * interpolation per path segment (e.g. `/chapters/${chapterId}/members`) -
- * never two in one segment, never a literal "/" inside one - so collapsing
- * each ${...} run to a single placeholder character before splitting is exact
- * for everything that exists today, and a mismatch here would show up as a
- * segment-count difference, which still fails loud rather than matching
- * something it shouldn't.
- */
-function clientSegments(raw) {
-  const collapsed = raw.replace(/\$\{[^}]*\}/g, "\u0000");
-  return segments(collapsed).map((s) => (s === "\u0000" ? WILDCARD : s));
-}
-
-function sameShape(a, b) {
-  if (a.length !== b.length) return false;
-  return a.every((seg, i) => seg === WILDCARD || b[i] === WILDCARD || seg === b[i]);
-}
-
-/** Scan `text` from `openParenIndex` (the "(" itself) and return the index one
- * past its matching ")", respecting nesting and skipping over string/template
- * literals so a stray "(" or ")" inside a string can't desync the count. */
-function matchParen(text, openParenIndex) {
-  let depth = 0;
-  let i = openParenIndex;
-  for (; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === '"' || ch === "'" || ch === "`") {
-      const quote = ch;
-      i++;
-      while (i < text.length && text[i] !== quote) {
-        if (text[i] === "\\") i++;
-        i++;
+for (const file of readdirSync(API_DIR).sort()) {
+  if (!file.endsWith(".ts") || ["client.ts", "index.ts", "operation.ts"].includes(file)) continue;
+  const source = program.getSourceFile(fileURLToPath(new URL(file, API_DIR)));
+  if (!source) throw new Error("Client source not in TypeScript program: " + file);
+  const imports = new Map();
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)
+      || statement.moduleSpecifier.text !== "./client") continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) {
+      unresolved.push(file + ": namespace client import requires explicit wrapper extraction");
+    }
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const item of bindings.elements) {
+      const original = (item.propertyName ?? item.name).text;
+      if (["request", "requestText", "requestWithHeaders"].includes(original)) imports.set(item.name.text, original);
+    }
+  }
+  function visit(node) {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && imports.has(node.expression.text)) {
+      const where = file + ":" + (source.getLineAndCharacterOfPosition(node.getStart()).line + 1);
+      const path = node.arguments[0] ? literalPath(node.arguments[0]) : null;
+      const options = node.arguments[1];
+      if (path === null || (options && !ts.isObjectLiteralExpression(options))) {
+        unresolved.push(where + ": non-literal path or request options");
+      } else {
+        const methodProperty = property(options, "method");
+        const methodNode = methodProperty?.initializer;
+        const method = methodProperty ? (methodNode && ts.isStringLiteralLike(methodNode) ? methodNode.text : null) : "GET";
+        // Spreads can hide methods and query keys. Spell out the transport fields
+        // at API call sites rather than presenting unknown options as a contract.
+        const spreads = options?.properties.filter(ts.isSpreadAssignment) ?? [];
+        if (method === null || spreads.length > 0) {
+          unresolved.push(where + ": unresolved/overridable HTTP method");
+        } else {
+          calls.push({ path, method, where, node, options, wrapper: imports.get(node.expression.text) });
+        }
       }
-      continue;
     }
-    if (ch === "(") depth++;
-    else if (ch === ")") {
-      depth--;
-      if (depth === 0) return i + 1;
-    }
+    ts.forEachChild(node, visit);
   }
-  throw new Error("unbalanced parentheses starting at " + openParenIndex);
+  visit(source);
 }
-
-/** The first string/template literal in a request()-call's argument text -
- * i.e. the path argument - or null if the call doesn't open with one. */
-function firstLiteral(argText) {
-  const m = /^\s*(['"`])/.exec(argText);
-  if (!m) return null;
-  const quote = m[1];
-  let i = m.index + m[0].length;
-  const start = i;
-  while (i < argText.length && argText[i] !== quote) {
-    if (argText[i] === "\\") i++;
-    i++;
-  }
-  return { raw: argText.slice(start, i), isTemplate: quote === "`" };
-}
-
-// --- backend: every @router.<verb>("...") across routers/*.py, verb+path only ---
-
-const ROUTE_DECORATOR = /@router\.(get|post|put|patch|delete)\(/g;
-const backendRoutes = []; // { method, segments, path, file }
-
-for (const file of readdirSync(ROUTERS_DIR)) {
-  if (!file.endsWith(".py")) continue;
-  const text = readFileSync(new URL(file, ROUTERS_DIR), "utf8");
-  for (const m of text.matchAll(ROUTE_DECORATOR)) {
-    const openParen = m.index + m[0].length - 1;
-    const closeParen = matchParen(text, openParen);
-    const argText = text.slice(openParen + 1, closeParen - 1);
-    const lit = firstLiteral(argText);
-    if (!lit) continue; // no route in this codebase has a computed path (verified by hand); skip rather than guess
-    backendRoutes.push({
-      method: m[1].toUpperCase(),
-      segments: backendSegments(lit.raw),
-      path: lit.raw,
-      file,
-    });
-  }
-}
-
-// --- client: every request<...>(...) across api/*.ts (excluding the wrapper itself) ---
-
-// requestWithHeaders (board c102) is the same call shape as request/requestText —
-// it just also hands back the raw Headers — so it must be recognized here too, or
-// its one caller (listPosts) silently drops out of contract coverage.
-const REQUEST_CALL = /\brequest(?:WithHeaders)?\s*(?=<|\()/g;
-
-function skipGeneric(text, i) {
-  if (text[i] !== "<") return i;
-  let depth = 0;
-  for (; i < text.length; i++) {
-    if (text[i] === "<") depth++;
-    else if (text[i] === ">") {
-      depth--;
-      if (depth === 0) return i + 1;
-    }
-  }
-  throw new Error("unbalanced <> starting near " + i);
-}
-
-const clientCalls = []; // { method, segments, path, file, line }
-const unresolved = []; // calls skipped because the path wasn't a literal - reported, not failed on
-
-for (const file of readdirSync(API_DIR)) {
-  if (!file.endsWith(".ts") || SKIP_API_FILES.has(file)) continue;
-  const text = readFileSync(new URL(file, API_DIR), "utf8");
-  for (const m of text.matchAll(REQUEST_CALL)) {
-    let i = skipGeneric(text, m.index + m[0].length);
-    if (text[i] !== "(") continue; // "request" matched something that isn't a call (e.g. a comment)
-    const closeParen = matchParen(text, i);
-    const argText = text.slice(i + 1, closeParen - 1);
-    const line = text.slice(0, m.index).split("\n").length;
-    const lit = firstLiteral(argText);
-    if (!lit) {
-      unresolved.push({ file, line });
-      continue;
-    }
-    const methodMatch = /method:\s*"([A-Z]+)"/.exec(argText);
-    const method = methodMatch ? methodMatch[1] : "GET"; // matches doFetch's `options.method ?? "GET"`
-    clientCalls.push({
-      method,
-      segments: lit.isTemplate ? clientSegments(lit.raw) : segments(lit.raw),
-      path: lit.raw,
-      file,
-      line,
-    });
-  }
-}
-
-// --- diff ---
 
 let failures = 0;
-console.log(`checked ${clientCalls.length} client call(s) against ${backendRoutes.length} backend route(s)\n`);
-
-for (const call of clientCalls) {
-  const match = backendRoutes.find((r) => r.method === call.method && sameShape(call.segments, r.segments));
-  if (match) {
-    console.log(`  PASS  ${call.method.padEnd(6)} ${call.path}  (${call.file}:${call.line})`);
-  } else {
-    failures++;
-    console.log(`  FAIL  ${call.method.padEnd(6)} ${call.path}  (${call.file}:${call.line})`);
-    console.log(`        no backend route matches ${call.method} ${call.segments.join("/")}`);
-    const sameShapeDifferentMethod = backendRoutes.filter((r) => sameShape(call.segments, r.segments));
-    if (sameShapeDifferentMethod.length > 0) {
-      console.log(
-        `        this path IS registered, but only as: ${sameShapeDifferentMethod
-          .map((r) => r.method)
-          .join(", ")} (in ${sameShapeDifferentMethod[0].file})`,
-      );
+function fail(message) { failures++; console.error("FAIL " + message); }
+for (const call of calls) {
+  const route = inventory.routes.find(r => r.method === call.method && equalShape(shape(r.path), shape(call.path)));
+  if (!route) { fail(call.where + " " + call.method + " " + call.path + ": no backend route"); continue; }
+  const query = property(call.options, "query");
+  if (query) {
+    const expression = ts.isShorthandPropertyAssignment(query) ? query.name : query.initializer;
+    if (!expression) { fail(call.where + ": unresolved query expression"); continue; }
+    const type = checker.getNonNullableType(checker.getTypeAtLocation(expression));
+    if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown) || type.getStringIndexType()) {
+      fail(call.where + ": query keys are not statically bounded");
+    } else {
+      for (const member of type.getProperties()) {
+        queryChecks++;
+        if (!route.query.includes(member.name)) fail(call.where + " " + call.path + ": unknown query field " + member.name);
+      }
+    }
+  }
+  // Field presence is checked where both sides declare structured responses.
+  // This is not runtime JSON validation or a claim about all field value types.
+  const returnName = route.returns.replace(/^list\[(.+)\]$/, "$1");
+  const backendFields = fieldsOfSchema(returnName);
+  if (backendFields && call.wrapper !== "requestText" && call.node.typeArguments?.length === 1) {
+    let type = checker.getTypeFromTypeNode(call.node.typeArguments[0]);
+    if (checker.isArrayType(type)) type = checker.getTypeArguments(type)[0];
+    for (const member of type.getProperties()) {
+      if (member.flags & ts.SymbolFlags.Optional) continue;
+      responseChecks++;
+      if (!(member.name in backendFields)) fail(call.where + " " + call.path + ": response field absent from backend " + member.name);
     }
   }
 }
-
-if (unresolved.length > 0) {
-  console.log(`\n${unresolved.length} call(s) skipped, path argument was not a literal - check by hand:`);
-  for (const u of unresolved) console.log(`  ? ${u.file}:${u.line}`);
+// Require each supported server publisher shape to provide the client's required
+// fields. Optional event fields and nested payload/value types are outside this
+// presence gate; executed socket tests cover dispatch/ownership separately.
+const socket = program.getSourceFile(APP_DIR + "src/realtime/socket.ts");
+if (!socket) throw new Error("Socket source not in TypeScript program");
+for (const [eventName, interfaceName] of [["message", "MessageSocketEvent"], ["poll", "PollSocketEvent"]]) {
+  const declaration = socket.statements.find(node => ts.isInterfaceDeclaration(node) && node.name.text === interfaceName);
+  const publishers = inventory.events[eventName];
+  if (!declaration || !publishers?.length) {
+    fail("Missing supported WebSocket contract: " + eventName);
+    continue;
+  }
+  const type = checker.getTypeAtLocation(declaration);
+  for (const member of type.getProperties()) {
+    if (member.flags & ts.SymbolFlags.Optional) continue;
+    eventChecks++;
+    if (publishers.some(fields => !fields.includes(member.name))) fail(eventName + ": WebSocket field absent from backend " + member.name);
+  }
 }
-
-// Board card c137, found by security's post-c103 vacuous-gate sweep, same shape as c103
-// itself: `failures` only ever increments inside the loop over clientCalls above. If
-// extraction finds nothing - the regex misses a new call style, src/api/ gets renamed,
-// request() gets wrapped in a helper - clientCalls is empty, the loop never runs,
-// failures stays 0, and this prints ALL PASS having verified nothing. Proven by security:
-// a scratch tree with real backend routers and one client file in an unrecognised call
-// style produced "checked 0 client call(s) ... ALL PASS ... EXIT CODE: 0".
-//
-// MIN_CLIENT_CALLS is not a guess - it is comfortably below the real count (78 today,
-// 88 backend routes) so ordinary API growth or shrinkage never trips it, while a
-// collapsed extraction (0, or anything near it) always does.
-const MIN_CLIENT_CALLS = 40; // real count today is 78
-if (clientCalls.length < MIN_CLIENT_CALLS) {
-  console.log(`\nEXTRACTOR FLOOR: only ${clientCalls.length} client call(s) found, expected >= ${MIN_CLIENT_CALLS}.`);
-  console.log("The extractor is probably broken, not the contract - fix the regex, do not lower the floor.");
-  process.exit(1);
-}
-
-console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-process.exit(failures === 0 ? 0 : 1);
+for (const unresolvedCall of unresolved) fail("UNRESOLVED " + unresolvedCall);
+if (calls.length < 40) fail("Extractor collapsed: " + calls.length + " calls, expected at least 40");
+const csvCalls = calls.filter(call => call.wrapper === "requestText");
+if (csvCalls.length < 2) fail("requestText coverage collapsed: expected both CSV callers");
+console.log(`${calls.length} actual HTTP calls (${csvCalls.length} text), ${queryChecks} query fields, ${responseChecks} structured response fields, ${eventChecks} required WebSocket fields, ${unresolved.length} unresolved`);
+console.log(failures ? `${failures} FAILURE(S)` : "ALL PASS");
+process.exit(failures ? 1 : 0);
