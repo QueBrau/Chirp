@@ -180,13 +180,15 @@ async def test_canceled_verification_keeps_admission_until_the_worker_finishes(m
     submitted = []
     original_submit = identity_verification._executor.submit
     def submit(*args, **kwargs):
-        submitted.append(1)
-        return original_submit(*args, **kwargs)
+        future = original_submit(*args, **kwargs)
+        submitted.append(future)
+        return future
     monkeypatch.setattr(identity_verification._executor, "submit", submit)
 
     monkeypatch.setattr(auth, "get_settings", lambda: SimpleNamespace(auth_mode="firebase"))
     monkeypatch.setattr(firebase_admin, "get_app", lambda: object())
     release = threading.Event()
+    late_release = threading.Event()
     lock = threading.Lock()
     starts, active, peak = [], 0, 0
     def verify(token):
@@ -197,6 +199,10 @@ async def test_canceled_verification_keeps_admission_until_the_worker_finishes(m
             peak = max(peak, active)
         try:
             assert release.wait(5), "worker fixture was not released"
+            if token == "fixture-0":
+                # A newly admitted call can finish before a canceled caller's
+                # native worker. Force the scheduling order that CI exposed.
+                assert late_release.wait(5), "late worker fixture was not released"
             return {"uid": "fixture-uid"}
         finally:
             with lock:
@@ -224,9 +230,19 @@ async def test_canceled_verification_keeps_admission_until_the_worker_finishes(m
         assert len(submitted) == VERIFICATION_WORKERS
     finally:
         release.set()
-        await asyncio.gather(*requests, return_exceptions=True)
-        if queued is not None:
-            assert await asyncio.wait_for(queued, 3) == "fixture-uid"
+        try:
+            await asyncio.gather(*requests, return_exceptions=True)
+            if queued is not None:
+                assert await asyncio.wait_for(queued, 3) == "fixture-uid"
+                with lock:
+                    assert active >= 1, "the late native worker must still be held"
+        finally:
+            late_release.set()
+            # Canceled asyncio callers are already done; joining them does not
+            # join the native futures that still own executor admission.
+            await asyncio.wait_for(asyncio.gather(*(
+                asyncio.wrap_future(future) for future in submitted
+            )), 3)
     assert peak == VERIFICATION_WORKERS and active == 0
     assert len(submitted) == VERIFICATION_WORKERS + 1
 

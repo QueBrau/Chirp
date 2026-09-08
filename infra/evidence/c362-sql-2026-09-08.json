@@ -1,0 +1,15 @@
+{
+  "observed_at": "2026-09-08T16:00:55.127150+00:00",
+  "max_connections": 100,
+  "superuser_reserved_connections": 3,
+  "reserved_connections": 0,
+  "provenance": {
+    "project": "chirps-prod",
+    "instance": "chirp-db",
+    "existing_local_proxy_port": 5433,
+    "proxy_target_verified": true,
+    "transaction": "READ ONLY",
+    "queries": "current_setting numeric connection limits only",
+    "explicit_user_approval": "2026-09-08"
+  }
+}

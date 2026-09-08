@@ -1,0 +1,814 @@
+{
+  "version": 1,
+  "project": "chirps-prod",
+  "started_at": "2026-09-08T16:22:45.744112+00:00",
+  "verdict": "NOT_PROVEN",
+  "reachability_verified": false,
+  "effective_iam_verified": false,
+  "observations": {
+    "redis": {
+      "state": "READY",
+      "tier": "BASIC",
+      "auth_enabled": null,
+      "transit_encryption_mode": "DISABLED",
+      "port": 6379,
+      "connect_mode": "DIRECT_PEERING",
+      "review_network_matches": true
+    },
+    "connector": {
+      "state": "READY",
+      "review_network_matches": true,
+      "source_range_present": true,
+      "min_instances": 2,
+      "max_instances": 3
+    },
+    "network": {
+      "auto_subnets": true,
+      "firewall_policy_order": "AFTER_CLASSIC_FIREWALL",
+      "peerings": [
+        {
+          "state": "ACTIVE",
+          "imports_custom_routes": false,
+          "exports_custom_routes": false
+        }
+      ],
+      "producer_network_policy_collected": false
+    },
+    "classic_firewalls": [
+      {
+        "kind": "network-firewall",
+        "label": "default-allow-icmp",
+        "direction": "INGRESS",
+        "priority": 65534,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "source": {
+            "count": 1,
+            "includes_anywhere": true
+          },
+          "destination": {
+            "count": 0,
+            "includes_anywhere": false
+          }
+        },
+        "target_tag_count": 0,
+        "target_identity_count": 0,
+        "target_network_matches": true,
+        "source_tag_count": 0,
+        "source_identity_count": 0,
+        "rules": [
+          {
+            "action": "ALLOW",
+            "protocol": "icmp",
+            "ports": []
+          }
+        ]
+      },
+      {
+        "kind": "network-firewall",
+        "label": "default-allow-internal",
+        "direction": "INGRESS",
+        "priority": 65534,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "source": {
+            "count": 1,
+            "includes_anywhere": false
+          },
+          "destination": {
+            "count": 0,
+            "includes_anywhere": false
+          }
+        },
+        "target_tag_count": 0,
+        "target_identity_count": 0,
+        "target_network_matches": true,
+        "source_tag_count": 0,
+        "source_identity_count": 0,
+        "rules": [
+          {
+            "action": "ALLOW",
+            "protocol": "tcp",
+            "ports": [
+              "0-65535"
+            ]
+          },
+          {
+            "action": "ALLOW",
+            "protocol": "udp",
+            "ports": [
+              "0-65535"
+            ]
+          },
+          {
+            "action": "ALLOW",
+            "protocol": "icmp",
+            "ports": []
+          }
+        ]
+      },
+      {
+        "kind": "network-firewall",
+        "label": "default-allow-rdp",
+        "direction": "INGRESS",
+        "priority": 65534,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "source": {
+            "count": 1,
+            "includes_anywhere": true
+          },
+          "destination": {
+            "count": 0,
+            "includes_anywhere": false
+          }
+        },
+        "target_tag_count": 0,
+        "target_identity_count": 0,
+        "target_network_matches": true,
+        "source_tag_count": 0,
+        "source_identity_count": 0,
+        "rules": [
+          {
+            "action": "ALLOW",
+            "protocol": "tcp",
+            "ports": [
+              "3389"
+            ]
+          }
+        ]
+      },
+      {
+        "kind": "network-firewall",
+        "label": "default-allow-ssh",
+        "direction": "INGRESS",
+        "priority": 65534,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "source": {
+            "count": 1,
+            "includes_anywhere": true
+          },
+          "destination": {
+            "count": 0,
+            "includes_anywhere": false
+          }
+        },
+        "target_tag_count": 0,
+        "target_identity_count": 0,
+        "target_network_matches": true,
+        "source_tag_count": 0,
+        "source_identity_count": 0,
+        "rules": [
+          {
+            "action": "ALLOW",
+            "protocol": "tcp",
+            "ports": [
+              "22"
+            ]
+          }
+        ]
+      }
+    ],
+    "effective_firewalls": [
+      {
+        "kind": "network-firewall",
+        "label": "connector_name_pattern",
+        "direction": "INGRESS",
+        "priority": 100,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "count": 3,
+          "includes_anywhere": false
+        },
+        "target_tag_count": 1,
+        "target_identity_count": 0,
+        "action": "ALLOW",
+        "protocol_details_collected": false
+      },
+      {
+        "kind": "network-firewall",
+        "label": "connector_name_pattern",
+        "direction": "INGRESS",
+        "priority": 100,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "count": 1,
+          "includes_anywhere": false
+        },
+        "target_tag_count": 1,
+        "target_identity_count": 0,
+        "action": "ALLOW",
+        "protocol_details_collected": false
+      },
+      {
+        "kind": "network-firewall",
+        "label": "connector_name_pattern",
+        "direction": "INGRESS",
+        "priority": 1000,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "count": 1,
+          "includes_anywhere": false
+        },
+        "target_tag_count": 0,
+        "target_identity_count": 0,
+        "action": "ALLOW",
+        "protocol_details_collected": false
+      },
+      {
+        "kind": "network-firewall",
+        "label": "connector_name_pattern",
+        "direction": "INGRESS",
+        "priority": 1000,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "count": 0,
+          "includes_anywhere": false
+        },
+        "target_tag_count": 0,
+        "target_identity_count": 0,
+        "action": "ALLOW",
+        "protocol_details_collected": false
+      },
+      {
+        "kind": "network-firewall",
+        "label": "default-allow-icmp",
+        "direction": "INGRESS",
+        "priority": 65534,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "count": 1,
+          "includes_anywhere": true
+        },
+        "target_tag_count": 0,
+        "target_identity_count": 0,
+        "action": "ALLOW",
+        "protocol_details_collected": false
+      },
+      {
+        "kind": "network-firewall",
+        "label": "default-allow-rdp",
+        "direction": "INGRESS",
+        "priority": 65534,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "count": 1,
+          "includes_anywhere": true
+        },
+        "target_tag_count": 0,
+        "target_identity_count": 0,
+        "action": "ALLOW",
+        "protocol_details_collected": false
+      },
+      {
+        "kind": "network-firewall",
+        "label": "default-allow-ssh",
+        "direction": "INGRESS",
+        "priority": 65534,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "count": 1,
+          "includes_anywhere": true
+        },
+        "target_tag_count": 0,
+        "target_identity_count": 0,
+        "action": "ALLOW",
+        "protocol_details_collected": false
+      },
+      {
+        "kind": "network-firewall",
+        "label": "default-allow-internal",
+        "direction": "INGRESS",
+        "priority": 65534,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "count": 1,
+          "includes_anywhere": false
+        },
+        "target_tag_count": 0,
+        "target_identity_count": 0,
+        "action": "ALLOW",
+        "protocol_details_collected": false
+      },
+      {
+        "kind": "network-firewall",
+        "label": "connector_name_pattern",
+        "direction": "EGRESS",
+        "priority": 100,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "count": 1,
+          "includes_anywhere": false
+        },
+        "target_tag_count": 1,
+        "target_identity_count": 0,
+        "action": "ALLOW",
+        "protocol_details_collected": false
+      },
+      {
+        "kind": "network-firewall",
+        "label": "connector_name_pattern",
+        "direction": "EGRESS",
+        "priority": 100,
+        "disabled": false,
+        "source_or_destination_ranges": {
+          "count": 1,
+          "includes_anywhere": false
+        },
+        "target_tag_count": 1,
+        "target_identity_count": 0,
+        "action": "DENY",
+        "protocol_details_collected": false
+      }
+    ],
+    "vms": {
+      "project_vm_count": 0,
+      "on_review_network": 0,
+      "with_external_address_config": 0,
+      "shared_runtime_identity_count": 0,
+      "managed_connector_vms_included": false
+    },
+    "sql": {
+      "public_ipv4_enabled": true,
+      "ssl_mode": "ENCRYPTED_ONLY",
+      "authorized_network_entries_reported": 0
+    },
+    "bucket": {
+      "public_access_prevention": "enforced",
+      "uniform_bucket_level_access": true
+    },
+    "iam/project": {
+      "direct_bindings": [
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "roles/bigquery.dataEditor",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "roles/cloudsql.client",
+          "member_count": 2,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "roles/editor",
+          "member_count": 2,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "roles/iam.serviceAccountTokenCreator",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "roles/owner",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 17,
+      "effective_access_verified": false
+    },
+    "iam/bucket": {
+      "direct_bindings": [
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": true
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 2,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "OTHER_ROLE",
+          "member_count": 1,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": true
+        },
+        {
+          "role": "roles/storage.legacyBucketOwner",
+          "member_count": 2,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "roles/storage.legacyBucketReader",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        },
+        {
+          "role": "roles/storage.objectAdmin",
+          "member_count": 1,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": true
+        },
+        {
+          "role": "roles/storage.objectCreator",
+          "member_count": 1,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 5,
+      "effective_access_verified": false
+    },
+    "iam/secret/DATABASE_URL": {
+      "direct_bindings": [
+        {
+          "role": "roles/secretmanager.secretAccessor",
+          "member_count": 1,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 0,
+      "effective_access_verified": false
+    },
+    "iam/secret/MEDIA_SIGNING_SECRET": {
+      "direct_bindings": [
+        {
+          "role": "roles/secretmanager.secretAccessor",
+          "member_count": 1,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 0,
+      "effective_access_verified": false
+    },
+    "iam/secret/REDIS_URL": {
+      "direct_bindings": [
+        {
+          "role": "roles/secretmanager.secretAccessor",
+          "member_count": 1,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 0,
+      "effective_access_verified": false
+    },
+    "iam/secret/RESEND_API_KEY": {
+      "direct_bindings": [
+        {
+          "role": "roles/secretmanager.secretAccessor",
+          "member_count": 1,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 0,
+      "effective_access_verified": false
+    },
+    "iam/secret/STRIPE_PUBLISHABLE_KEY": {
+      "direct_bindings": [
+        {
+          "role": "roles/secretmanager.secretAccessor",
+          "member_count": 1,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 0,
+      "effective_access_verified": false
+    },
+    "iam/secret/STRIPE_SECRET_KEY": {
+      "direct_bindings": [
+        {
+          "role": "roles/secretmanager.secretAccessor",
+          "member_count": 1,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 0,
+      "effective_access_verified": false
+    },
+    "iam/secret/STRIPE_WEBHOOK_SECRET": {
+      "direct_bindings": [
+        {
+          "role": "roles/secretmanager.secretAccessor",
+          "member_count": 1,
+          "shared_runtime_member": true,
+          "all_users_member": false,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 0,
+      "effective_access_verified": false
+    },
+    "service/api": {
+      "runtime_identity_observed": true,
+      "shared_runtime_identity": true,
+      "connector_matches_source": true,
+      "egress": "private-ranges-only",
+      "cloud_sql_matches_source": true,
+      "traffic": [
+        {
+          "revision": "chirp-api-00056-pcw",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    },
+    "iam/service/api": {
+      "direct_bindings": [
+        {
+          "role": "roles/run.invoker",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": true,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 0,
+      "effective_access_verified": false
+    },
+    "revision/chirp-api-00056-pcw": {
+      "runtime_identity_observed": true,
+      "shared_runtime_identity": true,
+      "connector_matches_source": true,
+      "egress": "private-ranges-only",
+      "cloud_sql_matches_source": true
+    },
+    "service/ws": {
+      "runtime_identity_observed": true,
+      "shared_runtime_identity": true,
+      "connector_matches_source": true,
+      "egress": "private-ranges-only",
+      "cloud_sql_matches_source": true,
+      "traffic": [
+        {
+          "revision": "chirp-ws-00019-l2q",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    },
+    "iam/service/ws": {
+      "direct_bindings": [
+        {
+          "role": "roles/run.invoker",
+          "member_count": 1,
+          "shared_runtime_member": false,
+          "all_users_member": true,
+          "all_authenticated_users_member": false,
+          "condition_present": false
+        }
+      ],
+      "unknown_role_bindings": 0,
+      "effective_access_verified": false
+    },
+    "revision/chirp-ws-00019-l2q": {
+      "runtime_identity_observed": true,
+      "shared_runtime_identity": true,
+      "connector_matches_source": true,
+      "egress": "private-ranges-only",
+      "cloud_sql_matches_source": true
+    },
+    "jobs": {
+      "known": {
+        "chirp-media-reconcile": {
+          "runtime_identity_observed": true,
+          "shared_runtime_identity": false,
+          "connector_matches_source": false,
+          "egress": "UNKNOWN",
+          "cloud_sql_matches_source": true
+        },
+        "chirp-purge": {
+          "runtime_identity_observed": true,
+          "shared_runtime_identity": false,
+          "connector_matches_source": false,
+          "egress": "UNKNOWN",
+          "cloud_sql_matches_source": true
+        }
+      },
+      "other_job_count": 0
+    }
+  },
+  "unavailable": [],
+  "findings": [
+    {
+      "scope": "redis",
+      "issue": "auth_not_observed_enabled"
+    },
+    {
+      "scope": "redis",
+      "issue": "tls_replacement_and_staging_required"
+    },
+    {
+      "scope": "classic_firewalls",
+      "issue": "broad_unscoped_ingress_rule_not_reachability_proof"
+    }
+  ],
+  "limitations": [
+    "metadata_is_not_a_packet_or_permission_test",
+    "producer_and_regional_firewall_scope_incomplete",
+    "iam_inheritance_deny_pab_and_conditions_not_evaluated",
+    "project_vm_list_excludes_managed_connector_vms",
+    "non_atomic_metadata_snapshot",
+    "no_secret_payload_or_live_redis_command_read"
+  ],
+  "finished_at": "2026-09-08T16:23:54.254070+00:00",
+  "metadata_complete_for_requested_scopes": true
+}
