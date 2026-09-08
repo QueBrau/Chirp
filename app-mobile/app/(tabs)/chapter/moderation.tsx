@@ -29,7 +29,7 @@
  * it as open.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import {
@@ -42,6 +42,15 @@ import {
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { AppText, Button, Card, Chip, EmptyState, Screen, SectionHeader } from "@/components";
 import { confirmAction, showApiError } from "@/lib/alert";
+import {
+  acceptPage,
+  beginOlderPage,
+  collectionPage,
+  mergePageRows,
+  pageExhausted,
+  reportOrder,
+  type CollectionPage,
+} from "@/lib/collectionPages";
 import { radii, spacing, useTheme } from "@/theme";
 
 type LoadState = "loading" | "loaded" | "error";
@@ -70,6 +79,9 @@ function removableChirpId(report: ContentReportOut): string | null {
 
 /** One page of the queue. The server caps at 200 (c258). */
 const REPORT_PAGE_SIZE = 50;
+/** Refill before the visible list runs dry, so a moderator clearing a page never
+ * sees a spinner on an empty queue while more open reports sit behind it (c353). */
+const REFILL_THRESHOLD = 10;
 
 export default function ModerationScreen() {
   // Single-org world (useOwnChapter's own note): membership/roleMeta describe
@@ -90,17 +102,28 @@ export default function ModerationScreen() {
   /** A full page means older reports exist behind it (c258). */
   const [hasOlder, setHasOlder] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  // Cursor/exhaustion/tombstones live here, independent of the mutable `reports`
+  // display array — resolving every visible report must not blank the cursor or
+  // fake "queue exhausted" the way deriving both from `reports` used to (c353).
+  const pageRef = useRef<CollectionPage>(collectionPage());
 
   const load = useCallback(async () => {
     setState("loading");
+    // A refresh genuinely restarts the queue: drop any stale cursor/removed/pending
+    // from the page this replaces, rather than resuming a half-reset one.
+    pageRef.current = collectionPage();
+    setLoadingOlder(false);
     try {
       // status=open is asked of the SERVER now, not filtered here. Filtering after
       // paging would let a page of resolved reports render an empty queue while real
       // open reports sat on later pages - a moderator told there is nothing to do while
       // work is outstanding (c258).
-      const page = await listReports({ status: "open", limit: REPORT_PAGE_SIZE });
-      setReports(page);
-      setHasOlder(page.length === REPORT_PAGE_SIZE);
+      const rows = await listReports({ status: "open", limit: REPORT_PAGE_SIZE });
+      const oldest = rows.at(-1);
+      acceptPage(pageRef.current, rows.length, REPORT_PAGE_SIZE,
+        oldest ? { before: oldest.created_at, beforeId: oldest.id } : null);
+      setReports(rows);
+      setHasOlder(pageRef.current.more);
       setState("loaded");
     } catch (error) {
       setState("error");
@@ -108,31 +131,50 @@ export default function ModerationScreen() {
     }
   }, []);
 
-  /** Append the page after the oldest report held. */
-  const loadOlderReports = async () => {
-    const oldest = reports[reports.length - 1];
-    if (oldest === undefined || loadingOlder) return;
+  /** Append the page after the oldest report the STORED cursor (not the display
+   * array) last saw — so resolving every visible report can't strand it. */
+  const loadOlderReports = useCallback(async () => {
+    const page = pageRef.current;
+    const request = beginOlderPage(page), cursor = page.cursor;
+    if (request === null || cursor === null) return;
     setLoadingOlder(true);
     try {
       const older = await listReports({
         status: "open",
-        before: oldest.created_at,
-        beforeId: oldest.id,
+        before: cursor.before,
+        beforeId: cursor.beforeId,
         limit: REPORT_PAGE_SIZE,
       });
-      setHasOlder(older.length === REPORT_PAGE_SIZE);
-      setReports((current) => [...current, ...older]);
+      if (pageRef.current !== page || page.pending !== request) return;
+      const oldest = older.at(-1);
+      acceptPage(page, older.length, REPORT_PAGE_SIZE,
+        oldest ? { before: oldest.created_at, beforeId: oldest.id } : null);
+      setHasOlder(page.more);
+      setReports((current) => mergePageRows(current, older, (r) => r.id, reportOrder, page.removed));
     } catch (error) {
+      if (pageRef.current !== page || page.pending !== request) return;
       showApiError(error, "Couldn't load earlier reports");
     } finally {
-      setLoadingOlder(false);
+      if (pageRef.current === page && page.pending === request) {
+        page.pending = null;
+        setLoadingOlder(false);
+      }
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (!isEboard) return; // role-gated: no /moderation/reports call otherwise
     void load();
   }, [isEboard, load]);
+
+  // Refill automatically once the visible list runs low, before it goes fully
+  // empty in front of a moderator working through a page. `beginOlderPage`'s own
+  // pending-guard collapses this with a concurrent manual "Load earlier" tap into
+  // one in-flight request for free.
+  const needsRefill = hasOlder && !loadingOlder && reports.length < REFILL_THRESHOLD;
+  useEffect(() => {
+    if (needsRefill) void loadOlderReports();
+  }, [needsRefill, loadOlderReports]);
 
   if (!isEboard) {
     return (
@@ -154,6 +196,10 @@ export default function ModerationScreen() {
    * keeps the screen in sync with what a reload will show without refetching.
    */
   const closeReport = (reportId: string) => {
+    // Tombstoned so a straggling in-flight older/refill response that still
+    // carries this id (a race against this client's own resolve) can't
+    // resurrect it once merged via mergePageRows (c353).
+    pageRef.current.removed.add(reportId);
     setReports((current) => current.filter((r) => r.id !== reportId));
   };
 
@@ -210,8 +256,12 @@ export default function ModerationScreen() {
     });
   };
 
+  // Never true off a bare empty array alone — the array goes empty every time a
+  // full page is resolved, well before the queue itself is exhausted (c353).
+  const allClear = reports.length === 0 && pageExhausted(pageRef.current);
+
   return (
-    <Screen title="Moderation" subtitle="Open reports across your e-board campuses">
+    <Screen title="Moderation" subtitle="Open reports across your e-board campuses" onRefresh={load}>
       {state === "loading" ? (
         <EmptyState title="Loading reports..." />
       ) : state === "error" ? (
@@ -221,8 +271,10 @@ export default function ModerationScreen() {
           actionLabel="Try again"
           onAction={() => void load()}
         />
-      ) : reports.length === 0 ? (
+      ) : allClear ? (
         <EmptyState title="All clear" message="No open reports right now." />
+      ) : reports.length === 0 ? (
+        <EmptyState title="Loading more reports" />
       ) : (
         <View style={{ gap: spacing.md }}>
           {/* "N+" while more pages exist, because reports.length is then the size of
