@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "currency": "USD",
+  "monthly_planning_target": "125.00",
+  "review_thresholds": ["0.50", "0.80", "1.00"],
+  "forecast_review_threshold": "1.00",
+  "comparison_basis": "supplied_net",
+  "notifications_configured": false
+}
