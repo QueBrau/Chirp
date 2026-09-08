@@ -20,7 +20,7 @@
  * floating tab bar out of the way on scroll (see src/nav/TabBarVisibility).
  */
 
-import { useRouter } from "expo-router";
+import { useRouter, useSegments } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Pressable, RefreshControl, ScrollView, View } from "react-native";
@@ -63,6 +63,24 @@ export interface ScreenProps {
    */
   hasFab?: boolean;
   /**
+   * Make the scroll content fill the viewport when it is shorter than the screen
+   * (c385). Adds `flexGrow: 1` to the ScrollView's contentContainerStyle, which
+   * does two things: short pages can push a footer to the bottom with a flex
+   * spacer instead of stranding it under a block of dead space, and `flex` on a
+   * CHILD starts behaving at all.
+   *
+   * THAT SECOND POINT IS A REAL TRAP AND IS WHY THIS IS DOCUMENTED HERE RATHER
+   * THAN BEING A ONE-LINER. Without flexGrow on the container, a `flex: 1` child
+   * of this ScrollView collapses to ZERO HEIGHT on native and the screen renders
+   * as a bare canvas - it cost exactly that bug on sign-in, and it is invisible on
+   * Expo web, which resolves the same styles differently. Leave this false and
+   * flex children stay forbidden; set it true and they work as written.
+   *
+   * Only for genuinely short screens. On a long list it does nothing, and it is
+   * not a substitute for laying content out.
+   */
+  fillHeight?: boolean;
+  /**
    * Show the back control. Defaults to `router.canGoBack()`, which is the right
    * answer almost everywhere: false on tab roots, true on pushed screens. Pass
    * `false` to suppress it, or `true` to force it alongside a custom `onBack`.
@@ -93,6 +111,7 @@ export function Screen({
   backgroundColor,
   scroll = true,
   hasFab = false,
+  fillHeight = false,
   showBack,
   onBack,
   onRefresh,
@@ -112,7 +131,11 @@ export function Screen({
   }, [onRefresh]);
   const router = useRouter();
   const tabBar = useTabBarVisibility();
-  const overlayClearance = useOverlayClearance(hasFab);
+  // The floating tab bar is rendered by the (tabs) group's own layout, so only
+  // routes inside it need clearing (c385). Read from the router rather than taken
+  // as a prop - see useOverlayClearance for why a prop would keep regressing.
+  const hasTabBar = useSegments()[0] === "(tabs)";
+  const overlayClearance = useOverlayClearance(hasFab, hasTabBar);
 
   // Hooks can't be conditional, but the provider is absent outside the tabs
   // subtree (the (auth) stack also renders <Screen>). Local fallbacks keep the
@@ -225,6 +248,7 @@ export function Screen({
             paddingHorizontal: spacing.gutter,
             paddingTop: spacing.xl,
             paddingBottom: overlayClearance,
+            ...(fillHeight ? { flexGrow: 1 } : null),
           }}
           showsVerticalScrollIndicator={false}
           onScroll={scrollHandler}
