@@ -22,8 +22,8 @@ Redis pub/sub is fire-and-forget: SUBSCRIBE is itself a round trip to the server
 gateway.py calls it *after* `websocket.accept()` has already unblocked the client's
 handshake — so "the websocket_connect() call returned" does NOT mean "the subscription is
 live". Publishing before it lands silently drops the event (no queue, no error). Every test
-that expects to receive something calls `_wait_for_subscriber()` first, which polls Redis's
-own `PUBSUB NUMSUB` for that channel instead of guessing with a blind sleep.
+that expects to receive something consumes c354's explicit ready frame first. It
+is emitted only after the Redis subscribe ACK, so it is a real subscription fence.
 """
 from __future__ import annotations
 
@@ -237,27 +237,6 @@ def _send_message(client: TestClient, conversation_id: str, sender: WsUser, devi
 # ---------------------------------------------------------------------------
 
 
-async def _wait_for_subscriber(channel: str, timeout: float = 2.0) -> None:
-    """Poll Redis `PUBSUB NUMSUB` until >=1 subscriber is registered for `channel`.
-
-    Explicit + bounded settle in place of a blind sleep (see module docstring): fast on a
-    healthy system, and fails loudly instead of flakily if the subscribe never lands.
-    """
-    from app.ws.pubsub import get_redis
-
-    redis = get_redis()
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    while True:
-        numsub = await redis.pubsub_numsub(channel)
-        count = numsub[0][1] if numsub else 0
-        if count >= 1:
-            return
-        if loop.time() >= deadline:
-            raise AssertionError(f"no subscriber registered on {channel!r} within {timeout}s")
-        await asyncio.sleep(0.02)
-
-
 async def _recv_or_none_async(session: WebSocketTestSession, timeout: float) -> str | None:
     """Real cancellation (anyio.move_on_after), not an abandoned reader.
 
@@ -305,7 +284,7 @@ def test_happy_path_recipient_receives_message_event(ws_client: TestClient) -> N
     conversation_id = _make_dm(client, alice, bob)
 
     with client.websocket_connect("/ws", headers=bob.headers) as bob_ws:
-        client.portal.call(_wait_for_subscriber, f"user:{bob.id}")
+        assert json.loads(_receive_text_required(bob_ws)) == {"type": "ready"}
 
         sent = _send_message(client, conversation_id, alice, device["id"], b"hello bob")
 
@@ -336,8 +315,8 @@ def test_non_member_receives_nothing(ws_client: TestClient) -> None:
         client.websocket_connect("/ws", headers=bob.headers) as bob_ws,
         client.websocket_connect("/ws", headers=charlie.headers) as charlie_ws,
     ):
-        client.portal.call(_wait_for_subscriber, f"user:{bob.id}")
-        client.portal.call(_wait_for_subscriber, f"user:{charlie.id}")
+        assert json.loads(_receive_text_required(bob_ws)) == {"type": "ready"}
+        assert json.loads(_receive_text_required(charlie_ws)) == {"type": "ready"}
 
         sent = _send_message(client, conversation_id, alice, device["id"], b"isolation payload")
 
@@ -400,10 +379,10 @@ def test_message_published_while_recipient_offline_is_dropped_but_http_catchup_e
     conversation_id = _make_dm(client, alice, bob)
 
     # Bob has a live session, then it drops (backgrounded app, network blip, ...).
-    with client.websocket_connect("/ws", headers=bob.headers):
-        client.portal.call(_wait_for_subscriber, f"user:{bob.id}")
+    with client.websocket_connect("/ws", headers=bob.headers) as bob_ws:
+        assert json.loads(_receive_text_required(bob_ws)) == {"type": "ready"}
     # Exiting the `with` block synchronously drove the gateway's disconnect path
-    # (unsubscribe + pubsub.aclose()), so Bob genuinely has no live channel now.
+    # (pubsub.aclose()), so Bob genuinely has no live channel now.
 
     # While Bob has no socket at all, Alice sends. Fire-and-forget: this publish has no
     # subscriber to reach and is simply dropped.
@@ -411,7 +390,7 @@ def test_message_published_while_recipient_offline_is_dropped_but_http_catchup_e
 
     # Bob reconnects.
     with client.websocket_connect("/ws", headers=bob.headers) as bob_ws:
-        client.portal.call(_wait_for_subscriber, f"user:{bob.id}")
+        assert json.loads(_receive_text_required(bob_ws)) == {"type": "ready"}
 
         missed_event = _recv_or_none(bob_ws, timeout=1.0)
         assert missed_event is None, (
