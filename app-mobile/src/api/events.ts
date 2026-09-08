@@ -71,6 +71,14 @@ export interface EventInviteOut {
   created_at: string;
 }
 
+/** Response of POST /events/{id}/invites (c359) - `created` is exactly the rows
+ * THIS call inserted, not the event's whole accumulated invite history. Empty on
+ * an all-duplicate/all-blocked/no-op batch. */
+export interface EventInviteBatchOut {
+  created: EventInviteOut[];
+  created_count: number;
+}
+
 export interface EventRsvpOut {
   event_id: string;
   user_id: string;
@@ -132,13 +140,17 @@ export async function cancelEvent(eventId: string): Promise<EventOut> {
 
 /**
  * Invite people. Host or e-board only, because an invite GRANTS READ ACCESS.
- * Returns the event's full invite list, so the caller need not track which were new.
+ *
+ * Returns only the rows THIS call inserted (c359), not the event's whole
+ * accumulated invite history - `created` is empty on a duplicate/all-blocked/no-op
+ * batch. GET /events/{id}/invites (listEventInvites, c351) is the paginated route
+ * for "what does the whole list look like".
  */
 export async function inviteToEvent(
   eventId: string,
   userIds: string[],
-): Promise<EventInviteOut[]> {
-  return request<EventInviteOut[]>(`/events/${eventId}/invites`, {
+): Promise<EventInviteBatchOut> {
+  return request<EventInviteBatchOut>(`/events/${eventId}/invites`, {
     method: "POST",
     body: { user_ids: userIds },
   });
@@ -267,13 +279,35 @@ export interface EventWithRsvpSummaryOut {
   my_rsvp_status: RsvpStatus | null;
 }
 
+/** One page of the chapter's events with their RSVP summaries. `before`/`beforeId`
+ * are the OLDEST event you already hold - BOTH halves or NEITHER, same rule as
+ * listEventsWithRsvps' underlying (starts_at, id) cursor everywhere else in this
+ * file, since `before` alone cannot tie-break two events sharing a start time. */
+export interface ChapterEventsPage {
+  before?: string;
+  beforeId?: string;
+  limit?: number;
+}
+
 /** The chapter's events with their RSVP summaries in ONE round trip (c43 shape,
  * re-cut by c280) - replaces the Events segment's listEvents + listRsvps-per-event
- * 1+N, without shipping a campus of rows per popular event. */
+ * 1+N, without shipping a campus of rows per popular event.
+ *
+ * c359: the server has accepted before/before_id/limit on this route since c201's
+ * cursor landed on list_events_with_rsvps; this client never sent them, so the
+ * Events segment silently stopped at page one. */
 export async function listEventsWithRsvps(
   chapterId: string,
+  page: ChapterEventsPage = {},
 ): Promise<EventWithRsvpSummaryOut[]> {
-  return request<EventWithRsvpSummaryOut[]>(`/chapters/${chapterId}/events-with-rsvps`);
+  const paired = page.before !== undefined && page.beforeId !== undefined;
+  return request<EventWithRsvpSummaryOut[]>(`/chapters/${chapterId}/events-with-rsvps`, {
+    query: {
+      before: paired ? page.before : undefined,
+      before_id: paired ? page.beforeId : undefined,
+      limit: page.limit,
+    },
+  });
 }
 
 /** Upserts the current user's RSVP for an event (Going / Maybe / Can't, §8.7). */

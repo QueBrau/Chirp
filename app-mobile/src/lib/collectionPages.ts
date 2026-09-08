@@ -50,6 +50,14 @@ export const commentOrder = (a: PostCommentOut, b: PostCommentOut) => -newest(a.
 export const reportOrder = (a: ContentReportOut, b: ContentReportOut) =>
   newest(a.created_at, a.id, b.created_at, b.id);
 
+/** Newest-first comparator for a row shape not already named above (board c359) -
+ * same PostgreSQL-microsecond-aware tie-break `newest` gives meetingOrder/pollOrder,
+ * parameterized by how to read this row's time and id instead of one more hand-copy
+ * of the comparison. */
+export function orderByNewest<T>(time: (row: T) => string, id: (row: T) => string) {
+  return (a: T, b: T) => newest(time(a), id(a), time(b), id(b));
+}
+
 /** Pure functional merge: a delayed page cannot overwrite newer displayed edits. */
 export function mergePageRows<T>(
   current: readonly T[] | null, incoming: readonly T[], id: (row: T) => string,

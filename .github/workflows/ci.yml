@@ -315,6 +315,13 @@ jobs:
         # "All clear" while a full page of open reports still sat behind it (c353).
         run: npm run verify:moderation-queue
 
+      - name: Chapter tab collection continuation
+        working-directory: app-mobile
+        # c359. The Feed and Events segments fetched only page one and never
+        # continued, even though the backend already accepted a cursor on both
+        # routes - this keeps a future edit from silently dropping it again.
+        run: npm run verify:c359-continuation
+
       - name: Every verifier actually runs
         working-directory: app-mobile
         # c336's own ratchet. Eight of fourteen guards here were never wired, so they
