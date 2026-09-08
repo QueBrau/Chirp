@@ -18,6 +18,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 
+# Stands in for a NULL chapter_id inside Conversation.dm_key (board c344). Postgres
+# treats NULLs as pairwise-distinct in a UNIQUE index, so a plain
+# f"{chapter_id}:..." key built straight from a NULL chapter_id would never actually
+# dedupe the (more common) chapterless-DM case — every row would look unique to the
+# index even when the participant pair repeats. This sentinel gives that case a real,
+# comparable value instead. See migration 0037 for the partial unique index this backs.
+NIL_UUID = uuid.UUID(int=0)
+
 
 class Conversation(Base):
     __tablename__ = "conversations"
@@ -42,6 +50,14 @@ class Conversation(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
+    # Canonical DM identity (board c344): f"{chapter_id or NIL_UUID}:{sorted user id
+    # pair}", computed ONLY for kind="dm" conversations with exactly two members —
+    # NULL for everything else (groups, and any malformed multi-recipient "dm" row,
+    # unvalidated today and out of scope here). Backed by a partial UNIQUE index
+    # WHERE dm_key IS NOT NULL added in migration 0037, which also carries the
+    # duplicate-safe backfill for rows created before this column existed. See
+    # routers/messages.py's _dm_key for exactly how the string is built.
+    dm_key: Mapped[str | None] = mapped_column(Text)
 
 
 class ConversationMember(Base):

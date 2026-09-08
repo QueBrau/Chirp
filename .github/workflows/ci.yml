@@ -293,6 +293,13 @@ jobs:
         # already accepts, which would silently reintroduce duplicate/skipped messages.
         run: npm run verify:messages-pagination
 
+      - name: Bounded messages inbox
+        working-directory: app-mobile
+        # c344. Keeps the per-row listMessages fanout from creeping back into the
+        # inbox load path, and keeps the leave action wired to a route that
+        # already existed but nothing called before this card.
+        run: npm run verify:messages-inbox
+
       - name: Session ownership and bounded recovery
         working-directory: app-mobile
         # Executes real TS handlers against deferred Firebase/fetch promises and a fake clock.
