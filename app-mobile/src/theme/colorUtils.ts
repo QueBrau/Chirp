@@ -136,6 +136,16 @@ export function compositeOver(fgHex: string, alpha: number, bgHex: string): stri
 }
 
 /**
+ * The `secondary` fill's alpha (c386). Matches `accentSoft`'s dark-mode alpha in
+ * appearance.tsx/orgScope.tsx (0.16) -- duplicated there rather than imported
+ * because those two derivation sites predate this card and already had their own
+ * literal before secondaryLabelColor existed; not touched here to keep this card's
+ * diff to the contrast fix. Exported so at least the verify script (below) and
+ * secondaryLabelColor's own fill computation share one source instead of two.
+ */
+export const SECONDARY_FILL_ALPHA = 0.16;
+
+/**
  * Board c386. `secondary` buttons fill with `accentSoft` (accent alpha-composited
  * at 16% dark / 15% light over `bg`, per appearance.tsx/orgScope.tsx) and label
  * with the raw accent. That reads fine whenever the accent itself is light enough
@@ -172,10 +182,9 @@ export function secondaryLabelColor(
   }
 
   const MIN_CONTRAST = 4.5;
-  const FILL_ALPHA = 0.16;
   const STEP = 1 / 64;
 
-  const fill = compositeOver(accent, FILL_ALPHA, bg);
+  const fill = compositeOver(accent, SECONDARY_FILL_ALPHA, bg);
   if (contrastRatio(accent, fill) >= MIN_CONTRAST) {
     return accent;
   }

@@ -38,9 +38,46 @@ const OUT = new URL("../.chart-verify/", import.meta.url);
 mkdirSync(OUT, { recursive: true });
 writeFileSync(new URL("./package.json", OUT), '{"type":"module"}\n');
 
-const { compositeOver, secondaryLabelColor, contrastRatio } = await import(
+const { compositeOver, secondaryLabelColor, contrastRatio, SECONDARY_FILL_ALPHA } = await import(
   "../.chart-verify/theme/colorUtils.js"
 );
+
+/**
+ * HSL hue in degrees (0-360), or `null` for an achromatic color (r === g === b).
+ * Used only to sanity-check that a LIFTED label still reads as "the same color
+ * family" as the accent it was lifted from -- catches a regression that collapses
+ * to an unrelated fallback (e.g. the generic `ink`) while still passing a bare
+ * contrast-ratio check, since `ink` is near-white/desaturated and its hue sits
+ * measurably away from any of the roster's saturated accents (verified below).
+ */
+function hue(hex) {
+  const int = parseInt(hex.replace("#", ""), 16);
+  let r = ((int >> 16) & 255) / 255;
+  let g = ((int >> 8) & 255) / 255;
+  let b = (int & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  if (d === 0) return null;
+  let h;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  h *= 60;
+  if (h < 0) h += 360;
+  return h;
+}
+
+/** Circular hue distance in degrees (0-180). `null` on either side means "far". */
+function hueDistance(hexA, hexB) {
+  const ha = hue(hexA);
+  const hb = hue(hexB);
+  if (ha === null || hb === null) return 180;
+  const d = Math.abs(ha - hb) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+const HUE_TOLERANCE_DEG = 5;
 
 let failures = 0;
 const check = (name, cond, extra = "") => {
@@ -144,10 +181,30 @@ for (const [label, accent] of [
   ["Alpha Delta Pi", ALPHA_DELTA_PI],
   ["DEFAULT_ORG_COLORS fallback", DEFAULT_ORG_PRIMARY],
 ]) {
-  const fill = compositeOver(accent, 0.16, DARK_BG);
+  const fill = compositeOver(accent, SECONDARY_FILL_ALPHA, DARK_BG);
   const result = secondaryLabelColor(accent, DARK_BG, "dark", DARK_INK);
   const ratio = contrastRatio(result, fill);
   check(`${label}: secondaryLabelColor clears 4.5:1 against its fill`, ratio >= 4.5, `ratio=${ratio.toFixed(3)}`);
+
+  // This color's own raw contrast against its fill decides whether a LIFT was
+  // actually required. For every color that needed a lift, a bare ">= 4.5" check
+  // alone cannot tell "correctly lightened toward the accent" apart from "lift
+  // loop failed to converge and fell through to the generic `ink` fallback" --
+  // both pass a contrast-only check since `ink` is near-white and clears 4.5:1
+  // against almost any dark fill. Guard against that collapse two ways: the
+  // result must not literally BE `ink`, and it must stay hue-close to the
+  // original accent (a collapse to `ink`, or to some other unrelated fallback,
+  // reads as a different color family, not a lightened version of this one).
+  const rawRatio = contrastRatio(accent, fill);
+  if (rawRatio < 4.5) {
+    check(`${label}: lifted result is not the generic ink fallback`, result !== DARK_INK, result);
+    const dist = hueDistance(accent, result);
+    check(
+      `${label}: lifted result stays hue-close to the original accent (<=${HUE_TOLERANCE_DEG} deg)`,
+      dist <= HUE_TOLERANCE_DEG,
+      `hue distance=${dist.toFixed(1)} deg, accent=${accent}, result=${result}`,
+    );
+  }
 }
 
 // Regression trap (pins the defect, mirrors verify-chirps-board.mjs): the RAW,
@@ -155,7 +212,7 @@ for (const [label, accent] of [
 // either the fill formula or dark.bg changed enough to accidentally fix the
 // defect by coincidence, which is itself worth knowing.
 {
-  const fill = compositeOver(UNCG_NAVY, 0.16, DARK_BG);
+  const fill = compositeOver(UNCG_NAVY, SECONDARY_FILL_ALPHA, DARK_BG);
   const rawRatio = contrastRatio(UNCG_NAVY, fill);
   check(
     "regression trap: raw UNCG navy on its own dark fill stays broken (~1.2:1)",
@@ -168,7 +225,7 @@ for (const [label, accent] of [
 // always-lift implementation would also pass the check above while silently
 // relabeling every screen's existing violet secondary buttons.
 {
-  const fill = compositeOver(DARK_ACCENT, 0.16, DARK_BG);
+  const fill = compositeOver(DARK_ACCENT, SECONDARY_FILL_ALPHA, DARK_BG);
   const rawRatio = contrastRatio(DARK_ACCENT, fill);
   check("default dark accent already clears AA unlifted (precondition)", rawRatio >= 4.5, `ratio=${rawRatio.toFixed(3)}`);
   const result = secondaryLabelColor(DARK_ACCENT, DARK_BG, "dark", DARK_INK);
