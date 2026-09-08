@@ -1,0 +1,152 @@
+{
+  "authenticated_ready": false,
+  "client_evidence_scope": "repository_config_plus_operator_supplied_artifact_observation_not_device_test",
+  "config_sha256": "1814044cd8f1f572fc0725e098c9cfbb9ebbc6700ccaa16537c17f9a19a1c151",
+  "database_evidence": "assumed_capacity_only",
+  "findings": [
+    {
+      "field": "expected_release_missing",
+      "kind": "unknown",
+      "scope": "release"
+    },
+    {
+      "field": "pool_inferred_from_checkout_not_image",
+      "kind": "unknown",
+      "scope": "api:template"
+    },
+    {
+      "field": "pool_inferred_from_checkout_not_image",
+      "kind": "unknown",
+      "scope": "chirp-api-00056-pcw"
+    },
+    {
+      "field": "pool_inferred_from_checkout_not_image",
+      "kind": "unknown",
+      "scope": "chirp-purge"
+    },
+    {
+      "field": "pool_inferred_from_checkout_not_image",
+      "kind": "unknown",
+      "scope": "chirp-media-reconcile"
+    },
+    {
+      "field": "current_sql_settings_evidence_missing_or_mismatched",
+      "kind": "unknown",
+      "scope": "database"
+    },
+    {
+      "field": "compiled_build_evidence_missing_or_mismatched",
+      "kind": "unknown",
+      "scope": "client"
+    }
+  ],
+  "jobs": {
+    "chirp-media-reconcile": {
+      "entrypoint_model_matches": true,
+      "image": "us-central1-docker.pkg.dev/chirps-prod/cloud-run-source-deploy/chirp-api@sha256:7709960aee462f12f7fd33b70929b28077eda900fdbe2b741c552b71ad1ef60e",
+      "inferred_from_checkout_not_image": [
+        "DB_POOL_SIZE",
+        "DB_MAX_OVERFLOW",
+        "DB_POOL_TIMEOUT",
+        "WEB_CONCURRENCY"
+      ],
+      "overlapping_executions": "operator_policy_not_enforced",
+      "parallelism": 1,
+      "pool_capacity_per_process": 5
+    },
+    "chirp-purge": {
+      "entrypoint_model_matches": true,
+      "image": "us-central1-docker.pkg.dev/chirps-prod/cloud-run-source-deploy/chirp-api@sha256:f668ff9745c3ecd0ea81653716c91f0f1d0fc3f169da41861142be0c63737e67",
+      "inferred_from_checkout_not_image": [
+        "DB_POOL_SIZE",
+        "DB_MAX_OVERFLOW",
+        "DB_POOL_TIMEOUT",
+        "WEB_CONCURRENCY"
+      ],
+      "overlapping_executions": "operator_policy_not_enforced",
+      "parallelism": 1,
+      "pool_capacity_per_process": 5
+    }
+  },
+  "observed_at": "2026-09-08T03:03:59.132702+00:00",
+  "pool_envelope": {
+    "assumed_max_connections": 100,
+    "hard_capacity_guarantee": false,
+    "job_connections": 10,
+    "listed_revisions_configured_capacity": 44,
+    "listed_revisions_plus_jobs_and_reserves": 68,
+    "policy_rollout_fits": true,
+    "reserved_operator_and_contingency": 14,
+    "serialized_rollout_jobs_quiescent": 98,
+    "service_connections": {
+      "api": 40,
+      "ws": 4
+    },
+    "simultaneous_rollout_fits": false,
+    "simultaneous_rollout_with_jobs": 112,
+    "steady_fits": true,
+    "steady_with_jobs": 68
+  },
+  "services": {
+    "api": {
+      "canonical_origin": "https://chirp-api-j3kcqhis6a-uc.a.run.app",
+      "client_origin_matches_published_alias": true,
+      "revisions": [
+        {
+          "configured_pool_capacity": 40,
+          "image": "us-central1-docker.pkg.dev/chirps-prod/cloud-run-source-deploy/chirp-api@sha256:cfd2bd3a867d5ce6d4a0338163a198e138961624c936d72aa4d254e4d9b7d512",
+          "percent": 100,
+          "revision": "chirp-api-00056-pcw",
+          "tagged": false
+        }
+      ],
+      "settings": {
+        "env": {
+          "AUTH_MODE": "firebase",
+          "DB_MAX_OVERFLOW": "2",
+          "DB_POOL_SIZE": "3",
+          "DB_POOL_TIMEOUT": "10",
+          "ENV": "production",
+          "FIREBASE_PROJECT_ID": "chirps-prod",
+          "WEB_CONCURRENCY": "1"
+        },
+        "inferred_from_checkout_not_image": [
+          "DB_POOL_SIZE",
+          "DB_MAX_OVERFLOW",
+          "DB_POOL_TIMEOUT",
+          "WEB_CONCURRENCY"
+        ],
+        "revision_max_instances": 8
+      }
+    },
+    "ws": {
+      "canonical_origin": "https://chirp-ws-j3kcqhis6a-uc.a.run.app",
+      "client_origin_matches_published_alias": true,
+      "revisions": [
+        {
+          "configured_pool_capacity": 4,
+          "image": "us-central1-docker.pkg.dev/chirps-prod/cloud-run-source-deploy/chirp-api@sha256:cfd2bd3a867d5ce6d4a0338163a198e138961624c936d72aa4d254e4d9b7d512",
+          "percent": 100,
+          "revision": "chirp-ws-00019-l2q",
+          "tagged": false
+        }
+      ],
+      "settings": {
+        "env": {
+          "AUTH_MODE": "firebase",
+          "DB_MAX_OVERFLOW": "1",
+          "DB_POOL_SIZE": "1",
+          "DB_POOL_TIMEOUT": "10",
+          "ENV": "production",
+          "FIREBASE_PROJECT_ID": "chirps-prod",
+          "WEB_CONCURRENCY": "1"
+        },
+        "inferred_from_checkout_not_image": [
+          "WEB_CONCURRENCY"
+        ],
+        "revision_max_instances": 2
+      }
+    }
+  },
+  "verdict": "NOT_PROVEN"
+}
