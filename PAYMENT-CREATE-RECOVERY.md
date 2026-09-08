@@ -75,6 +75,9 @@ says it could not be confirmed and suggests retrying with the same payment metho
 An aged unresolved attempt directs the member to the treasurer before another
 payment. No unknown outcome is presented as proof that a payment failed.
 
+Declined payment attempts are a separate lifecycle case: `failed` remains held
+under c387. See [failed-intent lifecycle and coordinated migration rollout](PAYMENT-FAILED-LIFECYCLE.md).
+
 ## Remaining operational work
 
 Unknown old rows need operator reconciliation against the original connected
