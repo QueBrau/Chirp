@@ -22,7 +22,8 @@ on either stream. See `tests/test_app_logging.py` for the falsifying test.
 FIX SCOPE, deliberately narrow: this configures exactly one logger, "app" — the
 common ancestor of every `app.*` module logger by Python's dotted-name convention —
 with one handler, INFO and above. Most app records use uvicorn's formatter;
-c373 preserves analytics INFO records as bare JSON for the structured-log sink.
+c373 preserves analytics INFO records as bare JSON for the structured-log sink;
+c370 preserves the fixed-schema operational logger in the same way.
 `propagate` is left at its default (True) on purpose: pytest's `caplog` fixture
 captures by attaching its own handler to the ROOT logger, and records only reach it
 by propagating there. Setting `propagate=False` here would make this fix invisible
@@ -39,10 +40,11 @@ from uvicorn.logging import DefaultFormatter
 
 
 class AppFormatter(DefaultFormatter):
-    """Keep analytics as JSON at the stream boundary selected by the GCP sink."""
+    """Keep analytics and operational observations as JSON at the stream boundary."""
 
     def format(self, record: logging.LogRecord) -> str:
-        if record.name == "app.analytics" and record.levelno == logging.INFO:
+        if ((record.name == "app.analytics" and record.levelno == logging.INFO)
+                or record.name == "app.operational"):
             return record.getMessage()
         return super().format(record)
 
@@ -51,8 +53,9 @@ class AppStreamHandler(logging.StreamHandler):
     def handleError(self, record: logging.LogRecord) -> None:
         # StreamHandler normally prints the exception, record and stack directly
         # to stderr. That bypasses emit()'s safe diagnostic and can expose an
-        # arbitrary transport error. A broken analytics stream must fail silently.
-        if record.name in {"app.analytics", "app.analytics_diagnostics"}:
+        # arbitrary transport error. These isolated emitters must fail silently.
+        if record.name in {"app.analytics", "app.analytics_diagnostics", "app.operational",
+                           "app.services.rate_limit"}:
             return
         super().handleError(record)
 
