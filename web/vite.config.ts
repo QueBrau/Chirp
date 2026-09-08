@@ -17,6 +17,9 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: "dist",
+    // Preserve Vite 5's browser floor when updating the build tool (c365).
+    // Vite 7's default raises Safari 14 to 16 and the other browser targets too.
+    target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
     // The site is small and mostly text. One bundle beats a waterfall of
     // chunks for a first-visit marketing page.
     chunkSizeWarningLimit: 700,

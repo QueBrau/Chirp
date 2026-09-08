@@ -145,7 +145,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: app-mobile/package-lock.json
       # c360's static backend inventory uses only Python's standard library.
@@ -266,6 +266,14 @@ jobs:
         # and the load states that stop a failed fetch rendering as an empty board.
         run: npm run verify:chirps-board
 
+      - name: Button secondary-variant contrast (c386)
+        working-directory: app-mobile
+        # secondary buttons label with the raw accent on a 16%/15% translucent fill;
+        # a dark accent (UNCG navy, the default campus primary) measured ~1.2:1 there
+        # in dark mode. Compiles and exercises secondaryLabelColor() against every
+        # roster accent, and pins the raw defect so it cannot regress quietly.
+        run: npm run verify:button-contrast
+
       - name: Events and polls
         working-directory: app-mobile
         # c312. The finding was not a missing spinner: a failed fetch rendered as
@@ -289,6 +297,12 @@ jobs:
         working-directory: app-mobile
         # Executes real TS handlers against deferred Firebase/fetch promises and a fake clock.
         run: npm run verify:c343-session
+
+      - name: Moderation queue survives resolving a full page
+        working-directory: app-mobile
+        # Resolving every visible report used to blank the pagination cursor and fake
+        # "All clear" while a full page of open reports still sat behind it (c353).
+        run: npm run verify:moderation-queue
 
       - name: Every verifier actually runs
         working-directory: app-mobile
@@ -316,7 +330,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install
