@@ -116,7 +116,10 @@ async def create_account_link(account_id: str, return_url: str, refresh_url: str
 
 async def retrieve_account(account_id: str) -> stripe.Account:
     """Fetch a connected account so status is read live rather than mirrored locally."""
-    return await stripe.Account.retrieve_async(account_id, api_key=_secret_key())
+    account = await stripe.Account.retrieve_async(account_id, api_key=_secret_key())
+    if getattr(account, "id", None) != account_id:
+        raise HTTPException(status_code=503, detail="payment_outcome_unconfirmed")
+    return account
 
 
 async def create_customer(account_id: str, email: str, display_name: str) -> str:
