@@ -181,6 +181,7 @@ async def update_me(
                 destination_prefix=AVATAR_PREFIX,
             )
 
+    account_type_event = None
     if "account_type" in fields:
         if body.account_type is None:
             # NOT NULL on the row, and there is no "back to nothing" state for it the
@@ -193,14 +194,15 @@ async def update_me(
             # A CHANGE, not a signup - user_signed_up already fired once, at
             # bootstrap, and must not fire again here (see the schemas/identity.py
             # AccountType docstring). Own event, own name.
-            emit(
-                "account_type_changed",
-                user_id=user.id,
-                previous_account_type=previous_account_type,
-                account_type=user.account_type,
-            )
+            account_type_event = {
+                "user_id": user.id,
+                "previous_account_type": previous_account_type,
+                "account_type": user.account_type,
+            }
 
     await session.commit()
+    if account_type_event is not None:
+        emit("account_type_changed", **account_type_event)
     await session.refresh(user)
     return UserOut.model_validate(user)
 
