@@ -25,7 +25,8 @@
     "verify:failure-states": "node scripts/verify-failure-states.mjs",
     "verify:ci-coverage": "node scripts/verify-ci-coverage.mjs",
     "verify:c343-session": "node scripts/verify-c343-session.mjs",
-    "verify:moderation-queue": "node scripts/verify-moderation-queue.mjs"
+    "verify:moderation-queue": "node scripts/verify-moderation-queue.mjs",
+    "verify:messages-inbox": "node scripts/verify-messages-inbox.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/muli": "^0.1.0",

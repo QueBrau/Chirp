@@ -28,6 +28,7 @@ from app.models.lineage import Family, LineageEdge
 from app.models.meetings import Meeting, MeetingAttendance
 from app.models.polls import Poll, PollOption, PollVote
 from app.models.messaging import (
+    NIL_UUID,
     Conversation,
     ConversationMember,
     Message,
@@ -48,6 +49,7 @@ __all__ = [
     "ContentReport",
     "Conversation",
     "ConversationMember",
+    "NIL_UUID",
     "Device",
     "DuesCycle",
     "DuesPaymentPlan",

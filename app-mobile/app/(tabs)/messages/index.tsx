@@ -19,10 +19,13 @@ import { Pressable, View } from "react-native";
 
 import { Feather } from "@expo/vector-icons";
 
-import { listConversations, listMessages, type ConversationOut } from "@/api/messages";
-import { AppText, Card, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
+import { listConversations, type ConversationOut } from "@/api/messages";
+import { AppText, Button, Card, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
 import { chirpSocket, isMessageEvent } from "@/realtime/socket";
 import { radii, spacing, typography, useTheme } from "@/theme";
+
+/** One inbox page (board c344) — matches the backend's default/max shape (30/100). */
+const PAGE_LIMIT = 30;
 
 /** Header-adjacent ghost pill, same shape as profile/index.tsx's EditLayoutToggle. */
 function NewConversationButton({ onPress }: { onPress: () => void }) {
@@ -64,6 +67,18 @@ function conversationTitle(conversation: ConversationOut): string {
   return conversation.kind === "group" ? "Group" : "Direct message";
 }
 
+/** Real bodies are ciphertext only — the row shows the encrypted preview
+ * ("Message") until on-device decryption lands. has_messages (board c344) comes
+ * straight off the conversation row, replacing the old per-row history-fetch call
+ * that fetched an entire message page just to answer this one boolean. */
+function toItem(conversation: ConversationOut): ConversationItem {
+  return {
+    conversation,
+    title: conversationTitle(conversation),
+    preview: conversation.has_messages ? "Message" : "No messages yet",
+  };
+}
+
 export default function MessagesScreen() {
   const router = useRouter();
   const palette = useTheme();
@@ -72,25 +87,17 @@ export default function MessagesScreen() {
    * used to render identically, so a dropped request told the user they had no
    * conversations. Same rule feed/index.tsx's LoadState comment sets out. */
   const [loadFailed, setLoadFailed] = useState(false);
+  // Whether the last page fetched was full — a page shorter than PAGE_LIMIT is
+  // provably the last one (board c344's cursor pagination).
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   // Hoisted from the mount effect (c304) so pull-to-refresh can invoke it too.
   const load = useCallback(async () => {
     try {
-      const conversations = await listConversations();
-      const withPreviews = await Promise.all(
-        conversations.map(async (conversation) => {
-          const messages = await listMessages(conversation.id);
-          // Real bodies are ciphertext only — the row shows the encrypted
-          // preview ("Message") until on-device decryption lands.
-          const last = messages[messages.length - 1];
-          return {
-            conversation,
-            title: conversationTitle(conversation),
-            preview: last ? "Message" : "No messages yet",
-          };
-        }),
-      );
-      setItems(withPreviews);
+      const conversations = await listConversations({ limit: PAGE_LIMIT });
+      setItems(conversations.map(toItem));
+      setHasMore(conversations.length === PAGE_LIMIT);
       setLoadFailed(false);
     } catch {
       // NOT `.catch(() => setItems([]))` (c299): an empty array is the server's answer
@@ -103,6 +110,27 @@ export default function MessagesScreen() {
       setLoadFailed(true);
     }
   }, []);
+
+  // Older page via the (created_at, id) cursor — the same compound cursor
+  // listMessages already uses, now on GET /conversations too (board c344).
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore || items === null || items.length === 0) return;
+    setLoadingMore(true);
+    try {
+      const last = items[items.length - 1].conversation;
+      const older = await listConversations({
+        before: last.created_at,
+        before_id: last.id,
+        limit: PAGE_LIMIT,
+      });
+      setItems((current) => [...(current ?? []), ...older.map(toItem)]);
+      setHasMore(older.length === PAGE_LIMIT);
+    } catch {
+      // Fail soft: the page already on screen stays usable; pull-to-refresh retries.
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [items, hasMore, loadingMore]);
 
   useEffect(() => {
     void load();
@@ -151,22 +179,32 @@ export default function MessagesScreen() {
           onAction={() => router.push("/messages/new")}
         />
       ) : (
-        <Card>
-          {(items ?? []).map((item, index) => (
-            <ListRow
-              key={item.conversation.id}
-              title={item.title}
-              subtitle={
-                <AppText variant="caption" tone="secondary" numberOfLines={1}>
-                  <Feather name="lock" size={12} color={palette.inkFaint} /> {item.preview}
-                </AppText>
-              }
-              left={<GradientAvatar name={item.title} size={48} />}
-              divider={index < (items ?? []).length - 1}
-              onPress={() => router.push(`/messages/${item.conversation.id}`)}
+        <View style={{ gap: spacing.md }}>
+          <Card>
+            {(items ?? []).map((item, index) => (
+              <ListRow
+                key={item.conversation.id}
+                title={item.title}
+                subtitle={
+                  <AppText variant="caption" tone="secondary" numberOfLines={1}>
+                    <Feather name="lock" size={12} color={palette.inkFaint} /> {item.preview}
+                  </AppText>
+                }
+                left={<GradientAvatar name={item.title} size={48} />}
+                divider={index < (items ?? []).length - 1}
+                onPress={() => router.push(`/messages/${item.conversation.id}`)}
+              />
+            ))}
+          </Card>
+          {hasMore ? (
+            <Button
+              label={loadingMore ? "Loading conversations..." : "Load older conversations"}
+              variant="secondary"
+              disabled={loadingMore}
+              onPress={() => void loadMore()}
             />
-          ))}
-        </Card>
+          ) : null}
+        </View>
       )}
     </Screen>
   );
