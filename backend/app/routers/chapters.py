@@ -4,8 +4,8 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_, func, select, update
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, func, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -922,10 +922,13 @@ async def create_invite(
 @router.get("/chapters/{chapter_id}/invites")
 async def list_invites(
     chapter_id: uuid.UUID,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=MAX_HISTORY_PAGE),
     actor: models.Membership = Depends(require_role(*EBOARD)),
     session: AsyncSession = Depends(get_session),
 ) -> list[ChapterInviteOut]:
-    """Every invite this chapter has minted; e-board only.
+    """One page of this chapter's minted invites, e-board only (board c359).
 
     c111: c105 shipped revocation that took the CODE, which covers a president who
     still has the string in front of them and nobody else. Minting was the only
@@ -944,23 +947,30 @@ async def list_invites(
     closest proxy available without a migration, and it does put live codes above
     dead ones, which is the question the screen is for. A created_at is worth
     adding the next time this table is touched.
+
+    c359: this was a flat MAX_HISTORY_PAGE cap with only a log warning past it, so a
+    chapter with more than 200 live/dead codes had codes that were neither visible
+    nor revocable. Cursor-paginated on (expires_at, id) — the SAME tuple_ compound
+    cursor shape as events.py's list_events, just on the column this table actually
+    sorts by, since it has no created_at to cursor on instead. `before` alone still
+    works (legacy callers) but does not guarantee the id tie-break for two codes
+    minted with the identical expires_at. warn_if_capped is dropped: a cursor makes
+    a full page expected, not silent truncation.
     """
-    result = await session.execute(
-        select(models.ChapterInvite)
-        .where(models.ChapterInvite.chapter_id == chapter_id)
-        .order_by(models.ChapterInvite.expires_at.desc())
-        # The one cap in this group a long-lived busy chapter could genuinely reach:
-        # invites accumulate with TIME, not with roster (c258). Generous for now; if
-        # warn_if_capped fires, this route graduates to a cursor and that log is the
-        # evidence deciding it rather than a guess.
-        .limit(MAX_HISTORY_PAGE)
-    )
-    invites = [ChapterInviteOut.model_validate(row) for row in result.scalars().all()]
-    warn_if_capped(
-        logger, invites, MAX_HISTORY_PAGE, "GET /chapters/{chapter_id}/invites",
-        chapter_id=str(chapter_id),
-    )
-    return invites
+    stmt = select(models.ChapterInvite).where(models.ChapterInvite.chapter_id == chapter_id)
+    if before is not None and before_id is not None:
+        stmt = stmt.where(
+            tuple_(models.ChapterInvite.expires_at, models.ChapterInvite.id)
+            < (before, before_id)
+        )
+    elif before is not None:
+        stmt = stmt.where(models.ChapterInvite.expires_at < before)
+    stmt = stmt.order_by(
+        models.ChapterInvite.expires_at.desc(), models.ChapterInvite.id.desc()
+    ).limit(limit)
+
+    result = await session.execute(stmt)
+    return [ChapterInviteOut.model_validate(row) for row in result.scalars().all()]
 
 
 @router.post("/chapters/{chapter_id}/invites/revoke", status_code=200)

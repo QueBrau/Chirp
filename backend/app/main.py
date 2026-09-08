@@ -13,6 +13,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from app.config import Settings, get_settings
 from app.core.log_scrub import install_credential_log_scrub
 from app.core.logging_config import configure_app_logging
+from app.core.operational_signals import observe
 from app.routers import (
     alumni,
     auth,
@@ -188,6 +189,7 @@ def create_app() -> FastAPI:
     # into the very pool that is saturated. 503 + Retry-After is the honest answer.
     @app.exception_handler(SQLAlchemyTimeoutError)
     async def _pool_exhausted(_request: Request, _exc: SQLAlchemyTimeoutError) -> JSONResponse:
+        observe("sql_pool_capacity_503")
         return JSONResponse(
             status_code=503,
             content={"detail": "over_capacity"},

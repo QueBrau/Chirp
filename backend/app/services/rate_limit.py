@@ -11,12 +11,11 @@ own private window. Nothing errors, nothing 500s, no line appears anywhere - the
 just stop being shared, so the real ceiling silently multiplies by the instance count
 and stays that way indefinitely. A degradation with no evidence is one nobody fixes.
 
-Evidentially: it is why c290's probe could prove the limiter REFUSES in prod but not
-that the count was SHARED. One instance served all 61 requests (manager checked Cloud
-Logging), and a single-instance run looks identical whether it counted in Redis or in
-this fallback. With a warning here, the proof by elimination becomes available: probe
-while at least two instances serve, and the ABSENCE of this line says the Redis path
-carried it.
+Evidentially: a warning is positive evidence of local fallback, but its absence
+cannot prove that Redis carried a request. Throttling, sink failure, process churn
+and absent traffic all limit this sampled observation. A single-instance refusal
+also cannot distinguish a local budget from a shared one; c290's cross-instance
+enforcement claim requires independent evidence of the Redis path.
 
 The warning is rate limited to at most one line per process per FALLBACK_WARNING_INTERVAL
 - a Redis outage under load must not turn a degradation into a log flood, which would be
@@ -31,6 +30,8 @@ import math
 import time
 from collections import defaultdict, deque
 
+from app.core.operational_signals import observe
+
 logger = logging.getLogger(__name__)
 
 # key -> monotonic timestamps of allowed calls within the current local window.
@@ -42,6 +43,9 @@ _WINDOWS: dict[str, deque[float]] = defaultdict(deque)
 FALLBACK_WARNING_INTERVAL_SECONDS = 600.0
 # Monotonic timestamp of the last warning, or None if none has been emitted.
 _last_fallback_warning_at: float | None = None
+# Each failure invalidates all successes from calls already in flight. An object
+# token avoids retaining requests, keys or identities; no per-key state is added.
+_fallback_epoch: object | None = None
 
 
 def _warn_fallback_once(key: str, exc: BaseException) -> None:
@@ -99,6 +103,7 @@ async def allow(key: str, *, max_calls: int, window_seconds: float) -> bool:
     request open while Redis is unavailable. The local fallback remains a mitigation,
     not a hard cross-instance guarantee during an outage.
     """
+    global _fallback_epoch
     # Avoid a network round-trip for local development and the test suite.
     from app.config import get_settings
 
@@ -108,6 +113,7 @@ async def allow(key: str, *, max_calls: int, window_seconds: float) -> bool:
     bucket = int(time.time() // window_seconds)
     redis_key = f"chirp:ratelimit:{key}:{bucket}"
     timeout = 0.5
+    started_epoch = _fallback_epoch
     try:
         from app.ws.pubsub import get_redis
 
@@ -120,16 +126,32 @@ async def allow(key: str, *, max_calls: int, window_seconds: float) -> bool:
                 redis.expire(redis_key, max(1, math.ceil(window_seconds))),
                 timeout=timeout,
             )
+        if started_epoch is not None and started_epoch is _fallback_epoch:
+            # Only this completed operation is known to have used Redis after
+            # the latest observed fallback. This is not fleet-wide recovery,
+            # and it cannot predict a still-pending operation's later failure.
+            _fallback_epoch = None
+            observe("rate_limit_redis_success_after_fallback")
         return count <= max_calls
     except Exception as exc:
-        _warn_fallback_once(key, exc)
+        _fallback_epoch = object()
+        observe("rate_limit_fallback")
+        try:
+            _warn_fallback_once(key, exc)
+        except Exception:
+            # The legacy prose warning is also best-effort. A failed logger
+            # cannot bypass the existing local abuse budget or leak diagnostics.
+            pass
         return _allow_local(key, max_calls=max_calls, window_seconds=window_seconds)
 
 
 def _reset_all() -> None:
     """Test-only: clear every tracked local window so tests do not bleed into each other."""
-    global _last_fallback_warning_at
+    global _last_fallback_warning_at, _fallback_epoch
     _WINDOWS.clear()
     # The warning suppressor is process-global too, so it bleeds the same way: without
     # this, the first test to trip the fallback would silence every later one.
     _last_fallback_warning_at = None
+    _fallback_epoch = None
+    from app.core.operational_signals import _reset_for_tests
+    _reset_for_tests()

@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # c389: board-only coordination updates are checked by scripts/board-check.
+    # Any other changed path still runs application CI; PRs stay unfiltered.
+    paths-ignore:
+      - board.html
   pull_request:
 
 # Explicit least-privilege regardless of org/repo Actions defaults (c185 - the
@@ -310,6 +314,13 @@ jobs:
         # Resolving every visible report used to blank the pagination cursor and fake
         # "All clear" while a full page of open reports still sat behind it (c353).
         run: npm run verify:moderation-queue
+
+      - name: Chapter tab collection continuation
+        working-directory: app-mobile
+        # c359. The Feed and Events segments fetched only page one and never
+        # continued, even though the backend already accepted a cursor on both
+        # routes - this keeps a future edit from silently dropping it again.
+        run: npm run verify:c359-continuation
 
       - name: Every verifier actually runs
         working-directory: app-mobile
