@@ -1,6 +1,7 @@
 /** Cursor progress belongs to server pages, never to locally edited display rows. */
 import type { PostCommentOut } from "@/api/feed";
 import type { MeetingWithAttendance } from "@/api/meetings";
+import type { ContentReportOut } from "@/api/moderation";
 import type { PollOut } from "@/api/polls";
 
 export interface CollectionCursor { before: string; beforeId: string }
@@ -28,6 +29,12 @@ export function acceptPage(page: CollectionPage, count: number, size: number, cu
   page.more = count === size;
 }
 
+/** Names the invariant this module exists to enforce: exhaustion is a property of
+ * the last fetched SERVER page, never inferred from a display array going empty. */
+export function pageExhausted(page: CollectionPage): boolean {
+  return !page.more;
+}
+
 const compareId = (a: string, b: string) => a === b ? 0 : a < b ? -1 : 1;
 // PostgreSQL preserves microseconds; Date.parse alone truncates them and can
 // incorrectly use the UUID tie-break for two different instants in one millisecond.
@@ -40,6 +47,8 @@ export const meetingOrder = (a: MeetingWithAttendance, b: MeetingWithAttendance)
   newest(a.meeting.meeting_date, a.meeting.id, b.meeting.meeting_date, b.meeting.id);
 export const pollOrder = (a: PollOut, b: PollOut) => newest(a.created_at, a.id, b.created_at, b.id);
 export const commentOrder = (a: PostCommentOut, b: PostCommentOut) => -newest(a.created_at, a.id, b.created_at, b.id);
+export const reportOrder = (a: ContentReportOut, b: ContentReportOut) =>
+  newest(a.created_at, a.id, b.created_at, b.id);
 
 /** Pure functional merge: a delayed page cannot overwrite newer displayed edits. */
 export function mergePageRows<T>(

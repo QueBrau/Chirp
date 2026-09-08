@@ -23,7 +23,8 @@
     "verify:events-polls": "node scripts/verify-events-polls.mjs",
     "verify:failure-states": "node scripts/verify-failure-states.mjs",
     "verify:ci-coverage": "node scripts/verify-ci-coverage.mjs",
-    "verify:c343-session": "node scripts/verify-c343-session.mjs"
+    "verify:c343-session": "node scripts/verify-c343-session.mjs",
+    "verify:moderation-queue": "node scripts/verify-moderation-queue.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/muli": "^0.1.0",
