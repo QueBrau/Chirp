@@ -282,7 +282,8 @@ async def test_event_invite_skips_someone_who_blocked_the_host(
         headers=setup.president.headers,
     )
     assert invited.status_code == 201, invited.text
-    assert guest.id not in {i["invited_user_id"] for i in invited.json()}
+    assert guest.id not in {i["invited_user_id"] for i in invited.json()["created"]}
+    assert invited.json()["created_count"] == 0
 
     # The read access an invite would have granted must not have been granted either.
     reachable = await client.get(f"/events/{event_id}", headers=guest.headers)

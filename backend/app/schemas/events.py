@@ -179,6 +179,22 @@ class EventInviteOut(_Schema):
     created_at: datetime
 
 
+class EventInviteBatchOut(_Schema):
+    """Response of POST /events/{event_id}/invites (board c359).
+
+    `created` is exactly the rows THIS call inserted — via ON CONFLICT DO NOTHING
+    ... RETURNING, so a duplicate or all-blocked batch comes back empty rather than
+    re-listing the event's whole accumulated invite history, which used to grow the
+    response without bound as an event aged. No field names who was skipped or why:
+    that matches today's exposure, where a blocked invitee is silently absent from
+    the result rather than called out. GET /events/{event_id}/invites (c351) is the
+    paginated route for "what does the whole list look like".
+    """
+
+    created: list[EventInviteOut]
+    created_count: int
+
+
 # ---- rsvps ----
 
 

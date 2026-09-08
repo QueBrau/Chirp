@@ -191,11 +191,30 @@ export async function createInvite(
   return request<ChapterInviteOut>(`/chapters/${chapterId}/invites`, { method: "POST", body });
 }
 
-/** Every code this chapter has minted, live and dead (c111). E-board only.
- *  Dead ones are included on purpose: "is the code going around still live" is
- *  the question the screen exists to answer. */
-export async function listInvites(chapterId: string): Promise<ChapterInviteOut[]> {
-  return request<ChapterInviteOut[]>(`/chapters/${chapterId}/invites`);
+/** One page of invites this chapter has minted, live and dead (c111/c359). E-board
+ * only. Dead ones are included on purpose: "is the code going around still live" is
+ * the question the screen exists to answer. Cursor on (expires_at, id) - the same
+ * FURTHEST-FROM-EXPIRY-first order the server has always used, not creation order
+ * (chapter_invites has no created_at column). BOTH cursor halves or NEITHER: `before`
+ * alone cannot tie-break two codes sharing an expires_at. */
+export interface ChapterInvitePage {
+  before?: string;
+  beforeId?: string;
+  limit?: number;
+}
+
+export async function listInvites(
+  chapterId: string,
+  page: ChapterInvitePage = {},
+): Promise<ChapterInviteOut[]> {
+  const paired = page.before !== undefined && page.beforeId !== undefined;
+  return request<ChapterInviteOut[]>(`/chapters/${chapterId}/invites`, {
+    query: {
+      before: paired ? page.before : undefined,
+      before_id: paired ? page.beforeId : undefined,
+      limit: page.limit,
+    },
+  });
 }
 
 /** Kill a leaked code (c105). By code, not id — the string is what leaks. */

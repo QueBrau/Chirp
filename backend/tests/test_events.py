@@ -458,7 +458,9 @@ async def test_inviting_is_gated_to_host_or_eboard_and_is_idempotent(
         headers=setup.president.headers,
     )
     assert first.status_code == 201 and second.status_code == 201, second.text
-    assert len(second.json()) == 1, "double-tap must not create a second invite row"
+    assert first.json()["created_count"] == 1 and len(first.json()["created"]) == 1
+    assert second.json()["created"] == [], "double-tap must not create a second invite row"
+    assert second.json()["created_count"] == 0
 
     unknown = await client.post(
         f"/events/{event_id}/invites",
@@ -467,6 +469,44 @@ async def test_inviting_is_gated_to_host_or_eboard_and_is_idempotent(
     )
     assert unknown.status_code == 422, unknown.text
     assert unknown.json() == {"detail": "unknown_user_in_invite_list"}
+
+
+async def test_invite_batch_response_reports_only_this_calls_new_rows(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, make_user
+) -> None:
+    """c359: the response must stay bounded to what THIS call did, not the event's
+    accumulated invite history. Invite A alone, then invite [A, B] together - the
+    second call's `created` must contain only B, even though the event now has two
+    invites total."""
+    setup = await make_chapter_with("member")
+    created_event = await client.post(
+        f"/chapters/{setup.chapter_id}/events",
+        json=_event_body(),
+        headers=setup.president.headers,
+    )
+    event_id = created_event.json()["id"]
+    guest_a = await _outsider(client, make_user, None, verified=False)
+    guest_b = await _outsider(client, make_user, None, verified=False)
+
+    first = await client.post(
+        f"/events/{event_id}/invites",
+        json={"user_ids": [guest_a.id]},
+        headers=setup.president.headers,
+    )
+    assert first.status_code == 201, first.text
+    assert first.json()["created_count"] == 1
+
+    second = await client.post(
+        f"/events/{event_id}/invites",
+        json={"user_ids": [guest_a.id, guest_b.id]},
+        headers=setup.president.headers,
+    )
+    assert second.status_code == 201, second.text
+    assert second.json()["created_count"] == 1, (
+        "the response must be bounded to this call's NEW rows, not the accumulated "
+        "invite list (which now has 2 entries total)"
+    )
+    assert {i["invited_user_id"] for i in second.json()["created"]} == {guest_b.id}
 
 
 async def test_public_event_is_readable_unauthenticated_and_leaks_no_guest_list(
