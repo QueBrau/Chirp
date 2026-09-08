@@ -52,7 +52,7 @@ Re-verify before promoting any of them.
 | Local backend suite | growing every day — **do not trust a number here**, run it yourself: `cd backend && pytest -q` (full-suite runs go through `scripts/with-suite-lock`) | **board-sourced only, NOT verified** — last count seen on the board was 778 passed / 5 skipped / 0 failed (c265, Aug 31); it was already stale by the time this line was written |
 | Website | https://chirps-prod.web.app | live |
 | Stripe | test mode, armed | **NO MONEY HAS EVER MOVED — and no test-mode payment has ever cleared end to end (board c11). That is the launch gate.** |
-| Analytics | emitter live; Cloud Logging sink `chirp-analytics-bq` into BigQuery dataset `chirp_analytics` | **verified Aug 28**; chirp authorship is provably never linked (c227 rule, test-pinned) |
+| Analytics | c216/c227 emitter and sink exist; c373 corrects prefixed JSON and tightens event privacy | **Sep 8: exact synthetic Logging-to-BigQuery delivery verified**; deployed collection remains unverified. [Current evidence and probe](ANALYTICS-VERIFICATION.md); deployed source verification remains on c388. Anonymous Chirps remain excluded; source scan is a regression guard, not whole-call-graph proof. |
 
 ## Durable infrastructure facts (not revision-dated)
 

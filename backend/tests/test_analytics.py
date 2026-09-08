@@ -9,11 +9,10 @@ Two families of test here:
      with only the coarse props the card asked for, via a real request through
      `client` and a real caplog capture on the "app.analytics" logger.
 
-THE PRIVACY-RULE TEST (test_chirps_router_never_imports_analytics) is the one that
-matters most: it source-scans app/routers/chirps.py for the literal string
-"analytics" and fails the whole suite if it appears. Nothing else in this file
-enforces that chirp creation/voting/reporting stay unreachable from this pipeline -
-this is the falsifying test for it.
+The privacy source guard scans app/routers/chirps.py for the literal string
+"analytics". It is a regression tripwire, not a proof of the complete call graph.
+c373 also checks runtime property allowlists and the actual stdout boundary in
+test_c373_analytics_delivery.py.
 """
 from __future__ import annotations
 
@@ -68,17 +67,14 @@ def test_emit_logs_one_json_line_on_the_app_analytics_logger(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.INFO, logger="app.analytics"):
-        analytics.emit("unit_test_event", user_id="u1", count=3, ok=True)
+        analytics.emit("user_signed_up", user_id="00000000-0000-0000-0000-000000000227", account_type="greek")
 
     events = _analytics_events(caplog)
     assert len(events) == 1
-    assert events[0] == {
-        "analytics": True,
-        "event": "unit_test_event",
-        "user_id": "u1",
-        "count": 3,
-        "ok": True,
-    }
+    assert events[0]["analytics"] is True
+    assert events[0]["event"] == "user_signed_up"
+    assert events[0]["user_id"] == "00000000-0000-0000-0000-000000000227"
+    assert events[0]["account_type"] == "greek"
 
 
 def test_emit_never_raises_when_json_dumps_fails(
@@ -101,23 +97,22 @@ def test_emit_never_raises_when_json_dumps_fails(
     monkeypatch.setattr(analytics, "json", types.SimpleNamespace(dumps=boom))
 
     with caplog.at_level(logging.WARNING, logger="app.analytics"):
-        analytics.emit("unit_test_event", user_id="u1")  # must not raise
+        analytics.emit("user_signed_up", user_id="00000000-0000-0000-0000-000000000227", account_type="greek")
 
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert any("analytics emit failed" in r.getMessage() for r in warnings)
 
 
-def test_emit_serializes_uuid_props_with_default_str(
+def test_emit_serializes_uuid_props_explicitly(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Every id handed to emit() from a router is a live uuid.UUID, not a string -
-    json.dumps cannot serialize one on its own, so this is what actually keeps every
-    call site below from silently degrading into nothing but warnings."""
+    """Identifiers may arrive as UUID values or strings; serialize UUIDs explicitly
+    so valid events do not silently degrade into diagnostics."""
     import uuid
 
     an_id = uuid.uuid4()
     with caplog.at_level(logging.INFO, logger="app.analytics"):
-        analytics.emit("unit_test_event", user_id=an_id)
+        analytics.emit("user_signed_up", user_id=an_id, account_type="greek")
 
     events = _analytics_events(caplog)
     assert events[0]["user_id"] == str(an_id)
@@ -132,10 +127,8 @@ def test_chirps_router_never_imports_analytics() -> None:
     """Source-scan, not a mock/monkeypatch check - this must fail loudly the moment
     ANY line in chirps.py so much as mentions "analytics", whether that's a real
     `from app.core.analytics import emit` call, an aliased import, or a re-exported
-    wrapper. Chirp creation, voting, and reporting must be structurally unreachable
-    from the analytics pipeline (board c227, Jose's hard privacy rule) - the API
-    already withholds chirp authorship on purpose, and this is what keeps that true
-    on the telemetry side too.
+    wrapper. This catches direct references, not indirect helper calls. Anonymous
+    Chirp creation/voting/reporting must remain outside this pipeline (c227).
     """
     chirps_source = (BACKEND_DIR / "app" / "routers" / "chirps.py").read_text()
     assert "analytics" not in chirps_source, (
