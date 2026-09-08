@@ -1,0 +1,74 @@
+{
+  "source": "local_emitter_via_logging_api_synthetic_resource_not_deployed_container",
+  "status": "EXACT_SYNTHETIC_ROW_VERIFIED",
+  "probe_payload": {
+    "analytics": true,
+    "schema_version": 1,
+    "event": "pipeline_probe",
+    "emission_id": "7bbecfa7-7277-4d52-bdff-d24f31be8b51",
+    "emitted_at": "2026-09-08T03:09:46.294001+00:00",
+    "severity": "INFO",
+    "probe_id": "539ac175-4ac4-4550-800b-89314be2d248"
+  },
+  "logging_write": {
+    "submitted_at": "2026-09-08T03:09:49.739490+00:00",
+    "exit_code": 0,
+    "completed_at": "2026-09-08T03:09:52.587795+00:00"
+  },
+  "logging_observation": {
+    "received_at": "2026-09-08T03:09:52.111530079Z",
+    "resource_type": "cloud_run_revision",
+    "resource_labels": {
+      "project_id": "chirps-prod",
+      "location": "us-central1",
+      "service_name": "synthetic-analytics-probe",
+      "revision_name": "synthetic-analytics-probe",
+      "configuration_name": "synthetic-analytics-probe"
+    },
+    "exact_payload_match": true
+  },
+  "destination": {
+    "projectId": "chirps-prod",
+    "datasetId": "chirp_analytics",
+    "tableId": "chirps_analytics_probe_20260908"
+  },
+  "bigquery_observation": {
+    "verified_at": "2026-09-08T03:31:37.752553+00:00",
+    "matching_rows_returned": 1,
+    "exact_payload_match": true,
+    "resource_type": "cloud_run_revision",
+    "service_name": "synthetic-analytics-probe",
+    "log_timestamp": "2026-09-08 03:09:52",
+    "log_receive_timestamp": "2026-09-08 03:09:52",
+    "jsonPayload_schema": {
+      "schema_version": "FLOAT",
+      "emission_id": "STRING",
+      "severity": "STRING",
+      "event": "STRING",
+      "emitted_at": "STRING",
+      "analytics": "BOOLEAN",
+      "probe_id": "STRING"
+    }
+  },
+  "query_scope": {
+    "exact_observed_table": true,
+    "event": "pipeline_probe",
+    "both_probe_and_emission_ids_matched": true,
+    "limit": 1,
+    "dry_run_maximum_bytes_billed": 10000000,
+    "dry_run_total_bytes_processed": 0,
+    "actual_query_billed_bytes": "NOT_RECORDED_IN_THIS_ARTIFACT"
+  },
+  "table_retention_observation": {
+    "expirationTime": null,
+    "interpretation": "No expiration was set on this probe table at inspection; no retention policy was established or changed."
+  },
+  "limitations": [
+    "First exact-row observation was delayed by session interruption; this is not a measurement of sink delivery latency.",
+    "The direct Logging API entry proves one synthetic Logging-to-BigQuery delivery separately from the local stdout regression. It does not prove deployed API/WS collection or release identity.",
+    "The observed schema belongs to the dedicated probe log/table, not actual product-event tables.",
+    "One matching row returned with LIMIT 1 does not establish uniqueness, exactly-once delivery, or complete product-event coverage.",
+    "The dry-run zero-byte estimate and ceiling do not establish zero total cost or measured actual query charges.",
+    "No cleanup, expiration, retention, IAM, sink, or deployed-service configuration was changed by this evidence check."
+  ]
+}
