@@ -242,3 +242,18 @@ assumed capacity. The new policy rejects that scenario. An independent reviewer
 reran both unchanged falsification scripts after the fixes and accepted the
 source. These checks establish local tooling behavior; they do not close the
 remaining production release/build/database or device acceptance.
+
+### Approved SQL follow-up — September 8, 2026, 16:00:55 UTC
+
+After explicit approval, a read-only transaction through the existing local
+Cloud SQL proxy verified its target and read the numeric PostgreSQL limits:
+**100 max connections, 3 superuser reserved, 0 additional reserved**. The separate
+[sanitized observation](infra/evidence/c362-sql-2026-09-08.json) matches the policy's
+planning values. No database changes ran and no credentials were printed.
+
+This resolves the missing SQL-limit observation at that timestamp; the earlier
+inspection and denied attempt above remain historical records. Overall release
+and configuration acceptance remains `NOT_PROVEN`: a reviewed release, compiled
+client evidence and proof of the old images' inferred pool defaults are still
+missing. SQL limits alone are not a new full configuration comparison. Use this
+observation only within the checker's freshness window, then obtain a fresh read.

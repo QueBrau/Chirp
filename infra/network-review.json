@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "deployment_source": "infra/deployment.json",
+  "targets": {
+    "network": "default",
+    "redis": "chirp-redis",
+    "media_bucket": "chirps-prod-media"
+  },
+  "preserve_controls": {
+    "sql_ssl_mode": "ENCRYPTED_ONLY",
+    "bucket_public_access_prevention": "enforced",
+    "bucket_uniform_access": true
+  },
+  "proposed_redis_controls": {
+    "auth_enabled": true,
+    "transit_encryption_mode": "SERVER_AUTHENTICATION",
+    "requires_staging_acceptance": true
+  }
+}
