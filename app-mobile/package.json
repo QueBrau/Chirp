@@ -12,6 +12,7 @@
     "verify:auth": "node scripts/verify-auth.mjs",
     "verify:invites": "node scripts/verify-invites.mjs",
     "verify:charts": "tsc -p tsconfig.chart-verify.json && node scripts/verify-charts.mjs",
+    "verify:button-contrast": "tsc -p tsconfig.chart-verify.json && node scripts/verify-button-contrast.mjs",
     "verify:contract": "node scripts/verify-contract.mjs && node scripts/verify-contract.mjs --self-test",
     "verify:dates": "node scripts/verify-dates.mjs",
     "verify:ws-url": "node scripts/verify-ws-url.mjs",

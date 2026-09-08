@@ -266,6 +266,14 @@ jobs:
         # and the load states that stop a failed fetch rendering as an empty board.
         run: npm run verify:chirps-board
 
+      - name: Button secondary-variant contrast (c386)
+        working-directory: app-mobile
+        # secondary buttons label with the raw accent on a 16%/15% translucent fill;
+        # a dark accent (UNCG navy, the default campus primary) measured ~1.2:1 there
+        # in dark mode. Compiles and exercises secondaryLabelColor() against every
+        # roster accent, and pins the raw defect so it cannot regress quietly.
+        run: npm run verify:button-contrast
+
       - name: Events and polls
         working-directory: app-mobile
         # c312. The finding was not a missing spinner: a failed fetch rendered as

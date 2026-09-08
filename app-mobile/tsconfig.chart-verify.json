@@ -11,6 +11,7 @@
   },
   "include": [
     "src/components/charts/geometry.ts",
-    "src/lib/treasury.ts"
+    "src/lib/treasury.ts",
+    "src/theme/colorUtils.ts"
   ]
 }
