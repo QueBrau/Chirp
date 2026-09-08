@@ -334,11 +334,18 @@ async def test_commit_failure_after_a_successful_move_is_logged_loudly_not_delet
     compensated away — it must be logged loudly instead. Setup's own commits must
     complete before the patch, or chapter/membership creation itself would break."""
     _configure_bucket(monkeypatch)
-    _install_fake_gcs(monkeypatch, {})
+    captured: dict = {}
+    _install_fake_gcs(monkeypatch, captured)
     setup = await make_chapter_with("member")
 
+    original_commit = AsyncSession.commit
+
     async def _raise(self, *args, **kwargs):
-        raise RuntimeError("simulated commit failure")
+        # c355 releases authentication reads before copying. The orphan claim is
+        # specifically about a failure AFTER a successful provider move.
+        if captured.get("copy_blob_calls"):
+            raise RuntimeError("simulated commit failure")
+        return await original_commit(self, *args, **kwargs)
 
     monkeypatch.setattr(AsyncSession, "commit", _raise)
 
@@ -352,6 +359,12 @@ async def test_commit_failure_after_a_successful_move_is_logged_loudly_not_delet
     logged = "\n".join(r.getMessage() for r in caplog.records)
     assert "orphan" in logged
     assert f"posts/{setup.member.id}/abc123.jpg" in logged
+
+    assert len(captured["copy_blob_calls"]) == 1
+    assert captured["copy_blob_calls"][0]["new_name"] == f"posts/{setup.member.id}/abc123.jpg"
+    assert captured["deleted"] == [f"tmp/{setup.member.id}/abc123.jpg"]
+    from tests.test_c349_settlement_binding import rows
+    assert await rows("SELECT id FROM posts") == []
 
 
 async def test_campus_post_route_validates_media_object_names_too(

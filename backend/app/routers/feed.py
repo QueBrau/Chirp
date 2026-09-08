@@ -641,7 +641,19 @@ async def create_post(
         raise not_found("chapter_not_found")
     if body.audience == "campus":
         require_verified_campus(user, chapter.campus_id)
-    media_urls = await _finalize_media(membership.user_id, body.media_object_names)
+    author_id, uid = membership.user_id, user.firebase_uid
+    if body.media_object_names:
+        await session.commit()  # release the read transaction before GCS waits
+        session.expire_all()
+    media_urls = await _finalize_media(author_id, body.media_object_names)
+    if body.media_object_names:
+        user = await get_current_user(uid=uid, session=session)
+        membership = await get_current_membership(chapter_id=chapter_id, user=user, session=session)
+        chapter = await session.get(models.Chapter, chapter_id)
+        if chapter is None:
+            raise not_found("chapter_not_found")
+        if body.audience == "campus":
+            require_verified_campus(user, chapter.campus_id)
 
     post = models.Post(
         chapter_id=chapter_id,
@@ -699,7 +711,14 @@ async def create_campus_post(
     campus-wide write by someone with no org at all - so it must not keep the
     weaker `user.campus_id == campus_id` check this branch was written against.
     """
-    media_urls = await _finalize_media(user.id, body.media_object_names)
+    author_id, uid = user.id, user.firebase_uid
+    if body.media_object_names:
+        await session.commit()
+        session.expire_all()
+    media_urls = await _finalize_media(author_id, body.media_object_names)
+    if body.media_object_names:
+        user = await get_current_user(uid=uid, session=session)
+        require_verified_campus(user, campus_id)
     post = models.Post(
         chapter_id=None,
         campus_id=campus_id,
@@ -781,6 +800,7 @@ async def update_post(
     body: PostUpdate,
     membership: models.Membership = Depends(get_current_membership),
     session: AsyncSession = Depends(get_session),
+    user: models.User = Depends(get_current_user),
 ) -> PostOut:
     """Edit a post; author only."""
     post = await session.get(models.Post, post_id)
@@ -788,11 +808,29 @@ async def update_post(
         raise not_found("post_not_found")
     if post.author_id != membership.user_id:
         raise forbidden("not_author")
+    if post.audience == "campus":
+        require_verified_campus(user, post.campus_id)
+    author_id, uid = membership.user_id, user.firebase_uid
+    media_urls: list[str] = []
+    if body.media_object_names:
+        # No body/media mutation may commit while the provider is still pending.
+        await session.commit()
+        session.expire_all()
+    if body.media_object_names is not None:
+        media_urls = await _finalize_media(author_id, body.media_object_names)
+    if body.media_object_names:
+        user = await get_current_user(uid=uid, session=session)
+        membership = await get_current_membership(chapter_id=chapter_id, user=user, session=session)
+        post = await session.get(models.Post, post_id)
+        if post is None or post.chapter_id != chapter_id or post.deleted_at is not None:
+            raise not_found("post_not_found")
+        if post.author_id != membership.user_id:
+            raise forbidden("not_author")
+        if post.audience == "campus":
+            require_verified_campus(user, post.campus_id)
     if body.body is not None:
         post.body = body.body
-    media_urls: list[str] = []
     if body.media_object_names is not None:
-        media_urls = await _finalize_media(membership.user_id, body.media_object_names)
         post.media_urls = media_urls or None
     await _commit_or_log_orphaned_media(session, media_urls)
     return _post_out(post, membership.user_id)

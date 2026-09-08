@@ -9,9 +9,11 @@ import asyncio
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.rate_limits import MEDIA_UPLOAD_URL_LIMIT, limit_per_user
+from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.schemas.media import MediaUploadUrlOut, MediaUploadUrlRequest
 from app.services.storage_service import (
@@ -32,6 +34,7 @@ router = APIRouter(tags=["media"])
 async def create_upload_url(
     body: MediaUploadUrlRequest,
     user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> MediaUploadUrlOut:
     """Mint a signed PUT URL for one image, under a tmp/ prefix (c132).
 
@@ -49,9 +52,13 @@ async def create_upload_url(
     # in-flight request - calling a blocking function directly here would stall all of
     # them for the duration of the network round trip. to_thread moves the call off
     # the loop onto a worker thread so only this request waits on it.
+    user_id, uid = user.id, user.firebase_uid
+    await session.commit()  # authentication reads own no capacity while signing
+    session.expire_all()
     upload = await asyncio.to_thread(
-        generate_upload_url, str(user.id), body.content_type, body.byte_size
+        generate_upload_url, str(user_id), body.content_type, body.byte_size
     )
+    await get_current_user(uid=uid, session=session)  # suspension/removal during signing
     return MediaUploadUrlOut(
         upload_url=upload.upload_url,
         preview_url=upload.preview_url,
