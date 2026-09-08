@@ -60,7 +60,8 @@ export interface PostOut {
  * server-side, so screens never have to fan out to a per-post likes or
  * comments request.
  */
-export interface FeedPostOut extends PostOut {
+// List responses exclude removed posts and do not serialize deleted_at.
+export interface FeedPostOut extends Omit<PostOut, "deleted_at"> {
   display_name: string;
   avatar_url: string | null;
   like_count: number;

@@ -30,10 +30,10 @@ export interface MediaUploadUrlOut {
 export async function getMediaUploadUrl(
   contentType: AllowedMediaContentType,
   byteSize: number,
-  options: RequestOptions = {},
+  options: Pick<RequestOptions, "operation" | "signal" | "timeoutMs"> = {},
 ): Promise<MediaUploadUrlOut> {
   return request<MediaUploadUrlOut>("/media/upload-url", {
-    ...options,
+    operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs,
     method: "POST",
     body: { content_type: contentType, byte_size: byteSize },
   });

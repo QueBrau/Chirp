@@ -149,22 +149,28 @@ async def test_two_concurrent_photo_posts_overlap_instead_of_serializing(
 
     This is the per-request half of the same property: with the call inline, the second
     request's copy cannot start until the first has returned, because both run on the one
-    loop. Off the loop they occupy overlapping windows on separate worker threads.
+    loop. Both finalizers must reach a two-party barrier before either can return.
+    This proves overlap without hoping CI schedules the second request within a fixed
+    sleep window. A missing peer breaks the barrier after five seconds, so an inline
+    or serialized regression fails instead of deadlocking the test.
     """
     _configure_bucket(monkeypatch)
     setup = await make_chapter_with("member")
     lock = threading.Lock()
-    intervals: list[tuple[float, float]] = []
+    rendezvous = threading.Barrier(2, timeout=5)
+    entries: list[tuple[str, int]] = []
+    loop_thread_id = threading.get_ident()
 
-    def _slow_finalize(user_id: str, tmp_object_name: str, **kwargs) -> str:
-        call_start = time.monotonic()
-        time.sleep(0.3)
-        call_end = time.monotonic()
+    def _rendezvous_finalize(user_id: str, tmp_object_name: str, **kwargs) -> str:
         with lock:
-            intervals.append((call_start, call_end))
+            entries.append((user_id, threading.get_ident()))
+        try:
+            rendezvous.wait()
+        except threading.BrokenBarrierError:
+            raise AssertionError("Concurrent finalizers did not overlap at the barrier") from None
         return _permanent_url(user_id, "abc123.jpg")
 
-    monkeypatch.setattr(feed, "finalize_media_object", _slow_finalize)
+    monkeypatch.setattr(feed, "finalize_media_object", _rendezvous_finalize)
 
     async def _create_as(member):
         return await client.post(
@@ -180,12 +186,22 @@ async def test_two_concurrent_photo_posts_overlap_instead_of_serializing(
     # Two DIFFERENT callers of the same chapter (the fixture's member and the president
     # who created it), because the tmp/ prefix gate is caller-scoped - one user cannot
     # name the other's upload, which is the whole point of validate_media_object_names.
-    responses = await asyncio.gather(
-        _create_as(setup.member), _create_as(setup.president)
-    )
+    try:
+        responses = await asyncio.wait_for(
+            asyncio.gather(
+                _create_as(setup.member), _create_as(setup.president),
+                return_exceptions=True,
+            ),
+            timeout=15,
+        )
+    finally:
+        # Release a worker if a request fails before its peer reaches the barrier.
+        rendezvous.abort()
 
     for response in responses:
+        assert not isinstance(response, BaseException), str(response)
         assert response.status_code == 201, response.text
-    assert len(intervals) == 2
-    (first_start, first_end), (second_start, second_end) = intervals
-    assert max(first_start, second_start) < min(first_end, second_end), intervals
+    assert len(entries) == 2
+    assert {user_id for user_id, _ in entries} == {setup.member.id, setup.president.id}
+    assert len({thread_id for _, thread_id in entries}) == 2
+    assert all(thread_id != loop_thread_id for _, thread_id in entries)
