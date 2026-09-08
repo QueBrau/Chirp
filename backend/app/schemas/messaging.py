@@ -59,6 +59,12 @@ class ConversationOut(_Schema):
     protocol_version: int
     created_at: datetime
     members: list[ConversationMemberOut] | None = None
+    # Presence/recency metadata only (board c344) — no ciphertext, no message count,
+    # no unread indicator. Computed by routers/messages.py from one grouped
+    # DISTINCT ON query per page of GET /conversations, never by decrypting or
+    # re-embedding a message body.
+    last_message_at: datetime | None = None
+    has_messages: bool = False
 
 
 # ---- messages ----

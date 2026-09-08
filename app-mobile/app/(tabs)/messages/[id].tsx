@@ -8,20 +8,52 @@
  * lands (milestone 4).
  */
 
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { TextInput, View } from "react-native";
+import { Pressable, TextInput, View } from "react-native";
 
 import {
-  listConversations,
+  getConversation,
+  leaveConversation,
   listMessages,
   type ConversationOut,
   type MessageOut,
 } from "@/api/messages";
 import { AppText, EmptyState, Screen } from "@/components";
+import { confirmAction, showApiError } from "@/lib/alert";
 import { chirpSocket, isMessageEvent } from "@/realtime/socket";
 import { metrics, radii, spacing, typography, useTheme } from "@/theme";
+
+/** Header-adjacent ghost pill, same shape as messages/index.tsx's
+ * NewConversationButton and profile/index.tsx's EditLayoutToggle. */
+function LeaveConversationButton({ onPress, busy }: { onPress: () => void; busy: boolean }) {
+  const palette = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Leave conversation"
+      accessibilityState={{ disabled: busy }}
+      disabled={busy}
+      onPress={onPress}
+      hitSlop={spacing.sm}
+      style={({ pressed }) => ({
+        flexDirection: "row",
+        alignItems: "center",
+        gap: spacing.xs,
+        paddingHorizontal: spacing.lg,
+        paddingVertical: spacing.sm,
+        borderRadius: radii.pill,
+        opacity: pressed || busy ? 0.7 : 1,
+      })}
+    >
+      <Feather name="log-out" size={typography.caption.fontSize} color={palette.inkSecondary} />
+      <AppText variant="bodyBold" tone="secondary">
+        Leave
+      </AppText>
+    </Pressable>
+  );
+}
 
 function bubbleTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
@@ -37,11 +69,13 @@ function conversationTitle(conversation: ConversationOut | null): string {
 
 export default function ThreadScreen() {
   const palette = useTheme();
+  const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [conversation, setConversation] = useState<ConversationOut | null>(null);
   const [messages, setMessages] = useState<MessageOut[]>([]);
   /** The history fetch failed. Distinct from a genuinely empty thread (c317). */
   const [loadFailed, setLoadFailed] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   // True once this screen has observed (or started inside) an "open" socket,
   // so a LATER "open" is a real reconnect and not the first connection
   // completing.
@@ -66,14 +100,40 @@ export default function ThreadScreen() {
   const load = useCallback(async () => {
     setLoadFailed(false);
     try {
-      const conversations = await listConversations();
-      setConversation(conversations.find((c) => c.id === id) ?? null);
+      // getConversation (board c344), not the old find-in-the-whole-list lookup: the
+      // inbox list is now bounded/cursor-paginated, so a conversation reached
+      // after paging past the first page (or via a deep link) would otherwise
+      // never resolve here.
+      const fetched = await getConversation(id);
+      setConversation(fetched);
       const history = await listMessages(id);
       setMessages(history);
     } catch {
       setLoadFailed(true);
     }
   }, [id]);
+
+  const handleLeave = useCallback(() => {
+    confirmAction({
+      title: "Leave this conversation?",
+      message: "You'll stop receiving new messages here.",
+      confirmLabel: "Leave",
+      destructive: true,
+      onConfirm: () => {
+        void (async () => {
+          setLeaving(true);
+          try {
+            await leaveConversation(id);
+            router.back();
+          } catch (error) {
+            showApiError(error, "Couldn't leave this conversation");
+          } finally {
+            setLeaving(false);
+          }
+        })();
+      },
+    });
+  }, [id, router]);
 
   useEffect(() => {
     // NOT unconditionally false. onStatus() only adds a listener — it never
@@ -146,6 +206,9 @@ export default function ThreadScreen() {
       title={conversationTitle(conversation)}
       subtitle={conversation?.kind === "group" ? "Group" : "Direct message"}
     >
+      <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
+        <LeaveConversationButton onPress={handleLeave} busy={leaving} />
+      </View>
       <View style={{ gap: spacing.sm }}>
         {loadFailed ? (
           <EmptyState
