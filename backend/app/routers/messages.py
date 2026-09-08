@@ -5,7 +5,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +39,38 @@ from app.ws.pubsub import publish_to_user
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["messages"])
+
+MESSAGE_LOOKUP_MAX_IDS = 50
+MESSAGE_LOOKUP_MAX_CSV_LENGTH = MESSAGE_LOOKUP_MAX_IDS * 36 + MESSAGE_LOOKUP_MAX_IDS - 1
+
+
+async def _lookup_message_ids(
+    request: Request,
+    ids: str | None = Query(default=None, description="1 to 50 comma-separated canonical UUIDs"),
+) -> list[uuid.UUID]:
+    """Reject bounded-query errors before the route's auth/SQL dependencies.
+
+    FastAPI accumulates ordinary Query validation errors while continuing to
+    resolve other dependencies. Raise the fixed 422 here instead, and keep this
+    dependency first on the lookup route. No raw input is included in errors.
+    """
+    if (ids is None or not ids or len(ids) > MESSAGE_LOOKUP_MAX_CSV_LENGTH
+            or len(request.query_params.getlist("ids")) != 1):
+        raise HTTPException(status_code=422, detail="invalid_message_ids")
+    tokens = ids.split(",")
+    if len(tokens) > MESSAGE_LOOKUP_MAX_IDS:
+        raise HTTPException(status_code=422, detail="invalid_message_ids")
+    parsed = []
+    for token in tokens:
+        try:
+            value = uuid.UUID(token)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="invalid_message_ids") from None
+        if str(value) != token.lower():
+            raise HTTPException(status_code=422, detail="invalid_message_ids")
+        parsed.append(value)
+    # Enforce the raw count before deduplication; duplicate hints cost no rows.
+    return list(dict.fromkeys(parsed))
 
 # ---- GET /users/search (board c322) ----
 #
@@ -532,25 +564,7 @@ async def send_message(
     return MessageOut.model_validate(message)
 
 
-@router.get(
-    "/conversations/{conversation_id}/messages", response_model=list[MessageOut]
-)
-async def list_messages(
-    conversation_id: uuid.UUID,
-    before: datetime | None = None,
-    before_id: uuid.UUID | None = None,
-    limit: int = Query(default=50, ge=1, le=200),
-    user: models.User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> list[MessageOut]:
-    """Ciphertext history, newest first, cursor-paginated on (created_at, id). Members only.
-
-    Pass both `before` and `before_id` (the last row's values from the previous
-    page) for an exact tie-break so rows sharing a timestamp at a page boundary
-    are never skipped. `before` alone still works (legacy clients) but does not
-    guarantee tied-timestamp rows won't be dropped at the boundary.
-    """
-    await _require_active_member(session, conversation_id, user.id)
+def _visible_message_query(conversation_id: uuid.UUID, reader_id: uuid.UUID):
     # c348: hide messages from a sender the READER currently holds a named block
     # against, live at query time (not snapshotted at send time, so an unblock
     # restores visibility with no further action). This is the reverse of
@@ -568,13 +582,13 @@ async def list_messages(
     # specific named contact IS the anonymous author's identity, reopening the
     # oracle c279 closed on feed/chirps. Do not widen this to match on
     # (blocker, blocked) regardless of source.
-    stmt = (
+    return (
         select(models.Message)
         .join(models.Device, models.Device.id == models.Message.sender_device_id)
         .outerjoin(
             models.UserBlock,
             (models.UserBlock.blocked_id == models.Device.user_id)
-            & (models.UserBlock.blocker_id == user.id)
+            & (models.UserBlock.blocker_id == reader_id)
             & (models.UserBlock.source == "named"),
         )
         .where(
@@ -582,6 +596,47 @@ async def list_messages(
             models.UserBlock.blocker_id.is_(None),
         )
     )
+
+
+@router.get("/conversations/{conversation_id}/messages/by-id", response_model=list[MessageOut])
+async def lookup_messages(
+    conversation_id: uuid.UUID,
+    message_ids: list[uuid.UUID] = Depends(_lookup_message_ids),
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[MessageOut]:
+    """Resolve live event IDs through the same current visibility as history.
+
+    Unknown, hidden and off-conversation IDs are simply absent. Only canonical
+    stored rows are returned, in exact history order. This is not a timestamp
+    watermark or an immediate revocation guarantee for already cached content.
+    """
+    await _require_active_member(session, conversation_id, user.id)
+    stmt = _visible_message_query(conversation_id, user.id).where(
+        models.Message.id.in_(message_ids),
+    ).order_by(models.Message.created_at.desc(), models.Message.id.desc()).limit(MESSAGE_LOOKUP_MAX_IDS)
+    result = await session.execute(stmt)
+    return [MessageOut.model_validate(message) for message in result.scalars().all()]
+
+
+@router.get("/conversations/{conversation_id}/messages", response_model=list[MessageOut])
+async def list_messages(
+    conversation_id: uuid.UUID,
+    before: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[MessageOut]:
+    """Ciphertext history, newest first, cursor-paginated on (created_at, id). Members only.
+
+    Pass both `before` and `before_id` (the last row's values from the previous
+    page) for an exact tie-break so rows sharing a timestamp at a page boundary
+    are never skipped. `before` alone still works (legacy clients) but does not
+    guarantee tied-timestamp rows won't be dropped at the boundary.
+    """
+    await _require_active_member(session, conversation_id, user.id)
+    stmt = _visible_message_query(conversation_id, user.id)
     if before is not None and before_id is not None:
         stmt = stmt.where(
             tuple_(models.Message.created_at, models.Message.id) < (before, before_id)

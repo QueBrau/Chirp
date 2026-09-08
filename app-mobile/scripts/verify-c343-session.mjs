@@ -8,7 +8,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import ts from "typescript";
+import { recoveryCases } from "./c354-recovery-cases.mjs";
 
+const emittedModules = new Map();
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let i = 0; i < 60; i++) await Promise.resolve(); };
@@ -42,7 +44,7 @@ function hooks() {
   function schedule() { if (!queued && alive) { queued = true; queueMicrotask(render); } }
   function render() {
     queued = false; if (!alive || !component) return;
-    cursor = 0; pending = []; tree = component(props);
+    api.onRender?.(); cursor = 0; pending = []; tree = component(props);
     for (const effect of pending) effect();
   }
   const react = {
@@ -57,17 +59,23 @@ function hooks() {
     useCallback(fn, deps) { return react.useMemo(() => fn, deps); },
     useEffect(fn, deps) {
       const i = cursor++, old = slots[i];
-      if (!old || !same(old.deps, deps)) pending.push(() => { old?.cleanup?.(); slots[i] = { deps, cleanup: fn() }; });
+      if (!old || !same(old.deps, deps)) pending.push(() => { old?.cleanup?.(); slots[i] = { deps, effect: fn, cleanup: fn() }; });
     },
   };
-  return { react, mount(fn, input = {}) { component = fn; props = input; render(); }, update(input) { props = input; render(); }, get tree() { return tree; }, get value() { return tree.props.value; }, unmount() { alive = false; for (const value of slots) value?.cleanup?.(); } };
+  const api = { react, mount(fn, input = {}) { component = fn; props = input; render(); }, update(input) { props = input; render(); }, replayEffects() { const effects = slots.filter(slot => slot?.effect); for (const slot of effects) slot.cleanup?.(); for (const slot of effects) slot.cleanup = slot.effect(); }, get tree() { return tree; }, get value() { return tree.props.value; }, unmount() { alive = false; for (const value of slots) value?.cleanup?.(); } };
+  return api;
 }
 
 function environment() {
   const timer = clock(), hook = hooks(), auth = { currentUser: null };
+  let activeHook = hook; hook.onRender = () => { activeHook = hook; };
+  const views = [];
   const authListeners = new Set(), tokenListeners = new Set(), beforeListeners = new Set();
-  const calls = [], sockets = [], alerts = [], cache = new Map();
-  const env = { timer, hook, auth, calls, sockets, alerts, signOutCalls: 0, pickerCalls: 0, commits: [] };
+  const calls = [], sockets = [], alerts = [], cache = new Map(), appListeners = new Set();
+  const appState = { currentState: "active", addEventListener: (_type, fn) => { appListeners.add(fn); return { remove: () => appListeners.delete(fn) }; } };
+  const document = { visibilityState: "visible" }, platform = { OS: "ios" };
+  const env = { timer, hook, auth, calls, sockets, alerts, views, route: { id: "thread" }, navigation: [], appState, document, platform, appListeners, signOutCalls: 0, pickerCalls: 0, commits: [] };
+  env.setAppState = value => { appState.currentState = value; for (const fn of appListeners) fn(value); };
   env.fetch = async (url) => {
     if (url.endsWith("/auth/me")) return response(200, { user: account(auth.currentUser?.uid), memberships: [] });
     if (url.endsWith("/auth/campus-verification")) return response(200, { verified: false });
@@ -90,9 +98,10 @@ function environment() {
     constructor(url, protocols) { this.url = url; this.protocols = protocols; sockets.push(this); }
     close() { this.closed = true; }
   }
-  const jsx = (type, props) => ({ type, props });
+  const jsx = (type, props, key) => ({ type, props, key });
+  env.router = { back: () => env.navigation.push("back"), push: path => env.navigation.push(path) };
   const stubs = {
-    "react": hook.react,
+    "react": new Proxy({}, { get: (_, key) => (...args) => activeHook.react[key](...args) }),
     "react/jsx-runtime": { jsx, jsxs: jsx, Fragment: "Fragment" },
     "firebase/auth": {
       beforeAuthStateChanged: (_, fn) => { beforeListeners.add(fn); return () => beforeListeners.delete(fn); },
@@ -102,23 +111,24 @@ function environment() {
       signInWithEmailAndPassword: (...args) => env.signIn(...args),
       createUserWithEmailAndPassword: (...args) => env.signIn(...args),
     },
-    "react-native": { View: "View", Pressable: "Pressable", Modal: "Modal", Image: "Image", TextInput: "TextInput", ActivityIndicator: "ActivityIndicator", KeyboardAvoidingView: "KeyboardAvoidingView", Platform: { OS: "ios" } },
+    "react-native": { View: "View", Pressable: "Pressable", Modal: "Modal", Image: "Image", TextInput: "TextInput", ActivityIndicator: "ActivityIndicator", KeyboardAvoidingView: "KeyboardAvoidingView", Platform: platform, AppState: appState },
     "react-native-safe-area-context": { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     "@expo/vector-icons": { Feather: "Feather" },
-    "expo-router": { Redirect: "Redirect", Tabs: Object.assign(() => {}, { Screen: "Tabs.Screen" }) },
+    "expo-router": { useFocusEffect: callback => { const focused = activeHook.focused !== false; activeHook.react.useEffect(() => focused ? callback() : undefined, [callback, focused]); }, useLocalSearchParams: () => env.route, useRouter: () => env.router, Redirect: "Redirect", Tabs: Object.assign(() => {}, { Screen: "Tabs.Screen" }) },
     "react-native-reanimated": { default: {}, interpolate() {}, useAnimatedStyle() {} },
     [resolve(ROOT, "src/nav/TabBarVisibility.tsx")]: { TabBarVisibilityProvider: "TabBarVisibilityProvider" },
-    [resolve(ROOT, "src/components/index.ts")]: { AppText: "AppText", Button: "Button", EmptyState: "EmptyState", Screen: "Screen" },
+    [resolve(ROOT, "src/components/index.ts")]: Object.fromEntries(["AppText", "Button", "EmptyState", "Screen", "Card", "GradientAvatar", "ListRow", "PollCard", "SectionHeader", "Chip"].map(name => [name, name])),
     "expo-image-picker": { requestMediaLibraryPermissionsAsync: () => env.permission(), launchImageLibraryAsync: () => { env.pickerCalls++; return env.picker(); } },
     [resolve(ROOT, "src/auth/config.ts")]: { hasFirebaseConfig: () => true },
     [resolve(ROOT, "src/auth/firebase.ts")]: { getFirebaseAuth: () => auth },
     [resolve(ROOT, "src/auth/devAuth.ts")]: { devAuthUid: () => null },
-    [resolve(ROOT, "src/lib/alert.ts")]: { showAlert: (...args) => alerts.push(args), showApiError: (...args) => alerts.push(args) },
+    [resolve(ROOT, "src/lib/alert.ts")]: { showAlert: (...args) => alerts.push(args), showApiError: (...args) => alerts.push(args), confirmAction: value => { env.confirmation = value; } },
+    [resolve(ROOT, "src/lib/export.ts")]: { shareCsv: async () => {} },
     [resolve(ROOT, "src/auth/index.ts")]: { useCampusAccess: () => "verified", useSession: () => hook.value },
-    [resolve(ROOT, "src/theme/index.ts")]: { useTheme: () => ({}), light: {}, radii: {}, spacing: {}, inputField: () => ({}), withAlpha: () => "color" },
+    [resolve(ROOT, "src/theme/index.ts")]: { useTheme: () => ({}), light: {}, radii: {}, spacing: {}, metrics: {}, typography: { caption: {}, body: {}, headline: {} }, inputField: () => ({}), withAlpha: () => "color" },
   };
   const deterministicMath = Object.create(Math); deterministicMath.random = () => 1;
-  const context = vm.createContext({ AbortController, Headers, Promise, console, queueMicrotask, Math: deterministicMath,
+  const context = vm.createContext({ AbortController, Headers, Promise, console, queueMicrotask, document, Math: deterministicMath,
     setTimeout: timer.setTimeout, clearTimeout: timer.clearTimeout, WebSocket,
     process: { env: {} }, fetch: (...args) => { calls.push(args); return env.fetch(...args); },
   });
@@ -133,7 +143,8 @@ function environment() {
     }
     if (cache.has(path)) return cache.get(path).exports;
     const module = { exports: {} }; cache.set(path, module);
-    const { outputText } = ts.transpileModule(readFileSync(path, "utf8"), { fileName: path, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } });
+    let outputText = emittedModules.get(path);
+    if (!outputText) { outputText = ts.transpileModule(readFileSync(path, "utf8"), { fileName: path, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText; emittedModules.set(path, outputText); }
     const run = vm.runInContext(`(function(require, module, exports) {${outputText}
 })`, context, { filename: path });
     run(name => load(name, path), module, module.exports); return module.exports;
@@ -144,9 +155,12 @@ function environment() {
   env.client = env.load("src/api/client.ts");
   env.operation = env.load("src/api/operation.ts");
   env.mountProvider = async () => { hook.mount(env.load("src/auth/SessionProvider.tsx").SessionProvider, { children: null }); await flush(); };
-  env.close = () => { hook.unmount(); cache.get(resolve(ROOT, "src/realtime/socket.ts"))?.exports.chirpSocket.disconnect(); env.identity.replaceIdentity(null, true); };
+  env.mountScreen = async path => { const view = hooks(); view.onRender = () => { activeHook = view; }; view.focus = async value => { view.focused = value; view.update({}); await flush(); }; views.push(view); view.mount(env.load(path).default); await flush(); return view; };
+  env.close = () => { for (const view of views) view.unmount(); hook.unmount(); cache.get(resolve(ROOT, "src/realtime/socket.ts"))?.exports.chirpSocket.disconnect(); env.identity.replaceIdentity(null, true); };
   return env;
 }
+
+function readySocket(socket) { socket.onopen(); socket.onmessage({ data: '{"type":"ready"}' }); }
 
 let count = 0;
 async function test(name, fn) { const env = environment(); try { await fn(env); console.log(`PASS ${name}`); count++; } finally { env.close(); await flush(); } }
@@ -273,10 +287,10 @@ await test("Q c379 redeem publication beats stale GET and cannot cross account g
 await test("old socket open/message/close cannot overwrite B socket or schedule reconnect", async e => {
   e.emit(e.user("A")); await e.session.getIdToken();
   const socket = e.load("src/realtime/socket.ts").chirpSocket; const events = []; socket.onEvent(v => events.push(v));
-  socket.connect(); const a = e.sockets[0]; a.onopen();
+  socket.setForeground(true); socket.connect(); const a = e.sockets[0]; readySocket(a);
   const retired = { open: a.onopen, message: a.onmessage, close: a.onclose, error: a.onerror };
   e.emit(e.user("B")); await e.session.getIdToken(); assert.equal(a.closed, true);
-  socket.connect(); const b = e.sockets[1]; b.onopen();
+  socket.connect(); const b = e.sockets[1]; readySocket(b);
   assert.equal(a.onopen, null); assert.equal(a.onmessage, null); assert.equal(a.onclose, null); assert.equal(a.onerror, null);
   retired.open(); retired.message({ data: '{"type":"message"}' }); retired.close({ code: 4403 }); retired.error();
   assert.equal(socket.getStatus(), "open"); assert.equal(events.length, 0);
@@ -448,7 +462,7 @@ const closeSocket = (socket, code) => { socket.closed = true; socket.onclose({ c
 const retryDelays = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 async function exhaustTransport(e, code = 4503) {
   for (let i = 0; i <= retryDelays.length; i++) {
-    const ws = e.sockets.at(-1); ws.onopen(); closeSocket(ws, code); await flush();
+    const ws = e.sockets.at(-1); readySocket(ws); closeSocket(ws, code); await flush();
     if (i < retryDelays.length) await e.timer.tick(retryDelays[i]);
   }
 }
@@ -457,12 +471,12 @@ await test("c346 4401 forces fresh bearer and authoritative /me once, without re
   let forces = 0;
   e.emit(e.user("A", async force => force ? (++forces, "fresh-A") : "old-A")); await e.mountProvider();
   const socket = e.load("src/realtime/socket.ts").chirpSocket;
-  const first = e.sockets[0]; first.onopen(); closeSocket(first, 4401); await flush();
+  const first = e.sockets[0]; readySocket(first); closeSocket(first, 4401); await flush();
   assert.equal(forces, 1); assert.equal(e.hook.value.status, "ready"); assert.equal(e.sockets.length, 2);
   assert.deepEqual([...e.sockets[1].protocols], ["fresh-A"]);
   const requests = e.calls.filter(([url]) => url.endsWith("/auth/me"));
   assert.equal(requests.length, 2); assert.equal(requests[1][1].headers.Authorization, "Bearer fresh-A");
-  const retry = e.sockets[1]; retry.onopen(); await e.timer.tick(5_000);
+  const retry = e.sockets[1]; readySocket(retry); await e.timer.tick(5_000);
   socket.connect(); closeSocket(retry, 4401); await flush();
   assert.equal(forces, 1); assert.equal(e.sockets.length, 2); assert.equal(e.hook.value.status, "recoverable");
   await e.timer.tick(120_000); assert.equal(e.sockets.length, 2); assert.equal(e.signOutCalls, 0);
@@ -471,7 +485,7 @@ await test("c346 4401 forces fresh bearer and authoritative /me once, without re
 await test("c346 4403 revalidates /me and preserves backend-confirmed suspension", async e => {
   e.emit(e.user("A")); await e.mountProvider();
   e.fetch = async () => response(200, { user: { ...account("A"), suspended_at: "2026-09-07T12:00:00Z" }, memberships: [] });
-  e.sockets[0].onopen(); closeSocket(e.sockets[0], 4403); await flush();
+  readySocket(e.sockets[0]); closeSocket(e.sockets[0], 4403); await flush();
   assert.equal(e.hook.value.status, "suspended"); assert.equal(e.sockets.length, 1);
   const layout = e.load("app/(tabs)/_layout.tsx").default();
   assert.equal(nodes(layout).find(n => n.type === "Redirect").props.href, "/suspended");
@@ -540,7 +554,7 @@ await test("c346 missing open/error/close callbacks hit a finite connect deadlin
 await test("c346 onerror without following close releases its socket and cannot hang reconnect", async e => {
   e.emit(e.user("A")); await e.mountProvider(); const first = e.sockets[0], lateClose = first.onclose;
   first.onerror(); await flush(); assert.equal(first.closed, true); assert.equal(first.onclose, null);
-  await e.timer.tick(1_000); const next = e.sockets[1]; next.onopen(); lateClose({ code: 4401 }); await flush();
+  await e.timer.tick(1_000); const next = e.sockets[1]; readySocket(next); lateClose({ code: 4401 }); await flush();
   assert.equal(e.hook.value.realtimeStatus, "open"); assert.equal(e.sockets.length, 2);
   assert.equal(e.calls.filter(([url]) => url.endsWith("/auth/me")).length, 1);
 });
@@ -548,7 +562,7 @@ await test("c346 onerror without following close releases its socket and cannot 
 await test("c346 five stable seconds replenish transient failures but preserve one active owner", async e => {
   e.emit(e.user("A")); await e.mountProvider();
   closeSocket(e.sockets[0], 1006); await e.timer.tick(1_000);
-  e.sockets[1].onopen(); await e.timer.tick(5_000); closeSocket(e.sockets[1], 1006);
+  readySocket(e.sockets[1]); await e.timer.tick(5_000); closeSocket(e.sockets[1], 1006);
   await e.timer.tick(999); assert.equal(e.sockets.length, 2);
   await e.timer.tick(1); assert.equal(e.sockets.length, 3);
   assert.equal(e.sockets.filter(ws => !ws.closed).length, 1);
@@ -584,7 +598,7 @@ await test("c346 late A revalidation cannot publish over B or retire B's socket"
   const a = e.sockets[0], retiredClose = a.onclose; closeSocket(a, 4403); await flush();
   const oldRequest = e.calls.at(-1); e.fetch = normalFetch; e.emit(e.user("B")); await flush();
   assert.equal(oldRequest[1].signal.aborted, true); assert.equal(e.hook.value.user.firebase_uid, "B");
-  const b = e.sockets.at(-1); b.onopen(); const count = e.sockets.length;
+  const b = e.sockets.at(-1); readySocket(b); const count = e.sockets.length;
   me.resolve(response(200, { user: { ...account("A"), suspended_at: "2026-09-07T12:00:00Z" }, memberships: [] }));
   retiredClose({ code: 4401 }); await flush(); await e.timer.tick(120_000);
   assert.equal(e.hook.value.status, "ready"); assert.equal(e.hook.value.user.firebase_uid, "B");
@@ -595,7 +609,7 @@ await test("c346 account switch during paused retry cannot start another socket 
   e.emit(e.user("A")); await e.mountProvider(); await exhaustTransport(e);
   const me = deferred(), normalFetch = e.fetch; e.fetch = url => url.endsWith("/auth/me") ? me.promise : normalFetch(url);
   const retry = e.hook.value.retryRealtime(); await flush(); e.fetch = normalFetch; e.emit(e.user("B")); await flush();
-  const count = e.sockets.length; e.sockets.at(-1).onopen();
+  const count = e.sockets.length; readySocket(e.sockets.at(-1));
   me.resolve(response(200, { user: account("A"), memberships: [] })); await retry; await flush();
   assert.equal(e.hook.value.user.firebase_uid, "B"); assert.equal(e.hook.value.realtimeRetrying, false);
   assert.equal(e.sockets.length, count); assert.equal(e.sockets.filter(ws => !ws.closed).length, 1);
@@ -603,10 +617,10 @@ await test("c346 account switch during paused retry cannot start another socket 
 
 await test("c346 already-queued A reconnect cannot erase B's timer or prevent its cancellation", async e => {
   e.emit(e.user("A")); await e.mountProvider();
-  e.sockets[0].onopen(); await e.timer.tick(5_000); closeSocket(e.sockets[0], 1006);
+  readySocket(e.sockets[0]); await e.timer.tick(5_000); closeSocket(e.sockets[0], 1006);
   const retired = e.timer.snapshot().find(task => task.due === 6_000); assert.ok(retired);
   e.emit(e.user("B")); await flush();
-  const b = e.sockets.at(-1); b.onopen(); await e.timer.tick(5_000); closeSocket(b, 1006);
+  const b = e.sockets.at(-1); readySocket(b); await e.timer.tick(5_000); closeSocket(b, 1006);
   const current = e.timer.snapshot().find(task => task.due === 11_000); assert.ok(current);
   // The runtime can already have queued A's callback before clearTimeout retires
   // its timer. Execute that callback after B has scheduled its own reconnect.
@@ -618,4 +632,142 @@ await test("c346 already-queued A reconnect cannot erase B's timer or prevent it
   assert.equal(e.sockets.length, count); assert.equal(e.hook.value.status, "signedOut");
 });
 
-console.log(`ALL PASS: ${count} executed c343/c346 behavior regressions (TypeScript ${ts.version}).`);
+
+await test("c354 native open is not ready; exact ACK alone releases application frames", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  const socket = e.load("src/realtime/socket.ts").chirpSocket, events = [], statuses = [];
+  socket.onEvent(event => events.push(event)); socket.onStatus(status => statuses.push(status));
+  const ws = e.sockets[0];
+  ws.onmessage({ data: '{"type":"ready"}' });
+  ws.onopen();
+  for (const data of ['null', '[]', '{', '{"type":"ready","extra":1}', '{"type":"message"}', '{"type":1}']) ws.onmessage({ data });
+  assert.equal(socket.getStatus(), "connecting"); assert.equal(events.length, 0);
+  await e.timer.tick(9_000); ws.onmessage({ data: '{"type":"ready"}' });
+  assert.equal(socket.getStatus(), "open");
+  const timers = e.timer.snapshot().map(row => row.id);
+  ws.onmessage({ data: '{"type":"ready"}' });
+  assert.deepEqual(e.timer.snapshot().map(row => row.id), timers);
+  ws.onmessage({ data: '{"type":"message"}' });
+  assert.equal(events.length, 1); assert.deepEqual(statuses, ["open"]);
+});
+
+await test("c354 handshake without subscription ACK times out and stale ACK cannot activate replacement", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); const first = e.sockets[0];
+  first.onopen(); const stale = first.onmessage;
+  await e.timer.tick(10_000); assert.equal(first.closed, true); assert.equal(e.hook.value.realtimeStatus, "closed");
+  await e.timer.tick(1_000); const next = e.sockets[1]; next.onopen();
+  stale({ data: '{"type":"ready"}' }); assert.equal(e.hook.value.realtimeStatus, "connecting");
+  next.onmessage({ data: '{"type":"ready"}' }); await flush(); assert.equal(e.hook.value.realtimeStatus, "open");
+});
+
+await test("c354 stability begins at ACK rather than native handshake", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); closeSocket(e.sockets[0], 1006);
+  await e.timer.tick(1_000); const next = e.sockets[1]; next.onopen();
+  await e.timer.tick(5_000); next.onmessage({ data: '{"type":"ready"}' }); closeSocket(next, 1006);
+  await e.timer.tick(1_999); assert.equal(e.sockets.length, 2);
+  await e.timer.tick(1); assert.equal(e.sockets.length, 3);
+});
+
+for (const initial of [null, "unknown", "background", "inactive"]) {
+  await test(`c354 ${initial} AppState stays disconnected until owned resume revalidation`, async e => {
+    e.appState.currentState = initial; e.emit(e.user("A")); await e.mountProvider();
+    assert.equal(e.hook.value.status, "ready"); assert.equal(e.sockets.length, 0);
+    const me = deferred(), normal = e.fetch;
+    e.fetch = url => url.endsWith("/auth/me") ? me.promise : normal(url);
+    e.setAppState("active"); await flush(); assert.equal(e.sockets.length, 0);
+    me.resolve(response(200, { user: account("A"), memberships: [] })); await flush();
+    assert.equal(e.sockets.length, 1); assert.equal(e.appListeners.size, 1);
+  });
+}
+
+await test("c354 RN-web unknown/hidden visibility never inherits its active fallback", async e => {
+  e.platform.OS = "web"; e.document.visibilityState = undefined;
+  e.emit(e.user("A")); await e.mountProvider(); assert.equal(e.sockets.length, 0);
+  e.document.visibilityState = "hidden"; e.setAppState("active"); await flush(); assert.equal(e.sockets.length, 0);
+  e.document.visibilityState = "visible"; e.setAppState("active"); await flush(); assert.equal(e.sockets.length, 1);
+  e.document.visibilityState = "hidden"; e.setAppState("background"); await flush(); assert.equal(e.sockets[0].closed, true);
+  assert.equal(e.appListeners.size, 1);
+});
+
+await test("c354 background retires handshake and resume cannot reopen after another background", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); const first = e.sockets[0]; first.onopen();
+  const late = { open: first.onopen, message: first.onmessage, close: first.onclose };
+  e.setAppState("background"); await e.timer.tick(120_000);
+  assert.equal(first.closed, true); assert.equal(e.sockets.length, 1);
+  const me = deferred(), normal = e.fetch; e.fetch = url => url.endsWith("/auth/me") ? me.promise : normal(url);
+  e.setAppState("active"); await flush(); const pending = e.calls.filter(([url]) => url.endsWith("/auth/me")).at(-1);
+  e.setAppState("background"); assert.equal(pending[1].signal.aborted, true);
+  me.resolve(response(200, { user: account("A"), memberships: [] }));
+  late.open(); late.message({ data: '{"type":"ready"}' }); late.close({ code: 4401 }); await flush();
+  assert.equal(e.sockets.length, 1); assert.equal(e.hook.value.status, "ready"); assert.equal(e.signOutCalls, 0);
+});
+
+await test("c354 foreground churn preserves scheduled retry attempts and retires old timer", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); closeSocket(e.sockets[0], 4503);
+  const retired = e.timer.snapshot().find(row => row.due === 1_000);
+  e.setAppState("background"); e.setAppState("active"); await flush();
+  assert.equal(e.sockets.length, 2); retired.fn(); assert.equal(e.sockets.length, 2);
+  closeSocket(e.sockets[1], 4503); await e.timer.tick(1_999); assert.equal(e.sockets.length, 2);
+  await e.timer.tick(1); assert.equal(e.sockets.length, 3);
+});
+
+await test("c354 exhausted transport budget stays paused across ten focus cycles", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); await exhaustTransport(e);
+  const meCalls = e.calls.filter(([url]) => url.endsWith("/auth/me")).length;
+  for (let i = 0; i < 10; i++) { e.setAppState("background"); e.setAppState("active"); await flush(); }
+  await e.timer.tick(120_000); assert.equal(e.sockets.length, 7);
+  assert.equal(e.hook.value.realtimeStatus, "paused");
+  assert.equal(e.calls.filter(([url]) => url.endsWith("/auth/me")).length, meCalls);
+});
+
+await test("c354 background during terminal auth revalidation consumes its attempt and preserves account", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); const me = deferred(), normal = e.fetch;
+  e.fetch = url => url.endsWith("/auth/me") ? me.promise : normal(url);
+  closeSocket(e.sockets[0], 4401); await flush();
+  const pending = e.calls.filter(([url]) => url.endsWith("/auth/me")).at(-1);
+  e.setAppState("background"); assert.equal(pending[1].signal.aborted, true);
+  me.resolve(response(200, { user: account("A"), memberships: [] })); await flush();
+  e.fetch = normal; e.setAppState("active"); await flush();
+  assert.equal(e.sockets.length, 1); assert.equal(e.hook.value.realtimeStatus, "paused");
+  assert.equal(e.hook.value.status, "ready"); assert.equal(e.signOutCalls, 0);
+  await e.hook.value.retryRealtime(); await flush(); assert.equal(e.sockets.length, 2);
+});
+
+await test("c354 background cancels explicit retry without a late run reset", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); await exhaustTransport(e);
+  const me = deferred(), normal = e.fetch; e.fetch = url => url.endsWith("/auth/me") ? me.promise : normal(url);
+  const retry = e.hook.value.retryRealtime(); await flush(); e.setAppState("background");
+  me.resolve(response(200, { user: account("A"), memberships: [] })); await retry; await flush();
+  e.fetch = normal; e.setAppState("active"); await flush();
+  assert.equal(e.sockets.length, 7); assert.equal(e.hook.value.realtimeStatus, "paused");
+  assert.equal(e.hook.value.realtimeRetrying, false);
+});
+
+await test("c354 A resume and captured retry callbacks cannot alter B", async e => {
+  e.emit(e.user("A")); await e.mountProvider(); const retryA = e.hook.value.retryRealtime;
+  e.setAppState("background"); const me = deferred(), normal = e.fetch;
+  e.fetch = url => url.endsWith("/auth/me") ? me.promise : normal(url);
+  e.setAppState("active"); await flush(); e.fetch = normal; e.emit(e.user("B")); await flush();
+  const count = e.sockets.length; readySocket(e.sockets.at(-1)); await retryA();
+  me.resolve(response(200, { user: { ...account("A"), suspended_at: "2026-09-08T00:00:00Z" }, memberships: [] })); await flush();
+  assert.equal(e.sockets.length, count); assert.equal(e.hook.value.user.firebase_uid, "B");
+  assert.equal(e.hook.value.realtimeStatus, "open"); assert.equal(e.signOutCalls, 0);
+});
+
+await test("c354 effect replay replaces its cancelled foreground controller", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  e.hook.replayEffects(); await flush();
+  assert.equal(await e.hook.value.refresh(), true);
+  assert.equal(e.appListeners.size, 1); assert.equal(e.hook.value.status, "ready");
+  assert.equal(e.sockets.filter(ws => !ws.closed).length, 1);
+});
+
+await test("c354 unavailable AppState fails closed without subscribing to a missing native module", async e => {
+  e.appState.isAvailable = false;
+  e.appState.addEventListener = () => { throw new Error("native module unavailable"); };
+  e.emit(e.user("A")); await e.mountProvider();
+  assert.equal(e.hook.value.status, "ready"); assert.equal(e.sockets.length, 0);
+});
+
+await recoveryCases({ test, flush, deferred, response, readySocket, nodes });
+console.log(`ALL PASS: ${count} executed c343/c346/c354 behavior regressions (TypeScript ${ts.version}).`);

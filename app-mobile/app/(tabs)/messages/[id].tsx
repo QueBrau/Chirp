@@ -8,19 +8,23 @@
  * lands (milestone 4).
  */
 
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
 import {
   getConversation,
+  getMessagesById,
   leaveConversation,
   listMessages,
   type ConversationOut,
   type MessageOut,
 } from "@/api/messages";
-import { AppText, EmptyState, Screen } from "@/components";
+import { useSession } from "@/auth";
+import { currentIdentity } from "@/auth/identity";
+import { DurableWindow } from "@/realtime/durableWindow";
+import { AppText, Button, EmptyState, Screen } from "@/components";
 import { confirmAction, showApiError } from "@/lib/alert";
 import { chirpSocket, isMessageEvent } from "@/realtime/socket";
 import { metrics, radii, spacing, typography, useTheme } from "@/theme";
@@ -71,146 +75,97 @@ export default function ThreadScreen() {
   const palette = useTheme();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [conversation, setConversation] = useState<ConversationOut | null>(null);
-  const [messages, setMessages] = useState<MessageOut[]>([]);
-  /** The history fetch failed. Distinct from a genuinely empty thread (c317). */
-  const [loadFailed, setLoadFailed] = useState(false);
+  useSession();
+  const owner = currentIdentity();
+  const [, redraw] = useState(0);
+  const [detail, setDetail] = useState<{ window: DurableWindow<MessageOut>; conversation: ConversationOut } | null>(null);
   const [leaving, setLeaving] = useState(false);
-  // True once this screen has observed (or started inside) an "open" socket,
-  // so a LATER "open" is a real reconnect and not the first connection
-  // completing.
-  const wasOpenRef = useRef(false);
-
-  /**
-   * c317: this used to be `load().catch(() => setMessages([]))`, justified as
-   * "matches the repo pattern elsewhere in this stack" — the same sentence that
-   * justified the bug in chapter/members.tsx before c299 removed it. The pattern
-   * was never the convention; it was the defect, repeated.
-   *
-   * An empty thread and an unreachable server are not the same claim. This screen
-   * has no empty-state copy at all, so a failed load rendered zero bubbles and
-   * nothing else — which in a DM reads as the other person never having written
-   * anything. That is a statement about a person, made out of a dropped request.
-   *
-   * The catch lives INSIDE this callback rather than at the call site, for the
-   * reason c299 found on messages/index.tsx: the retry action below invokes load()
-   * directly, and a catch attached only to the mount effect would leave a failed
-   * RETRY unhandled — silently, and precisely when the user is already failing.
-   */
-  const load = useCallback(async () => {
-    setLoadFailed(false);
-    try {
-      // getConversation (board c344), not the old find-in-the-whole-list lookup: the
-      // inbox list is now bounded/cursor-paginated, so a conversation reached
-      // after paging past the first page (or via a deep link) would otherwise
-      // never resolve here.
-      const fetched = await getConversation(id);
-      setConversation(fetched);
-      const history = await listMessages(id);
-      setMessages(history);
-    } catch {
-      setLoadFailed(true);
-    }
-  }, [id]);
+  const queryRef = useRef<DurableWindow<MessageOut> | null>(null);
+  const window = useMemo(() => {
+    const query: DurableWindow<MessageOut> = new DurableWindow({
+      owner, selected: () => queryRef.current === query,
+      changed: () => {
+        if (query.state.denied) setDetail(current => current?.window === query ? null : current);
+        redraw(value => value + 1);
+      },
+      pageSize: 50, refreshPages: 4,
+      prepare: async operation => {
+        const conversation = await getConversation(id, { operation });
+        operation.assertCurrent();
+        if (conversation.id !== id) throw new Error("Invalid conversation.");
+        if (query.owns()) setDetail({ window: query, conversation });
+      },
+      page: async (cursor, operation) => {
+        const rows = await listMessages(id, { ...cursor, limit: 50, operation });
+        if (rows.some(row => row.conversation_id !== id)) throw new Error("Invalid conversation history.");
+        return rows;
+      },
+      lookup: async (ids, operation) => {
+        const rows = await getMessagesById(id, ids, { operation });
+        if (rows.some(row => row.conversation_id !== id)) throw new Error("Invalid conversation history.");
+        return rows;
+      },
+    });
+    return query;
+  }, [owner, id]);
+  queryRef.current = window;
+  const conversation = !window.state.denied && detail?.window === window ? detail.conversation : null;
+  const { rows: messages, failed: loadFailed, denied, more, incomplete, loading, loadingMore } = window.state;
+  const activation = window.activation;
+  const load = () => window.ownsFocus(activation) ? window.refresh() : Promise.resolve();
 
   const handleLeave = useCallback(() => {
+    if (!window.ownsFocus(activation)) return;
     confirmAction({
       title: "Leave this conversation?",
       message: "You'll stop receiving new messages here.",
-      confirmLabel: "Leave",
-      destructive: true,
+      confirmLabel: "Leave", destructive: true,
       onConfirm: () => {
-        void (async () => {
-          setLeaving(true);
-          try {
-            await leaveConversation(id);
-            router.back();
-          } catch (error) {
-            showApiError(error, "Couldn't leave this conversation");
-          } finally {
+        if (!window.ownsFocus(activation)) return;
+        setLeaving(true);
+        void window.leave(operation => leaveConversation(id, { operation }), () => router.back())
+          .finally(() => {
+            if (!window.ownsFocus(activation)) return;
             setLeaving(false);
-          }
-        })();
+            if (window.state.failed) showApiError(new Error("Try again."), "Couldn't leave this conversation");
+          });
       },
     });
-  }, [id, router]);
+  }, [window, id, router, activation]);
 
-  useEffect(() => {
-    // NOT unconditionally false. onStatus() only adds a listener — it never
-    // replays the CURRENT status to a new subscriber (see socket.ts) — and
-    // since SessionProvider connects at sign-in, the socket is almost always
-    // already "open" by the time a user taps into a thread minutes later.
-    // Starting this false in that case meant the very next status event this
-    // screen ever saw (the first REAL reconnect after a real outage) was
-    // wrongly treated as "the initial connection completing" and skipped its
-    // catch-up fetch — exactly the outage it existed to catch up on. Reading
-    // the actual current status makes "was it already open when I mounted"
-    // the question, not "have I personally seen an open event yet".
-    wasOpenRef.current = chirpSocket.getStatus() === "open";
-
-    void load();
-
-    // c63: live-append messages published for THIS conversation while the
-    // screen is open. Deduped by id — the socket can genuinely double-deliver
-    // (e.g. a reconnect's catch-up fetch below racing a not-yet-processed
-    // live event for the same message).
-    const unsubEvent = chirpSocket.onEvent((event) => {
-      if (!isMessageEvent(event) || event.conversation_id !== id) return;
-      setMessages((current) => {
-        if (current.some((message) => message.id === event.message_id)) return current;
-        return [
-          ...current,
-          {
-            id: event.message_id,
-            conversation_id: event.conversation_id,
-            sender_device_id: event.sender_device_id ?? "",
-            ciphertext_b64: event.ciphertext ?? "",
-            // routers/messages.py's publish never actually sets this field on
-            // the wire (checked the event dict directly), so the optional type
-            // on MessageSocketEvent is aspirational today — "signal" is the
-            // real-content case; sender_key_distribution is the protocol
-            // handshake type, not a reasonable default for an unknown message.
-            message_type: event.message_type ?? "signal",
-            created_at: event.created_at ?? new Date().toISOString(),
-          },
-        ];
-      });
+  useFocusEffect(useCallback(() => {
+    const focus = window.activate();
+    setLeaving(false);
+    const unsubscribeEvent = chirpSocket.onEvent(event => {
+      if (window.ownsFocus(focus) && isMessageEvent(event) && event.conversation_id === id) window.hint(event.message_id);
     });
-
-    // c63: pub/sub drops anything published while the socket was down (proven
-    // in c21's suite) — a reconnect has no memory of what it missed. Refetch
-    // on every "open" AFTER the first one, which is the signal that a real
-    // disconnect just ended rather than the initial connection completing.
-    const unsubStatus = chirpSocket.onStatus((status) => {
-      if (status !== "open") return;
-      if (!wasOpenRef.current) {
-        wasOpenRef.current = true;
-        return;
-      }
-      listMessages(id)
-        .then(setMessages)
-        .catch(() => {
-          // Fail soft: the live-append path above still works going forward,
-          // this only means whatever was missed during the outage stays missed.
-        });
-    });
-
-    return () => {
-      unsubEvent();
-      unsubStatus();
-    };
-  }, [id, load]);
+    const unsubscribeStatus = chirpSocket.onStatus(status => { if (window.ownsFocus(focus) && status === "open") void window.refresh(); });
+    void window.refresh();
+    return () => { window.retire(); unsubscribeEvent(); unsubscribeStatus(); };
+  }, [window, id]));
 
   return (
     <Screen
       title={conversationTitle(conversation)}
+      onRefresh={load}
       subtitle={conversation?.kind === "group" ? "Group" : "Direct message"}
     >
       <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
-        <LeaveConversationButton onPress={handleLeave} busy={leaving} />
+        <LeaveConversationButton onPress={handleLeave} busy={leaving || denied} />
       </View>
       <View style={{ gap: spacing.sm }}>
-        {loadFailed ? (
+        {loading ? <AppText variant="caption" tone="secondary">Refreshing conversation…</AppText> : null}
+        {denied ? <EmptyState title="Conversation unavailable" message="We couldn't verify access to this conversation. Try again to check."
+          actionLabel="Try again" onAction={() => void load()} /> : null}
+        {incomplete && !denied ? <EmptyState title="Some updates may be missing"
+          message="Refresh to check the latest messages. Older history may still need to be loaded."
+          actionLabel="Refresh conversation" onAction={() => void load()} /> : null}
+        {more && !denied ? <View style={{ gap: spacing.sm }}>
+          <AppText variant="caption" tone="secondary">Showing a recent window. More history may include messages missed while offline.</AppText>
+          <Button label={loadingMore ? "Loading older messages…" : "Load older messages"} variant="secondary"
+            disabled={loading || loadingMore} onPress={() => { if (window.ownsFocus(activation)) void window.older(); }} />
+        </View> : null}
+        {loadFailed && !denied ? (
           <EmptyState
             title="Couldn't load this conversation"
             message="Check your connection and try again. This isn't a statement that nothing has been said."

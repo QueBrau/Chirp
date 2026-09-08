@@ -78,7 +78,7 @@ if (threadSource.includes("listConversations()")) {
 } else {
   pass("messages/[id].tsx does not call listConversations()");
 }
-if (!threadSource.includes("getConversation(id)")) {
+if (!/getConversation\(id(?:\s*,\s*\{\s*operation\s*\})?\)/.test(threadSource)) {
   fail("messages/[id].tsx never calls getConversation(id)");
 } else {
   pass("messages/[id].tsx calls getConversation(id)");

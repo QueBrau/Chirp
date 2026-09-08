@@ -91,6 +91,11 @@ export class ChirpSocket {
   private unsubscribeIdentity: (() => void) | null = null;
   private status: SocketStatus = "idle";
   private shouldRun = false;
+  private foreground = false;
+  private sessionReady = false;
+  private epoch = 0;
+  private epochAbort = new AbortController();
+  private terminalRecovery = false;
   private paused = false;
   private run = 0;
   private runAbort: AbortController | null = null;
@@ -123,7 +128,8 @@ export class ChirpSocket {
 
   /** Repeated connect calls never replenish a live or paused run's retry budget. */
   connect(): void {
-    if (this.shouldRun) return;
+    this.sessionReady = true;
+    if (this.shouldRun) { this.open(); return; }
     this.shouldRun = true;
     this.paused = false;
     this.run += 1;
@@ -132,6 +138,28 @@ export class ChirpSocket {
     this.reconnectAttempts = 0;
     this.unsubscribeIdentity = onIdentityChanged(() => this.disconnect());
     this.open();
+  }
+
+  /** Visibility changes retire connections, never the authenticated retry run. */
+  setForeground(eligible: boolean): void {
+    if (eligible === this.foreground) return;
+    this.foreground = eligible;
+    if (!eligible) {
+      // An interrupted terminal auth recovery still consumed its single attempt.
+      if (this.terminalRecovery) this.paused = true;
+      this.retireEpoch();
+      this.setStatus(this.paused ? "paused" : "closed");
+    } else if (this.shouldRun && this.sessionReady && !this.paused) {
+      void this.revalidate(this.run, currentIdentity(), false);
+    }
+  }
+
+  /** A recoverable/backend-gated account keeps its run counters until explicit retry. */
+  hold(): void {
+    this.sessionReady = false;
+    if (this.terminalRecovery) this.paused = true;
+    this.retireEpoch();
+    this.setStatus(this.paused ? "paused" : "closed");
   }
 
   /** Explicit user retry after Provider revalidates the current account. */
@@ -144,16 +172,29 @@ export class ChirpSocket {
     this.unsubscribeIdentity = null;
     this.runAbort?.abort();
     this.runAbort = null;
+    this.sessionReady = false;
+    this.retireEpoch();
+    this.setStatus("closed");
+  }
+
+  private retireEpoch(): void {
+    this.epoch += 1;
+    this.epochAbort.abort();
+    this.epochAbort = new AbortController();
     this.authOperation?.cancel();
     this.authOperation = null;
+    this.terminalRecovery = false;
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     if (this.ws) this.retire(this.ws, true);
-    this.setStatus("closed");
   }
 
   private ownsRun(run: number, owner: AuthIdentity): boolean {
     return this.shouldRun && this.run === run && ownsIdentity(owner);
+  }
+
+  private ownsEpoch(run: number, owner: AuthIdentity, epoch: number): boolean {
+    return this.ownsRun(run, owner) && this.epoch === epoch && this.foreground && this.sessionReady;
   }
 
   private retire(ws: WebSocket, close: boolean): void {
@@ -170,8 +211,8 @@ export class ChirpSocket {
   private pause(): void { this.paused = true; this.setStatus("paused"); }
 
   private open(): void {
-    if (!this.shouldRun || this.paused || this.ws || this.authOperation) return;
-    const owner = currentIdentity(), run = this.run;
+    if (!this.shouldRun || !this.foreground || !this.sessionReady || this.paused || this.ws || this.authOperation || this.reconnectTimer !== null) return;
+    const owner = currentIdentity(), run = this.run, epoch = this.epoch;
     this.setStatus("connecting");
     if (!this.ownsRun(run, owner)) return;
     let ws: WebSocket;
@@ -183,7 +224,8 @@ export class ChirpSocket {
       return;
     }
     this.ws = ws;
-    const isCurrent = () => this.ws === ws && this.ownsRun(run, owner);
+    const isCurrent = () => this.ws === ws && this.ownsEpoch(run, owner, epoch);
+    let transportOpen = false, ready = false;
     const transientFailure = () => {
       if (!isCurrent()) return;
       this.retire(ws, true);
@@ -193,20 +235,29 @@ export class ChirpSocket {
     this.connectTimer = setTimeout(transientFailure, CONNECT_TIMEOUT_MS);
     ws.onopen = () => {
       if (!isCurrent()) return;
-      if (this.connectTimer !== null) clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-      this.stabilityTimer = setTimeout(() => {
-        if (!isCurrent()) return;
-        this.reconnectAttempts = 0;
-        this.stabilityTimer = null;
-      }, STABLE_CONNECTION_MS);
-      this.setStatus("open");
+      transportOpen = true;
+      // Native onopen precedes the server's Redis subscription ACK. The same
+      // ten-second timer bounds BOTH stages; no usable connection exists yet.
     };
     ws.onmessage = (frame: { data: unknown }) => {
       if (!isCurrent() || typeof frame.data !== "string") return;
       let event: SocketEvent;
       try { event = JSON.parse(frame.data) as SocketEvent; } catch { return; }
       if (typeof event?.type !== "string") return;
+      if (event.type === "ready") {
+        if (!transportOpen || ready || Array.isArray(event) || Object.keys(event).length !== 1) return;
+        ready = true;
+        if (this.connectTimer !== null) clearTimeout(this.connectTimer);
+        this.connectTimer = null;
+        this.stabilityTimer = setTimeout(() => {
+          if (!isCurrent()) return;
+          this.reconnectAttempts = 0;
+          this.stabilityTimer = null;
+        }, STABLE_CONNECTION_MS);
+        this.setStatus("open");
+        return;
+      }
+      if (!ready) return;
       for (const listener of this.eventListeners) listener(event);
     };
     ws.onclose = (event: { code: number }) => {
@@ -222,33 +273,36 @@ export class ChirpSocket {
     ws.onerror = transientFailure;
   }
 
-  private async revalidate(run: number, owner: AuthIdentity): Promise<void> {
-    if (!this.ownsRun(run, owner)) return;
+  private async revalidate(run: number, owner: AuthIdentity, terminal = true): Promise<void> {
+    const epoch = this.epoch;
+    if (!this.ownsEpoch(run, owner, epoch) || this.authOperation || this.paused) return;
     const handlers = this.authHandlers;
-    if (this.authAttempts >= 1 || !handlers) {
+    if ((terminal && this.authAttempts >= 1) || !handlers) {
       this.pause();
       if (this.ownsRun(run, owner)) handlers?.exhausted(owner);
       return;
     }
-    this.authAttempts += 1;
-    const operation = new Operation({ timeoutMs: AUTH_REVALIDATION_TIMEOUT_MS, signal: this.runAbort?.signal }, owner);
+    if (terminal) this.authAttempts += 1;
+    const operation = new Operation({ timeoutMs: AUTH_REVALIDATION_TIMEOUT_MS, signal: this.epochAbort.signal }, owner);
     this.authOperation = operation;
+    this.terminalRecovery = terminal;
     this.setStatus("revalidating");
     let ready = false;
     try { operation.assertCurrent(); ready = await operation.wait(handlers.revalidate(owner, operation.signal)); }
     catch { /* Provider owns the account decision and retry UI. */ }
     finally {
       operation.dispose();
-      if (this.authOperation === operation) this.authOperation = null;
+      if (this.authOperation === operation) { this.authOperation = null; this.terminalRecovery = false; }
     }
-    if (!this.ownsRun(run, owner)) return;
+    if (!this.ownsEpoch(run, owner, epoch)) return;
     if (ready && !operation.signal.aborted) this.open();
     else { this.pause(); if (this.ownsRun(run, owner)) handlers.exhausted(owner); }
   }
 
   /** Finite consecutive transport retries; reconnect success must survive five seconds. */
   private scheduleReconnect(run: number, owner: AuthIdentity): void {
-    if (!this.ownsRun(run, owner) || this.paused || this.reconnectTimer !== null) return;
+    const epoch = this.epoch;
+    if (!this.ownsEpoch(run, owner, epoch) || this.paused || this.reconnectTimer !== null) return;
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) { this.pause(); return; }
     const delay = Math.min(BASE_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempts, MAX_RECONNECT_DELAY_MS)
       * (0.5 + Math.random() * 0.5);
@@ -256,7 +310,7 @@ export class ChirpSocket {
     const timer = setTimeout(() => {
       // A callback already queued when clearTimeout ran belongs to its old run.
       // It must not erase a replacement run's timer before checking ownership.
-      if (!this.ownsRun(run, owner) || this.reconnectTimer !== timer) return;
+      if (!this.ownsEpoch(run, owner, epoch) || this.reconnectTimer !== timer) return;
       this.reconnectTimer = null;
       this.open();
     }, delay);

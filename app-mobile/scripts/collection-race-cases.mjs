@@ -61,22 +61,24 @@ function environment(kind, options = {}) {
   env.api = implementations;
   const api = new Proxy({}, { get: (_, name) => (...args) => { apiCalls.push({ name, args }); return implementations[name](...args); } });
   const primitive = new Proxy({}, { get: (_, name) => String(name) });
-  const context = vm.createContext({ console, Date, Set, Map, Symbol,
+  const context = vm.createContext({ console, Date, Set, Map, Symbol, AbortController, setTimeout, clearTimeout,
     __capture: value => { snapshot = value; },
   });
   const stubs = {
     react: hooks, "react/jsx-runtime": { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
+    "expo-router": { useFocusEffect: callback => hooks.useEffect(callback, [callback]) },
     "react-native": primitive, "@expo/vector-icons": { Feather: "Feather" },
     "react-native-safe-area-context": { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     "@/api/chapters": api, "@/api/meetings": api, "@/api/polls": api, "@/api/feed": api,
     "@/auth": { useSession: () => ({ user: { id: env.owner.uid } }) },
-    "@/auth/identity": { currentIdentity: () => env.owner, ownsIdentity: owner => owner === env.owner },
+    "@/auth/identity": { currentIdentity: () => env.owner, ownsIdentity: owner => owner === env.owner, requireIdentity: owner => { assert.equal(owner, env.owner); } },
+    "@/api/client": { ApiError: class ApiError extends Error {} },
     "@/components": primitive, "./AppText": { AppText: "AppText" }, "./CharCounter": { CharCounter: "CharCounter" },
     "./EmptyState": { EmptyState: "EmptyState" }, "./GradientAvatar": { GradientAvatar: "GradientAvatar" },
     "@/lib/alert": { showApiError: (...args) => alerts.push(args), showAlert: (...args) => alerts.push(args), confirmAction: value => value.onConfirm() },
     "@/lib/dates": { calendarDay: value => new Date(value), compactAge: () => "now" },
     "@/lib/export": { shareCsv: async () => {} }, "@/org/semester": { currentSemesterWindow: () => ({ start: time(0), end: time(100) }) },
-    "@/realtime/socket": { chirpSocket: { onEvent: fn => { listeners.add(fn); return () => listeners.delete(fn); } }, isPollEvent: event => event.type === "poll" },
+    "@/realtime/socket": { chirpSocket: { onStatus: () => () => {}, getStatus: () => "closed", onEvent: fn => { listeners.add(fn); return () => listeners.delete(fn); } }, isPollEvent: event => event.type === "poll" },
     "@/theme": { useTheme: () => ({}), light: {}, inputField: () => ({}), radii: {}, spacing: {}, withAlpha: () => "color" },
     "@/lib/contentLimits": { isOverLimit: () => false, MAX_COMMENT_BODY_LENGTH: 2000 },
   };
@@ -92,6 +94,8 @@ function environment(kind, options = {}) {
     const module = { exports: {} };
     vm.runInContext(`(function(require,module,exports){${output}\n})`, context)(name => {
       if (name === "@/lib/collectionPages") return compile("src/lib/collectionPages.ts");
+      if (name === "@/api/operation") return compile("src/api/operation.ts");
+      if (name === "../auth/identity") return stubs["@/auth/identity"];
       assert.ok(name in stubs, `Unstubbed dependency: ${name}`); return stubs[name];
     }, module, module.exports);
     return module.exports;
@@ -185,6 +189,7 @@ export async function runSecretaryCollectionCases(options = {}) {
       e.value().setNewQuestion("Question"); e.value().setNewOptions(["Yes", "No"]); await e.settle();
       const pending = e.value().handleCreatePoll();
       e.emit({ type: "poll", action: "opened", chapter_id: e.chapter, poll_id: "p101", poll: { ...poll(101), total_votes: 9 } }); await e.settle();
+      e.api.listPolls = async () => [{ ...poll(101), total_votes: 9, my_option_id: null }, ...descending(poll).slice(0, 49)];
       created.resolve({ ...poll(101), total_votes: 0, my_option_id: null }); await pending; await e.settle();
       assert.equal(e.value().polls.filter(row => row.id === "p101").length, 1);
       assert.equal(e.value().polls.find(row => row.id === "p101").total_votes, 9);

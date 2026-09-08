@@ -335,7 +335,7 @@ console.log("\n-- messages/[id].tsx: a DIFFERENT shape, asserted differently --"
 // cannot fail is worse than no check, because it reports coverage it does not have.
 {
   const src = sources[THREAD];
-  const blockAt = src.indexOf("{loadFailed ? (");
+  const blockAt = src.indexOf("{loadFailed && !denied ? (");
   const listAt = src.indexOf("messages.map(");
   if (blockAt === -1) {
     fail(`${THREAD}: the inline loadFailed block is gone`);
@@ -361,22 +361,13 @@ console.log("\n-- messages/[id].tsx: a DIFFERENT shape, asserted differently --"
   }
 }
 
-// The catch must live INSIDE load(), not at the call site: the retry action invokes
-// load() directly, so a catch attached only to the mount effect leaves a failed RETRY
-// unhandled - silently, and exactly when the user is already failing.
+// c354 moved request/failure ownership into DurableWindow. Requiring a local
+// setLoadFailed setter would reject that delegation without proving recovery.
+// verify:c343-session executes this actual screen through a failed initial manual
+// refresh, a second failed retry, and recovery, asserting the inline error, cached
+// bubbles and parked composer. Keep the retry wiring and inline ordering here.
 {
   const src = sources[THREAD];
-  const start = src.indexOf("const load = useCallback(");
-  const end = src.indexOf("\n  }, [", start);
-  const body = start === -1 || end === -1 ? "" : src.slice(start, end);
-  if (body.includes("setLoadFailed(true)")) {
-    pass("messages/[id].tsx: the catch lives inside load(), so a failed RETRY is handled too");
-  } else {
-    fail(
-      "messages/[id].tsx: setLoadFailed(true) must be inside load()'s own catch",
-      "a catch at the call site leaves the retry path unhandled",
-    );
-  }
   if (/onAction=\{\(\) => void load\(\)\}/.test(src)) {
     pass("messages/[id].tsx: the retry actually re-runs load()");
   } else {
