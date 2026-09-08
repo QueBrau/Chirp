@@ -590,6 +590,13 @@ export default function SignInScreen() {
           </Pressable>
         ) : null}
 
+        {/* Slack ABOVE the CTA as well as below the social block, so the two spacers
+            split the leftover height evenly and the CTA-through-Google band sits
+            lower on the screen instead of riding directly under the fields (braul,
+            Sep 8). Both collapse to nothing the moment the content is tall enough to
+            scroll, so a small phone and a keyboard-up layout are unaffected. */}
+        <View style={{ flex: 1, minHeight: spacing.lg }} />
+
         <Button
           // The screen's one gold moment (DESIGN section 10.4 rule 4): solid accent
           // fill, campus-secondary label. Same pairing the tab bar ships.
@@ -648,11 +655,8 @@ export default function SignInScreen() {
           ) : null}
         </View>
 
-        {/* Absorbs the slack on a screen taller than the form, so the footer and the
-            legal line sit near the bottom the way the reference has them, instead of
-            the whole page hugging the top under a block of empty canvas. Collapses to
-            nothing once the content is tall enough to scroll, so a small phone and a
-            keyboard-up layout are unaffected. */}
+        {/* The other half of the pair above: keeps the footer and legal line at the
+            bottom rather than letting them float up under the social buttons. */}
         <View style={{ flex: 1, minHeight: spacing.lg }} />
 
         {/* The reference's own footer says "Don't have an account? Sign Up" on a
