@@ -45,4 +45,7 @@ USER appuser
 EXPOSE 8080
 
 # Cloud Run injects PORT; shell form so the env var expands, exec so uvicorn gets signals.
-CMD exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port ${PORT}
+# c354: outbound-only sockets need no large incoming application messages. The
+# pinned sansio adapter enforces max-size but DOES NOT consume ws-max-queue;
+# do not add a queue flag and claim an effective limit. See the WS runbook.
+CMD exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port ${PORT} --ws websockets-sansio --ws-max-size 1024 --ws-per-message-deflate false
