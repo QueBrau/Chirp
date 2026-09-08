@@ -3,7 +3,9 @@ import asyncio
 import contextlib
 import logging
 import random
+from dataclasses import dataclass
 
+import anyio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
@@ -11,6 +13,7 @@ from app import models
 from app.config import get_settings
 from app.db import get_session_factory
 from app.middleware.auth import get_user_by_uid
+from app.services.identity_verification import run_verification
 from app.ws.pubsub import get_redis
 
 logger = logging.getLogger(__name__)
@@ -59,7 +62,7 @@ def _offered_protocol(websocket: WebSocket) -> str | None:
     return protocols[0] if protocols else None
 
 
-def _resolve_uid(websocket: WebSocket) -> str | None:
+async def _resolve_uid(websocket: WebSocket) -> str | None:
     """Resolve a verified Firebase uid from the handshake, or None.
 
     REWRITTEN (security-pass item 7, ~Aug 22): the handshake used to authenticate
@@ -103,162 +106,230 @@ def _resolve_uid(websocket: WebSocket) -> str | None:
         try:
             firebase_admin.get_app()
         except ValueError:
-            firebase_admin.initialize_app()
-        decoded = firebase_auth.verify_id_token(token)
+            project_id = settings.firebase_project_id
+            firebase_admin.initialize_app(options={"projectId": project_id} if project_id else None)
+        decoded = await run_verification(firebase_auth.verify_id_token, token)
     except Exception:  # invalid/expired token, missing SDK, or init failure
         return None
     return decoded.get("uid")
 
 
+# c354: these bound application work; they aren't a total socket-RSS or OS
+# transport-close guarantee. Keep the current 24-36s authorization reconciliation
+# even when Redis fails. See WEBSOCKET-RESOURCE-LIMITS.md for the measured envelope.
+WS_SUBSCRIBE_SECONDS = 2.0
+WS_AUTH_SECONDS = 10.0
+WS_SEND_SECONDS = 5.0
+WS_CLOSE_SECONDS = 1.0
+WS_CLEANUP_SECONDS = 1.0
+WS_RECONCILE_SECONDS = 2.0
+WS_QUEUE_MAX_AGE_SECONDS = 5.0
+WS_QUEUE_MAX_FRAMES = 32
+WS_QUEUE_MAX_BYTES = 512 * 1024
+# Current message ciphertext input is <=64KiB, plus its small JSON envelope.
+# Oversized legacy/provider events are disconnected, never truncated.
+WS_FRAME_MAX_BYTES = 128 * 1024
+
+
+class _EndStream(Exception):
+    def __init__(self, reason: str, code: int = WS_REALTIME_UNAVAILABLE):
+        self.reason = reason
+        self.code = code
+        super().__init__(reason)
+
+
+@dataclass(frozen=True)
+class _Frame:
+    text: str
+    size: int
+    queued_at: float
+
+
+class _OutboundBuffer:
+    """Nonblocking admission; ownership includes the frame held by the sender."""
+
+    def __init__(self):
+        self.queue: asyncio.Queue[_Frame] = asyncio.Queue(maxsize=WS_QUEUE_MAX_FRAMES)
+        self.frames = self.bytes = self.peak_frames = self.peak_bytes = 0
+
+    def offer(self, data: str) -> None:
+        if not isinstance(data, str):
+            raise _EndStream("invalid_broker_frame")
+        # Check characters first to avoid another huge allocation for oversized
+        # input. Redis already parsed this frame; that allocation is not this cap.
+        if len(data) > WS_FRAME_MAX_BYTES:
+            raise _EndStream("frame_too_large")
+        size = len(data.encode("utf-8"))
+        if size > WS_FRAME_MAX_BYTES:
+            raise _EndStream("frame_too_large")
+        if self.frames >= WS_QUEUE_MAX_FRAMES or self.bytes + size > WS_QUEUE_MAX_BYTES:
+            raise _EndStream("queue_full")
+        self.queue.put_nowait(_Frame(data, size, asyncio.get_running_loop().time()))
+        self.frames += 1
+        self.bytes += size
+        self.peak_frames = max(self.peak_frames, self.frames)
+        self.peak_bytes = max(self.peak_bytes, self.bytes)
+
+    def release(self, frame: _Frame) -> None:
+        self.frames -= 1
+        self.bytes -= frame.size
+
+    def clear(self) -> None:
+        while not self.queue.empty():
+            self.release(self.queue.get_nowait())
+
+
+async def _bounded_close(websocket: WebSocket, code: int) -> None:
+    with contextlib.suppress(Exception):
+        async with asyncio.timeout(WS_CLOSE_SECONDS):
+            await websocket.close(code=code)
+
+
 @router.websocket("/ws")
 async def websocket_gateway(websocket: WebSocket) -> None:
-    """Authenticate the connection, then forward user:{user_id} Redis events until disconnect.
+    """Short SQL scopes, bounded outbound ownership, and explicit stream failure.
 
-    THIS ROUTE DELIBERATELY TAKES NO `Depends(get_session)`, and that is a fix rather
-    than an oversight (board c205). FastAPI holds a yield-dependency open for the whole
-    endpoint call; on an HTTP route that is milliseconds, but on a WEBSOCKET route it is
-    the entire session - so every connected user pinned one pooled Postgres connection
-    until they closed the app. The pool is 15 per instance and HTTP requests draw from
-    the same one, so a handful of idle sockets could starve the instance's REST API
-    while CPU sat near zero, which autoscaling cannot see and will not rescue.
-
-    Sessions here are therefore SHORT-LIVED and explicit: one to resolve the user, then
-    one per suspension poll. Anything added to this handler later that needs the
-    database must open its own and close it - re-introducing a connection that spans
-    the socket's lifetime re-introduces the whole bug.
+    No yield dependency: a websocket must never pin its authentication SQL
+    connection for its lifetime (c205). A Redis subscription belongs to this
+    socket until teardown; sharing subscriptions is a measured follow-up.
     """
-    offered_protocol = _offered_protocol(websocket)
-    uid = _resolve_uid(websocket)
-    if uid is None:
-        await websocket.close(code=4401)
-        return
-
-    # Scoped tightly on purpose: released before accept(), so a connection is never
-    # held across the part of this function that waits on a human.
-    async with get_session_factory()() as session:
-        user = await get_user_by_uid(session, uid)
-        if user is None:
-            await websocket.close(code=4401)
-            return
-        # Read every attribute needed later WHILE the session is open. `user` is a
-        # detached instance once this block exits, and touching an unloaded attribute
-        # on a detached instance raises rather than lazily loading.
-        user_id = user.id
-        user_suspended_at = user.suspended_at
-    # c126: mirrors middleware/auth.py's get_current_user, the HTTP precedent —
-    # same field, same "resolved but blocked" meaning. This closes NEW connection
-    # attempts only, matching what the HTTP side does (checked per-request, and a
-    # WS connect is this gateway's equivalent of a request). It does not reach an
-    # already-open socket for someone suspended mid-session — that's a genuinely
-    # different problem (periodic re-check or a suspend-triggered kill) and is
-    # deliberately out of scope here rather than silently pretended-closed.
-    if user_suspended_at is not None:
-        await websocket.close(code=WS_ACCOUNT_SUSPENDED)
-        return
-
-    # item 7: echo the offered protocol back so a strict client (one that
-    # verifies the server selected a protocol it actually offered) doesn't
-    # treat a bare accept() as a mismatch. None when auth came via the
-    # Authorization header instead — nothing was offered, so nothing to select.
-    await websocket.accept(subprotocol=offered_protocol)
-    channel = f"user:{user_id}"
-    pubsub = get_redis().pubsub()
-
-    # Subscribe is the first thing here that touches the network, and it runs
-    # AFTER accept(), so an unreachable Redis used to surface as a socket that
-    # opened and then died on an unhandled ConnectionError — indistinguishable
-    # from a flaky client, with no server-side signal that the cause was missing
-    # infrastructure (board c62). Redis was in fact never provisioned in prod
-    # (c61), so this was every connection, not an edge case.
-    #
-    # Closing with a distinct application code lets the client tell "the realtime
-    # backend is down, back off" apart from "your token is bad" (4401) and from
-    # an ordinary network drop, which it would otherwise reconnect against in a
-    # tight loop.
     try:
-        await pubsub.subscribe(channel)
-    except Exception:
-        # user_id only, never ciphertext or token material (SPEC 8.1), and the
-        # same warning shape messages.py already uses on the publish side.
-        logger.error("ws subscribe failed, realtime unavailable user_id=%s", user_id)
-        with contextlib.suppress(Exception):
-            await pubsub.aclose()
-        await websocket.close(code=WS_REALTIME_UNAVAILABLE)
+        async with asyncio.timeout(WS_AUTH_SECONDS):
+            uid = await _resolve_uid(websocket)
+    except TimeoutError:
+        await _bounded_close(websocket, WS_REALTIME_UNAVAILABLE)
+        return
+    if uid is None:
+        await _bounded_close(websocket, 4401)
         return
 
-    async def _forward() -> None:
-        async for item in pubsub.listen():
-            if item.get("type") == "message":
-                await websocket.send_text(item["data"])
+    try:
+        async with asyncio.timeout(WS_RECONCILE_SECONDS):
+            async with get_session_factory()() as session:
+                user = await get_user_by_uid(session, uid)
+                user_id = user.id if user is not None else None
+                suspended_at = user.suspended_at if user is not None else None
+    except Exception:
+        await _bounded_close(websocket, WS_REALTIME_UNAVAILABLE)
+        return
+    # Always release SQL before any transport write, including rejection.
+    if user_id is None:
+        await _bounded_close(websocket, 4401)
+        return
+    if suspended_at is not None:
+        await _bounded_close(websocket, WS_ACCOUNT_SUSPENDED)
+        return
 
-    async def _drain() -> None:
+    channel = f"user:{user_id}"
+    buffer = _OutboundBuffer()
+    pubsub = None
+    tasks: list[asyncio.Task] = []
+    reason, close_code = "client_disconnect", None
+
+    async def read_broker() -> None:
+        # redis-py subscribe() sends the command but does NOT read its ACK.
+        # A ready event before this ACK recreates the history/live delivery gap.
+        async with asyncio.timeout(WS_SUBSCRIBE_SECONDS):
+            await pubsub.subscribe(channel)
+            stream = pubsub.listen()
+            while True:
+                item = await anext(stream)
+                if item.get("type") == "subscribe" and item.get("channel") == channel:
+                    break
+                if item.get("type") == "message":
+                    raise _EndStream("message_before_subscription_ack")
+        buffer.offer('{"type":"ready"}')
+        async for item in stream:
+            kind = item.get("type")
+            if kind == "message":
+                buffer.offer(item["data"])
+            elif kind == "subscribe":
+                # redis-py can reconnect/resubscribe transparently. Events may
+                # have been lost; force a client reconnect and durable catch-up.
+                raise _EndStream("broker_resubscribed")
+        raise _EndStream("broker_stream_ended")
+
+    async def send_frames() -> None:
         while True:
-            # Drain client frames purely to detect disconnect; the stream is server -> client.
+            frame = await buffer.queue.get()
+            try:
+                remaining = WS_QUEUE_MAX_AGE_SECONDS - (asyncio.get_running_loop().time() - frame.queued_at)
+                if remaining <= 0:
+                    raise _EndStream("frame_expired")
+                async with asyncio.timeout(min(WS_SEND_SECONDS, remaining)):
+                    await websocket.send_text(frame.text)
+            finally:
+                buffer.release(frame)
+
+    async def drain_client() -> None:
+        while True:
+            # Application traffic is server -> client. The container's ASGI
+            # settings bound incoming message payload bytes before this handler;
+            # they do not bound fragment count (see the open runbook issue).
             await websocket.receive_text()
 
-    async def _watch_suspension() -> None:
-        """Close the socket shortly after moderation suspends this account.
-
-        Opens its OWN session per poll and closes it immediately (c205). The session
-        is created after the sleep rather than outside the loop, so a connection is
-        checked out for the length of one indexed primary-key lookup and handed back,
-        instead of being held for the socket's lifetime.
-        """
+    async def reconcile_user() -> None:
         while True:
-            jitter = 1.0 + random.uniform(-WS_SUSPENSION_POLL_JITTER, WS_SUSPENSION_POLL_JITTER)
+            jitter = 1 + random.uniform(-WS_SUSPENSION_POLL_JITTER, WS_SUSPENSION_POLL_JITTER)
             await asyncio.sleep(WS_SUSPENSION_POLL_SECONDS * jitter)
-            async with get_session_factory()() as poll_session:
-                result = await poll_session.execute(
-                    select(models.User.suspended_at).where(models.User.id == user_id)
-                )
-                suspended_at = result.scalar_one_or_none()
-            if suspended_at is not None:
-                logger.info("ws closed for suspended account user_id=%s", user_id)
-                with contextlib.suppress(Exception):
-                    await websocket.close(code=WS_ACCOUNT_SUSPENDED)
-                return
-
-    forward_task = asyncio.create_task(_forward(), name="ws-forward")
-    drain_task = asyncio.create_task(_drain(), name="ws-drain")
-    suspension_task = asyncio.create_task(_watch_suspension(), name="ws-suspension-watch")
+            async with asyncio.timeout(WS_RECONCILE_SECONDS):
+                async with get_session_factory()() as poll_session:
+                    result = await poll_session.execute(
+                        select(models.User.suspended_at).where(models.User.id == user_id)
+                    )
+                    row = result.one_or_none()
+            # scalar_one_or_none cannot distinguish a missing user from the
+            # SQL NULL that means an existing user is not suspended.
+            if row is None:
+                raise _EndStream("account_missing", 4401)
+            if row[0] is not None:
+                raise _EndStream("account_suspended", WS_ACCOUNT_SUSPENDED)
 
     try:
-        # Race the two: whichever ends first ends the connection. Awaiting only
-        # the client-drain (the previous shape) meant a forwarder that died —
-        # Redis restarting, the VPC connector dropping — was never observed. The
-        # socket stayed open delivering nothing, with no log and no close frame,
-        # which is the same "looks like a flaky client" symptom c62 exists to
-        # kill, just moved from connect time to steady state.
-        done, _ = await asyncio.wait(
-            {forward_task, drain_task, suspension_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        if forward_task in done:
-            # _forward only returns if the pubsub stream ended, so reaching here
-            # at all means realtime is gone for this connection.
-            error = forward_task.exception()
-            logger.error(
-                "ws forward ended mid-connection, realtime lost user_id=%s (%s)",
-                user_id,
-                type(error).__name__ if error else "stream closed",
-            )
-            with contextlib.suppress(Exception):
-                await websocket.close(code=WS_REALTIME_UNAVAILABLE)
-    finally:
-        for task in (forward_task, drain_task, suspension_task):
-            task.cancel()
-        for task in (forward_task, drain_task, suspension_task):
-            # Both Exception and CancelledError, deliberately. Awaiting a task
-            # re-raises whatever it stored, and CancelledError is a
-            # BaseException — suppressing only one of them lets the other escape
-            # the finally block and skip the teardown below it.
-            with contextlib.suppress(Exception, asyncio.CancelledError):
+        async with asyncio.timeout(WS_SUBSCRIBE_SECONDS):
+            await websocket.accept(subprotocol=_offered_protocol(websocket))
+        pubsub = get_redis().pubsub()
+        # All tasks only report a reason. The owner stops every producer and
+        # sender BEFORE writing close, including suspension and queue overflow.
+        reader = asyncio.create_task(read_broker(), name="ws-subscribe-forward")
+        sender = asyncio.create_task(send_frames(), name="ws-send")
+        drain = asyncio.create_task(drain_client(), name="ws-drain")
+        watcher = asyncio.create_task(reconcile_user(), name="ws-suspension-watch")
+        tasks = [watcher, reader, sender, drain]
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        # Authorization takes precedence if several tasks finish in one turn.
+        for task in tasks:
+            if task in done:
                 await task
-
-        # Teardown is best-effort: if Redis died mid-connection these raise, and
-        # an exception here would mask whatever actually ended the connection.
-        with contextlib.suppress(Exception):
-            await pubsub.unsubscribe(channel)
-        with contextlib.suppress(Exception):
-            await pubsub.aclose()
+    except _EndStream as exc:
+        reason, close_code = exc.reason, exc.code
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        # Exception type is safe; provider URLs, token material, and payloads
+        # are not. Timeouts/failures are realtime loss, not credential failure.
+        reason, close_code = type(exc).__name__, WS_REALTIME_UNAVAILABLE
+    finally:
+        # ASGI/AnyIO can cancel at every checkpoint, not only once. Protect
+        # owned teardown from that outer scope while retaining each local
+        # timeout; the original cancellation still propagates after cleanup.
+        with anyio.CancelScope(shield=True):
+            for task in tasks:
+                task.cancel()
+            with contextlib.suppress(Exception):
+                async with asyncio.timeout(WS_CLEANUP_SECONDS):
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            buffer.clear()
+            if close_code is not None:
+                logger.warning(
+                    "ws stream closed reason=%s user_id=%s peak_frames=%s peak_bytes=%s",
+                    reason, user_id, buffer.peak_frames, buffer.peak_bytes,
+                    extra={"ws_reason": reason, "ws_peak_frames": buffer.peak_frames, "ws_peak_bytes": buffer.peak_bytes},
+                )
+                await _bounded_close(websocket, close_code)
+            if pubsub is not None:
+                with contextlib.suppress(Exception):
+                    async with asyncio.timeout(WS_CLEANUP_SECONDS):
+                        # aclose disconnects and releases the dedicated subscription
+                        # connection. No extra UNSUBSCRIBE round trip is necessary.
+                        await pubsub.aclose()
