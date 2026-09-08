@@ -298,6 +298,12 @@ jobs:
         # Executes real TS handlers against deferred Firebase/fetch promises and a fake clock.
         run: npm run verify:c343-session
 
+      - name: Moderation queue survives resolving a full page
+        working-directory: app-mobile
+        # Resolving every visible report used to blank the pagination cursor and fake
+        # "All clear" while a full page of open reports still sat behind it (c353).
+        run: npm run verify:moderation-queue
+
       - name: Every verifier actually runs
         working-directory: app-mobile
         # c336's own ratchet. Eight of fourteen guards here were never wired, so they
