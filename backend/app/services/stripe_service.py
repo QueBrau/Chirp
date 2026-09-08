@@ -165,11 +165,11 @@ async def create_dues_payment_intent(
     """Create a dues PaymentIntent on the chapter's account with the platform fee.
 
     The idempotency key includes the CALLER'S reservation row id (board c231), not
-    just (cycle, member, rail): a declined-card retry supersedes a 'failed'
-    reservation with a fresh DB row (payments.py never reuses a dead one), and that
-    fresh row must get a genuinely fresh Stripe intent. Keying only on (cycle,
-    member, rail) — the pre-c231 behavior — replayed Stripe's own idempotency cache
-    across that reservation boundary and handed the new row back the dead
+    just (cycle, member, rail): a retry after confirmed cancellation supersedes
+    the canceled reservation with a fresh DB row, which must get a fresh Stripe
+    intent. A declined attempt now retains its original reservation (c387). Keying
+    only on (cycle, member, rail) — the pre-c231 behavior — replayed Stripe's
+    idempotency cache across that boundary and handed the new row back the canceled
     reservation's OLD intent id, which collides with uq_dues_intent_stripe_id
     (that index spans every status, including 'failed') and 500s. A retry against
     the SAME reservation with a stored provider ID retrieves it. When an earlier
