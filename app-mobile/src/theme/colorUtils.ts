@@ -121,3 +121,72 @@ export function ensureAccentContrast(hex: string): string {
   }
   return color;
 }
+
+/**
+ * Alpha-composites `fgHex` at `alpha` (0-1) over opaque `bgHex`, returning the
+ * resulting opaque hex. This is exactly `mix(bgHex, fgHex, alpha)` -- mix's own
+ * definition (`from + (to - from) * weight` per channel) IS the standard "over"
+ * compositing formula for an opaque backdrop -- this just names the operation the
+ * contrastRatio doc comment above already tells callers to perform by hand before
+ * measuring a translucent layer (e.g. `accentSoft`, which is `withAlpha(accent, …)`
+ * and therefore not itself opaque).
+ */
+export function compositeOver(fgHex: string, alpha: number, bgHex: string): string {
+  return mix(bgHex, fgHex, alpha);
+}
+
+/**
+ * Board c386. `secondary` buttons fill with `accentSoft` (accent alpha-composited
+ * at 16% dark / 15% light over `bg`, per appearance.tsx/orgScope.tsx) and label
+ * with the raw accent. That reads fine whenever the accent itself is light enough
+ * to clear AA against its own faint wash -- it does NOT when the accent is dark
+ * (the default campus primary is often a school's navy), because a 15-16% wash of
+ * a very dark color barely lifts off a dark canvas: UNCG navy on its own dark
+ * fill measures ~1.2:1, effectively invisible.
+ *
+ * Light mode is untouched BY CONSTRUCTION: there is no branch that can reach it
+ * except the unconditional early return, so it is always byte-identical to the
+ * raw `accent` -- never gated on a contrast measurement, because two of the real
+ * campus/org accents already fall below 4.5:1 in light mode today on their own
+ * (a separate, pre-existing, out-of-scope defect).
+ *
+ * Dark mode composites the real fill the button actually paints (using the
+ * caller's live accent/bg, so campus tint and org-scoped accents are honored
+ * automatically), and if the raw accent already clears 4.5:1 against that fill it
+ * is returned unchanged -- an already-legible accent (e.g. the default violet)
+ * must not be silently relabeled. Otherwise the accent is lightened in fine (1/64)
+ * steps, returning the FIRST step whose contrast against the fill clears 4.5:1, so
+ * the result stays as close to the accent's own identity as the threshold allows.
+ * `lighten(accent, 1)` is opaque white, which always clears 4.5:1 against a fill
+ * this dark, so the loop is guaranteed to terminate before exhausting the range;
+ * `ink` is an unreachable-in-practice fallback, never expected to fire.
+ */
+export function secondaryLabelColor(
+  accent: string,
+  bg: string,
+  mode: "light" | "dark",
+  ink: string,
+): string {
+  if (mode === "light") {
+    return accent;
+  }
+
+  const MIN_CONTRAST = 4.5;
+  const FILL_ALPHA = 0.16;
+  const STEP = 1 / 64;
+
+  const fill = compositeOver(accent, FILL_ALPHA, bg);
+  if (contrastRatio(accent, fill) >= MIN_CONTRAST) {
+    return accent;
+  }
+
+  let steps = 1;
+  while (steps <= 64) {
+    const lifted = lighten(accent, steps * STEP);
+    if (contrastRatio(lifted, fill) >= MIN_CONTRAST) {
+      return lifted;
+    }
+    steps += 1;
+  }
+  return ink;
+}

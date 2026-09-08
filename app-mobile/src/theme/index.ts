@@ -40,6 +40,7 @@ export type {
   CampusColors,
 } from "./appearance";
 export {
+  compositeOver,
   contrastRatio,
   contrastWithWhite,
   darken,
@@ -48,6 +49,7 @@ export {
   lighten,
   mix,
   relativeLuminance,
+  secondaryLabelColor,
   withAlpha,
 } from "./colorUtils";
 export { applyOrgAccent, OrgAccentScope, useOrgAccentColors } from "./orgScope";
