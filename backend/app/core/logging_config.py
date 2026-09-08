@@ -21,8 +21,8 @@ on either stream. See `tests/test_app_logging.py` for the falsifying test.
 
 FIX SCOPE, deliberately narrow: this configures exactly one logger, "app" — the
 common ancestor of every `app.*` module logger by Python's dotted-name convention —
-with one handler, INFO and above, formatted with uvicorn's own formatter class so a
-Cloud Logging viewer cannot tell an app line from a uvicorn one by shape alone.
+with one handler, INFO and above. Most app records use uvicorn's formatter;
+c373 preserves analytics INFO records as bare JSON for the structured-log sink.
 `propagate` is left at its default (True) on purpose: pytest's `caplog` fixture
 captures by attaching its own handler to the ROOT logger, and records only reach it
 by propagating there. Setting `propagate=False` here would make this fix invisible
@@ -35,6 +35,26 @@ credential-scrubbing filter on uvicorn.access, which is out of scope here.
 from __future__ import annotations
 
 import logging.config
+from uvicorn.logging import DefaultFormatter
+
+
+class AppFormatter(DefaultFormatter):
+    """Keep analytics as JSON at the stream boundary selected by the GCP sink."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        if record.name == "app.analytics" and record.levelno == logging.INFO:
+            return record.getMessage()
+        return super().format(record)
+
+
+class AppStreamHandler(logging.StreamHandler):
+    def handleError(self, record: logging.LogRecord) -> None:
+        # StreamHandler normally prints the exception, record and stack directly
+        # to stderr. That bypasses emit()'s safe diagnostic and can expose an
+        # arbitrary transport error. A broken analytics stream must fail silently.
+        if record.name in {"app.analytics", "app.analytics_diagnostics"}:
+            return
+        super().handleError(record)
 
 
 def configure_app_logging() -> None:
@@ -52,13 +72,13 @@ def configure_app_logging() -> None:
             "disable_existing_loggers": False,
             "formatters": {
                 "app": {
-                    "()": "uvicorn.logging.DefaultFormatter",
+                    "()": "app.core.logging_config.AppFormatter",
                     "fmt": "%(levelprefix)s %(name)s - %(message)s",
                 },
             },
             "handlers": {
                 "app": {
-                    "class": "logging.StreamHandler",
+                    "class": "app.core.logging_config.AppStreamHandler",
                     "formatter": "app",
                     "stream": "ext://sys.stdout",
                 },

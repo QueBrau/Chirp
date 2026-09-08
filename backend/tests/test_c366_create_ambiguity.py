@@ -195,6 +195,7 @@ async def test_provider_timeout_releases_row_and_pool_without_releasing_reservat
             cancelled.set()
 
     monkeypatch.setattr(stripe.PaymentIntent, f"{provider_step}_async", hang)
+    normal_budget = payments.RESERVATION_PROVIDER_TIMEOUT_SECONDS
     monkeypatch.setattr(payments, "RESERVATION_PROVIDER_TIMEOUT_SECONDS", .2)
     before = time.monotonic()
     response = await client.post(f"/payments/dues/{cycle}/intent", json={"rail": "ach"}, headers=setup.member.headers)
@@ -213,6 +214,9 @@ async def test_provider_timeout_releases_row_and_pool_without_releasing_reservat
     monkeypatch.setattr(stripe.PaymentIntent, f"{provider_step}_async", recover)
     # A non-canceled provider response must not expire an aged reservation.
     monkeypatch.setattr(stripe.PaymentIntent, "retrieve_async", recover)
+    # The shortened budget already proved actual timeout/cancellation above.
+    # Recovery uses the real budget; laptop DB scheduling is not a 200ms contract.
+    monkeypatch.setattr(payments, "RESERVATION_PROVIDER_TIMEOUT_SECONDS", normal_budget)
     retry = await client.post(f"/payments/dues/{cycle}/intent", json={"rail": "ach"}, headers=setup.member.headers)
     assert retry.status_code == 200, retry.text
     assert retry.json()["payment_intent_status"] == "processing"
