@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "project": "chirps-prod",
+  "region": "us-central1",
+  "image_repository": "us-central1-docker.pkg.dev/chirps-prod/cloud-run-source-deploy/chirp-api",
+  "database": {
+    "instance": "chirp-db",
+    "tier": "db-custom-1-3840",
+    "max_connections": 100,
+    "superuser_reserved_connections": 3,
+    "reserved_connections": 0,
+    "operator_connections": 1,
+    "surge_allowance_connections": 10,
+    "evidence_max_age_hours": 24
+  },
+  "shared": {
+    "service_account": "chirp-api-run@chirps-prod.iam.gserviceaccount.com",
+    "cloud_sql": "chirps-prod:us-central1:chirp-db",
+    "vpc_connector": "chirp-vpc",
+    "vpc_egress": "private-ranges-only",
+    "ingress": "all",
+    "timeout_seconds": 3600,
+    "cpu_throttling": true,
+    "startup_cpu_boost": true,
+    "env": {
+      "ENV": "production",
+      "AUTH_MODE": "firebase",
+      "FIREBASE_PROJECT_ID": "chirps-prod",
+      "DB_POOL_TIMEOUT": "10"
+    },
+    "secrets": {
+      "DATABASE_URL": "DATABASE_URL:latest",
+      "REDIS_URL": "REDIS_URL:latest",
+      "MEDIA_SIGNING_SECRET": "MEDIA_SIGNING_SECRET:latest"
+    },
+    "scaling_mode": "automatic"
+  },
+  "services": {
+    "api": {
+      "name": "chirp-api",
+      "cpu": "2",
+      "memory": "512Mi",
+      "concurrency": 80,
+      "revision_min_instances": 1,
+      "revision_max_instances": 8,
+      "service_max_instances": 20,
+      "workers": 1,
+      "env": {
+        "DB_POOL_SIZE": "3",
+        "DB_MAX_OVERFLOW": "2"
+      },
+      "client_origin": "https://chirp-api-593616178468.us-central1.run.app",
+      "secrets": {
+        "STRIPE_SECRET_KEY": "STRIPE_SECRET_KEY:latest",
+        "STRIPE_PUBLISHABLE_KEY": "STRIPE_PUBLISHABLE_KEY:latest",
+        "STRIPE_WEBHOOK_SECRET": "STRIPE_WEBHOOK_SECRET:latest",
+        "RESEND_API_KEY": "RESEND_API_KEY:latest"
+      }
+    },
+    "ws": {
+      "name": "chirp-ws",
+      "cpu": "1",
+      "memory": "512Mi",
+      "concurrency": 200,
+      "revision_min_instances": 1,
+      "revision_max_instances": 2,
+      "service_max_instances": 20,
+      "workers": 1,
+      "env": {
+        "DB_POOL_SIZE": "1",
+        "DB_MAX_OVERFLOW": "1"
+      },
+      "client_origin": "https://chirp-ws-593616178468.us-central1.run.app",
+      "secrets": {}
+    }
+  },
+  "jobs": {
+    "chirp-purge": {
+      "parallelism": 1,
+      "max_overlapping_executions": 1,
+      "workers": 1,
+      "module": "app.jobs.purge"
+    },
+    "chirp-media-reconcile": {
+      "parallelism": 1,
+      "max_overlapping_executions": 1,
+      "workers": 1,
+      "module": "app.jobs.media_reconcile"
+    }
+  },
+  "rollout": {
+    "max_overlapping_services": 1,
+    "revisions_per_service": 2,
+    "jobs_quiescent": true,
+    "max_window_minutes": 180
+  },
+  "client": {
+    "ws_path": "/ws",
+    "build_evidence_max_age_hours": 24
+  }
+}
