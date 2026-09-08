@@ -2,6 +2,7 @@
  * Transient failures expose retry after a finite budget; they never log Firebase out.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AppState, Platform } from "react-native";
 import { fetchMe, getCampus, getCampusVerification, type CampusOut, type CampusVerificationStatus, type UserOut } from "@/api/auth";
 import { ApiError, setDebugFirebaseUid } from "@/api/client";
 import { Operation } from "@/api/operation";
@@ -79,6 +80,12 @@ export interface SessionContextValue {
 const SessionContext = createContext<SessionContextValue | null>(null);
 const LOADING_TIMEOUT_MS = 10_000;
 const DEV_UID = devAuthUid();
+function foregroundEligible(): boolean {
+  // RN-web's AppState already emits visibilitychange. Its fallback is "active"
+  // when the DOM/visibility API is absent, so require known visible web evidence.
+  return AppState.isAvailable !== false && AppState.currentState === "active" && (Platform.OS !== "web"
+    || (typeof document !== "undefined" && document.visibilityState === "visible"));
+}
 interface LoadOptions {
   owner?: AuthIdentity;
   signal?: AbortSignal;
@@ -100,6 +107,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const genRef = useRef(0);
   const verificationGenRef = useRef(0);
   const loadRef = useRef<Operation | null>(null);
+  const foregroundRef = useRef({ eligible: foregroundEligible(), abort: new AbortController() });
 
   const loadMe = useCallback(async (options: LoadOptions = {}): Promise<SessionStatus | null> => {
     const owner = options.owner ?? (DEV_UID !== null ? replaceIdentity(DEV_UID) : captureSession());
@@ -114,7 +122,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (DEV_UID === null) await operation.wait(getIdToken(options.forceToken ?? false, owner));
       operation.assertCurrent();
       const me = await fetchMe({ operation });
-      if (genRef.current !== gen || !ownsIdentity(owner)) return null;
+      if (genRef.current !== gen || !ownsIdentity(owner) || options.signal?.aborted) return null;
       if (me.user.firebase_uid !== owner.uid) throw new Error("Account changed. Please try again.");
       setUser(me.user);
       setMemberships(me.memberships);
@@ -122,7 +130,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setStatus(nextStatus);
       return nextStatus;
     } catch (err) {
-      if (genRef.current !== gen || !ownsIdentity(owner)) return null;
+      if (genRef.current !== gen || !ownsIdentity(owner) || options.signal?.aborted) return null;
       if (err instanceof ApiError && err.status === 404 && err.detail === "user_not_registered") {
         setUser(null);
         setMemberships([]);
@@ -195,12 +203,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => { unsubscribeStatus(); unsubscribeAuth(); };
   }, [loadMe]);
 
+  useEffect(() => {
+    const update = () => {
+      const eligible = foregroundEligible();
+      if (!eligible) {
+        foregroundRef.current.abort.abort();
+        realtimeRetrySequence.current += 1;
+        realtimeRetryRef.current = null;
+        setRealtimeRetrying(false);
+      } else if (!foregroundRef.current.eligible || foregroundRef.current.abort.signal.aborted) {
+        foregroundRef.current.abort = new AbortController();
+      }
+      foregroundRef.current.eligible = eligible;
+      chirpSocket.setForeground(eligible);
+    };
+    // One platform listener: native AppState, RN-web's visibility mapping.
+    const subscription = AppState.isAvailable === false ? undefined : AppState.addEventListener("change", update);
+    update();
+    return () => { subscription?.remove(); foregroundRef.current.abort.abort(); chirpSocket.setForeground(false); };
+  }, []);
+
   const retryRealtime = useCallback((): Promise<void> => {
+    if (!ownsIdentity(renderOwner) || !foregroundRef.current.eligible) return Promise.resolve();
     if (realtimeRetryRef.current) return realtimeRetryRef.current;
-    const owner = currentIdentity(), sequence = ++realtimeRetrySequence.current;
+    const owner = renderOwner, sequence = ++realtimeRetrySequence.current;
     setRealtimeRetrying(true);
-    const retry = loadMe({ owner, forceToken: true, recoverOnFailure: true }).then(result => {
-      if (result === "ready" && ownsIdentity(owner) && sequence === realtimeRetrySequence.current) chirpSocket.retry();
+    const retry = loadMe({ owner, signal: foregroundRef.current.abort.signal, forceToken: true, recoverOnFailure: true }).then(result => {
+      if (result === "ready" && ownsIdentity(owner) && foregroundRef.current.eligible && sequence === realtimeRetrySequence.current) chirpSocket.retry();
     }).finally(() => {
       if (sequence === realtimeRetrySequence.current) {
         realtimeRetryRef.current = null;
@@ -209,18 +238,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     });
     realtimeRetryRef.current = retry;
     return retry;
-  }, [loadMe]);
+  }, [loadMe, renderOwner]);
 
+  useEffect(() => () => chirpSocket.disconnect(), [sessionGeneration]);
   useEffect(() => {
-    if (status === "ready") chirpSocket.connect();
-    else chirpSocket.disconnect();
-    return () => chirpSocket.disconnect();
+    if (status === "ready" && currentIdentity().uid !== null) chirpSocket.connect();
+    else chirpSocket.hold();
   }, [status, sessionGeneration]);
 
   const refresh = useCallback(async (): Promise<boolean> => {
+    if (!ownsIdentity(renderOwner)) return false;
     if (DEV_UID === null && (!hasFirebaseConfig() || !getFirebaseAuth().currentUser)) return false;
-    return await loadMe() !== null;
-  }, [loadMe]);
+    const foreground = foregroundRef.current.abort;
+    const paused = chirpSocket.getStatus() === "paused";
+    const result = await loadMe({ owner: renderOwner, signal: foreground.signal });
+    // This is the explicit recovery action used by the recoverable session UI.
+    // Ordinary /me refreshes for an already-ready account do not reset budgets.
+    if (result === "ready" && status === "recoverable" && paused && ownsIdentity(renderOwner)
+      && !foreground.signal.aborted && foregroundRef.current.eligible) chirpSocket.retry();
+    return result !== null;
+  }, [loadMe, status, renderOwner]);
 
   const applyBootstrap = useCallback((bootstrapped: UserOut) => {
     if (!ownsIdentity(renderOwner) || bootstrapped.firebase_uid !== renderOwner.uid) return;
