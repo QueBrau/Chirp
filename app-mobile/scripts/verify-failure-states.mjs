@@ -46,6 +46,8 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import "./payment-uncertainty-cases.mjs";
+import { runCommentCollectionCases } from "./collection-race-cases.mjs";
+await runCommentCollectionCases();
 
 const read = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 
