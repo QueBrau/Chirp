@@ -600,7 +600,7 @@ export default function SignInScreen() {
         />
 
         <View style={{ gap: spacing.md }}>
-          <AppText variant="caption" tone="secondary">
+          <AppText variant="caption" tone="secondary" style={{ textAlign: "center" }}>
             {isSignUp ? "Or sign up with" : "Or sign in with"}
           </AppText>
           {/* TWO providers, not the reference's three: Chirp has Apple and Google,
@@ -633,7 +633,7 @@ export default function SignInScreen() {
             />
           </View>
           {appleAvailable && googleAvailable ? null : (
-            <AppText variant="caption" tone="tertiary">
+            <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
               {appleAvailable
                 ? "Google sign-in is not connected in this build yet. Use Apple or Email."
                 : googleAvailable
@@ -642,7 +642,7 @@ export default function SignInScreen() {
             </AppText>
           )}
           {socialError !== null ? (
-            <AppText variant="caption" tone="danger">
+            <AppText variant="caption" tone="danger" style={{ textAlign: "center" }}>
               {socialError}
             </AppText>
           ) : null}
@@ -663,7 +663,12 @@ export default function SignInScreen() {
           disabled={submitting}
           onPress={toggleAuthMode}
           hitSlop={spacing.sm}
-          style={{ flexDirection: "row", gap: spacing.xs, opacity: submitting ? 0.4 : 1 }}
+          style={{
+            flexDirection: "row",
+            justifyContent: "center",
+            gap: spacing.xs,
+            opacity: submitting ? 0.4 : 1,
+          }}
         >
           <AppText variant="caption" tone="secondary">
             {isSignUp ? "Already have an account?" : "Don't have an account?"}
@@ -673,7 +678,7 @@ export default function SignInScreen() {
           </AppText>
         </Pressable>
 
-        <AppText variant="caption" tone="tertiary">
+        <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
           By continuing, you agree to Chirp's Terms of Service and acknowledge our Privacy Policy.
         </AppText>
       </View>
