@@ -336,8 +336,36 @@ async def list_messages(
     guarantee tied-timestamp rows won't be dropped at the boundary.
     """
     await _require_active_member(session, conversation_id, user.id)
-    stmt = select(models.Message).where(
-        models.Message.conversation_id == conversation_id
+    # c348: hide messages from a sender the READER currently holds a named block
+    # against, live at query time (not snapshotted at send time, so an unblock
+    # restores visibility with no further action). This is the reverse of
+    # blockers_of (app/core/blocks.py), which answers "who has blocked ME" for
+    # the CONTACT direction used by send_message above — history instead needs
+    # "who have I, the reader, blocked", the same question feed.py's blocked-
+    # author anti-join answers for posts/comments (routers/feed.py:225-239,
+    # :266-272). Deliberately NOT calling blockers_of here: reusing it would
+    # filter the wrong direction, and it is a Python-side set lookup that can't
+    # compose into a paginated SQL WHERE evaluated before LIMIT anyway.
+    # NAMED blocks only (matches feed.py's c279/c342 precedent) — message
+    # history is a named surface (senders are known contacts), so a by-chirp
+    # block, whose target the blocker never learns, must not make that one
+    # named person's messages vanish from a thread; that before/after diff on a
+    # specific named contact IS the anonymous author's identity, reopening the
+    # oracle c279 closed on feed/chirps. Do not widen this to match on
+    # (blocker, blocked) regardless of source.
+    stmt = (
+        select(models.Message)
+        .join(models.Device, models.Device.id == models.Message.sender_device_id)
+        .outerjoin(
+            models.UserBlock,
+            (models.UserBlock.blocked_id == models.Device.user_id)
+            & (models.UserBlock.blocker_id == user.id)
+            & (models.UserBlock.source == "named"),
+        )
+        .where(
+            models.Message.conversation_id == conversation_id,
+            models.UserBlock.blocker_id.is_(None),
+        )
     )
     if before is not None and before_id is not None:
         stmt = stmt.where(
