@@ -196,6 +196,42 @@ class MonitoringApplyTests(unittest.TestCase):
             bad_path.write_text(json.dumps({"note": "belongs to project " + project_number}))
             self.assertIn(project_number, bad_path.read_text())
 
+    # --- reader() extends monitoring_check's GET-only closure with POST/PATCH ---
+    def test_reader_post_and_patch_use_bearer_auth_and_correct_verb(self):
+        import io
+        import ssl
+        args = m.parse_arguments(["--project", PROJECT])
+        captured = []
+
+        class Opener:
+            def open(self, request, timeout):
+                captured.append({
+                    "method": request.get_method(), "url": request.full_url,
+                    "auth": request.get_header("Authorization"),
+                    "content_type": request.get_header("Content-type"),
+                    "body": json.loads(request.data) if request.data else None,
+                })
+                return io.BytesIO(b'{"name": "projects/x/alertPolicies/1"}')
+
+        def build(*handlers):
+            context = handlers[1]._context
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertIsInstance(handlers[0], m.NoRedirect)
+            return Opener()
+
+        with patch.object(m.subprocess, "run", return_value=type("R", (), {"returncode": 0, "stdout": "tok"})()):
+            with patch.object(m.urllib.request, "build_opener", side_effect=build):
+                get, post, patch_fn = m.reader(args)
+                post("https://monitoring.googleapis.com/v3/projects/x/alertPolicies", {"displayName": "d"})
+                patch_fn("https://monitoring.googleapis.com/v3/projects/x/alertPolicies/1", {"displayName": "d"})
+
+        self.assertEqual(captured[0]["method"], "POST")
+        self.assertEqual(captured[1]["method"], "PATCH")
+        for call in captured:
+            self.assertEqual(call["auth"], "Bearer tok")
+            self.assertEqual(call["content_type"], "application/json")
+            self.assertEqual(call["body"], {"displayName": "d"})
+
 
 if __name__ == "__main__":
     unittest.main()
