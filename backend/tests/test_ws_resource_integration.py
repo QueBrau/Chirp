@@ -24,6 +24,39 @@ from loadtest.ws_resource_probe import (
 from tests.conftest import b64, share_verified_campus
 
 
+def _redis_reachable() -> bool:
+    """True if a Redis is actually listening at the address the `broker` fixture uses.
+
+    Board c92 established the pattern (see tests/test_ws_fanout.py); board c394 applies
+    it here. Copied rather than imported because this file's fixture targets REDIS_URL
+    (falling back to 127.0.0.1:6379), not settings.redis_url as test_ws_fanout.py does —
+    the two addresses can disagree, so the reachability check must match the fixture it
+    guards, not the app's own default.
+
+    Deliberately a CONNECTION check and nothing more. A skip that triggered on any error
+    would swallow the exact regression these tests exist to catch: if Redis is up and
+    something is actually broken, these must still fail loudly.
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0"))
+    try:
+        with socket.create_connection((parsed.hostname or "127.0.0.1", parsed.port or 6379), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+#: Applied per-test, NOT as a module-level pytestmark — see test_ws_fanout.py's
+#: needs_redis for why: the other tests in this file pass with no Redis running, and a
+#: module-level skip would silently stop running them on a Redis-less machine.
+needs_redis = pytest.mark.skipif(
+    not _redis_reachable(),
+    reason="no Redis at REDIS_URL/127.0.0.1:6379 — see boards c92, c394 (brew install redis, or use CI)",
+)
+
+
 @pytest.fixture(autouse=True)
 def fixed_pool(monkeypatch):
     monkeypatch.setenv("DB_POOL_SIZE", "1")
@@ -119,6 +152,7 @@ async def test_actual_paused_transport_close_attempt_returns(monkeypatch):
             record_result({"case": "paused_close", "attempt_budget_ms": 40, "return_and_disconnect_ms": (time.monotonic() - start) * 1000})
 
 
+@needs_redis
 async def test_churn_delivery_sql_and_memory(client, make_user, broker, monkeypatch):
     from app.db import get_engine
     from app.main import create_app
@@ -204,6 +238,7 @@ async def test_churn_delivery_sql_and_memory(client, make_user, broker, monkeypa
         event.remove(engine, "before_cursor_execute", query)
 
 
+@needs_redis
 async def test_live_suspension_unsuspend_and_broker_churn(client, make_user, broker, monkeypatch):
     from app.db import get_session_factory
     from app.main import create_app
@@ -237,6 +272,7 @@ async def test_live_suspension_unsuspend_and_broker_churn(client, make_user, bro
         await socket.close()
         await no_subscribers(broker)
 
+@needs_redis
 async def test_actual_slow_reader_is_released_without_starving_peer(client, make_user, broker, caplog):
     from app.db import get_engine
     from app.main import create_app
@@ -298,6 +334,7 @@ async def test_actual_slow_reader_is_released_without_starving_peer(client, make
 
 
 
+@needs_redis
 async def test_disconnect_resume_preserves_durable_message_catchup(client, make_user, broker):
     from app.main import create_app
     sender, recipient = await make_user(), await make_user()
