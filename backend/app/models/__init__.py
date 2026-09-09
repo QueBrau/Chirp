@@ -1,6 +1,7 @@
 """SQLAlchemy models for Chirp — re-exports every model so Base.metadata is complete."""
 
 from app.models.alumni import AlumniProfile, JobPost
+from app.models.delivery import DeliveryOutbox
 from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
 from app.models.events import Event, EventInvite, EventRsvp
 from app.models.finance import (
@@ -50,6 +51,7 @@ __all__ = [
     "Conversation",
     "ConversationMember",
     "NIL_UUID",
+    "DeliveryOutbox",
     "Device",
     "DuesCycle",
     "DuesPaymentPlan",
