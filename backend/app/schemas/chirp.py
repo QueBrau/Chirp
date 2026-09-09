@@ -25,13 +25,24 @@ class ChirpCreate(_Schema):
 
 
 class ChirpOut(_Schema):
-    """Anonymous to peers: NO author field of any kind (SPEC §8.3)."""
+    """No author IDENTIFIER of any kind (SPEC §8.3) - but since c390 it does carry
+    `author_label`, a daily-rotating pseudonym.
+
+    That is a deliberate, narrowed exception rather than a repeal. The label is
+    stable for one author within one UTC day on one campus and unrelated the next
+    day, so it links a day's chirps and nothing beyond that. It is derived from a
+    stored random seed, so it is a one-way label and not the author id in disguise:
+    nothing here lets a caller resolve it back to a person, and users.pseudonym_seed
+    is never exposed by any route. See services/pseudonym_service for the two ways
+    to get this wrong.
+    """
 
     id: uuid.UUID
     campus_id: uuid.UUID
     body: str
     score: int
     created_at: datetime
+    author_label: str
 
 
 # ---- votes ----

@@ -541,12 +541,16 @@ export const MOCK_MOMENTS: MockMoment[] = [
   { id: "mom-7", userId: "usr-noah" },
 ];
 
-// ---------- chirps (anonymous — NO author fields, SPEC §8.3) ----------
+// ---------- chirps (anonymous - no author IDENTIFIER, SPEC §8.3) ----------
+// c390: author_label is a daily-rotating pseudonym, so these fixtures mirror what
+// the server sends. Chirps 1 and 3 deliberately SHARE a label to represent one
+// author posting twice in a day, which is the whole behaviour the feature adds.
 
 export const MOCK_CHIRPS: ChirpOut[] = [
   {
     id: "chirp-1",
     campus_id: MOCK_CAMPUS.id,
+    author_label: "Quiet-Magnolia-07",
     body: "the EUC put out 'street tacos' today. brother, that was a fold of sadness",
     score: 41,
     created_at: "2026-08-11T12:20:00Z",
@@ -554,6 +558,7 @@ export const MOCK_CHIRPS: ChirpOut[] = [
   {
     id: "chirp-2",
     campus_id: MOCK_CAMPUS.id,
+    author_label: "Copper-Sycamore-53",
     body: "whoever keeps playing saxophone on Tate Street at 8am: you're getting better and I hate that I know that",
     score: 87,
     created_at: "2026-08-11T09:02:00Z",
@@ -561,6 +566,7 @@ export const MOCK_CHIRPS: ChirpOut[] = [
   {
     id: "chirp-3",
     campus_id: MOCK_CAMPUS.id,
+    author_label: "Quiet-Magnolia-07",
     body: "Jackson Library 4th floor AC is broken again. finals week speedrun any% sweat category",
     score: 12,
     created_at: "2026-08-10T22:47:00Z",
@@ -568,6 +574,7 @@ export const MOCK_CHIRPS: ChirpOut[] = [
   {
     id: "chirp-4",
     campus_id: MOCK_CAMPUS.id,
+    author_label: "Brisk-Heron-18",
     body: "hot take: the Spartan Village geese run this campus and we just live here",
     score: -3,
     created_at: "2026-08-10T18:11:00Z",

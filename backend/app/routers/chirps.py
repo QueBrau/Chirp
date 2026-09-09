@@ -14,6 +14,7 @@ from app.core.rate_limits import CHIRP_CREATE_LIMIT, limit_per_user
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.schemas.chirp import ChirpCreate, ChirpOut, ChirpVoteCreate, ChirpVoteOut
+from app.services.pseudonym_service import daily_pseudonym
 
 router = APIRouter(tags=["chirps"])
 
@@ -22,6 +23,26 @@ class ChirpFeedOut(ChirpOut):
     """ChirpOut plus the caller's OWN vote only — still no author field of any kind (§8.3)."""
 
     my_vote: int | None = None
+
+
+def _feed_out(chirp: models.Chirp, seed: str, my_vote: int | None) -> ChirpFeedOut:
+    """One chirp as the wire sees it, including its daily pseudonym (c390).
+
+    Fields are listed EXPLICITLY rather than model_validate(chirp) + assignment,
+    because author_label has no counterpart on the ORM row: a validate-then-assign
+    would need the field to be optional, and an optional identity field is one
+    forgotten assignment away from every chirp on the board sharing a default.
+    Spelled out, a missing field is a startup-time error instead.
+    """
+    return ChirpFeedOut(
+        id=chirp.id,
+        campus_id=chirp.campus_id,
+        body=chirp.body,
+        score=chirp.score,
+        created_at=chirp.created_at,
+        author_label=daily_pseudonym(seed, chirp.campus_id, chirp.created_at),
+        my_vote=my_vote,
+    )
 
 
 @router.get("/campuses/{campus_id}/chirps")
@@ -50,7 +71,12 @@ async def list_chirps(
     this caller (§8.3: nothing in the response may reveal that anything was hidden).
     """
     stmt = (
-        select(models.Chirp, models.ChirpVote.value)
+        # users is joined for pseudonym_seed alone (c390). An INNER join is correct
+        # and intentional: chirps.author_id is a non-null FK, so a chirp with no
+        # author row cannot exist, and an outer join would quietly admit one with a
+        # null seed that then blows up in daily_pseudonym.
+        select(models.Chirp, models.ChirpVote.value, models.User.pseudonym_seed)
+        .join(models.User, models.User.id == models.Chirp.author_id)
         .outerjoin(
             models.ChirpVote,
             (models.ChirpVote.chirp_id == models.Chirp.id)
@@ -82,10 +108,8 @@ async def list_chirps(
 
     result = await session.execute(stmt)
     items: list[ChirpFeedOut] = []
-    for chirp, my_vote in result.all():
-        item = ChirpFeedOut.model_validate(chirp)
-        item.my_vote = my_vote
-        items.append(item)
+    for chirp, my_vote, seed in result.all():
+        items.append(_feed_out(chirp, seed, my_vote))
     return items
 
 
@@ -105,7 +129,15 @@ async def create_chirp(
     session.add(chirp)
     await session.commit()
     await session.refresh(chirp)
-    return ChirpOut.model_validate(chirp)
+    # The author is the caller, so their seed is already in hand - no re-query.
+    return ChirpOut(
+        id=chirp.id,
+        campus_id=chirp.campus_id,
+        body=chirp.body,
+        score=chirp.score,
+        created_at=chirp.created_at,
+        author_label=daily_pseudonym(user.pseudonym_seed, chirp.campus_id, chirp.created_at),
+    )
 
 
 @router.put("/chirps/{chirp_id}/vote")

@@ -49,7 +49,24 @@ async def test_create_chirp_response_has_no_author_field(
     body = response.json()
     assert "author" not in body
     assert "author_id" not in body
-    assert set(body.keys()) == {"id", "campus_id", "body", "score", "created_at"}
+    # c390 NARROWED this, and the exact-key assertion is kept exact on purpose: the
+    # point of pinning the whole set is that a NEW field cannot appear here without
+    # someone deciding it may. author_label is that decision - a daily-rotating
+    # pseudonym derived from a stored random seed, which links one author's chirps
+    # within a UTC day and nothing further (services/pseudonym_service). Anything
+    # else showing up in this diff is a leak, so widen this set only with the same
+    # deliberation.
+    assert set(body.keys()) == {
+        "id",
+        "campus_id",
+        "body",
+        "score",
+        "created_at",
+        "author_label",
+    }
+    # The label must be a LABEL, never the identity behind it.
+    assert user.id not in body["author_label"]
+    assert str(campus_id) not in body["author_label"]
 
 
 async def test_list_chirps_response_has_no_author_field(
