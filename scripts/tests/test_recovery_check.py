@@ -13,7 +13,11 @@ import unittest
 from typing import Any
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "recovery-check"
+# c392: the python source moved to recovery_check.py behind a bash wrapper
+# (scripts/recovery-check) shared with every other scripts/ entry point; this
+# suite runs the module directly via sys.executable, as it always has, so only
+# the path it points at changes.
+SCRIPT = Path(__file__).resolve().parents[1] / "recovery_check.py"
 SECRET = "do-not-print-this-cloud-secret"
 FAKE_GCLOUD = '''#!/usr/bin/env python3
 import json

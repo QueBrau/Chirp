@@ -10,18 +10,11 @@
 # backend/.venv interpreter, then python3 - and whichever wins must prove it
 # holds CA certificates before a single probe is sent, so a wrong interpreter
 # fails here with a message instead of as a false NOT_READY.
+#
+# c392: the resolver itself now lives in scripts/lib/pick-python.sh, shared by
+# every scripts/ entry point.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-if [ -n "${CHIRP_PYTHON:-}" ]; then
-  python="$CHIRP_PYTHON"
-elif [ -x "$here/../backend/.venv/bin/python" ]; then
-  python="$here/../backend/.venv/bin/python"
-else
-  python="$(command -v python3)"
-fi
-if ! "$python" -c 'import ssl, sys; sys.exit(0 if ssl.create_default_context().cert_store_stats()["x509_ca"] > 0 else 1)' 2>/dev/null; then
-  printf 'deploy-verify: %s has no CA certificates in its default trust store; every https probe would fail before reaching the service. Set CHIRP_PYTHON to an interpreter with certificates (the repo backend/.venv/bin/python works).\n' "$python" >&2
-  exit 2
-fi
-printf 'deploy-verify: interpreter %s\n' "$python" >&2
+source "$here/lib/pick-python.sh"
+python=$(chirp_pick_python deploy-verify) || exit $?
 exec "$python" "$here/deploy_verify.py" "$@"
