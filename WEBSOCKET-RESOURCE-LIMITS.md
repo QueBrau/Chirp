@@ -1,10 +1,11 @@
 # WebSocket resource limits — c354 partial backend delivery
 
 This change bounds the gateway's outbound application work and waiting tasks.
-c354 remains open: foreground/visibility lifecycle and durable consumer catch-up
-need coordinated mobile work, and the current inbound transport has a confirmed
-empty-continuation-fragment retention issue described below. These results do
-not establish a safe production user count or a total per-socket memory ceiling.
+c354 remains open: the coordinated client slice and its release/device acceptance
+are tracked in [REALTIME-CLIENT-RECOVERY.md](REALTIME-CLIENT-RECOVERY.md), and the
+current inbound transport has a confirmed empty-continuation-fragment retention
+issue described below. These results do not establish a safe production user
+count or a total per-socket memory ceiling.
 
 ## Gateway contract
 
@@ -50,7 +51,7 @@ a slot held by a still-running native verification call. Four SDK calls may stay
 occupied until the SDK completes; admission waiters remain part of the server's
 overall request-concurrency envelope. No SDK-duration bound is claimed.
 
-## Readiness, reconnects and remaining client work
+## Readiness and coordinated client release
 
 The gateway sends an additive `{"type":"ready"}` event only after reading the
 actual Redis `subscribe` ACK for that user's channel. Awaiting redis-py's
@@ -58,21 +59,23 @@ actual Redis `subscribe` ACK for that user's channel. Awaiting redis-py's
 without reading that reply. A later automatic resubscription ends the connection
 so missing events cannot be hidden behind an apparently unchanged stream.
 
-This event is a subscription fence, not a durable-delivery receipt. Existing
-clients ignore the unknown event and still treat native `onopen` as ready. Their
-current catch-up/subscription race is therefore not fixed until the coordinated
-client slice lands. Deploy the additive server event before updated clients
-require it; a fallback to native `onopen` would restore the race.
+This event marks subscription readiness, not a durable-delivery receipt. Older
+clients ignore the unknown event and still treat native `onopen` as ready. Deploy
+the additive server event before releasing clients that require it; a fallback
+to native `onopen` would restore the history/subscription race. The coordinated
+client contract and its separate source/release evidence are in
+[REALTIME-CLIENT-RECOVERY.md](REALTIME-CLIENT-RECOVERY.md).
 
-The remaining c354 client work must preserve the existing identity/operation
-ownership protections and Claude's history/inbox work:
+The coordinated c354 client contract preserves identity/operation ownership
+protections and the existing history/inbox work:
 
 - Connect only for an authenticated foreground app or visible browser tab;
   cancel reconnect timers while backgrounded, and revalidate before resuming.
 - Treat the server's ready event as usable realtime, with a readiness timeout.
-- On every ready event, including first connection, refresh durable thread/inbox
-  state, merge by stable ID without overwriting concurrent live events, and retain
-  bounded pagination and stale-result rejection.
+- On every ready event, including first connection, refresh a bounded durable
+  thread/inbox window. Resolve live message IDs through current server visibility
+  checks; callback arrival order never makes a raw event authoritative. Retain
+  server cursors, exact ordering and stale-result rejection.
 - Exercise real handlers for background/resume, suspended/unsuspended accounts,
   reconnect churn and missed durable updates; device integration remains separate.
 

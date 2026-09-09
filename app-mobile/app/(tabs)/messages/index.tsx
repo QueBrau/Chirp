@@ -13,12 +13,15 @@
  * inside `children`, right under the header.
  */
 
-import { useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { Feather } from "@expo/vector-icons";
 
+import { useSession } from "@/auth";
+import { currentIdentity } from "@/auth/identity";
+import { DurableWindow } from "@/realtime/durableWindow";
 import { listConversations, type ConversationOut } from "@/api/messages";
 import { AppText, Button, Card, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
 import { chirpSocket, isMessageEvent } from "@/realtime/socket";
@@ -82,78 +85,37 @@ function toItem(conversation: ConversationOut): ConversationItem {
 export default function MessagesScreen() {
   const router = useRouter();
   const palette = useTheme();
-  const [items, setItems] = useState<ConversationItem[] | null>(null);
-  /** The inbox fetch failed. Distinct from a genuinely empty inbox (c299) - the two
-   * used to render identically, so a dropped request told the user they had no
-   * conversations. Same rule feed/index.tsx's LoadState comment sets out. */
-  const [loadFailed, setLoadFailed] = useState(false);
-  // Whether the last page fetched was full — a page shorter than PAGE_LIMIT is
-  // provably the last one (board c344's cursor pagination).
-  const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-
-  // Hoisted from the mount effect (c304) so pull-to-refresh can invoke it too.
-  const load = useCallback(async () => {
-    try {
-      const conversations = await listConversations({ limit: PAGE_LIMIT });
-      setItems(conversations.map(toItem));
-      setHasMore(conversations.length === PAGE_LIMIT);
-      setLoadFailed(false);
-    } catch {
-      // NOT `.catch(() => setItems([]))` (c299): an empty array is the server's answer
-      // "you have no conversations", and a failed fetch has no answer at all. Rendering
-      // them the same is the bug this rollout removes — the failure gets its own state.
-      //
-      // Handled INSIDE load rather than at the call site, because c304 hoisted this
-      // into a useCallback that pull-to-refresh also invokes directly (onRefresh={load}).
-      // A catch on only the mount effect would leave a failed PULL unhandled.
-      setLoadFailed(true);
-    }
-  }, []);
-
-  // Older page via the (created_at, id) cursor — the same compound cursor
-  // listMessages already uses, now on GET /conversations too (board c344).
-  const loadMore = useCallback(async () => {
-    if (loadingMore || !hasMore || items === null || items.length === 0) return;
-    setLoadingMore(true);
-    try {
-      const last = items[items.length - 1].conversation;
-      const older = await listConversations({
-        before: last.created_at,
-        before_id: last.id,
-        limit: PAGE_LIMIT,
-      });
-      setItems((current) => [...(current ?? []), ...older.map(toItem)]);
-      setHasMore(older.length === PAGE_LIMIT);
-    } catch {
-      // Fail soft: the page already on screen stays usable; pull-to-refresh retries.
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [items, hasMore, loadingMore]);
-
-  useEffect(() => {
-    void load();
-
-    // c63: flip a row from "No messages yet" to "Message" the moment
-    // something arrives, rather than only on the next full mount of this
-    // screen. No reordering and no real preview text — those need real
-    // content decrypted (m4) or a recency sort this screen doesn't have
-    // today; this only updates the ONE thing that changed and is knowable
-    // without either.
-    const unsubEvent = chirpSocket.onEvent((event) => {
-      if (!isMessageEvent(event)) return;
-      setItems((current) =>
-        (current ?? []).map((item) =>
-          item.conversation.id === event.conversation_id
-            ? { ...item, preview: "Message" }
-            : item,
-        ),
-      );
+  useSession();
+  const owner = currentIdentity();
+  const [, redraw] = useState(0);
+  const queryRef = useRef<DurableWindow<ConversationOut> | null>(null);
+  const window = useMemo(() => {
+    const query: DurableWindow<ConversationOut> = new DurableWindow({
+      owner, selected: () => queryRef.current === query, changed: () => redraw(value => value + 1),
+      pageSize: PAGE_LIMIT, refreshPages: 1,
+      page: (cursor, operation) => listConversations({ ...cursor, limit: PAGE_LIMIT, operation }),
     });
+    return query;
+  }, [owner]);
+  queryRef.current = window;
+  const state = window.state;
+  const items = state.loading && state.rows.length === 0 ? null : state.rows.map(toItem);
+  const loadFailed = state.failed, hasMore = state.more, loadingMore = state.loadingMore;
+  const activation = window.activation;
+  const load = () => window.ownsFocus(activation) ? window.refresh() : Promise.resolve();
+  const loadMore = () => window.ownsFocus(activation) ? window.older() : Promise.resolve();
 
-    return unsubEvent;
-  }, [load]);
+  useFocusEffect(useCallback(() => {
+    const focus = window.activate();
+    // Subscribe before the initial request. Every ready, including the first one
+    // after a fetch/socket gap, starts a new owned authoritative window.
+    const unsubscribeEvent = chirpSocket.onEvent(event => {
+      if (window.ownsFocus(focus) && isMessageEvent(event)) window.hint(event.conversation_id);
+    });
+    const unsubscribeStatus = chirpSocket.onStatus(status => { if (window.ownsFocus(focus) && status === "open") void window.refresh(); });
+    void window.refresh(); // Also covers mounting when the socket is already ready.
+    return () => { window.retire(); unsubscribeEvent(); unsubscribeStatus(); };
+  }, [window]));
 
   return (
     <Screen
@@ -161,6 +123,9 @@ export default function MessagesScreen() {
       subtitle="Start conversations. Sending isn't available yet."
       onRefresh={load}
     >
+      {state.incomplete ? <EmptyState title="Some activity may be missing"
+        message="Refresh to check the latest conversations. Earlier conversations remain available below."
+        actionLabel="Refresh messages" onAction={() => void load()} /> : null}
       <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
         <NewConversationButton onPress={() => router.push("/messages/new")} />
       </View>
@@ -200,7 +165,7 @@ export default function MessagesScreen() {
             <Button
               label={loadingMore ? "Loading conversations..." : "Load older conversations"}
               variant="secondary"
-              disabled={loadingMore}
+              disabled={loadingMore || state.loading}
               onPress={() => void loadMore()}
             />
           ) : null}

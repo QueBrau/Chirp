@@ -11,11 +11,14 @@
  * sees an EmptyState instead of a wall of 403s.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useFocusEffect } from "expo-router";
 import { Pressable, TextInput, View } from "react-native";
 
 import { listMembers, myMemberships, type MemberOut, type MyMembershipOut } from "@/api/chapters";
 import { useSession } from "@/auth";
+import { ApiError } from "@/api/client";
+import { Operation } from "@/api/operation";
 import { currentIdentity, ownsIdentity, type AuthIdentity } from "@/auth/identity";
 import {
   createMeeting,
@@ -150,9 +153,12 @@ const POLL_PAGE_SIZE = 50;
 
 function dashboardQuery(owner: AuthIdentity) {
   return {
-    owner, active: true, chapterId: null as string | null,
+    owner, active: true, focused: true, chapterId: null as string | null,
     meetings: collectionPage(), polls: collectionPage(),
     ownVoteKnown: new Set<string>(), summaryRequest: 0, windowKey: "semester" as WindowKey,
+    pollRefresh: null as Operation | null, pollChanges: 0, pollWindowRows: POLL_PAGE_SIZE,
+    pollInitial: null as Operation | null, pollOlder: null as Operation | null,
+    pollsLoaded: false, pollRefreshRequested: false, pollReadGeneration: 0,
   };
 }
 type DashboardQuery = ReturnType<typeof dashboardQuery>;
@@ -207,6 +213,8 @@ export default function SecretaryScreen() {
   const [creatingPoll, setCreatingPoll] = useState(false);
   // Which poll has a request in flight, so only that card disables.
   const [busyPollId, setBusyPollId] = useState<string | null>(null);
+  const [pollRefreshState, setPollRefreshState] = useState<"updating" | "incomplete" | null>(null);
+  const [accessLost, setAccessLost] = useState(false);
 
   // Roster attendance totals (board c82) — one server call for the whole chapter.
   const [summary, setSummary] = useState<ChapterAttendanceSummary | null>(null);
@@ -214,6 +222,73 @@ export default function SecretaryScreen() {
   const [deletingMeetingId, setDeletingMeetingId] = useState<string | null>(null);
 
   const chapterId = membership?.chapter_id ?? null;
+
+  const retireAccess = (query: DashboardQuery) => {
+    if (!currentQuery(query)) return;
+    query.active = false;
+    query.pollRefresh?.cancel();
+    query.pollInitial?.cancel(); query.pollOlder?.cancel();
+    setItems(null); setPolls(null); setRoster(null); setSummary(null); setMembership(null);
+    setAccessLost(true);
+  };
+
+  /** Re-read the visible poll window on every server-ready transition. Absolute
+   * event tallies have no revision: overlapping activity invalidates this read,
+   * rather than being assumed newer merely because its callback arrived later. */
+  const refreshPollWindow = useCallback(async (query: DashboardQuery) => {
+    if (!currentQuery(query) || query.chapterId === null) return;
+    if (!query.pollsLoaded || query.pollRefresh !== null) { query.pollRefreshRequested = true; return; }
+    const operation = new Operation({ timeoutMs: 15_000 }, query.owner);
+    query.pollRefresh = operation;
+    query.pollReadGeneration += 1;
+    query.pollRefreshRequested = false;
+    query.polls.pending = null; // Retire an older-page response before replacing its cursor.
+    query.pollOlder?.cancel();
+    setLoadingOlderPolls(false);
+    setPollRefreshState("updating");
+    const pages = Math.min(4, Math.max(1, Math.ceil(query.pollWindowRows / POLL_PAGE_SIZE)));
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const change = query.pollChanges;
+        query.pollRefreshRequested = false;
+        let cursor: { before: string; beforeId: string } | undefined;
+        let more = false;
+        const rows: PollOut[] = [];
+        for (let page = 0; page < pages; page++) {
+          operation.assertCurrent();
+          const batch = await operation.wait(listPolls(query.chapterId, { ...cursor, limit: POLL_PAGE_SIZE, operation }));
+          if (!currentQuery(query)) return;
+          if (batch.some(row => row.chapter_id !== query.chapterId)) throw new Error("Invalid poll window.");
+          rows.push(...batch);
+          const last = batch.at(-1);
+          more = batch.length === POLL_PAGE_SIZE;
+          if (last) cursor = { before: last.created_at, beforeId: last.id };
+          if (!more) break;
+        }
+        if (query.pollChanges !== change || query.pollRefreshRequested) continue;
+        const removed = new Set(query.polls.removed);
+        query.polls.cursor = cursor ?? null;
+        query.polls.more = more;
+        query.pollWindowRows = rows.length;
+        query.ownVoteKnown = new Set(rows.map(row => row.id));
+        // Replace the covered window. Missed closes/deletes and personal ballots
+        // come from the server; only irreversible deletion tombstones persist.
+        setPolls(() => mergePageRows([], rows, row => row.id, pollOrder, removed));
+        setHasOlderPolls(more);
+        setPollRefreshState(null);
+        return;
+      }
+      // At most one follow-up within the SAME deadline, even under constant votes.
+      if (currentQuery(query)) setPollRefreshState("incomplete");
+    } catch (error) {
+      if (!currentQuery(query)) return;
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403 || error.status === 404)) retireAccess(query);
+      else setPollRefreshState("incomplete");
+    } finally {
+      operation.dispose();
+      if (query.pollRefresh === operation) query.pollRefresh = null;
+    }
+  }, [renderOwner]);
 
   /**
    * Deliberately swallows its own errors instead of throwing to the caller: a failed
@@ -245,26 +320,39 @@ export default function SecretaryScreen() {
    * past date must not jump to the top.
    */
   const loadDashboard = useCallback(async (id: string, query: DashboardQuery) => {
-    const [withAttendance, members, chapterPolls] = await Promise.all([
-      listMeetingsWithAttendance(id, { limit: MEETING_PAGE_SIZE }),
-      listMembers(id),
-      listPolls(id, { limit: POLL_PAGE_SIZE }),
-    ]);
-    if (!currentQuery(query)) return;
-    setRoster(members.filter((m) => m.status === "active"));
-    const meeting = withAttendance.at(-1)?.meeting, poll = chapterPolls.at(-1);
-    acceptPage(query.meetings, withAttendance.length, MEETING_PAGE_SIZE,
-      meeting ? { before: meeting.meeting_date, beforeId: meeting.id } : null);
-    acceptPage(query.polls, chapterPolls.length, POLL_PAGE_SIZE,
-      poll ? { before: poll.created_at, beforeId: poll.id } : null);
-    const removedMeetings = new Set(query.meetings.removed), removedPolls = new Set(query.polls.removed);
-    const ownVoteKnown = new Set(query.ownVoteKnown);
-    for (const row of chapterPolls) query.ownVoteKnown.add(row.id);
-    setItems(current => mergePageRows(current, withAttendance, row => row.meeting.id, meetingOrder, removedMeetings));
-    setHasOlderMeetings(query.meetings.more);
-    setPolls(current => mergePollPage(current, chapterPolls, ownVoteKnown, removedPolls));
-    setHasOlderPolls(query.polls.more);
-  }, [renderOwner]);
+    const operation = new Operation({ timeoutMs: 15_000 }, query.owner);
+    query.pollInitial = operation;
+    query.pollReadGeneration += 1;
+    const pollChanges = query.pollChanges;
+    try {
+      const [withAttendance, members, chapterPolls] = await Promise.all([
+        listMeetingsWithAttendance(id, { limit: MEETING_PAGE_SIZE }),
+        listMembers(id),
+        listPolls(id, { limit: POLL_PAGE_SIZE, operation }),
+      ]);
+      if (!currentQuery(query)) return;
+      setRoster(members.filter((m) => m.status === "active"));
+      const meeting = withAttendance.at(-1)?.meeting, poll = chapterPolls.at(-1);
+      acceptPage(query.meetings, withAttendance.length, MEETING_PAGE_SIZE,
+        meeting ? { before: meeting.meeting_date, beforeId: meeting.id } : null);
+      acceptPage(query.polls, chapterPolls.length, POLL_PAGE_SIZE,
+        poll ? { before: poll.created_at, beforeId: poll.id } : null);
+      const removedMeetings = new Set(query.meetings.removed), removedPolls = new Set(query.polls.removed);
+      const ownVoteKnown = new Set(query.ownVoteKnown);
+      for (const row of chapterPolls) query.ownVoteKnown.add(row.id);
+      setItems(current => mergePageRows(current, withAttendance, row => row.meeting.id, meetingOrder, removedMeetings));
+      setHasOlderMeetings(query.meetings.more);
+      setPolls(current => mergePollPage(current, chapterPolls, ownVoteKnown, removedPolls));
+      setHasOlderPolls(query.polls.more);
+      query.pollWindowRows = chapterPolls.length;
+      query.pollsLoaded = true;
+      if (query.pollChanges !== pollChanges) query.pollRefreshRequested = true;
+      if (query.pollRefreshRequested) void refreshPollWindow(query);
+    } finally {
+      operation.cancel(); operation.dispose();
+      if (query.pollInitial === operation) query.pollInitial = null;
+    }
+  }, [renderOwner, refreshPollWindow]);
 
   /** Append the page of meetings after the oldest held. Each sheet still arrives whole,
    * so the present/absent/excused counts below stay counts of the real sheet (c258). */
@@ -299,14 +387,17 @@ export default function SecretaryScreen() {
 
   const loadOlderPolls = async () => {
     const query = renderQuery;
-    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId) return;
+    if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId || query.pollRefresh !== null) return;
     const request = beginOlderPage(query.polls), cursor = query.polls.cursor;
     if (request === null || cursor === null) return;
+    const operation = new Operation({ timeoutMs: 15_000 }, query.owner);
+    query.pollOlder = operation;
     setLoadingOlderPolls(true);
     try {
       const older = await listPolls(chapterId, {
         ...cursor,
         limit: POLL_PAGE_SIZE,
+        operation,
       });
       if (!currentQuery(query) || query.polls.pending !== request) return;
       const poll = older.at(-1);
@@ -314,12 +405,16 @@ export default function SecretaryScreen() {
         poll ? { before: poll.created_at, beforeId: poll.id } : null);
       const ownVoteKnown = new Set(query.ownVoteKnown), removed = new Set(query.polls.removed);
       for (const row of older) query.ownVoteKnown.add(row.id);
+      query.pollWindowRows += older.length;
       setHasOlderPolls(query.polls.more);
       setPolls(current => mergePollPage(current, older, ownVoteKnown, removed));
     } catch (error) {
       if (!currentQuery(query) || query.polls.pending !== request) return;
-      showApiError(error, "Couldn't load earlier polls");
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403 || error.status === 404)) retireAccess(query);
+      else showApiError(error, "Couldn't load earlier polls");
     } finally {
+      operation.dispose();
+      if (query.pollOlder === operation) query.pollOlder = null;
       if (currentQuery(query) && query.polls.pending === request) {
         query.polls.pending = null;
         setLoadingOlderPolls(false);
@@ -327,9 +422,9 @@ export default function SecretaryScreen() {
     }
   };
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     const query = dashboardQuery(renderOwner);
-    queryRef.current.active = false;
+    queryRef.current.active = false; queryRef.current.focused = false;
     queryRef.current = query;
     setMembership(undefined);
     setItems(null); setPolls(null); setRoster(null); setSummary(null);
@@ -342,6 +437,15 @@ export default function SecretaryScreen() {
     setNewTitle(""); setNewDateText(""); setNewQuestion("");
     setNewOptions(Array.from({ length: POLL_OPTION_SLOTS }, () => ""));
     setCreateError(null); setPollError(null); setWindowKey("semester");
+    setPollRefreshState(null); setAccessLost(false);
+    // Attach both listeners BEFORE any initial HTTP request, including when the
+    // socket was already ready at mount. The initial fetch covers that ready state.
+    const unsubscribeEvents = subscribePollEvents(query);
+    const unsubscribeStatus = chirpSocket.onStatus(socketStatus => {
+      if (!currentQuery(query) || socketStatus !== "open") return;
+      if (!query.pollsLoaded) query.pollRefreshRequested = true;
+      else void refreshPollWindow(query);
+    });
     const init = async () => {
       setLoadFailed(false);
       try {
@@ -356,6 +460,7 @@ export default function SecretaryScreen() {
         await loadSummary(eligible.chapter_id, query.windowKey, query);
       } catch (error) {
         if (!currentQuery(query)) return;
+        if (error instanceof ApiError && [401, 403, 404].includes(error.status)) { retireAccess(query); return; }
         showApiError(error, "Couldn't load the secretary dashboard");
         // c313: a FAILED load must not render as "Secretary/president only" -
         // that is the revoked-role lie c299 removed from treasurer.tsx. The
@@ -365,8 +470,8 @@ export default function SecretaryScreen() {
       }
     };
     void init();
-    return () => { query.active = false; };
-  }, [loadDashboard, loadSummary, retryKey, renderOwner]);
+    return () => { query.active = false; query.focused = false; query.pollRefresh?.cancel(); query.pollInitial?.cancel(); query.pollOlder?.cancel(); unsubscribeEvents(); unsubscribeStatus(); };
+  }, [loadDashboard, loadSummary, refreshPollWindow, retryKey, renderOwner]));
 
   /**
    * Live poll updates (c162). Somebody else voting is the ONLY thing that moves a
@@ -382,11 +487,10 @@ export default function SecretaryScreen() {
    * chapters receives both chapters' polls on one socket. Without this check the
    * other chapter's votes would silently rewrite this screen.
    */
-  useEffect(() => {
-    if (chapterId === null) return;
-    const query = queryRef.current;
+  const subscribePollEvents = (query: DashboardQuery) => {
     return chirpSocket.onEvent((event) => {
-      if (!currentQuery(query) || query.chapterId !== chapterId || !isPollEvent(event) || event.chapter_id !== chapterId) return;
+      if (!currentQuery(query) || query.chapterId === null || !isPollEvent(event) || event.chapter_id !== query.chapterId) return;
+      query.pollChanges += 1;
 
       if (event.action === "deleted") {
         query.polls.removed.add(event.poll_id);
@@ -408,7 +512,20 @@ export default function SecretaryScreen() {
         );
       });
     });
-  }, [chapterId, renderOwner, retryKey]);
+  };
+
+  const retryDashboard = () => {
+    const query = renderQuery;
+    if (query !== queryRef.current || !query.focused || query.owner !== renderOwner || !ownsIdentity(renderOwner)) return;
+    setRetryKey(key => key + 1);
+  };
+
+  if (accessLost && queryRef.current.owner === renderOwner) return (
+    <Screen title="Secretary" subtitle="Minutes, polls, and attendance">
+      <EmptyState title="Dashboard unavailable" message="We couldn't verify access to this chapter. Try again to check."
+        actionLabel="Try again" onAction={retryDashboard} />
+    </Screen>
+  );
 
   if (!currentQuery(queryRef.current)) return null;
 
@@ -422,7 +539,7 @@ export default function SecretaryScreen() {
           title="Couldn't load the dashboard"
           message="Something went wrong reaching the server."
           actionLabel="Try again"
-          onAction={() => setRetryKey((k) => k + 1)}
+          onAction={retryDashboard}
         />
       </Screen>
     );
@@ -666,13 +783,19 @@ export default function SecretaryScreen() {
 
     setPollError(null);
     setCreatingPoll(true);
+    const mutation = { changes: ++query.pollChanges, read: query.pollReadGeneration };
     try {
       const created = await createPoll(chapterId, { question, options });
       if (!currentQuery(query)) return;
-      const ownVoteKnown = new Set(query.ownVoteKnown), removed = new Set(query.polls.removed);
-      query.ownVoteKnown.add(created.id);
-      // The opened event can beat this POST response and already include votes.
-      setPolls(current => mergePollPage(current, [created], ownVoteKnown, removed));
+      if (query.pollChanges !== mutation.changes || query.pollReadGeneration !== mutation.read) {
+        // Neither an older POST body nor an aggregate event establishes ordering.
+        query.pollChanges += 1;
+        void refreshPollWindow(query);
+      } else {
+        const ownVoteKnown = new Set(query.ownVoteKnown), removed = new Set(query.polls.removed);
+        query.ownVoteKnown.add(created.id); query.pollChanges += 1;
+        setPolls(current => mergePollPage(current, [created], ownVoteKnown, removed));
+      }
       setNewQuestion("");
       setNewOptions(Array.from({ length: POLL_OPTION_SLOTS }, () => ""));
     } catch (error) {
@@ -685,8 +808,11 @@ export default function SecretaryScreen() {
 
   /** Both vote and close return the whole poll, so the card re-renders from the
    * server's tally rather than from a guess made locally. */
-  const replacePoll = (updated: PollOut, query: DashboardQuery) => {
+  const replacePoll = (updated: PollOut, query: DashboardQuery, mutation: { changes: number; read: number }) => {
     if (!currentQuery(query) || query.polls.removed.has(updated.id)) return;
+    const ambiguous = query.pollChanges !== mutation.changes || query.pollReadGeneration !== mutation.read;
+    query.pollChanges += 1;
+    if (ambiguous) { void refreshPollWindow(query); return; }
     query.ownVoteKnown.add(updated.id);
     setPolls((prev) => (prev ?? []).map((p) => (p.id === updated.id ? updated : p)));
   };
@@ -695,8 +821,9 @@ export default function SecretaryScreen() {
     const query = renderQuery;
     if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId) return;
     setBusyPollId(pollId);
+    const mutation = { changes: ++query.pollChanges, read: query.pollReadGeneration };
     try {
-      replacePoll(await castVote(chapterId, pollId, optionId), query);
+      replacePoll(await castVote(chapterId, pollId, optionId), query, mutation);
     } catch (error) {
       if (!currentQuery(query)) return;
       showApiError(error, "Couldn't record your vote");
@@ -709,8 +836,9 @@ export default function SecretaryScreen() {
     const query = renderQuery;
     if (!currentQuery(query) || chapterId === null || query.chapterId !== chapterId) return;
     setBusyPollId(pollId);
+    const mutation = { changes: ++query.pollChanges, read: query.pollReadGeneration };
     try {
-      replacePoll(await closePoll(chapterId, pollId), query);
+      replacePoll(await closePoll(chapterId, pollId), query, mutation);
     } catch (error) {
       if (!currentQuery(query)) return;
       showApiError(error, "Couldn't close the poll");
@@ -765,6 +893,11 @@ export default function SecretaryScreen() {
             title="Polls"
             caption="Open a vote. Results update as members tap"
           />
+          {pollRefreshState === "updating" ? <AppText variant="caption" tone="secondary">Refreshing poll results…</AppText> : null}
+          {pollRefreshState === "incomplete" ? <EmptyState title="Poll updates may be incomplete"
+            message="Some results could not be refreshed. Try again to check the current tally."
+            actionLabel="Refresh polls" onAction={() => void refreshPollWindow(renderQuery)} /> : null}
+          {hasOlderPolls ? <AppText variant="caption" tone="secondary">Showing a recent window. Earlier polls may include missed updates.</AppText> : null}
           <Card style={{ marginBottom: spacing.md }}>
             <View style={{ gap: spacing.lg }}>
               <View>

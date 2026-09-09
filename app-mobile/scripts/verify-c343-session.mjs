@@ -8,6 +8,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import ts from "typescript";
+import { recoveryCases } from "./c354-recovery-cases.mjs";
 
 const emittedModules = new Map();
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -122,6 +123,7 @@ function environment() {
     [resolve(ROOT, "src/auth/firebase.ts")]: { getFirebaseAuth: () => auth },
     [resolve(ROOT, "src/auth/devAuth.ts")]: { devAuthUid: () => null },
     [resolve(ROOT, "src/lib/alert.ts")]: { showAlert: (...args) => alerts.push(args), showApiError: (...args) => alerts.push(args), confirmAction: value => { env.confirmation = value; } },
+    [resolve(ROOT, "src/lib/export.ts")]: { shareCsv: async () => {} },
     [resolve(ROOT, "src/auth/index.ts")]: { useCampusAccess: () => "verified", useSession: () => hook.value },
     [resolve(ROOT, "src/theme/index.ts")]: { useTheme: () => ({}), light: {}, radii: {}, spacing: {}, metrics: {}, typography: { caption: {}, body: {}, headline: {} }, inputField: () => ({}), withAlpha: () => "color" },
   };
@@ -767,4 +769,5 @@ await test("c354 unavailable AppState fails closed without subscribing to a miss
   assert.equal(e.hook.value.status, "ready"); assert.equal(e.sockets.length, 0);
 });
 
+await recoveryCases({ test, flush, deferred, response, readySocket, nodes });
 console.log(`ALL PASS: ${count} executed c343/c346/c354 behavior regressions (TypeScript ${ts.version}).`);

@@ -4,7 +4,8 @@
  * Decrypted history lives ONLY in the on-device SQLite store (src/db/schema.ts).
  */
 
-import { request } from "./client";
+import { request, type RequestOptions } from "./client";
+export type MessageRequestOptions = Pick<RequestOptions, "operation" | "signal" | "timeoutMs">;
 
 export type ConversationKind = "dm" | "group";
 export type MessageType = "signal" | "sender_key_distribution";
@@ -72,7 +73,7 @@ export async function createConversation(body: ConversationCreate): Promise<Conv
 
 /** Cursor options for the inbox list, newest-first — same (before, before_id) shape
  * as ListMessagesOptions below. */
-export interface ListConversationsOptions {
+export interface ListConversationsOptions extends MessageRequestOptions {
   /** created_at cursor — conversations older than this. */
   before?: string;
   /** id tie-break for rows sharing the same created_at as `before`. */
@@ -84,6 +85,7 @@ export async function listConversations(
   options: ListConversationsOptions = {},
 ): Promise<ConversationOut[]> {
   return request<ConversationOut[]>("/conversations", {
+    operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs,
     query: { before: options.before, before_id: options.before_id, limit: options.limit },
   });
 }
@@ -91,8 +93,10 @@ export async function listConversations(
 /** One conversation's summary — added so a screen that only has a conversation id
  * (a deep link, or one reached after paging past the first inbox page) can still
  * resolve its title/kind without listConversations() being guaranteed to include it. */
-export async function getConversation(conversationId: string): Promise<ConversationOut> {
-  return request<ConversationOut>(`/conversations/${conversationId}`);
+export async function getConversation(conversationId: string, options: MessageRequestOptions = {}): Promise<ConversationOut> {
+  return request<ConversationOut>(`/conversations/${conversationId}`, {
+    operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs,
+  });
 }
 
 export async function sendMessage(
@@ -106,7 +110,7 @@ export async function sendMessage(
 }
 
 /** Cursor options for ciphertext history, newest-first. */
-export interface ListMessagesOptions {
+export interface ListMessagesOptions extends MessageRequestOptions {
   /** created_at cursor — messages older than this. */
   before?: string;
   /** id tie-break for rows sharing the same created_at as `before`. */
@@ -120,13 +124,28 @@ export async function listMessages(
   options: ListMessagesOptions = {},
 ): Promise<MessageOut[]> {
   return request<MessageOut[]>(`/conversations/${conversationId}/messages`, {
+    operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs,
     query: { before: options.before, before_id: options.before_id, limit: options.limit },
   });
 }
 
 /** Leave a conversation — server sets left_at; remaining clients rotate sender keys (SPEC §6.4). */
-export async function leaveConversation(conversationId: string): Promise<void> {
-  return request<void>(`/conversations/${conversationId}/leave`, { method: "POST" });
+export async function leaveConversation(conversationId: string, options: MessageRequestOptions = {}): Promise<void> {
+  return request<void>(`/conversations/${conversationId}/leave`, {
+    operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs, method: "POST",
+  });
+}
+
+/** Live frames supply identifiers only; the server rechecks current visibility. */
+export async function getMessagesById(conversationId: string, ids: readonly string[], options: MessageRequestOptions = {}): Promise<MessageOut[]> {
+  const unique = [...new Set(ids.map(id => id.toLowerCase()))];
+  if (ids.length > 50 || unique.length === 0 || unique.some(id => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) {
+    throw new Error("Invalid message selection.");
+  }
+  return request<MessageOut[]>(`/conversations/${conversationId}/messages/by-id`, {
+    operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs,
+    query: { ids: unique.join(",") },
+  });
 }
 
 export async function postReceipt(

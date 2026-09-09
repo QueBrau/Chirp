@@ -1,6 +1,6 @@
 /** Polls API: open a vote, cast a ballot, read the tally — routers/polls.py (c162). */
 
-import { request } from "./client";
+import { request, type RequestOptions } from "./client";
 
 export type PollStatus = "open" | "closed";
 
@@ -39,7 +39,7 @@ export interface PollOut {
 }
 
 /** One page of polls, newest first. `before`/`beforeId` are the OLDEST poll held (c258). */
-export interface PollPageQuery {
+export interface PollPageQuery extends Pick<RequestOptions, "operation" | "signal" | "timeoutMs"> {
   meetingId?: string;
   before?: string;
   beforeId?: string;
@@ -53,6 +53,7 @@ export async function listPolls(
   // BOTH cursor halves or NEITHER - see listMeetingsWithAttendance for why.
   const paired = options.before !== undefined && options.beforeId !== undefined;
   return request<PollOut[]>(`/chapters/${chapterId}/polls`, {
+    operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs,
     query: {
       meeting_id: options.meetingId,
       before: paired ? options.before : undefined,
