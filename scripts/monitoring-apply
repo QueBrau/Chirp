@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Dry-run by default; --apply --channel ... makes live write calls. See
+# MONITORING-RUNBOOK.md's "Applying the policies" section.
+#
+# c370: this tool makes live HTTPS POST/PATCH calls, unlike the read-only
+# scripts/monitoring-check wrapper (which can afford a bare `exec python3`).
+# Following scripts/deploy-verify's interpreter-resolution shape here instead:
+# a python3 with an empty default TLS trust store must fail loudly, not
+# silently no-op behind a transport error that a write path could misreport
+# as an apply failure. scripts/lib/pick-python.sh (c392) does not exist yet
+# (carded, not merged) - fold this into that shared helper once it lands.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+if [ -n "${CHIRP_PYTHON:-}" ]; then
+  python="$CHIRP_PYTHON"
+elif [ -x "$here/../backend/.venv/bin/python" ]; then
+  python="$here/../backend/.venv/bin/python"
+else
+  python="$(command -v python3)"
+fi
+if ! "$python" -c 'import ssl, sys; sys.exit(0 if ssl.create_default_context().cert_store_stats()["x509_ca"] > 0 else 1)' 2>/dev/null; then
+  printf 'monitoring-apply: %s has no CA certificates in its default trust store; every https call would fail before reaching the service. Set CHIRP_PYTHON to an interpreter with certificates (the repo backend/.venv/bin/python works).\n' "$python" >&2
+  exit 2
+fi
+printf 'monitoring-apply: interpreter %s\n' "$python" >&2
+exec "$python" "$here/monitoring_apply.py" "$@"

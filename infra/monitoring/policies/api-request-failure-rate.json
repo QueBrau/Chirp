@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp-api request failure rate",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: API request failures (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: on-call API responder. This condition thresholds an absolute 5xx count as a proxy for the runbook's proposed >5%-of->=20-total-requests ratio rule; a true ratio needs a query-language condition, which is outside the REST field-name allowlist this slice uses. Initial, review after 7 days once real traffic volume is known.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "900s"}
+  },
+  "conditions": [
+    {
+      "displayName": "chirp-api 5xx response count elevated",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.project_id=\"{{PROJECT}}\" AND resource.labels.service_name=\"chirp-api\" AND metric.type=\"run.googleapis.com/request_count\" AND metric.labels.response_code_class=\"5xx\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 5,
+        "duration": "300s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": ["resource.labels.service_name"]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-09T01:33:52.567197Z",
+  "read_only": true,
+  "operational_acceptance": false,
+  "external_and_organization_inventory": "not_verified",
+  "alert_delivery_and_responders": "not_verified",
+  "time_series_and_signal_coverage": "not_verified",
+  "limits": {
+    "max_pages_per_collection": 10,
+    "page_size": 100,
+    "max_response_bytes": 1048576
+  },
+  "collections": {
+    "alerts": {
+      "status": "complete",
+      "count": 0,
+      "enabled_count": 0,
+      "with_channel_reference_count": 0
+    },
+    "uptime": {
+      "status": "complete",
+      "count": 0
+    },
+    "channels": {
+      "status": "complete",
+      "count": 0,
+      "enabled_count": 0,
+      "verified_count": 0
+    }
+  },
+  "native_metric_descriptors": {
+    "run.googleapis.com/request_count": "available",
+    "run.googleapis.com/request_latencies": "available",
+    "run.googleapis.com/container/instance_count": "available",
+    "run.googleapis.com/container/cpu/utilizations": "available",
+    "run.googleapis.com/container/memory/utilizations": "available",
+    "run.googleapis.com/job/completed_execution_count": "available",
+    "cloudsql.googleapis.com/database/up": "available",
+    "cloudsql.googleapis.com/database/cpu/utilization": "available",
+    "cloudsql.googleapis.com/database/disk/utilization": "available",
+    "cloudsql.googleapis.com/database/disk/bytes_used": "available",
+    "cloudsql.googleapis.com/database/postgresql/num_backends": "available",
+    "redis.googleapis.com/clients/connected": "available",
+    "redis.googleapis.com/server/uptime": "available",
+    "redis.googleapis.com/stats/memory/usage_ratio": "available",
+    "redis.googleapis.com/stats/evicted_keys": "available"
+  },
+  "configuration_gaps": [
+    "alerts_none_enabled_or_configured",
+    "uptime_none_enabled_or_configured",
+    "channels_none_enabled_or_configured"
+  ],
+  "status": "inventory_gaps",
+  "exit_code": 1
+}

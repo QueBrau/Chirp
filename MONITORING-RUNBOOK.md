@@ -194,6 +194,91 @@ coverage gap. Mark c370 done only after the current-service coverage matrix and
 responder/delivery evidence are accepted. The code and fixture tests alone are
 preparation, even when CI passes.
 
+## Applying the policies
+
+This slice ships policy-only, native-metric alert policies: the eleven files
+under `infra/monitoring/policies/`, covering API request failures, API
+latency, Cloud Run instance CPU/memory pressure, SQL availability, SQL disk
+warning/critical, SQL connections approaching the reserved ceiling, Redis
+memory pressure, Redis unexpected eviction, and failed-execution alerts for
+both `chirp-purge` and `chirp-media-reconcile`. `{{PROJECT}}` and
+`{{NOTIFICATION_CHANNEL}}` are the only templating points in any policy body;
+`scripts/monitoring_apply.py` substitutes `{{PROJECT}}` unconditionally and
+`{{NOTIFICATION_CHANNEL}}` only under `--apply`. No policy body contains a
+literal project number or channel id.
+
+Dry-run first, which makes zero write calls and only prints the plan (create,
+update or no-op per policy `displayName`):
+
+```sh
+scripts/monitoring-apply --project YOUR_PROJECT --gcloud /path/to/gcloud
+```
+
+Create the notification channel in the console first (this tool never creates
+channels), then apply with its resource name:
+
+```sh
+scripts/monitoring-apply --project YOUR_PROJECT --gcloud /path/to/gcloud \
+  --apply --channel projects/YOUR_PROJECT/notificationChannels/CHANNEL_ID
+```
+
+`--apply` without `--channel` exits 2 before any network call. Existing
+remote policies are matched to local files by `displayName`; a matching
+policy already identical to the local body (ignoring server-assigned fields
+and, when a channel is supplied, the channel itself) is a no-op, so re-running
+`--apply` against unchanged files makes no write calls at all. The tool never
+deletes a policy. Auth reuses `scripts/monitoring-check`'s `gcloud auth
+print-access-token` closure and verified-TLS, no-redirect opener, extended
+with POST and PATCH against the same `monitoring.googleapis.com/v3` host; the
+bearer token never enters argv, logs or the report. Required write
+permissions, parallel to the read permissions listed above, are
+`monitoring.alertPolicies.create` and `monitoring.alertPolicies.update`.
+
+Field names (`conditionThreshold`, `comparison`, `thresholdValue`, `duration`,
+`trigger`, `aggregations` with `alignmentPeriod`/`perSeriesAligner`/
+`crossSeriesReducer`/`groupByFields`, `combiner`, `alertStrategy`) were checked
+against the [AlertPolicy REST v3 reference](https://docs.cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.alertPolicies)
+and the [Aggregation reference](https://docs.cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.alertPolicies#Aggregation)
+at build time; `scripts/tests/test_monitoring_apply.py` round-trips every
+policy through a strict validator that fails on any key outside that
+allowlist, since a rejected body is a failure mode a fixture-only test cannot
+otherwise see. Every `metric.type` a policy filters on must be a member of
+the frozen native-metric inventory copied into
+`infra/monitoring/evidence/c370-inventory-2026-09-08.json`; a policy
+referencing anything else is skipped (exit code 1) rather than applied.
+Several thresholds not stated explicitly in the signal-plan table above (the
+SQL-up duration, the disk-warning/critical durations, the connections
+ceiling's absolute number, the Redis eviction window, and the job-failure
+evaluation window) are judgment calls, marked in each policy's own
+`documentation.content` as initial and due for review after 7 days once real
+traffic exists. The API request-failure-rate policy is a simplified absolute
+5xx-count proxy for the runbook's percentage-ratio rule above, documented the
+same way, because a true ratio needs a query-language condition outside the
+REST field-name allowlist this slice uses.
+
+`scripts/monitoring-apply` follows `scripts/deploy-verify`'s inline
+interpreter-resolution shape (`CHIRP_PYTHON`, then `backend/.venv/bin/python`,
+then `python3`, with the pre-flight CA-store check), duplicated rather than
+shared, because `scripts/lib/pick-python.sh` (c392) is only carded on the
+board and not merged as of this writing. Once it lands, both wrappers should
+be rebased onto the shared helper instead of keeping their own copies.
+
+**Out of scope for this slice, deliberately** (tracked as the c370 follow-up):
+uptime checks for the two `/_health` endpoints and the alert policies that
+reference their check id; the three log-based metrics for
+`sql_pool_capacity_503`, `rate_limit_fallback` and the purge job's stdout
+aggregate; the alert policies built on those log-based metrics; and the
+missed-schedule half of the job-failure signal (`conditionAbsent` against a
+Cloud Scheduler cadence). On that last point: as of 2026-09-08, `chirp-purge`
+does have a live Cloud Scheduler job in production -
+`chirp-purge-daily`, cron `0 9 * * *` (UTC), state `ENABLED` - observed via
+`gcloud scheduler jobs list`, but that schedule is not checked into this
+repository. It is recorded here as the input the follow-up's missed-schedule
+window will need; this slice does not build that condition from it.
+`rate_limit_redis_success_after_fallback` intentionally gets nothing in
+either slice - the signal-plan table above already states it "must not
+automatically resolve a fleet incident", so it is not alert-worthy.
+
 ## Local verification
 
 `backend/tests/test_c370_operational_signals.py` exercises actual local SQL pool
@@ -203,3 +288,12 @@ the standard-library collector fixtures to normal backend CI; the same cases
 also run with `python3 -m unittest scripts/tests/test_monitoring_check.py`.
 They test pagination, permission denial, empty/invalid metadata, descriptor drift,
 TLS/redirect handling and diagnostic redaction without cloud credentials.
+`backend/tests/test_c370_monitoring_apply_collector.py` exposes
+`scripts/tests/test_monitoring_apply.py` the same way, covering dry-run
+zero-write-calls, the `--apply` without `--channel` guard, create-versus-update
+matching by `displayName`, a second `--apply` landing all no-ops against a
+stateful fake API, the required-shape and inventory-membership check (with a
+deliberately bad fixture proving it is discriminating), the strict REST-shape
+round-trip that fails on any key outside the AlertPolicy allowlist, and the
+scan for a hardcoded project number or channel id outside the two templating
+points.

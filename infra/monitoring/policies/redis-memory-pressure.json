@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp Redis memory pressure",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: Redis pressure and fallback (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: on-call API responder. Memory usage ratio over 80% sustained 10 minutes, per the runbook's stated proposal.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "1800s"}
+  },
+  "conditions": [
+    {
+      "displayName": "Redis memory usage ratio over 80%",
+      "conditionThreshold": {
+        "filter": "resource.type=\"redis_instance\" AND resource.labels.project_id=\"{{PROJECT}}\" AND metric.type=\"redis.googleapis.com/stats/memory/usage_ratio\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0.8,
+        "duration": "600s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_MEAN",
+            "crossSeriesReducer": "REDUCE_MAX",
+            "groupByFields": []
+          }
+        ]
+      }
+    }
+  ]
+}

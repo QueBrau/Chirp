@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp Redis unexpected eviction warning",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: Redis pressure and fallback (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: on-call API responder. Warns on any evicted key in a 5-minute window; the runbook names this signal but states no explicit window. Initial, review after 7 days.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "1800s"}
+  },
+  "conditions": [
+    {
+      "displayName": "Redis evicted_keys above zero",
+      "conditionThreshold": {
+        "filter": "resource.type=\"redis_instance\" AND resource.labels.project_id=\"{{PROJECT}}\" AND metric.type=\"redis.googleapis.com/stats/evicted_keys\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "300s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": []
+          }
+        ]
+      }
+    }
+  ]
+}

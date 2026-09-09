@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp-db SQL availability",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: SQL availability and capacity (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: on-call API responder. Pages on database/up reporting down. The runbook proposes a SQL-up failure page but states no explicit sustained duration; 60 seconds is chosen here. Initial, review after 7 days.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "900s"}
+  },
+  "conditions": [
+    {
+      "displayName": "chirp-db database/up reporting down",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloudsql_database\" AND resource.labels.project_id=\"{{PROJECT}}\" AND resource.labels.database_id=\"{{PROJECT}}:chirp-db\" AND metric.type=\"cloudsql.googleapis.com/database/up\"",
+        "comparison": "COMPARISON_LT",
+        "thresholdValue": 1,
+        "duration": "60s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "60s",
+            "perSeriesAligner": "ALIGN_MEAN",
+            "crossSeriesReducer": "REDUCE_MIN",
+            "groupByFields": []
+          }
+        ]
+      }
+    }
+  ]
+}
