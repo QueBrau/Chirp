@@ -171,6 +171,54 @@ existing deployment. First provisioning of a new environment still requires its
 own reviewed identities, secrets, Firebase settings, CORS and IAM; the old
 single-service initial command is not a production redeploy recipe.
 
+## Service roles (SERVICE_ROLE, board c375)
+
+Settings gained `service_role: Literal["all", "api", "ws"]` (env `SERVICE_ROLE`,
+default `"all"`), read once at `create_app()` time to decide which router
+families a process mounts. `"all"` is today's behavior and is what both
+`infra/deployment.json` service blocks carry right now: every domain router
+plus the `/ws` gateway, byte-identical to before this section existed. `"api"`
+drops the `/ws` gateway and keeps every domain router. `"ws"` drops every
+domain router except `app.routers.deployment` (kept because the paragraph
+below requires it) plus the `/ws` gateway; `/_health` is mounted under every
+role unconditionally, outside this dispatch entirely.
+
+This section documents the mounting contract and the commands to flip it
+later. It does NOT flip anything now, and the commands below must NOT be run
+yet. `infra/deployment.json` intentionally ships `SERVICE_ROLE=all` on BOTH
+chirp-api and chirp-ws in this PR, not the eventual `api`/`ws` split, because
+`scripts/deployment-config plan` (section 7 below) renders `--update-env-vars`
+from every configured key on EVERY routine redeploy, unconditionally — shipping
+the eventual split values now would make the very next ordinary image release
+silently flip a live service's role as a side effect of what looks like a
+routine deploy.
+
+**Do not run the commands below until a follow-up card makes
+`scripts/deploy_verify.py`'s authenticated check role-aware.** Today that
+verifier unconditionally probes `/auth/me`, `/auth/campus-verification` and
+`/campuses/{id}/chirps` against BOTH the api and ws targets, because today both
+services genuinely answer all of that. The moment `SERVICE_ROLE=ws` is applied
+to the live chirp-ws service, those routes on chirp-ws start answering 404 (the
+domain routers are gone), and the next authenticated verification reports
+NOT_READY — loud and blocking, which is the safe failure mode, but it will look
+like an unrelated regression to whoever is running that deploy unless they know
+to expect it. The follow-up must update the verifier's per-target checks before
+these commands are safe to run for real.
+
+When that follow-up has landed, the flip commands are:
+
+```sh
+gcloud run services update chirp-api --update-env-vars SERVICE_ROLE=api
+gcloud run services update chirp-ws --update-env-vars SERVICE_ROLE=ws
+```
+
+Rollback (either service): remove the override or set it back to `all`:
+
+```sh
+gcloud run services update <service> --remove-env-vars SERVICE_ROLE
+# or: gcloud run services update <service> --update-env-vars SERVICE_ROLE=all
+```
+
 ## 7. Redeploying the pair
 
 Migrate and verify the schema first (section 5). Prepare the reviewed release JSON

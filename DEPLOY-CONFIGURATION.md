@@ -15,7 +15,11 @@ consume the same source; changing a cap requires reviewing its rollout arithmeti
 
 Both services still run the complete FastAPI application under the same runtime
 service account. The split manages HTTP/socket concurrency; it is not a security
-boundary. API-specific Stripe and email secret bindings remain API-specific. The
+boundary. `SERVICE_ROLE` (board c375) is now in the `ENV_NAMES` allowlist and in
+both services' `env` blocks in [infra/deployment.json](infra/deployment.json),
+currently `all`/`all` on both — the mounting contract exists in code (see
+DEPLOY.md's "Service roles" section) but nothing live has changed yet.
+API-specific Stripe and email secret bindings remain API-specific. The
 shared account's permissions have not been narrowed. Neither this file nor the
 checker proves least privilege, resolved secret-version parity, every environment
 variable, an effective deployed image's Python defaults, or runtime worker behavior.

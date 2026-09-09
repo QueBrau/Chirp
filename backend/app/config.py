@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     # finding 5) — see app.main.create_app.
     env: Literal["local", "staging", "production"] = "local"
     auth_mode: Literal["emulated", "firebase"] = "emulated"
+    # Which router families this process mounts (board c375): "all" is today's
+    # behavior (every domain router plus the /ws gateway), "api" drops the /ws
+    # gateway, "ws" drops every domain router except app.routers.deployment (kept
+    # so DEPLOY-VERIFICATION.md's authenticated /_deployment check still has
+    # something to hit). An out-of-enum value fails Settings() construction the
+    # same way env/auth_mode do; see app.main.create_app for the mounting
+    # dispatch and DEPLOY.md's "Service roles" section for the operational
+    # picture, including why this PR does not flip any live service's value.
+    service_role: Literal["all", "api", "ws"] = "all"
     firebase_project_id: str | None = None
     stripe_secret_key: str | None = None
     stripe_publishable_key: str | None = None

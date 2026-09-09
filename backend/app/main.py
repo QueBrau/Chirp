@@ -38,6 +38,36 @@ from app.ws import gateway
 
 logger = logging.getLogger(__name__)
 
+# Board c375: which HTTP routers each service_role mounts. ALL_HTTP_ROUTERS is
+# today's full set, unchanged, so role="all" (the default) produces a
+# byte-identical route table to before this change. WS_ROLE_HTTP_ROUTERS is the
+# minimal HTTP surface chirp-ws must keep answering under role="ws":
+# app.routers.deployment, because DEPLOY-VERIFICATION.md requires /_deployment
+# on both services before the authenticated verifier can pass. /_health is
+# registered directly on `app` below, outside this dispatch entirely, so it is
+# mounted under every role by construction.
+ALL_HTTP_ROUTERS = (
+    auth,
+    deployment,
+    campus_verification,
+    chapters,
+    keys,
+    messages,
+    feed,
+    chirps,
+    moderation,
+    lineage,
+    finance,
+    meetings,
+    polls,
+    media,
+    alumni,
+    payments,
+    events,
+    house,
+)
+WS_ROLE_HTTP_ROUTERS = (deployment,)
+
 # Long enough that a cold Memorystore connection is not called dead, short enough
 # that a wrong host cannot hold a Cloud Run cold start hostage.
 _REDIS_PROBE_TIMEOUT_S = 3.0
@@ -211,28 +241,23 @@ def create_app() -> FastAPI:
         expose_headers=["X-Actives-Only-Hidden"],
     )
 
-    for module in (
-        auth,
-        deployment,
-        campus_verification,
-        chapters,
-        keys,
-        messages,
-        feed,
-        chirps,
-        moderation,
-        lineage,
-        finance,
-        meetings,
-    polls,
-        media,
-        alumni,
-        payments,
-        events,
-        house,
-    ):
+    # Board c375: role dispatch. Any value that reaches here without matching one
+    # of the three roles is only reachable by bypassing Settings()'s own Literal
+    # check post-construction (see test_c375_service_role.py) -- the container
+    # must never fall through to serving something under a role it does not
+    # recognize.
+    if settings.service_role == "all":
+        http_routers, mount_ws = ALL_HTTP_ROUTERS, True
+    elif settings.service_role == "api":
+        http_routers, mount_ws = ALL_HTTP_ROUTERS, False
+    elif settings.service_role == "ws":
+        http_routers, mount_ws = WS_ROLE_HTTP_ROUTERS, True
+    else:
+        raise RuntimeError(f"unhandled service_role={settings.service_role!r}")
+    for module in http_routers:
         app.include_router(module.router)
-    app.include_router(gateway.router)
+    if mount_ws:
+        app.include_router(gateway.router)
 
     # NOT /healthz. Google's frontend intercepts that exact path and answers it
     # with its own HTML 404 before the request ever reaches Cloud Run, so the

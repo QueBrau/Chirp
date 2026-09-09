@@ -19,7 +19,7 @@ from deploy_verify import ready_and_observed
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "infra/deployment.json"
 MAX_BYTES = 1024 * 1024
-ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY")
+ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE")
 ANN = ("autoscaling.knative.dev/minScale", "autoscaling.knative.dev/maxScale", "run.googleapis.com/cloudsql-instances", "run.googleapis.com/vpc-access-connector", "run.googleapis.com/vpc-access-egress", "run.googleapis.com/cpu-throttling", "run.googleapis.com/startup-cpu-boost")
 SERVICE_ANN = ("run.googleapis.com/scalingMode", "run.googleapis.com/manualInstanceCount", "run.googleapis.com/minScale", "run.googleapis.com/maxScale", "run.googleapis.com/ingress", "run.googleapis.com/urls")
 
