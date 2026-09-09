@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1788978339980,
+  "updated": 1788978959688,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -418,11 +418,11 @@
   "cards": [
     {
       "id": "c394",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "bug",
       "area": "backend",
-      "title": "c394 [Sep 9 02:25 chirps-17, Jose] CLAIMED - apply the c92 needs_redis skip pattern to tests/test_ws_resource_integration.py so a Redis-less machine skips its 4 tests with a named reason instead of erroring, while a broken fan-out with Redis UP still fails loudly; builder next on jose/c394-w17 | was: c394 [Sep 9 chirps-17] tests/test_ws_resource_integration.py (Astra's c354 backend tests, merged 98c50cb) has no needs_redis guard, so on any machine without a local Redis (Jose's Mac) its 4 tests ERROR with ConnectionRefused to 127.0.0.1:6379 in every full suite; CI has Redis and is green. Fix = apply tests/test_ws_fanout.py's c92 skip pattern (connection check, skip only when nothing listens, never swallow a real failure) to that file; two-line PR | 03:30 (Sep 9): DRAFT PR #281 built and independently verified (guard copied from c92 targeting the fixture's own address, per-test marker, two subprocess pin tests both directions). CI's backend suite FAILED on the guard test itself: CI sets CHIRP_REQUIRE_DB=1 (c103 skip ceiling of zero) and the inner subprocess inherited it, so the deliberate 4 skips were failed by the ceiling and the word failed in that prose tripped the assertion. Manager reproduced it locally with the ceiling set, fixed it (inner run drops the ceiling; assertions judge pytest's summary line anchored on its in-seconds tail), green under both conditions, pushed; merge on CI green",
+      "title": "c394 [DONE Sep 9 03:55, chirps-17, merged 064aef4 via PR #281 (squash, CI 4/4 on the fixed head, independent verifier pass, manager read and manager-fixed CI finding)] tests/test_ws_resource_integration.py now carries the c92 needs_redis guard per test (a connection check against the fixture's own REDIS_URL address; skips with a reason naming c92/c394 only when nothing listens, still fails loudly with Redis up); tests/test_c394_redis_guard.py pins both directions by running the file as a subprocess (dead loopback port -> 4 skipped, 0 errors; live non-Redis listener -> errors, no skip). First CI run failed because the inner run inherited CI's CHIRP_REQUIRE_DB=1 skip ceiling; the inner run now drops it and both assertions judge pytest's summary line. Local full suites on this Mac no longer report 4 environmental errors. Branch and worktree swept",
       "detail": "FOUND Sep 9 00:55 in c375's pre-PR full suite (1624 passed, 4 errors), reproduced on main at 907dbaa: the fixture in tests/test_ws_resource_integration.py does Redis.from_url(require_loopback(REDIS_URL), socket_connect_timeout=1) and raises ConnectionRefusedError [Errno 61] when nothing listens on 6379. tests/test_ws_fanout.py documents the house pattern (board c92): a deliberate connection check, pytest.mark.skipif applied per test, reason naming the board card, so that a broken fan-out with Redis UP still fails loudly. Apply the same guard to the four tests here. Until then, every local full suite on this Mac reports 4 errors that are environmental, which is the corrosive kind of red the c92 note warns about."
     },
     {
