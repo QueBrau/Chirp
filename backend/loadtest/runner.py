@@ -66,6 +66,7 @@ class Runner:
         self.stop = asyncio.Event()
         self.abort_violations: list[Violation] = []
         self._t0 = time.monotonic()
+        self._http_client: httpx.AsyncClient | None = None
 
     def _now(self) -> float:
         return time.monotonic() - self._t0
@@ -257,6 +258,21 @@ class Runner:
                 self.stop.set()
                 return
 
+    # ---- teardown ----
+
+    async def aclose(self) -> None:
+        """Force-release the HTTP leg's pooled connections.
+
+        A cancelled run_http_phase unwinds through the client's own `async
+        with`, which normally closes it - but a caller that cancelled the
+        phase from outside (an external timeout budget) cannot rely on that
+        unwind finishing before it moves on. Idempotent and safe to call
+        whether or not run_http_phase ever started.
+        """
+        client, self._http_client = self._http_client, None
+        if client is not None and not client.is_closed:
+            await client.aclose()
+
     # ---- entry ----
 
     async def run_http_phase(self) -> None:
@@ -267,6 +283,7 @@ class Runner:
         async with httpx.AsyncClient(
             base_url=self.config.base_url, timeout=REQUEST_TIMEOUT, limits=limits, trust_env=False
         ) as client:
+            self._http_client = client
             await self._warmup(client)
             if self.stop.is_set():
                 return

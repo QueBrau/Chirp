@@ -276,6 +276,17 @@ def test_overlap_excludes_probe_warmup_handshake_only_and_already_closed():
     }
 
 
+def _run_phases_budget(config) -> float:
+    """A real margin over how long the phases should take, not a flat guess
+    that assumes a fast, idle machine (c393): at least 4x whichever of the
+    http duration or the ws cohort/connect-rate/hold combination is larger,
+    floored so a fast local run still gets slack.
+    """
+    ws = config.ws
+    expected = max(config.duration_seconds, ws.max_sockets / ws.connects_per_second + ws.hold_seconds)
+    return max(10.0, 4 * expected)
+
+
 @pytest.mark.asyncio
 async def test_actual_http_and_ready_ws_overlap_and_longer_ws_hold_survives(tmp_path, monkeypatch):
     from dataclasses import replace
@@ -313,15 +324,100 @@ async def test_actual_http_and_ready_ws_overlap_and_longer_ws_hold_survives(tmp_
                 ws_url=f"ws://127.0.0.1:{ws_server.sockets[0].getsockname()[1]}",
                 ws=WsLegConfig(2, 20, .5))
             runner = Runner(config, manifest())
-            await asyncio.wait_for(run_phases(runner, ["http_mix", "ws_storm"]), 3)
+            budget = _run_phases_budget(config)
+            try:
+                await asyncio.wait_for(run_phases(runner, ["http_mix", "ws_storm"]), budget)
+            finally:
+                # A cancelled/timed-out run above must not leave pooled HTTP
+                # connections open behind it (c393): force-release them so
+                # any still-pending http_peer handler sees EOF instead of
+                # blocking readuntil forever, and cancel the rest directly.
+                await runner.aclose()
+                for task in handlers:
+                    if not task.done():
+                        task.cancel()
         if handlers:
-            await asyncio.gather(*handlers)
+            leaked = len(handlers)
+            try:
+                await asyncio.wait_for(asyncio.gather(*handlers, return_exceptions=True), 20)
+            except asyncio.TimeoutError:
+                pytest.fail(f"{leaked} http_peer handler(s) still pending 20s after run_phases teardown")
     summary = runner.recorder.summary()
     assert summary["mixed_observation"]["http_2xx_while_ready_ws_open"] >= 1
     assert summary["ws"]["outcomes"]["completed_hold"] == 2
     assert all(value >= .48 for value in holds)
     assert summary["ws"]["pending"] == summary["ws"]["active_ready"] == 0
     assert not [t for t in asyncio.all_tasks() if t.get_name().startswith("loadtest-")]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_never_leaves_http_peer_handlers_hanging(tmp_path, monkeypatch):
+    """c393: force the same external-timeout cancellation the mixed-harness
+    test above can hit on a slow/busy machine, deterministically instead of
+    by racing real load, and prove teardown completes instead of hanging.
+    """
+    from dataclasses import replace
+    from loadtest.__main__ import run_phases
+    from loadtest.config import WsLegConfig
+    from loadtest.runner import Runner
+
+    handlers = set()
+    handler_started = asyncio.Event()
+
+    async def http_peer(reader, writer):
+        handlers.add(asyncio.current_task())
+        handler_started.set()
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            # Never respond: a stuck peer that only a cancel (not a client
+            # close it isn't reading for) can release, so the assertions
+            # below prove the explicit handler-cancel path, not just aclose.
+            await asyncio.Event().wait()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            handlers.discard(asyncio.current_task())
+
+    async def ws_peer(ws):
+        await ws.send('{"type":"ready"}')
+        await ws.wait_closed()
+
+    async def no_warmup(self, client):
+        pass
+
+    monkeypatch.setattr(Runner, "_warmup", no_warmup)
+
+    async def body() -> None:
+        async with await asyncio.start_server(http_peer, "127.0.0.1", 0) as http_server:
+            async with serve(ws_peer, "127.0.0.1", 0) as ws_server:
+                config = replace(config_for(tmp_path),
+                    base_url=f"http://127.0.0.1:{http_server.sockets[0].getsockname()[1]}",
+                    ws_url=f"ws://127.0.0.1:{ws_server.sockets[0].getsockname()[1]}",
+                    duration_seconds=5, think_seconds=0,
+                    # The ws hold (30s) far outlasts the .3s budget below, so
+                    # the cancellation path fires every run, not just a slow one.
+                    ws=WsLegConfig(1, 20, 30))
+                runner = Runner(config, manifest())
+                try:
+                    await asyncio.wait_for(run_phases(runner, ["http_mix", "ws_storm"]), .3)
+                except asyncio.TimeoutError:
+                    pass
+                # The discriminating condition, constructed on purpose: a real
+                # http_peer handler was mid-flight and stuck when the budget
+                # fired. Without this, the teardown below would prove nothing.
+                assert handler_started.is_set()
+                assert handlers, "no handler was pending - built nothing to prove teardown against"
+                await runner.aclose()
+                for task in list(handlers):
+                    if not task.done():
+                        task.cancel()
+                if handlers:
+                    await asyncio.gather(*handlers, return_exceptions=True)
+
+    # Bounded, not tight: this proves termination, not speed - a shared,
+    # loaded dev box can make even a correct teardown take real wall time.
+    await asyncio.wait_for(body(), 20)
+    assert not handlers
 
 
 @pytest.mark.asyncio
