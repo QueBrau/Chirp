@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from urllib.parse import urlparse
 
 import yaml
@@ -18,6 +19,10 @@ C259_LIMITS: dict[str, tuple[int, int]] = {
 }
 
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+ROUTE_CLASSES = frozenset({
+    "feed_campus", "chirps_list", "posts_list", "comments_list", "me",
+    "post_create", "comment_create", "chirp_create",
+})
 
 
 class ConfigError(SystemExit):
@@ -48,12 +53,10 @@ class AbortCriteria:
     # Rolling p95 ceilings, split read/write because their baselines differ.
     read_p95_ceiling_ms: float
     write_p95_ceiling_ms: float
-    # WS storm: handshake failures (refused, timeout, rejected pre-accept) as a
-    # percentage of attempts. Post-accept closes (4401/4403/4503) are reported
-    # by close code instead — locally with no Redis every socket 4503s and that
-    # is expected, not a connect failure.
+    # WS failures / (failures + completed holds), whole cohort. Pending attempts,
+    # operator stops and cancellation aren't failure samples; codes are also retained.
     max_ws_failure_pct: float
-    # Rolling window all rates/percentiles above are computed over.
+    # Rolling HTTP window. WS terminal outcomes cover the whole finite cohort.
     window_seconds: float
     # Evaluation only starts once the window holds this many samples, so the
     # first request of the run cannot trip a percentage criterion by itself.
@@ -65,6 +68,8 @@ class AbortCriteria:
     grace_seconds: float
 
     def validate(self) -> None:
+        if not all(math.isfinite(v) for v in vars(self).values()):
+            raise ConfigError("abort values must be finite")
         for name in ("max_error_rate_pct", "max_429_rate_pct", "max_ws_failure_pct"):
             v = getattr(self, name)
             if not 0 <= v <= 100:
@@ -95,11 +100,13 @@ class RateCaps:
     per_user_writes_per_minute: dict[str, float] = field(default_factory=dict)
 
     def validate(self) -> None:
-        if self.max_rps <= 0:
+        if not math.isfinite(self.max_rps) or self.max_rps <= 0:
             raise ConfigError("caps.max_rps must be positive")
         if self.max_concurrent_requests < 1:
             raise ConfigError("caps.max_concurrent_requests must be at least 1")
         for scope, per_minute in self.per_user_writes_per_minute.items():
+            if not math.isfinite(per_minute) or per_minute <= 0:
+                raise ConfigError("per-user write caps must be finite and positive")
             if scope not in C259_LIMITS:
                 raise ConfigError(f"caps: unknown write scope {scope!r}")
             max_calls, window = C259_LIMITS[scope]
@@ -124,6 +131,8 @@ class WsLegConfig:
     hold_seconds: float
 
     def validate(self) -> None:
+        if not all(math.isfinite(v) for v in vars(self).values()):
+            raise ConfigError("ws values must be finite")
         if self.max_sockets < 1:
             raise ConfigError("ws.max_sockets must be at least 1")
         if self.connects_per_second <= 0:
@@ -154,6 +163,11 @@ class HarnessConfig:
     approved_date: str = ""
 
     def validate(self, *, confirm_park_lifted: bool = False) -> None:
+        if not all(math.isfinite(v) for v in (
+            self.duration_seconds, self.ramp_in_seconds, self.think_seconds,
+            *self.mix_weights.values(),
+        )):
+            raise ConfigError("duration, ramp, think time and weights must be finite")
         if self.auth_mode not in ("emulated", "firebase"):
             raise ConfigError(f"auth_mode must be emulated|firebase, got {self.auth_mode!r}")
         if self.duration_seconds <= 0:
@@ -167,9 +181,11 @@ class HarnessConfig:
         if not self.mix_weights:
             raise ConfigError("mix_weights must name at least one route class")
         for name, w in self.mix_weights.items():
+            if name not in ROUTE_CLASSES:
+                raise ConfigError("mix_weights contains an unknown route class")
             if w < 0:
                 raise ConfigError(f"mix_weights.{name} must be non-negative")
-        if sum(self.mix_weights.values()) <= 0:
+        if not math.isfinite(sum(self.mix_weights.values())) or sum(self.mix_weights.values()) <= 0:
             raise ConfigError("mix_weights must sum to a positive weight")
         self.caps.validate()
         self.abort.validate()

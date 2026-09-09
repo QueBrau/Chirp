@@ -53,9 +53,8 @@ class AbortMonitor:
                 violations.append(
                     Violation("write_p95_ms", stats["write_p95_ms"], self._criteria.write_p95_ceiling_ms)
                 )
-        ws_attempts = self._recorder.ws_attempts
-        if ws_attempts >= self._criteria.min_samples:
-            ws_failure = self._recorder.ws_failure_pct()
+        ws_settled, ws_failure = self._recorder.ws_terminal_stats()
+        if ws_settled >= self._criteria.min_samples:
             if ws_failure > self._criteria.max_ws_failure_pct:
                 violations.append(
                     Violation("ws_failure_pct", ws_failure, self._criteria.max_ws_failure_pct)
