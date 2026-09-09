@@ -64,8 +64,14 @@ from app.db import get_session_factory
 
 logger = logging.getLogger(__name__)
 
-# recipient_ids, event -> the recipient_ids that failed (empty means full success).
-Dispatcher = Callable[[list[uuid.UUID], dict], Awaitable[list[str]]]
+# recipient_ids, event, sender_id -> the recipient_ids that failed (empty means full
+# success). sender_id is passed OUT OF BAND from the event dict -- the event dict is
+# exactly what goes out over the wire to every recipient, and must never carry a
+# sender user id (see the module docstring and messages.py's c344 docstring: a
+# recipient never learns a sender's user id beyond what ConversationMemberOut already
+# exposes). The dispatcher may still use sender_id itself, e.g. to skip the
+# content-free push to the sender's own other devices.
+Dispatcher = Callable[[list[uuid.UUID], dict, str | None], Awaitable[list[str]]]
 
 _dispatchers: dict[str, Dispatcher] = {}
 
@@ -112,6 +118,7 @@ async def dispatch_now(
     kind: str,
     recipient_ids: list[uuid.UUID],
     event: dict,
+    sender_id: str | None = None,
 ) -> None:
     """Best-effort immediate delivery on the request path.
 
@@ -120,12 +127,16 @@ async def dispatch_now(
     itself (as opposed to a per-recipient failure, which the dispatcher already
     catches and reports back as a failed-id list) leaves the row exactly as
     enqueued, untouched, for the sweeper to pick up on its own schedule later.
+
+    sender_id is passed separately from `event` -- `event` is exactly what goes out
+    over the wire to every recipient and must never carry a sender user id (c356 fix;
+    see the Dispatcher type comment).
     """
     dispatcher = _dispatchers.get(kind)
     if dispatcher is None:
         return
     try:
-        failed = await dispatcher(recipient_ids, event)
+        failed = await dispatcher(recipient_ids, event, sender_id)
     except Exception:
         logger.warning("outbox live dispatch raised kind=%s row_id=%s", kind, row_id)
         return
@@ -189,6 +200,10 @@ async def dispatch_pending(limit: int | None = None) -> DispatchStats:
                 "attempts": row["attempts"],
                 "dead": False,
                 "event": None,
+                # sender_id lives OUTSIDE the event dict -- see the Dispatcher type
+                # comment. The outbox payload column itself is server-side only and
+                # may keep sender_id; the rebuilt wire event must not.
+                "sender_id": row["payload"].get("sender_id"),
             }
             if row["kind"] == "message":
                 message = await session.get(models.Message, uuid.UUID(row["payload"]["message_id"]))
@@ -199,7 +214,6 @@ async def dispatch_pending(limit: int | None = None) -> DispatchStats:
                         "type": "message",
                         "conversation_id": row["payload"]["conversation_id"],
                         "message_id": row["payload"]["message_id"],
-                        "sender_id": row["payload"].get("sender_id"),
                         "sender_device_id": row["payload"]["sender_device_id"],
                         "ciphertext": base64.b64encode(message.ciphertext).decode("ascii"),
                         "created_at": row["payload"]["created_at"],
@@ -224,7 +238,7 @@ async def dispatch_pending(limit: int | None = None) -> DispatchStats:
         recipients = [uuid.UUID(rid) for rid in entry["recipient_ids"]]
         try:
             async with asyncio.timeout(settings.outbox_dispatch_timeout_s):
-                failed = await dispatcher(recipients, entry["event"])
+                failed = await dispatcher(recipients, entry["event"], entry["sender_id"])
         except TimeoutError:
             failed = [str(rid) for rid in recipients]
         except Exception:

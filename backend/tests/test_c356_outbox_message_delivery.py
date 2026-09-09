@@ -20,7 +20,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.db import get_session, get_session_factory
+from app.db import get_session_factory
 from app.services import outbox
 from tests.conftest import MakeUser, RegisterDevice, b64, share_verified_campus
 
@@ -68,10 +68,19 @@ async def _outbox_row_for(message_id: str) -> models.DeliveryOutbox | None:
 
 async def test_outbox_row_and_message_row_share_one_transaction(
     client: AsyncClient, make_user: MakeUser, register_device: RegisterDevice,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Moving outbox.enqueue to AFTER session.commit would leave the message row
-    behind while the outbox row does not, the instant commit is forced to fail right
-    after the flush/refresh that populates message.id (acceptance criterion 2).
+    committed and visible while the enqueue call that would have written its
+    outbox row instead fails on its own, orphaned (acceptance criterion 2).
+
+    The crash is injected at outbox.enqueue itself, not at session.commit -- a
+    monkeypatched commit() fails identically no matter which side of it enqueue
+    runs on, so it cannot tell the two orderings apart. Failing enqueue instead
+    only rolls the message back with it AS LONG AS enqueue still runs before
+    commit, in the same transaction; if enqueue were moved to after commit, the
+    message would already be durably committed by the time this same failure
+    hits, and would survive it.
     """
     creator = await make_user("Creator")
     other = await make_user("Other")
@@ -84,29 +93,24 @@ async def test_outbox_row_and_message_row_share_one_transaction(
     assert opened.status_code == 201, opened.text
     conversation_id = opened.json()["id"]
 
-    app = client._transport.app
+    async def raising_enqueue(*args: Any, **kwargs: Any) -> uuid.UUID:
+        raise RuntimeError("c356 simulated enqueue failure")
 
-    async def crashing_session():
-        async with get_session_factory()() as session:
-            async def failing_commit() -> None:
-                raise RuntimeError("c356 simulated crash before commit")
+    monkeypatch.setattr(outbox, "enqueue", raising_enqueue)
 
-            session.commit = failing_commit  # type: ignore[method-assign]
-            yield session
-
-    app.dependency_overrides[get_session] = crashing_session
-    try:
-        with pytest.raises(RuntimeError, match="c356 simulated crash before commit"):
-            await _send(client, conversation_id, creator, device["id"], b"never persisted")
-    finally:
-        app.dependency_overrides.pop(get_session, None)
+    with pytest.raises(RuntimeError, match="c356 simulated enqueue failure"):
+        await _send(client, conversation_id, creator, device["id"], b"never persisted")
 
     async with get_session_factory()() as session:
         message_count = await session.scalar(
             select(models.Message)
             .where(models.Message.conversation_id == uuid.UUID(conversation_id))
         )
-        assert message_count is None, "the message must not have survived the failed commit"
+        assert message_count is None, (
+            "the message must not have survived a failed enqueue -- if it did, "
+            "enqueue must have run AFTER the message's own commit, meaning the two "
+            "writes no longer share one transaction"
+        )
         outbox_count = await session.execute(
             text(
                 "SELECT COUNT(*) FROM delivery_outbox WHERE payload->>'conversation_id' = :cid"
@@ -114,8 +118,8 @@ async def test_outbox_row_and_message_row_share_one_transaction(
             {"cid": conversation_id},
         )
         assert outbox_count.scalar_one() == 0, (
-            "an outbox row surviving a rolled-back message row would mean the two "
-            "writes are not sharing one transaction"
+            "an outbox row surviving a failed enqueue would mean enqueue partially "
+            "succeeded outside the transaction it is supposed to share"
         )
 
 
@@ -302,6 +306,94 @@ async def test_attempts_cap_sets_dead_letter_and_stops_retrying(
 
     stats_again = await outbox.dispatch_pending(limit=10)
     assert stats_again.claimed == 0, "a dead row must never be claimed again"
+
+
+async def test_published_event_key_set_excludes_sender_id_on_live_and_sweeper_paths(
+    client: AsyncClient, make_user: MakeUser, register_device: RegisterDevice,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-c356 event carried exactly {type, conversation_id, message_id,
+    sender_device_id, ciphertext, created_at} -- never a sender user id (c344
+    docstring on send_message: a recipient never learns a sender's user id beyond
+    what ConversationMemberOut already exposes). c356 added a sender_id to the
+    outbox payload column, used only to decide whether to skip the sender's own
+    content-free push -- it must never leak into the event actually published to
+    recipients, on either the live dispatch_now path or the sweeper's rebuilt event.
+    """
+    expected_keys = {
+        "type", "conversation_id", "message_id", "sender_device_id", "ciphertext",
+        "created_at",
+    }
+
+    creator = await make_user("Creator")
+    other = await make_user("Other")
+    await share_verified_campus(creator.id, other.id)
+    device = await register_device(creator, one_time_prekey_count=1)
+    opened = await client.post(
+        "/conversations", json={"kind": "dm", "member_user_ids": [other.id]},
+        headers=creator.headers,
+    )
+    assert opened.status_code == 201, opened.text
+    conversation_id = opened.json()["id"]
+
+    import app.routers.messages as messages_router
+
+    # --- live path: dispatch_now publishes the in-memory event built in send_message.
+    live_published: list[tuple[str, dict]] = []
+
+    async def recording_publish_live(user_id: str, event: dict) -> None:
+        live_published.append((user_id, event))
+
+    monkeypatch.setattr(messages_router, "publish_to_user", recording_publish_live)
+
+    sent = await _send(client, conversation_id, creator, device["id"], b"live-path-key-set")
+    assert sent.status_code == 201, sent.text
+    message_id = sent.json()["id"]
+
+    assert len(live_published) == 2, "one publish call per recipient on the live path"
+    for _, event in live_published:
+        assert set(event.keys()) == expected_keys, (
+            f"live event key set changed: {sorted(event.keys())}"
+        )
+        assert event["message_id"] == message_id
+    assert await _outbox_row_for(message_id) is None, "the live path fully delivered it"
+
+    # --- sweeper path: crash live dispatch so the row survives to dispatch_pending,
+    # which rebuilds `event` itself from the outbox payload (app/services/outbox.py,
+    # the message-kind branch of dispatch_pending) rather than reusing send_message's
+    # in-memory event.
+    async def crashed_dispatch(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(outbox, "dispatch_now", crashed_dispatch)
+
+    sweeper_published: list[tuple[str, dict]] = []
+
+    async def recording_publish_sweeper(user_id: str, event: dict) -> None:
+        sweeper_published.append((user_id, event))
+
+    monkeypatch.setattr(messages_router, "publish_to_user", recording_publish_sweeper)
+
+    sent2 = await _send(client, conversation_id, creator, device["id"], b"sweeper-path-key-set")
+    assert sent2.status_code == 201, sent2.text
+    message_id_2 = sent2.json()["id"]
+
+    row = await _outbox_row_for(message_id_2)
+    assert row is not None, "live dispatch was crashed above -- the row must still be pending"
+    assert row.payload.get("sender_id") == creator.id, (
+        "the outbox PAYLOAD column itself is allowed to keep sender_id server-side -- "
+        "only the published wire event must exclude it"
+    )
+
+    stats = await outbox.dispatch_pending(limit=10)
+    assert stats.delivered == 1
+
+    assert len(sweeper_published) == 2, "one publish call per recipient on the sweeper path"
+    for _, event in sweeper_published:
+        assert set(event.keys()) == expected_keys, (
+            f"sweeper-rebuilt event key set changed: {sorted(event.keys())}"
+        )
+        assert event["message_id"] == message_id_2
 
 
 def test_poll_delivery_paths_are_unmodified_by_this_change() -> None:

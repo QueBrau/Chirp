@@ -42,7 +42,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["messages"])
 
 
-async def _dispatch_message_event(recipient_ids: list[uuid.UUID], event: dict) -> list[str]:
+async def _dispatch_message_event(
+    recipient_ids: list[uuid.UUID], event: dict, sender_id: str | None
+) -> list[str]:
     """Publish one message event to every recipient; return the ids that failed.
 
     Same shape as the loop this replaces (board c356): a per-recipient publish
@@ -52,8 +54,14 @@ async def _dispatch_message_event(recipient_ids: list[uuid.UUID], event: dict) -
     Registered as the 'message' dispatcher below, so this stays the literal
     module-level function tests/test_contact_blocks.py's
     `monkeypatch.setattr(messages_router, "publish_to_user", ...)` already pins.
+
+    sender_id is passed OUT OF BAND, never through `event` -- `event` is published
+    verbatim to every recipient over the socket and must stay byte-identical in key
+    set to the pre-c356 event ({type, conversation_id, message_id, sender_device_id,
+    ciphertext, created_at}); a recipient never learns a sender's user id beyond what
+    ConversationMemberOut already exposes (c344). sender_id here is used only to skip
+    the content-free push to the sender's own other devices.
     """
-    sender_id = event.get("sender_id")
     failed: list[str] = []
     for recipient_id in recipient_ids:
         rid = str(recipient_id)
@@ -591,11 +599,15 @@ async def send_message(
         recipient_count=len(recipient_ids),
     )
 
+    # sender_id is deliberately NOT a key of `event` -- `event` is published
+    # verbatim to every recipient over the socket, and the pre-c356 event never
+    # carried a sender user id (c344 docstring above). It is passed to
+    # dispatch_now/the dispatcher out of band, below, used only to skip the
+    # content-free push to the sender's own other devices.
     event = {
         "type": "message",
         "conversation_id": str(conversation_id),
         "message_id": str(message.id),
-        "sender_id": str(user.id),
         "sender_device_id": str(body.sender_device_id),
         "ciphertext": body.ciphertext_b64,
         "created_at": message.created_at.isoformat(),
@@ -611,6 +623,7 @@ async def send_message(
             kind="message",
             recipient_ids=recipient_ids,
             event=event,
+            sender_id=str(user.id),
         )
     except Exception:
         logger.warning(
