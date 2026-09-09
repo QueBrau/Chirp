@@ -5,6 +5,7 @@ import math
 import threading
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
+from typing import Callable
 
 # Route classes whose requests are writes; everything else counts as a read for
 # the split p95 abort criteria. Kept here so the abort monitor and the report
@@ -12,17 +13,23 @@ from dataclasses import dataclass
 WRITE_CLASSES = frozenset({"post_create", "comment_create", "chirp_create"})
 
 # The self-audit probe (c285): one dedicated low-rate requester that bypasses
-# every cap and shares no connection with the mix. Its latencies approximate the
-# SERVER's truth; the gap between them and the mix's read p95 measures the
-# DRIVER's own saturation. Excluded from the abort criteria's read set so the
+# every cap and shares no connection with the mix. Its latency is a consistency
+# reference, not attribution of server time or proof of driver saturation.
+# Excluded from the abort criteria's read set so the
 # probe can never mask or dilute a real violation.
 REFERENCE_CLASS = "reference_probe"
 
-# Read p95 exceeding the probe's p95 by this factor means the driver is
-# inflating measurements (B3's post-mortem ratio was 6-9x on a clean server).
+# A ratio over this value flags inconsistent latency. The legacy verdict names
+# remain stable; neither side of the threshold establishes the cause.
 SATURATION_RATIO = 3.0
 
 TIMELINE_BUCKET_SECONDS = 10.0
+
+WS_FAILURE_OUTCOMES = frozenset({
+    "handshake_error", "handshake_timeout", "ready_timeout", "invalid_ready",
+    "closed_before_ready", "closed_during_hold", "cleanup_timeout", "internal_error",
+})
+WS_OUTCOMES = WS_FAILURE_OUTCOMES | {"completed_hold", "stopped", "cancelled"}
 
 
 def quantile(sorted_values: list[float], q: float) -> float:
@@ -43,8 +50,8 @@ def quantile(sorted_values: list[float], q: float) -> float:
 def instrument_verdict(mix_read_p95: float, probe_p95: float) -> dict:
     """The self-audit (c285): compare the mix's read p95 against the probe's.
 
-    A ratio above SATURATION_RATIO means the numbers in this report describe the
-    DRIVER, not the server - exactly the failure that produced B3's false cliff.
+    A ratio above SATURATION_RATIO flags a discrepancy for investigation.
+    Different endpoint costs or driver contention can both contribute.
     Verdict states: 'saturated', 'clean', or 'no_probe' when the probe never ran
     (0.0 p95) - a missing probe must never read as a clean instrument.
     """
@@ -85,11 +92,22 @@ class Recorder:
         self.ws_connected = 0
         self.ws_close_codes: Counter = Counter()
         self.ws_connect_ms: list[float] = []
+        self.ws_ready_ms: list[float] = []
+        self.ws_outcomes: Counter = Counter()
+        self.ws_cleanup_timeouts = 0
+        self._ready: dict[int, Callable[[], bool]] = {}
+        self._http_mix_active = False
+        self._mixed_responses = 0
+        self._mixed_successes = 0
 
     # ---- HTTP ----
 
     def record(self, sample: Sample) -> None:
         with self._lock:
+            if (self._http_mix_active and sample.route_class != REFERENCE_CLASS
+                    and sample.status >= 100 and any(is_open() for is_open in self._ready.values())):
+                self._mixed_responses += 1
+                self._mixed_successes += int(200 <= sample.status < 300)
             self._window.append(sample)
             self._trim(sample.at)
             self._latencies[sample.route_class].append(sample.latency_ms)
@@ -113,6 +131,33 @@ class Recorder:
             self._window.popleft()
 
     # ---- WS ----
+
+    def set_http_mix_active(self, active: bool) -> None:
+        with self._lock:
+            self._http_mix_active = active
+
+    def record_ws_ready(self, ready_ms: float, is_open: Callable[[], bool]) -> int:
+        with self._lock:
+            self.ws_ready_ms.append(ready_ms)
+            key = len(self.ws_ready_ms)
+            self._ready[key] = is_open
+            return key
+
+    def end_ws_ready(self, key: int) -> None:
+        with self._lock:
+            self._ready.pop(key, None)
+
+    def record_ws_outcome(self, outcome: str, *, cleanup_timeout: bool = False) -> None:
+        if outcome not in WS_OUTCOMES:
+            raise ValueError("unknown WS outcome")
+        with self._lock:
+            self.ws_outcomes[outcome] += 1
+            self.ws_cleanup_timeouts += int(cleanup_timeout)
+
+    def ws_terminal_stats(self) -> tuple[int, float]:
+        with self._lock:
+            settled = sum(self.ws_outcomes[k] for k in WS_FAILURE_OUTCOMES | {"completed_hold"})
+            return settled, self._ws_failure_pct_unlocked()
 
     def record_ws_attempt(self) -> None:
         with self._lock:
@@ -167,9 +212,11 @@ class Recorder:
         # Callers already holding self._lock (summary) use this directly: the
         # lock is a plain threading.Lock, so re-taking it self-deadlocks — that
         # exact hang cost this harness its first proving run.
-        if self.ws_attempts == 0:
+        failures = sum(self.ws_outcomes[k] for k in WS_FAILURE_OUTCOMES)
+        denominator = failures + self.ws_outcomes["completed_hold"]
+        if denominator == 0:
             return 0.0
-        return 100.0 * (self.ws_attempts - self.ws_connected) / self.ws_attempts
+        return 100.0 * failures / denominator
 
     # ---- Whole-run summary (report) ----
 
@@ -197,6 +244,8 @@ class Recorder:
                 for bucket, counts in sorted(self._timeline.items())
             ]
             ws_ordered = sorted(self.ws_connect_ms)
+            ready_ordered = sorted(self.ws_ready_ms)
+            settled = sum(self.ws_outcomes[k] for k in WS_FAILURE_OUTCOMES | {"completed_hold"})
             mix_reads = sorted(
                 v
                 for route_class, values in self._latencies.items()
@@ -210,12 +259,24 @@ class Recorder:
                 "substituted_writes": self._substituted_writes,
                 "instrument": instrument,
                 "timeline": timeline,
+                "mixed_observation": {
+                    "http_responses_while_ready_ws_open": self._mixed_responses,
+                    "http_2xx_while_ready_ws_open": self._mixed_successes,
+                    "observed": self._mixed_responses > 0,
+                },
                 "ws": {
                     "attempts": self.ws_attempts,
                     "connected": self.ws_connected,
-                    "failure_pct": round(self._ws_failure_pct_unlocked(), 2),
+                    "ready": len(self.ws_ready_ms),
+                    "active_ready": len(self._ready),
+                    "pending": self.ws_attempts - sum(self.ws_outcomes.values()),
+                    "settled_for_failure_rate": settled,
+                    "failure_pct": round(self._ws_failure_pct_unlocked(), 2) if settled else None,
+                    "outcomes": {k: self.ws_outcomes[k] for k in sorted(WS_OUTCOMES)},
+                    "cleanup_timeouts": self.ws_cleanup_timeouts,
                     "close_codes": {str(k): v for k, v in sorted(self.ws_close_codes.items())},
                     "connect_p50_ms": round(quantile(ws_ordered, 0.50), 1),
                     "connect_p95_ms": round(quantile(ws_ordered, 0.95), 1),
+                    "ready_p95_ms": round(quantile(ready_ordered, 0.95), 1) if ready_ordered else None,
                 },
             }

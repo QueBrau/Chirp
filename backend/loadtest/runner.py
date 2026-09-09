@@ -81,8 +81,12 @@ class Runner:
         path: str,
         json_body: dict | None = None,
     ) -> httpx.Response | None:
+        if self.stop.is_set():
+            return None
         await self.pacer.global_bucket.acquire()
         async with self.pacer.semaphore:
+            if self.stop.is_set():
+                return None
             start = time.monotonic()
             try:
                 response = await client.request(
@@ -155,7 +159,7 @@ class Runner:
                 json_body={"body": _text("chirp", user.uid)},
             )
         else:
-            raise SystemExit(f"mix_weights names unknown route class {route_class!r}")
+            raise ValueError("unknown route class escaped configuration validation")
 
     def _harvest_posts(self, response: httpx.Response | None) -> None:
         if response is None or response.status_code != 200:
@@ -191,7 +195,7 @@ class Runner:
                 pass
         classes = list(self.config.mix_weights.keys())
         weights = list(self.config.mix_weights.values())
-        read_classes = [c for c in classes if c not in WRITE_CLASSES]
+        read_classes = [c for c in classes if c not in WRITE_CLASSES and self.config.mix_weights[c] > 0]
         read_weights = [self.config.mix_weights[c] for c in read_classes]
         while not self.stop.is_set():
             think = self.config.think_seconds * random.uniform(0.5, 1.5)
@@ -261,37 +265,38 @@ class Runner:
             max_keepalive_connections=self.config.caps.max_concurrent_requests,
         )
         async with httpx.AsyncClient(
-            base_url=self.config.base_url, timeout=REQUEST_TIMEOUT, limits=limits
+            base_url=self.config.base_url, timeout=REQUEST_TIMEOUT, limits=limits, trust_env=False
         ) as client:
             await self._warmup(client)
-            watch = asyncio.create_task(self._abort_watch())
-            probe = asyncio.create_task(self._reference_probe())
-            total = len(self.manifest.users)
-            users = [
-                asyncio.create_task(
-                    self._user_loop(
-                        client,
-                        user,
-                        ramp_delay(index, total, self.config.ramp_in_seconds),
-                    )
-                )
-                for index, user in enumerate(self.manifest.users)
-            ]
+            if self.stop.is_set():
+                return
+            self.recorder.set_http_mix_active(True)
             try:
-                await asyncio.wait_for(self.stop.wait(), timeout=self.config.duration_seconds)
-            except asyncio.TimeoutError:
-                pass
-            self.stop.set()
-            await asyncio.gather(*users, return_exceptions=True)
-            watch.cancel()
-            probe.cancel()
-            await asyncio.gather(watch, probe, return_exceptions=True)
+                async with asyncio.TaskGroup() as group:
+                    children = [group.create_task(self._reference_probe(), name="loadtest-probe")]
+                    total = len(self.manifest.users)
+                    children.extend(
+                        group.create_task(self._user_loop(
+                            client, user, ramp_delay(index, total, self.config.ramp_in_seconds)
+                        ), name="loadtest-http-user")
+                        for index, user in enumerate(self.manifest.users)
+                    )
+                    try:
+                        await asyncio.wait_for(self.stop.wait(), self.config.duration_seconds)
+                    except TimeoutError:
+                        pass
+                    finally:
+                        # Normal HTTP expiry owns only this leg, never the shared WS hold.
+                        for child in children:
+                            child.cancel()
+            finally:
+                self.recorder.set_http_mix_active(False)
 
     async def _reference_probe(self) -> None:
         """The instrument's self-audit (c285): one request per second on its OWN
         client and connection, outside every cap and semaphore, recorded under
-        REFERENCE_CLASS. Its p95 approximates what the server actually did; the
-        report compares the mix against it and calls out driver saturation.
+        REFERENCE_CLASS. Its p95 is a consistency reference, not server timing
+        or proof that driver contention is absent.
 
         Deliberately outside the pacer: queueing the probe behind the mix would
         make it measure the same contention it exists to expose. Cost: 1 rps.
@@ -301,6 +306,7 @@ class Runner:
             base_url=self.config.base_url,
             timeout=REQUEST_TIMEOUT,
             limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+            trust_env=False,
         ) as probe_client:
             while not self.stop.is_set():
                 start = time.monotonic()
