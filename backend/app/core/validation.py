@@ -45,6 +45,14 @@ MAX_COMMENT_BODY_LENGTH = 2_000
 # A moderation reason is a sentence or two a human types to explain an action, and
 # it is read later from an audit row. 1,000 leaves room for a reporter describing
 # harassment in detail without inviting an essay into moderation_actions.
+#
+# FIVE request schemas carry this one number (ContentReportCreate, ReportResolveRequest
+# and SuspendUserRequest in schemas/moderation.py; ChirpRemoveRequest and
+# ContentRemoveRequest in schemas/chirp.py). Today mobile sends only preset reasons
+# (longest 26 chars, c251), so no composer counter exists. The day a free-text reason
+# field ships, cap the COMPOSER against this same constant and extend
+# app-mobile/scripts/verify-content-limits.mjs - capping one schema's UI would leave
+# four uncapped (board c256).
 MAX_REASON_LENGTH = 1_000
 
 # ---- message content (c252) ----
