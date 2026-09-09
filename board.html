@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1788914056684,
+  "updated": 1788914217774,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -418,11 +418,11 @@
   "cards": [
     {
       "id": "c391",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "deploy",
       "area": "infra",
-      "title": "c391 [Sep 8 chirps-17, Jose] DRAFT PR #275 OPEN, CI pending - scripts/deploy-verify resolves CHIRP_PYTHON, then backend/.venv/bin/python, then python3, prints its choice to stderr, and refuses (exit 2) before any probe if the interpreter holds no CA certificates (the Mac's python.org 3.13 has 0, the venv 145). 4 new subprocess tests construct the certless condition via SSL_CERT_FILE/SSL_CERT_DIR and exercise the resolution order against shims; all 4 red under the old wrapper; c361 CLI suite pins CHIRP_PYTHON (its http fixtures passed 59/59 under the certless build, which is why it never saw this). 63 passed. Next: manager review after CI, merge, sweep branch",
+      "title": "c391 [DONE Sep 8, chirps-17, merged b97a24f via PR #275, CI 4/4] scripts/deploy-verify resolves CHIRP_PYTHON, then backend/.venv/bin/python, then python3, prints its choice to stderr, and refuses (exit 2) before any probe if the interpreter holds no CA certificates - the Mac's python.org 3.13 has 0, the venv 145, which is why windows #13/#14 read NOT_READY until re-run by hand. 4 new subprocess tests construct the certless condition via SSL_CERT_FILE/SSL_CERT_DIR (asserted to yield 0 CAs first) and drive the resolution order against shims in a sandbox; all 4 red under the old wrapper, only the certless one red with the preflight deleted. c361's CLI suite pins CHIRP_PYTHON (its plain-http fixtures passed 59/59 under the certless build, so it never saw this). 63 passed locally, CI 4/4. Live proof = the next window's verifier run citing the interpreter line. Branch and worktree swept",
       "detail": "FOUND Sep 8 during deploy windows #13 and #14 (chirps-96 manager session, recorded in the handoff): scripts/deploy-verify execs whatever python3 is first on PATH. On the Intel Mac that is the python.org 3.13 framework build, which ships without a certificate bundle unless Install Certificates.command has been run, so every HTTPS probe in scripts/deploy_verify.py failed at the TLS layer, reported status 0, and the verifier returned NOT_READY with an auth_gate verdict that read like a deployment problem. Running the same module through backend/.venv/bin/python (3.11, certifi present) returned AUTHENTICATED_READY 16/16 both times.\n\nWHY IT MATTERS: the verifier is the thing that decides whether a window closed clean. A false NOT_READY costs a re-run by hand; the dangerous direction is someone trusting a NOT_READY, rolling back a good deploy, or learning to ignore the tool.\n\nSCOPE: the wrapper only. Interpreter resolution order: $CHIRP_PYTHON if set, else the repo's backend/.venv/bin/python if executable, else python3. Print the chosen interpreter to stderr so a report can cite it. Add a one-line note to DEPLOY-VERIFICATION.md. No change to deploy_verify.py's probes or report contract.\n\nACCEPTANCE: (1) with the venv present, scripts/deploy-verify --help runs under the venv interpreter (stderr names it); (2) CHIRP_PYTHON overrides it; (3) with neither, it falls back to python3 rather than failing; (4) the existing deploy_verify tests are untouched and green."
     },
     {
