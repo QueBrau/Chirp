@@ -228,6 +228,107 @@ async def test_concurrent_dispatch_pending_delivers_five_rows_exactly_once_each(
         assert remaining.scalar_one() == 0, "every delivered row must be gone afterward"
 
 
+async def test_partial_failure_retries_only_the_failed_recipient_not_the_succeeded_one(
+    client: AsyncClient, make_user: MakeUser, register_device: RegisterDevice,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Falsifies the exact bug named in the verifier finding: if dispatch_pending's
+    retry branch forgot to narrow recipient_ids to the still-failing subset (e.g. kept
+    the full original recipient_ids, or re-derived it from the row instead of from
+    `failed`), a recipient who ALREADY succeeded in sweep 1 would be published to a
+    second time in sweep 2. Constructed so sweep 1 genuinely has one success and one
+    failure in the SAME dispatch_pending call -- not two separate rows, one per
+    outcome, which would never exercise the narrowing at all.
+    """
+    creator = await make_user("Creator")
+    ok_recipient = await make_user("OkRecipient")
+    fail_recipient = await make_user("FailRecipient")
+    await share_verified_campus(creator.id, ok_recipient.id, fail_recipient.id)
+    device = await register_device(creator, one_time_prekey_count=1)
+
+    async def crashed_dispatch(*args: Any, **kwargs: Any) -> None:
+        return None  # force every send onto the sweeper, never the live path
+
+    monkeypatch.setattr(outbox, "dispatch_now", crashed_dispatch)
+
+    opened = await client.post(
+        "/conversations",
+        json={"kind": "group", "member_user_ids": [ok_recipient.id, fail_recipient.id]},
+        headers=creator.headers,
+    )
+    sent = await client.post(
+        f"/conversations/{opened.json()['id']}/messages",
+        json={"sender_device_id": device["id"], "ciphertext_b64": b64(b"partial-fail"),
+              "message_type": "signal"},
+        headers=creator.headers,
+    )
+    assert sent.status_code == 201, sent.text
+    message_id = sent.json()["id"]
+    row_id = await _pending_row_id_for(message_id)
+
+    calls: list[str] = []
+
+    async def flaky_publish(user_id: str, event: dict) -> None:
+        calls.append(user_id)
+        if user_id == fail_recipient.id:
+            raise ConnectionError("simulated transport failure")
+
+    import app.routers.messages as messages_router
+
+    monkeypatch.setattr(messages_router, "publish_to_user", flaky_publish)
+
+    stats_1 = await outbox.dispatch_pending(limit=10)
+    assert stats_1.claimed == 1
+    assert stats_1.retried == 1, "one recipient failed -> the row must be RETRIED, not delivered/dead"
+    assert stats_1.delivered == 0
+    # Construct + assert the discriminating condition: sweep 1 genuinely reached
+    # BOTH recipients in one dispatch_pending call, one of each outcome, before
+    # trusting anything the second sweep does.
+    assert set(calls) == {creator.id, ok_recipient.id, fail_recipient.id}, (
+        "sweep 1 must have attempted every original recipient exactly once"
+    )
+    assert calls.count(creator.id) == 1
+    assert calls.count(ok_recipient.id) == 1
+    assert calls.count(fail_recipient.id) == 1
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            text("SELECT recipient_ids, delivered_at, dead_at FROM delivery_outbox WHERE id = :id"),
+            {"id": row_id},
+        )
+        row_after_sweep_1 = result.mappings().one()
+    assert row_after_sweep_1["delivered_at"] is None
+    assert row_after_sweep_1["dead_at"] is None
+    assert {str(rid) for rid in row_after_sweep_1["recipient_ids"]} == {fail_recipient.id}, (
+        "the row must be narrowed to ONLY the still-failing recipient -- keeping "
+        "creator/ok_recipient in recipient_ids here is exactly the bug: they would "
+        "be re-published to on the next sweep despite already having succeeded"
+    )
+
+    calls.clear()
+
+    async def all_succeed_publish(user_id: str, event: dict) -> None:
+        calls.append(user_id)
+
+    monkeypatch.setattr(messages_router, "publish_to_user", all_succeed_publish)
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text("UPDATE delivery_outbox SET next_attempt_at = now() - interval '1 second' "
+                 "WHERE id = :id"),
+            {"id": row_id},
+        )
+        await session.commit()
+
+    stats_2 = await outbox.dispatch_pending(limit=10)
+    assert stats_2.delivered == 1
+    assert calls == [fail_recipient.id], (
+        "sweep 2 must publish to ONLY the previously-failed recipient -- "
+        f"creator/ok_recipient appearing here means they were published to twice "
+        f"total across the two sweeps (got calls={calls!r})"
+    )
+
+
 def _records(caplog: pytest.LogCaptureFixture) -> list[dict]:
     return [
         json.loads(r.getMessage()) for r in caplog.records if r.name == "app.operational"
