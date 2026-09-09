@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1788974561542,
+  "updated": 1788974825528,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -416,6 +416,15 @@
     }
   ],
   "cards": [
+    {
+      "id": "c394",
+      "col": "backlog",
+      "owner": "J",
+      "tag": "bug",
+      "area": "backend",
+      "title": "c394 [Sep 9 chirps-17] tests/test_ws_resource_integration.py (Astra's c354 backend tests, merged 98c50cb) has no needs_redis guard, so on any machine without a local Redis (Jose's Mac) its 4 tests ERROR with ConnectionRefused to 127.0.0.1:6379 in every full suite; CI has Redis and is green. Fix = apply tests/test_ws_fanout.py's c92 skip pattern (connection check, skip only when nothing listens, never swallow a real failure) to that file; two-line PR",
+      "detail": "FOUND Sep 9 00:55 in c375's pre-PR full suite (1624 passed, 4 errors), reproduced on main at 907dbaa: the fixture in tests/test_ws_resource_integration.py does Redis.from_url(require_loopback(REDIS_URL), socket_connect_timeout=1) and raises ConnectionRefusedError [Errno 61] when nothing listens on 6379. tests/test_ws_fanout.py documents the house pattern (board c92): a deliberate connection check, pytest.mark.skipif applied per test, reason naming the board card, so that a broken fan-out with Redis UP still fails loudly. Apply the same guard to the four tests here. Until then, every local full suite on this Mac reports 4 errors that are environmental, which is the corrosive kind of red the c92 note warns about."
+    },
     {
       "id": "c393",
       "col": "progress",
@@ -3795,7 +3804,7 @@
       "owner": "J",
       "tag": "P2 audit",
       "area": "infra",
-      "title": "c375 [Sep 8 chirps-17 wave, Jose] BUILT on jose/c375-w17 (77b0424 rebased), CODE HALF - Settings.service_role Literal all/api/ws default all; create_app mounts ALL_HTTP_ROUTERS + gateway (all), ALL_HTTP_ROUTERS only (api), deployment + gateway (ws), unhandled role raises; SERVICE_ROLE=all on both services in infra/deployment.json and in ENV_NAMES; DEPLOY.md Service roles section with flip/rollback commands gated on a role-aware verifier follow-up. 13 new tests (6 red with the change removed, 5-sabotage matrix all caught, ENV_NAMES falsified via 21 red c362 tests), 80 passed targeted. Full suite running under the lock now; then draft PR, independent verifier, manager review. REMAINING after merge (Jose cloud steps): role-aware deploy_verify.py, the live SERVICE_ROLE flip, separate runtime identities/IAM | 22:10: the pre-PR full suite STALLED at 35% (silent since 21:55, zero CPU, holding the suite lock with three suites queued); diagnosing, then rerun",
+      "title": "c375 [Sep 8-9 chirps-17 wave, Jose] DRAFT PR #280 OPEN (head c1f591c), CODE HALF - Settings.service_role Literal all/api/ws default all; create_app mounts per role (ws keeps /_health, /_deployment and /ws only; unhandled role raises); SERVICE_ROLE=all on both services in infra/deployment.json and in ENV_NAMES; DEPLOY.md Service roles section with flip and rollback commands gated on a role-aware deploy_verify.py. 13 new tests (6 red with the change removed, 5-sabotage matrix caught, ENV_NAMES falsified via 21 red c362 tests); full suite 1624 passed / 5 skipped / 1 deselected (c393) / 4 Redis-env errors that reproduce on main (c394). Independent verifier running, then manager review. REMAINING after merge (Jose cloud steps): role-aware verifier, the live flip, separate runtime identities",
       "detail": "AUDIT INTAKE Sep 7, 2026. Tracking: c341.\n\nSTATUS / SEVERITY / CONFIDENCE\nDated infrastructure observation or proposed improvement; revalidate current state before implementation.\n\nSUGGESTED ROUTING\nJ (router modes/deploy/IAM), Q independently verifies client routing. Proposed routing, not an accepted assignment. Remains unclaimed; claim before editing shared files.\n\nPHASE\nLater hardening; preserve independent scaling now\n\nSCOPE\nComplete the scoped follow-up below. Current services scale independently but run shared app factory/image and runtime identity. This is not a proven authorization bypass; the existing split is workload isolation.\n\nACCEPTANCE (proposed, not run by intake)\n1. Inventory routes, callers and resource grants per service; design explicit API-only/WS-only modes that fail startup on invalid mode and reject unintended route families.\n2. Prepare separate runtime identities with only necessary secret/storage/SQL/broker privileges; preserve authentication/membership/suspension checks and code/image compatibility.\n3. Verify positive and negative route matrices, client WS URL, ordinary API behavior, rollouts/rollback and same-release contracts in staging; retain health checks and required startup paths.\n4. Document the boundary and connection envelope including jobs and rolling revisions. Do not convert the modular monolith to microservices or introduce Kubernetes as part of this card.\n\nCOORDINATION LINKS\n- F22 (c361) authenticated deploy verification\n- F23 (c362) routing/capacity docs\n- F24 (c363) mixed validation\n- infra_network (c372)\nThese links identify related work and shared owners; they impose no start or completion dependency by themselves. Only an explicitly scoped acceptance criterion or an existing product/operational decision is a blocker for its stated stage. Diagnosis/design can otherwise start independently.\n\nHISTORY / DEDUPLICATION\n- Current services scale independently but run shared app factory/image and runtime identity. This is not a proven authorization bypass; the existing split is workload isolation.\n\nSOURCE\n- backend/app/main.py\n- backend/app/config.py\n- DEPLOY.md\nThe code audit and CTO strategy are dated snapshots. Detailed session archives and cloud metadata are local, not included in this board publication.\n\nGUARDS\nJose authorized public board publication and starting implementation Sep 7. Claim this card publicly before editing; use reviewed feature PRs and keep progress current. Existing E2EE/library/HA/device decisions stand. Specific production operations must respect their scoped acceptance, operational window and existing authority; this is not a blanket instruction to delete data, run load against production or execute payments. Done requires acceptance evidence, not routing-only smoke."
     },
     {
