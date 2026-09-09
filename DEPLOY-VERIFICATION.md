@@ -5,6 +5,13 @@ run says `ROUTING_ONLY`; only a successful authenticated run says
 `AUTHENTICATED_READY`. HTTP 200/401 routing probes alone cannot establish readiness.
 The script does not deploy, migrate, send messages/email, or create payments.
 
+The wrapper picks its interpreter in this order: `$CHIRP_PYTHON`, then the repo's
+`backend/.venv/bin/python`, then `python3` on `PATH`, and refuses to start (exit 2)
+if the winner holds no CA certificates - a python.org framework build without its
+Install Certificates step fails every https probe at the TLS layer and would
+otherwise report a false `NOT_READY` (c391, deploy windows #13 and #14). The chosen
+interpreter is printed to stderr so a report can cite it.
+
 ## Release inputs
 
 Use the expected schema revision and immutable image digests from the reviewed
