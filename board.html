@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1788971019242,
+  "updated": 1788972038482,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -431,7 +431,7 @@
       "owner": "J",
       "tag": "deploy",
       "area": "infra",
-      "title": "c392 [Sep 8 chirps-17, Jose] CLAIMED - every scripts/ wrapper must pin an interpreter with CA certificates, not just deploy-verify: deployment-config, monitoring-check, network-audit, spend-report exec bare python3 and recovery-check has a bare python3 shebang. Proven today: monitoring-check under the Mac's 3.13 reported transport_or_trust_unavailable for every collection while the same module under backend/.venv returned the real inventory (c370). Fix = one shared resolver (scripts/lib) used by all six, c391's tests kept green, one test per wrapper; PR pending",
+      "title": "c392 [Sep 8-9 chirps-17, Jose] DRAFT PR #278 OPEN (head 5dca226) - one shared resolver scripts/lib/pick-python.sh (CHIRP_PYTHON, then backend/.venv relative to the helper, then python3; refuses a certless interpreter with exit 2; cites the interpreter on stderr) sourced by all six wrappers: deploy-verify, deployment-config, monitoring-check, network-audit, spend-report, recovery-check (now a wrapper over recovery_check.py, moved unchanged). 13 new tests, all red under the old wrappers; c391's 4 tests unchanged in assertions; scripts/tests 35 passed. Full suite queued under the lock (c393 hang deselected); independent verifier running; then manager review",
       "detail": "FOUND Sep 8 while running c370's monitoring inventory from the manager session: scripts/monitoring-check execs python3, which on the Intel Mac is the python.org 3.13 framework build with an empty trust store, so every Cloud Monitoring API call failed at the TLS layer and the checker reported transport_or_trust_unavailable for alerts, uptime, channels and every metric descriptor - a report that reads like a permissions problem. Running scripts/monitoring_check.py through backend/.venv/bin/python returned the real inventory (zero policies, zero channels, zero uptime checks, all descriptors available).\n\nc391 fixed exactly this for scripts/deploy-verify (resolve CHIRP_PYTHON, then backend/.venv/bin/python, then python3; refuse with exit 2 if the winner holds no CA certificates). Five more entry points share the defect: scripts/deployment-config, scripts/monitoring-check, scripts/network-audit, scripts/spend-report (all exec python3) and scripts/recovery-check (python3 shebang; it only shells out to gcloud today, so it works by accident).\n\nSCOPE: factor c391's resolver into one sourced helper (scripts/lib/pick-python.sh or similar), make every wrapper use it, convert recovery-check to the same wrapper shape, keep c391's four tests green, and add one parametrised test that drives each wrapper with CHIRP_PYTHON pointed at a marker shim and asserts the shim was chosen and cited. No change to any checker's probes or report contract.\n\nACCEPTANCE: (1) all six wrappers resolve the same way and cite the interpreter on stderr; (2) each refuses a certless interpreter before doing anything; (3) tests/test_c391_deploy_verify_interpreter.py unchanged and green; (4) the c361, c362, c368, c370, c371, c372 script test suites stay green."
     },
     {
