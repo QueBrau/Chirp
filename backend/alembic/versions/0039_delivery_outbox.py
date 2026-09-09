@@ -3,11 +3,11 @@
 Brand-new, empty table -- there is nothing pre-existing to backfill (unlike
 0033/0037/0349's careful data-preserving dances), so this is a plain create/drop.
 
-Parented on 0037 (the head at authoring time -- `alembic heads` confirmed a single
-head, 0037, with PR #274/c390's 0038 still an OPEN branch, not yet merged). If #274
-merges before this migration does, HANDOFF's migration rule requires re-pointing
-down_revision to '0038' and re-running `alembic heads` immediately before merging
-c356, not at authoring time -- see this PR's body.
+Originally authored parented on 0037 (the single head at authoring time, with PR
+#274/c390's 0038 still an open branch). #274/c390 merged before this PR did, so
+per HANDOFF's migration rule this was re-pointed to down_revision='0038' right
+before opening this PR, re-running `alembic heads` to confirm a single head
+afterward -- see this PR's body.
 
 kind is CHECKed to only ever be 'message' or 'poll' even though this PR only ever
 inserts 'message' rows; polls stay on their own best-effort path (DELIVERY-OUTBOX.md)
@@ -21,7 +21,7 @@ idx_conversation_members_user_active (models/messaging.py).
 from alembic import op
 
 revision = "0039"
-down_revision = "0037"
+down_revision = "0038"
 branch_labels = None
 depends_on = None
 
