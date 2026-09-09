@@ -10,7 +10,10 @@ The wrapper picks its interpreter in this order: `$CHIRP_PYTHON`, then the repo'
 if the winner holds no CA certificates - a python.org framework build without its
 Install Certificates step fails every https probe at the TLS layer and would
 otherwise report a false `NOT_READY` (c391, deploy windows #13 and #14). The chosen
-interpreter is printed to stderr so a report can cite it.
+interpreter is printed to stderr so a report can cite it. That same resolution
+lives in `scripts/lib/pick-python.sh` and is shared by every `scripts/` wrapper
+(deploy-verify, deployment-config, monitoring-check, network-audit, spend-report,
+recovery-check), not just this one (c392).
 
 ## Release inputs
 

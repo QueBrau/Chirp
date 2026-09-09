@@ -61,12 +61,19 @@ def _shim(path: Path, marker: Path) -> Path:
 
 def _sandbox(tmp_path: Path) -> tuple[Path, Path]:
     """A copy of the wrapper and its module with NO backend/.venv beside them, plus a
-    bin/ whose python3 is this interpreter, so PATH fallback resolves deterministically."""
+    bin/ whose python3 is this interpreter, so PATH fallback resolves deterministically.
+    c392: the resolver moved into scripts/lib/pick-python.sh, shared by every scripts/
+    wrapper, so the sandbox now carries that file too - unavoidable since deploy-verify
+    sources it relative to its own location; no assertion in this file changed."""
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     for name in ("deploy-verify", "deploy_verify.py"):
         (scripts / name).write_bytes((ROOT / "scripts" / name).read_bytes())
     (scripts / "deploy-verify").chmod(0o755)
+    (scripts / "lib").mkdir()
+    (scripts / "lib" / "pick-python.sh").write_bytes(
+        (ROOT / "scripts" / "lib" / "pick-python.sh").read_bytes()
+    )
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (bindir / "python3").symlink_to(sys.executable)

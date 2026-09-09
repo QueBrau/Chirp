@@ -17,14 +17,18 @@ The August 27 restore rehearsal (c215) and August 22 purge success (c69) remain 
 Run from the repository root with an authenticated gcloud installation:
 
 ~~~bash
-python3 scripts/recovery-check --project chirps-prod --instance chirp-db
+scripts/recovery-check --project chirps-prod --instance chirp-db
 ~~~
 
 On Jose's machine, add the executable path if gcloud is absent from PATH:
 
 ~~~bash
-python3 scripts/recovery-check --project chirps-prod --instance chirp-db --gcloud "$HOME/google-cloud-sdk/bin/gcloud"
+scripts/recovery-check --project chirps-prod --instance chirp-db --gcloud "$HOME/google-cloud-sdk/bin/gcloud"
 ~~~
+
+(c392: recovery-check is now a bash wrapper that resolves and validates its own
+interpreter via scripts/lib/pick-python.sh, same as every other scripts/ entry
+point, so it is invoked directly rather than via `python3`.)
 
 The script makes metadata reads only. It does not access secrets, connect to PostgreSQL, enable APIs, change settings or create a restored instance. Its JSON distinguishes configured retention, the available recovery window, backup freshness and inspection errors. Defaults are a 36-hour maximum automated-backup age, 15-minute maximum recovery lag, and seven configured log days; these are proposed operational checks, not measured recovery guarantees.
 

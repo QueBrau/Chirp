@@ -1,3 +1,8 @@
 #!/usr/bin/env bash
+# c392: resolve an interpreter that can complete TLS before running; see
+# scripts/lib/pick-python.sh and DEPLOY-VERIFICATION.md.
 set -euo pipefail
-exec python3 "$(dirname "$0")/monitoring_check.py" "$@"
+here="$(cd "$(dirname "$0")" && pwd)"
+source "$here/lib/pick-python.sh"
+python=$(chirp_pick_python monitoring-check) || exit $?
+exec "$python" "$here/monitoring_check.py" "$@"
