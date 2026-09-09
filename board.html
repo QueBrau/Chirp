@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1788914478616,
+  "updated": 1788914639628,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -2901,11 +2901,11 @@
     },
     {
       "id": "c256",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "J",
       "tag": "",
       "area": "",
-      "title": "c256 [NOTE FOR WHOEVER BUILDS A REASON COMPOSER] MAX_REASON_LENGTH is carried by FIVE request schemas (ContentReportCreate, ChirpRemoveRequest, SuspendUserRequest, ContentRemoveRequest, ReportResolveRequest). Today mobile sends only presets (longest 26 chars), so no counter is needed (c251 finding). The day a free-text reason field ships, cap the COMPOSER against the same constant and extend verify-content-limits.mjs - capping one schema's UI would leave four.",
+      "title": "c256 [Sep 8 chirps-17, Jose's call] FOLDED INTO CODE - PR #276 open, CI pending: the note now lives as a comment on MAX_REASON_LENGTH in backend/app/core/validation.py (five schemas share the cap; a future free-text reason composer caps against the constant and extends verify-content-limits.mjs). Comment-only change; closes on merge | was: c256 [NOTE FOR WHOEVER BUILDS A REASON COMPOSER] MAX_REASON_LENGTH is carried by FIVE request schemas (ContentReportCreate, ChirpRemoveRequest, SuspendUserRequest, ContentRemoveRequest, ReportResolveRequest). Today mobile sends only presets (longest 26 chars), so no counter is needed (c251 finding).",
       "detail": ""
     },
     {
