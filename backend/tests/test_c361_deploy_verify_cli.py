@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -136,6 +137,12 @@ print(json.dumps(config[sys.argv[4]]))
         command += list(extra)
         env = {k: v for k, v in os.environ.items() if not k.startswith("DEPLOY_VERIFY_")}
         env.update(FAKE_CLOUD_CONFIG=str(config), FAKE_CLOUD_CALLS=str(calls))
+        # c391: the wrapper resolves its interpreter from the checkout (CHIRP_PYTHON,
+        # then backend/.venv, then PATH's python3) and refuses one with no CA
+        # certificates. A worktree has no backend/.venv and PATH's python3 may be a
+        # certless framework build, so pin the CLI under test to the interpreter
+        # running this suite - the one interpreter known to exist here.
+        env.setdefault("CHIRP_PYTHON", sys.executable)
         if bearer is not None:
             env["DEPLOY_VERIFY_BEARER"] = bearer
         result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=20)

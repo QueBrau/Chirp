@@ -1,4 +1,27 @@
 #!/usr/bin/env bash
 # Read-only deployment verification; see DEPLOY-VERIFICATION.md.
+#
+# c391: choose an interpreter that can complete a TLS handshake. `exec python3`
+# picked up the python.org 3.13 framework build on the deploy operator's Mac,
+# which ships with an EMPTY default trust store until its Install Certificates
+# step is run; every https probe then failed at the TLS layer, reported status 0,
+# and the verdict read NOT_READY/auth_gate for a deployment that was fine
+# (windows #13 and #14, Sep 8). Resolution order: $CHIRP_PYTHON, the repo's
+# backend/.venv interpreter, then python3 - and whichever wins must prove it
+# holds CA certificates before a single probe is sent, so a wrong interpreter
+# fails here with a message instead of as a false NOT_READY.
 set -euo pipefail
-exec python3 "$(dirname "$0")/deploy_verify.py" "$@"
+here="$(cd "$(dirname "$0")" && pwd)"
+if [ -n "${CHIRP_PYTHON:-}" ]; then
+  python="$CHIRP_PYTHON"
+elif [ -x "$here/../backend/.venv/bin/python" ]; then
+  python="$here/../backend/.venv/bin/python"
+else
+  python="$(command -v python3)"
+fi
+if ! "$python" -c 'import ssl, sys; sys.exit(0 if ssl.create_default_context().cert_store_stats()["x509_ca"] > 0 else 1)' 2>/dev/null; then
+  printf 'deploy-verify: %s has no CA certificates in its default trust store; every https probe would fail before reaching the service. Set CHIRP_PYTHON to an interpreter with certificates (the repo backend/.venv/bin/python works).\n' "$python" >&2
+  exit 2
+fi
+printf 'deploy-verify: interpreter %s\n' "$python" >&2
+exec "$python" "$here/deploy_verify.py" "$@"
