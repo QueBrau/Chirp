@@ -47,7 +47,8 @@
       "workers": 1,
       "env": {
         "DB_POOL_SIZE": "3",
-        "DB_MAX_OVERFLOW": "2"
+        "DB_MAX_OVERFLOW": "2",
+        "SERVICE_ROLE": "all"
       },
       "client_origin": "https://chirp-api-593616178468.us-central1.run.app",
       "secrets": {
@@ -68,7 +69,8 @@
       "workers": 1,
       "env": {
         "DB_POOL_SIZE": "1",
-        "DB_MAX_OVERFLOW": "1"
+        "DB_MAX_OVERFLOW": "1",
+        "SERVICE_ROLE": "all"
       },
       "client_origin": "https://chirp-ws-593616178468.us-central1.run.app",
       "secrets": {}
