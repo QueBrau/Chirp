@@ -135,7 +135,34 @@ CREATE TABLE kyber_prekeys (
 );
 CREATE INDEX idx_kyber_otk_available ON kyber_prekeys(device_id)
     WHERE consumed_at IS NULL AND NOT is_last_resort;
+```
 
+**Supported-device contract** (`backend/app/routers/keys.py` MAX_ACTIVE_DEVICES=5 /
+MAX_RETAINED_DEVICES=20): an account may have at most 5 non-revoked devices at once
+(`GET /users/{id}/prekey-bundle` refuses over that, before consuming any key) and at
+most 20 device rows total including revoked history (further registration then refused
+with `device_storage_limit_reached`, so old revoked devices are not silently forgotten).
+`test_bundle_serves_every_device_at_maximum_supported_count` is the enforcing test for
+the active-device half of this contract.
+
+**Key-material byte sizes** (`backend/app/schemas/e2ee.py`): identity keys, signed-
+prekey public keys, and one-time-prekey public keys are all 32 raw Curve25519 (X25519)
+bytes — no Signal-style leading type byte, since that convention belongs to libsignal
+and libsignal is AGPL-rejected (board Sep 1). Signatures are 64 bytes (Ed25519/XEdDSA).
+Kyber public keys are 1568 bytes (ML-KEM-1024, PQXDH). Server-side signature
+verification is not implemented — see the decision note at the top of
+`backend/app/schemas/e2ee.py`.
+
+**Key-material retirement**: `app.jobs.purge` runs a second, independent phase that
+hard-deletes already-useless key material once `e2ee_key_retirement_grace_days` (default
+7, `backend/app/config.py`) has passed: consumed one-time EC/Kyber prekeys, superseded
+signed prekeys (the newest row per device always survives regardless of its own age),
+and every prekey row of a device revoked past the grace window (the Device row itself is
+never deleted). Reported under `report["key_retirement_counts"]`, separate from the
+content-purge `report["counts"]`. This phase ships in the purge job's own deployed
+image, which is redeployed separately from the API (see DEPLOY.md).
+
+```sql
 -- ============ MESSAGING (ciphertext only) ============
 
 CREATE TABLE conversations (

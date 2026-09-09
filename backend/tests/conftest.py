@@ -399,6 +399,17 @@ def b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
+def _padded(tag: bytes, length: int) -> bytes:
+    """Deterministically pad (by repeating) or truncate opaque test key bytes to an
+    exact length. schemas/e2ee.py now rejects any *_b64 field whose decoded length
+    isn't exactly 32/64/1568 bytes (board c347) — every hand-rolled device/prekey body
+    in the test suite must land on those exact sizes, and this is the shared way to do
+    it while keeping each tag's bytes distinct from every other tag's."""
+    if not tag:
+        tag = b"\x00"
+    return (tag * (length // len(tag) + 1))[:length]
+
+
 @pytest.fixture
 def make_user(client: AsyncClient) -> MakeUser:
     """Factory: bootstrap a user with a unique firebase_uid via POST /auth/bootstrap."""
@@ -666,14 +677,17 @@ def register_device(client: AsyncClient) -> RegisterDevice:
         body = {
             "device_label": "pytest-device",
             "registration_id": registration_id,
-            "identity_key_b64": b64(b"identity-" + uuid.uuid4().bytes),
+            "identity_key_b64": b64(_padded(b"identity-" + uuid.uuid4().bytes, 32)),
             "signed_prekey": {
                 "key_id": 1,
-                "public_key_b64": b64(b"spk-" + uuid.uuid4().bytes),
-                "signature_b64": b64(b"sig-" + uuid.uuid4().bytes),
+                "public_key_b64": b64(_padded(b"spk-" + uuid.uuid4().bytes, 32)),
+                "signature_b64": b64(_padded(b"sig-" + uuid.uuid4().bytes, 64)),
             },
             "one_time_prekeys": [
-                {"key_id": key_id, "public_key_b64": b64(f"otk-{key_id}".encode())}
+                {
+                    "key_id": key_id,
+                    "public_key_b64": b64(_padded(f"otk-{key_id}".encode(), 32)),
+                }
                 for key_id in range(1, one_time_prekey_count + 1)
             ],
         }

@@ -19,14 +19,14 @@ from typing import Any
 from httpx import AsyncClient
 
 from app.schemas.e2ee import MAX_PREKEY_BATCH
-from tests.conftest import MakeChapterWith, MakeUser, b64
+from tests.conftest import MakeChapterWith, MakeUser, _padded, b64
 
 MAX_INVITE_IDS = 500
 
 
 def _otks(count: int) -> list[dict[str, Any]]:
     return [
-        {"key_id": key_id, "public_key_b64": b64(f"otk-{key_id}".encode())}
+        {"key_id": key_id, "public_key_b64": b64(_padded(f"otk-{key_id}".encode(), 32))}
         for key_id in range(1, count + 1)
     ]
 
@@ -35,8 +35,8 @@ def _kyber(count: int) -> list[dict[str, Any]]:
     return [
         {
             "key_id": key_id,
-            "public_key_b64": b64(f"kyber-{key_id}".encode()),
-            "signature_b64": b64(f"kyber-sig-{key_id}".encode()),
+            "public_key_b64": b64(_padded(f"kyber-{key_id}".encode(), 1568)),
+            "signature_b64": b64(_padded(f"kyber-sig-{key_id}".encode(), 64)),
         }
         for key_id in range(1, count + 1)
     ]
@@ -46,11 +46,11 @@ def _device_body(**extra: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
         "device_label": "pytest-c264",
         "registration_id": 7264,
-        "identity_key_b64": b64(b"identity-" + uuid.uuid4().bytes),
+        "identity_key_b64": b64(_padded(b"identity-" + uuid.uuid4().bytes, 32)),
         "signed_prekey": {
             "key_id": 1,
-            "public_key_b64": b64(b"spk-" + uuid.uuid4().bytes),
-            "signature_b64": b64(b"sig-" + uuid.uuid4().bytes),
+            "public_key_b64": b64(_padded(b"spk-" + uuid.uuid4().bytes, 32)),
+            "signature_b64": b64(_padded(b"sig-" + uuid.uuid4().bytes, 64)),
         },
         "one_time_prekeys": _otks(2),
     }

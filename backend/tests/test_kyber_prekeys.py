@@ -10,14 +10,14 @@ import uuid
 
 from httpx import AsyncClient
 
-from tests.conftest import ApiUser, MakeUser, b64
+from tests.conftest import ApiUser, MakeUser, _padded, b64
 
 
 def _kyber_field(tag: str, key_id: int = 1) -> dict[str, object]:
     return {
         "key_id": key_id,
-        "public_key_b64": b64(f"kyber-pub-{tag}-{uuid.uuid4().hex}".encode()),
-        "signature_b64": b64(f"kyber-sig-{tag}-{uuid.uuid4().hex}".encode()),
+        "public_key_b64": b64(_padded(f"kyber-pub-{tag}-{uuid.uuid4().hex}".encode(), 1568)),
+        "signature_b64": b64(_padded(f"kyber-sig-{tag}-{uuid.uuid4().hex}".encode(), 64)),
     }
 
 
@@ -33,14 +33,14 @@ async def _register_device_with_kyber(
     body: dict[str, object] = {
         "device_label": "pytest-kyber-device",
         "registration_id": registration_id,
-        "identity_key_b64": b64(b"identity-" + uuid.uuid4().bytes),
+        "identity_key_b64": b64(_padded(b"identity-" + uuid.uuid4().bytes, 32)),
         "signed_prekey": {
             "key_id": 1,
-            "public_key_b64": b64(b"spk-" + uuid.uuid4().bytes),
-            "signature_b64": b64(b"sig-" + uuid.uuid4().bytes),
+            "public_key_b64": b64(_padded(b"spk-" + uuid.uuid4().bytes, 32)),
+            "signature_b64": b64(_padded(b"sig-" + uuid.uuid4().bytes, 64)),
         },
         "one_time_prekeys": [
-            {"key_id": key_id, "public_key_b64": b64(f"otk-{key_id}".encode())}
+            {"key_id": key_id, "public_key_b64": b64(_padded(f"otk-{key_id}".encode(), 32))}
             for key_id in range(1, 3)
         ],
         "kyber_one_time": [

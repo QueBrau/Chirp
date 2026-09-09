@@ -21,40 +21,72 @@ def _to_b64(value: object) -> object:
 
 Base64Str = Annotated[str, BeforeValidator(_to_b64)]
 
-# Storage ceilings for the mounted, legacy opaque-byte directory, not claims about
-# a selected crypto algorithm. Mobile crypto is still parked. Exact key sizes and
-# signature verification must follow its eventual supported protocol contract.
+# Storage ceilings for the mounted opaque-byte directory: a cheap upper bound on the
+# encoded string length, checked by Field(max_length=...) before base64 decoding even
+# runs. The EXACT_* constants below are the real contract; keep each <= its ceiling.
 MAX_PUBLIC_KEY_BYTES = 256
 MAX_SIGNATURE_BYTES = 256
 MAX_KYBER_PUBLIC_KEY_BYTES = 4096
 MAX_DEVICE_LABEL_LENGTH = 100
 
+# Exact decoded byte lengths (board c347 ruling, Sep 8). X25519/Curve25519 public keys
+# (identity key, signed-prekey public key, one-time-prekey public key — SPEC.md's schema
+# uses the same X25519 point for all three) are 32 raw bytes with NO Signal-style leading
+# type byte: libsignal is the only library in this ecosystem that uses that convention,
+# and libsignal is AGPL-rejected (board Sep 1 ruling — excluded from the E2EE plan
+# permanently). Ed25519/XEdDSA signatures are 64 bytes regardless of curve. Kyber public
+# keys are ML-KEM-1024 (1568 bytes), matching Signal's own PQXDH NIST level; SPEC.md names
+# no level on record, so this is a recommended default the manager can revise with a
+# one-constant change if a different level is later chosen.
+EXACT_PUBLIC_KEY_BYTES = 32
+EXACT_SIGNATURE_BYTES = 64
+EXACT_KYBER_PUBLIC_KEY_BYTES = 1568
+assert EXACT_PUBLIC_KEY_BYTES <= MAX_PUBLIC_KEY_BYTES
+assert EXACT_SIGNATURE_BYTES <= MAX_SIGNATURE_BYTES
+assert EXACT_KYBER_PUBLIC_KEY_BYTES <= MAX_KYBER_PUBLIC_KEY_BYTES
 
-def _bounded_base64(value: str, *, max_bytes: int) -> str:
-    """Validate decoded storage size as well as the encoded string's cheap bound."""
+# Server-side signature verification is DEFERRED, not implemented here. Signed prekeys
+# and Kyber prekeys are signed with XEdDSA over the X25519 identity key (Signal's scheme
+# for signing with a Curve25519 key that has no native signing mode). The `cryptography`
+# library (pinned 50.0.0) can verify plain Ed25519 signatures but implements no XEdDSA
+# primitive, and the one library that does — libsignal — is AGPL-rejected (see above).
+# Exact-length validation below only checks SHAPE, never authenticity: a syntactically
+# valid 64-byte string that is not a real signature over the key it accompanies is
+# accepted. This gap stays open until Jose picks a protocol library that both avoids
+# AGPL and exposes XEdDSA verification (vodozemac/mls-rs are the standing candidates
+# per c339 — neither has shipped). Do not half-implement this: a partial check that
+# verifies shape but not cryptographic validity would look like real verification to
+# a caller and is worse than the documented gap.
+
+
+def _bounded_base64(value: str, *, exact_bytes: int) -> str:
+    """Validate the decoded length is EXACTLY exact_bytes, not merely under a ceiling."""
     try:
         decoded = base64.b64decode(value, validate=True)
     except (binascii.Error, ValueError):
         raise ValueError("invalid_base64") from None
-    if not 1 <= len(decoded) <= max_bytes:
-        raise ValueError("invalid_key_size")
+    if len(decoded) != exact_bytes:
+        raise ValueError(
+            f"invalid_key_size: expected exactly {exact_bytes} decoded bytes, "
+            f"got {len(decoded)}"
+        )
     return value
 
 
 PublicKeyInput = Annotated[
     str,
     Field(min_length=1, max_length=4 * ((MAX_PUBLIC_KEY_BYTES + 2) // 3)),
-    AfterValidator(partial(_bounded_base64, max_bytes=MAX_PUBLIC_KEY_BYTES)),
+    AfterValidator(partial(_bounded_base64, exact_bytes=EXACT_PUBLIC_KEY_BYTES)),
 ]
 SignatureInput = Annotated[
     str,
     Field(min_length=1, max_length=4 * ((MAX_SIGNATURE_BYTES + 2) // 3)),
-    AfterValidator(partial(_bounded_base64, max_bytes=MAX_SIGNATURE_BYTES)),
+    AfterValidator(partial(_bounded_base64, exact_bytes=EXACT_SIGNATURE_BYTES)),
 ]
 KyberPublicKeyInput = Annotated[
     str,
     Field(min_length=1, max_length=4 * ((MAX_KYBER_PUBLIC_KEY_BYTES + 2) // 3)),
-    AfterValidator(partial(_bounded_base64, max_bytes=MAX_KYBER_PUBLIC_KEY_BYTES)),
+    AfterValidator(partial(_bounded_base64, exact_bytes=EXACT_KYBER_PUBLIC_KEY_BYTES)),
 ]
 # These identifiers are PostgreSQL INTEGER columns. Reject overflow at the HTTP
 # boundary instead of turning a malformed request into a database error.
