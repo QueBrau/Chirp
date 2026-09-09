@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1788919759581,
+  "updated": 1788971019242,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -416,6 +416,15 @@
     }
   ],
   "cards": [
+    {
+      "id": "c393",
+      "col": "progress",
+      "owner": "J",
+      "tag": "bug",
+      "area": "backend",
+      "title": "c393 [Sep 8 chirps-17, Jose] BLOCKER FOR EVERY LOCAL FULL SUITE - tests/test_c363_mixed_harness.py::test_actual_http_and_ready_ws_overlap_and_longer_ws_hold_survives (Astra's c363 harness, merged 62060e4 tonight) deadlocks the backend suite on this Mac: silent at 0 percent CPU for 15+ minutes at test 639 of 1634 holding a loopback socket pair, reproduced again on the whole file in isolation (26 min, still hung), while the single neighbouring test passes in 0.4s and Linux CI is green. Cause (read, not yet proven): run_phases is wrapped in wait_for(3s); under load the budget fires, the cancelled client leaves loopback connections open, and the test's final gather over the http_peer handlers waits forever on readuntil. It held the suite lock with three builder suites queued behind it, and it is why the c375 and c356 builders reported blocked at their pre-PR suites. Tonight's manager-run suites deselect this one test (recorded in each PR body). Fix PR next: bound the handler gather, close the runner's client in the test, widen the budget; falsify by forcing the cancellation",
+      "detail": "FOUND Sep 8 22:10 by the chirps-17 manager session while running c375's pre-PR full suite under scripts/with-suite-lock. Evidence: /private/tmp/c375-full-suite.log stopped growing at 21:55 with 638 dots; pytest --collect-only names index 639 as test_actual_http_and_ready_ws_overlap_and_longer_ws_hold_survives; ps showed the pytest process at 0.0 percent CPU for over 15 minutes with no child processes, no PostgreSQL activity in pg_stat_activity, and lsof showing one loopback TCP pair (the test's own HTTP peer server); pytest tests/test_c363_mixed_harness.py alone also hung for 26 minutes; the single test before it passes in 0.41s. CI for #275/#276 ran the full suite green on Linux after c363 merged, so the hang is environment-sensitive (load and timing on a 4-core Intel Mac running several pytest processes), not a Linux regression.\n\nREADING OF THE TEST: it starts an asyncio HTTP peer and a websockets peer on 127.0.0.1, runs run_phases(runner, [http_mix, ws_storm]) under asyncio.wait_for(..., 3), then awaits asyncio.gather(*handlers) over every http_peer handler that ever started. A handler blocks in reader.readuntil until the client sends a full request or closes. If the 3-second budget fires (slow machine, other suites running), run_phases is cancelled but the Runner's HTTP client is never closed by the test, so pooled loopback connections stay open, readuntil never sees EOF, and the gather never returns. No timeout guards that gather.\n\nSCOPE OF THE FIX: bound the final gather with asyncio.wait_for and a clear assertion message; close the runner's HTTP client (or cancel the leftover handler tasks) in a finally; consider a larger run_phases budget tied to the ws hold (2 sockets x 0.5s hold) rather than a flat 3s. Falsify by monkeypatching the budget to a value that always cancels and asserting the test now FAILS within seconds instead of hanging. Keep the test's assertions (mixed observation, completed holds, no leaked loadtest tasks) intact.\n\nTONIGHT'S MITIGATION: the manager-run pre-PR suites for c375 and c356 pass --deselect on this one test id, and each PR body says so. Builders launched before this card will hit the hang and report blocked; the manager reruns their suites the same way."
+    },
     {
       "id": "c392",
       "col": "progress",
@@ -3827,6 +3836,7 @@
     }
   ],
   "decisions": [
+    "Sep 8 22:20 - LOCAL SUITE BLOCKER (chirps-17): c363's test_actual_http_and_ready_ws_overlap_and_longer_ws_hold_survives deadlocks the full backend suite on Jose's Mac under load (card c393). Until the fix merges, pre-PR full suites run by the manager pass --deselect for that single test id and say so in the PR body; a suite that hangs there is a rerun, not a failure. Lock hygiene: a with-suite-lock holder at zero CPU with no log growth for 10 minutes gets killed and re-queued.",
     "Sep 8 (night) - JOSE'S RULING ON POINTER CARDS: a reopened card stays in the backlog while its primary audit card has real work left, and the manager closes the pointer together with its primary. The 27 closed at 21:15 as duplicates are reopened, each retitled with the concrete remaining work of its primary so the backlog reads as work, not as pointers. Primaries still open tonight: c345 c347 c350 c354 c356 c362 c363 c364 c367 c368 c369 c374 c376.",
     "Sep 8 (night) - c390 MERGED on Jose's go after an independent verifier pass (13/13, two minors left for Q on the card). c347's remainder approved for wave 2b with these rulings: 32-byte Curve25519 (no Signal type byte; libsignal is rejected), ML-KEM-1024 (1568), grace 7 days as its own setting, SPEC.md hosts the device contract, no migration, signature verification deferred until a protocol library is chosen. Cloud remainders: read-only inventories recorded on c368/c369/c370/c371/c372/c362/c363/c388/c240; the classifier allowed the purge service account (created) and refused the monitoring channel and the Asset API enable; every human/credential/billing/restart step is written out in ~/Desktop/chirps/JOSE-CLOUD-BLOCK-2026-09-08.md (outside the repo). c375 built; c356 and c392 building.",
     "Sep 8 (night) - CLOUD REMAINDERS, first pass (chirps-17, on Jose's 'get these closed out'): read-only inventories re-run from the manager session and recorded on c368/c369/c370/c372. Attempted the reversible, low-risk cloud steps directly: enable the Cloud Asset API (c372 effective-IAM), create an email notification channel to the owner inbox (c370), create the dedicated chirp-purge service account with cloudsql.client only (c369). Anything that restarts prod (PITR patch), creates a credential (purge DB role/secret), bills (TLS Redis instance) or changes firewalls stays a Jose step and is written out as an exact command block. New card c392 for the wrapper-interpreter class found while doing this.",
