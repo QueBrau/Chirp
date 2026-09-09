@@ -290,8 +290,12 @@ export default function ChirpScreen() {
             Chirps
           </AppText>
         </View>
+        {/* c390 CHANGED THIS COPY BECAUSE THE OLD LINE BECAME FALSE. It read "No
+            names, ever." and the board now shows a per-author name. The promise that
+            survives is the real one and is what this says instead: the name is not
+            yours, it is not your account, and it is gone tomorrow. */}
         <AppText variant="caption" tone={headerTone} style={{ marginTop: spacing.xs }}>
-          Anonymous and campus-wide. No names, ever.
+          Campus-wide and anonymous. Your name here changes every day.
         </AppText>
       </View>
 
@@ -472,8 +476,17 @@ export default function ChirpScreen() {
                           >
                             <View style={{ flex: 1, backgroundColor: light.ink, opacity: 0.28 }} />
                           </View>
-                          <AppText variant="caption" style={{ color: light.inkFaint, flex: 1 }}>
-                            anonymous · {age(chirp.created_at)}
+                          {/* c390: the daily pseudonym replaces the word "anonymous".
+                              The DOT STAYS - it is the marker that says this is the
+                              anonymous board, and the label alone would read like a
+                              username. Server-derived (see src/api/chirps.ts): the
+                              client cannot compute or reverse it. */}
+                          <AppText
+                            variant="caption"
+                            style={{ color: light.inkSecondary, flex: 1 }}
+                            numberOfLines={1}
+                          >
+                            {chirp.author_label} · {age(chirp.created_at)}
                           </AppText>
                           <Pressable
                             accessibilityRole="button"

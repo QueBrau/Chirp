@@ -17,6 +17,8 @@ export interface ChirpOut {
   body: string;
   score: number;
   created_at: string;
+  /** Daily-rotating pseudonym, e.g. "Quiet-Magnolia-07" (c390). Server-derived; see the file header. */
+  author_label: string;
 }
 
 export type ChirpVoteValue = -1 | 1;
@@ -28,8 +30,13 @@ export interface ChirpVoteOut {
 
 /**
  * GET /campuses/{campus_id}/chirps response shape: ChirpOut plus the caller's OWN
- * vote only (backend routers/chirps.py `ChirpFeedOut`) — still no author field of
- * any kind (SPEC §8.3).
+ * vote only (backend routers/chirps.py `ChirpFeedOut`).
+ *
+ * c390: `author_label` (on ChirpOut) is the ONE author-derived field on the wire —
+ * a daily-rotating pseudonym, stable for one author within a UTC day on one campus
+ * and unrelated the next day. It is derived server-side from a stored random seed,
+ * so it is a label and not the author id in disguise; there is still no author
+ * IDENTIFIER of any kind here, and nothing the client can resolve back to a person.
  */
 export interface ChirpFeedOut extends ChirpOut {
   my_vote: number | null;

@@ -37,6 +37,13 @@ class User(Base):
     email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(Text)
+    # Random per user, migration 0038. The ONLY input to their daily chirp
+    # pseudonym that an attacker cannot enumerate - see services/pseudonym_service
+    # for why a hash of `id` would hand any chapter member an authorship oracle.
+    # Never returned by any route: this is key material, not profile data.
+    pseudonym_seed: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("gen_random_uuid()::text")
+    )
     # Self-declared at signup, display/routing only — never authorization (c242).
     # The full account of why is on AccountType in schemas/identity.py; read it
     # before gating anything on this column.

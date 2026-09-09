@@ -186,9 +186,24 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
 - Auth `account-type` copy: "I'm a student" / "I'm in a fraternity or sorority" /
   "I'm an alum" — same three backend account types, friendlier framing.
 - Chirps stays campus-wide + anonymous: NO avatars and NO masks of any kind — the
-  chirpTint card background + typography carry the anonymity. Optional small tinted
-  geometric dot (8px circle in the card's tint, darkened) as the only marker.
+  chirpTint card background + typography carry the anonymity. Small tinted
+  geometric dot (8px circle in the card's tint, darkened) beside the meta line.
   VotePill on the right.
+- **A card carries a DAILY-ROTATING PSEUDONYM, not the word "anonymous"** (c390,
+  braul, Sep 8 — "randomized name like in reddit and yikyak"). `author_label` comes
+  from the server (`Quiet-Magnolia-07`); the client cannot compute or reverse it.
+  - He was given three options with their costs and chose the middle one
+    knowingly. A name that labels one POST costs nothing and tracks nobody. A
+    Reddit-style name that is stable forever makes one identifying chirp
+    deanonymize a person's whole history, which on a single campus is a real
+    risk. The daily rotation caps linkage at a day.
+  - **The dot stays.** It is what says "this is the anonymous board"; the label on
+    its own reads like a username and would imply an account that does not exist.
+  - No avatar, ever — a name is not permission to add a face. The §5
+    GradientAvatar must not appear on this board.
+  - The subtitle copy changed with it, because "No names, ever." became false. It
+    now says the true thing: *"Campus-wide and anonymous. Your name here changes
+    every day."* If the rotation is ever removed, that line has to change again.
 
 ## 7. Screen notes
 
