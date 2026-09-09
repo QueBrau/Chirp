@@ -33,12 +33,53 @@ from app.schemas.messaging import (
     MessageReceiptCreate,
     MessageReceiptOut,
 )
+from app.services import outbox
 from app.services.fcm_service import send_content_free_push
 from app.ws.pubsub import publish_to_user
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["messages"])
+
+
+async def _dispatch_message_event(
+    recipient_ids: list[uuid.UUID], event: dict, sender_id: str | None
+) -> list[str]:
+    """Publish one message event to every recipient; return the ids that failed.
+
+    Same shape as the loop this replaces (board c356): a per-recipient publish
+    failure is logged (ids only, never ciphertext -- SPEC Section 8.1) and does
+    not stop the rest of the roster, but is now reported back instead of silently
+    swallowed, so the outbox can retry exactly the recipients that actually failed.
+    Registered as the 'message' dispatcher below, so this stays the literal
+    module-level function tests/test_contact_blocks.py's
+    `monkeypatch.setattr(messages_router, "publish_to_user", ...)` already pins.
+
+    sender_id is passed OUT OF BAND, never through `event` -- `event` is published
+    verbatim to every recipient over the socket and must stay byte-identical in key
+    set to the pre-c356 event ({type, conversation_id, message_id, sender_device_id,
+    ciphertext, created_at}); a recipient never learns a sender's user id beyond what
+    ConversationMemberOut already exposes (c344). sender_id here is used only to skip
+    the content-free push to the sender's own other devices.
+    """
+    failed: list[str] = []
+    for recipient_id in recipient_ids:
+        rid = str(recipient_id)
+        try:
+            await publish_to_user(rid, event)
+        except Exception:
+            # Ids only -- never ciphertext (SPEC Section 8.1).
+            logger.warning(
+                "ws fan-out failed message_id=%s user_id=%s", event["message_id"], rid
+            )
+            failed.append(rid)
+            continue
+        if rid != sender_id:
+            await send_content_free_push(rid, "New message")
+    return failed
+
+
+outbox.register_dispatcher("message", _dispatch_message_event)
 
 MESSAGE_LOOKUP_MAX_IDS = 50
 MESSAGE_LOOKUP_MAX_CSV_LENGTH = MESSAGE_LOOKUP_MAX_IDS * 36 + MESSAGE_LOOKUP_MAX_IDS - 1
@@ -533,6 +574,22 @@ async def send_message(
     session.add(message)
     await session.flush()
     await session.refresh(message)
+    # Board c356: the delivery intent is written in THIS same transaction as the
+    # message row, before commit, so a crash or rollback loses both together or
+    # neither — never a message with no record it was ever owed to recipient_ids.
+    # No ciphertext in the payload, ever; the sweeper re-reads it from `messages`.
+    outbox_row_id = await outbox.enqueue(
+        session,
+        kind="message",
+        recipient_ids=recipient_ids,
+        payload={
+            "conversation_id": str(conversation_id),
+            "message_id": str(message.id),
+            "sender_id": str(user.id),
+            "sender_device_id": str(body.sender_device_id),
+            "created_at": message.created_at.isoformat(),
+        },
+    )
     await session.commit()
     emit(
         "message_sent",
@@ -542,6 +599,11 @@ async def send_message(
         recipient_count=len(recipient_ids),
     )
 
+    # sender_id is deliberately NOT a key of `event` -- `event` is published
+    # verbatim to every recipient over the socket, and the pre-c356 event never
+    # carried a sender user id (c344 docstring above). It is passed to
+    # dispatch_now/the dispatcher out of band, below, used only to skip the
+    # content-free push to the sender's own other devices.
     event = {
         "type": "message",
         "conversation_id": str(conversation_id),
@@ -550,16 +612,23 @@ async def send_message(
         "ciphertext": body.ciphertext_b64,
         "created_at": message.created_at.isoformat(),
     }
-    for recipient_id in recipient_ids:
-        try:
-            await publish_to_user(str(recipient_id), event)
-        except Exception:
-            # Ids only — never ciphertext (SPEC §8.1).
-            logger.warning(
-                "ws fan-out failed message_id=%s user_id=%s", message.id, recipient_id
-            )
-        if recipient_id != user.id:
-            await send_content_free_push(str(recipient_id), "New message")
+    try:
+        # Best-effort immediate delivery. Any failure here — including the follow-up
+        # write inside dispatch_now itself — leaves the outbox row exactly as
+        # enqueued above, pending for the sweeper; a crash between the commit and
+        # this call is the same case (board c356 acceptance: crash-then-recover).
+        await outbox.dispatch_now(
+            session,
+            outbox_row_id,
+            kind="message",
+            recipient_ids=recipient_ids,
+            event=event,
+            sender_id=str(user.id),
+        )
+    except Exception:
+        logger.warning(
+            "outbox live dispatch follow-up failed message_id=%s", message.id
+        )
 
     return MessageOut.model_validate(message)
 

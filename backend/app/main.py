@@ -13,7 +13,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from app.config import Settings, get_settings
 from app.core.log_scrub import install_credential_log_scrub
 from app.core.logging_config import configure_app_logging
-from app.core.operational_signals import observe
+from app.core.operational_signals import observe, report_queue_age
 from app.routers import (
     alumni,
     auth,
@@ -126,6 +126,32 @@ async def _probe_redis(settings: Settings) -> None:
             await probe.aclose()
 
 
+async def _sweep_outbox(settings: Settings) -> None:
+    """Retry pending delivery_outbox rows and report queue depth (board c356).
+
+    Runs on every Cloud Run instance; each sweep's claim UPDATE (FOR UPDATE SKIP
+    LOCKED, app/services/outbox.py) makes concurrent instances safe rather than a
+    problem — bounded, idempotent workers, same precedent as
+    app/services/prekey_service.py's one-time-prekey handout. Never holds a
+    session across the publish attempt; see outbox.dispatch_pending's own
+    docstring for why that matters given chirp-ws's single-connection pool.
+    """
+    if not settings.outbox_sweeper_enabled:
+        return
+    from app.services import outbox
+
+    while True:
+        try:
+            await outbox.dispatch_pending(settings.outbox_sweep_batch_limit)
+            pending, oldest_age_seconds = await outbox.queue_stats()
+            report_queue_age(pending, oldest_age_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("outbox sweep iteration failed", exc_info=False)
+        await asyncio.sleep(settings.outbox_sweep_interval_s)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Initialize firebase_admin at boot, not lazily per-request, so a misconfigured
@@ -155,12 +181,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The handle is kept on app.state so the task is not garbage collected
     # mid-flight, which is the trap with bare create_task().
     app.state.redis_probe = asyncio.create_task(_probe_redis(settings))
+    # Same fire-and-forget, handle-on-app.state shape as redis_probe just above
+    # (board c356). _sweep_outbox itself no-ops immediately if
+    # outbox_sweeper_enabled is False, so the task always exists to cancel below.
+    app.state.outbox_sweeper = asyncio.create_task(_sweep_outbox(settings))
 
     yield
 
     app.state.redis_probe.cancel()
     with contextlib.suppress(Exception, asyncio.CancelledError):
         await app.state.redis_probe
+    app.state.outbox_sweeper.cancel()
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        await app.state.outbox_sweeper
 
 
 def create_app() -> FastAPI:

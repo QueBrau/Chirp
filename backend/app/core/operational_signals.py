@@ -17,6 +17,10 @@ _INTERVALS = {
     "sql_pool_capacity_503": 60.0,
     "rate_limit_fallback": 600.0,
     "rate_limit_redis_success_after_fallback": 600.0,
+    # board c356: the outbox sweep loop already throttles its own cadence at
+    # settings.outbox_sweep_interval_s, so this is always-emit (0.0) rather than a
+    # second, redundant interval gate here.
+    "outbox_queue_age": 0.0,
 }
 _last_emitted: dict[str, float] = {}
 _lock = threading.Lock()
@@ -46,6 +50,39 @@ def observe(event: str) -> None:
     except Exception:
         # Never include the failing handler, exception, or original record in a
         # diagnostic: they can contain transport credentials. No recursive log.
+        return
+
+
+def report_queue_age(pending: int, oldest_age_seconds: float) -> None:
+    """Emit the outbox sweeper's queue depth -- counts only, never an id or a payload.
+
+    A sibling to `observe()`, not a call through it: `observe(event)` takes no
+    payload argument at all, and widening it to accept arbitrary kwargs would widen
+    the exact attack surface it exists to close (see module docstring and
+    tests/test_c370_operational_signals.py's closedness tests, which this function
+    does not touch -- "outbox_queue_age" is the only new fixed vocabulary entry and
+    every existing event name/behavior is unchanged).
+    """
+    try:
+        now = time.monotonic()
+        with _lock:
+            previous = _last_emitted.get("outbox_queue_age")
+            if previous is not None and now - previous < _INTERVALS["outbox_queue_age"]:
+                return
+            _last_emitted["outbox_queue_age"] = now
+        logger.log(logging.INFO, json.dumps({
+            "schema_version": 1,
+            "signal_family": "chirp_operational",
+            "event": "outbox_queue_age",
+            "severity": logging.getLevelName(logging.INFO),
+            "observation_scope": "process",
+            "sampled": True,
+            "pending": int(pending),
+            "oldest_age_seconds": round(float(oldest_age_seconds), 3),
+        }, separators=(",", ":")))
+    except Exception:
+        # Same rule as observe(): never let a logging failure carry the original
+        # value or an exception into a recursive log.
         return
 
 

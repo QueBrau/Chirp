@@ -105,6 +105,25 @@ class Settings(BaseSettings):
     # visibly break instead, because the emitted urls would 403 against a private bucket.
     # That is the intended failure direction: loud and harmless, never silent and open.
     media_signing_secret: str | None = None
+    # Durable delivery outbox sweeper (board c356) -- see app/services/outbox.py.
+    # Disabling this only stops the background retry loop; the live/fast dispatch
+    # path on send_message is unaffected.
+    outbox_sweeper_enabled: bool = True
+    outbox_sweep_interval_s: float = 5.0
+    outbox_sweep_batch_limit: int = 10
+    # One recipient loop's total deadline, mirroring POLL_BROADCAST_TIMEOUT_SECONDS's
+    # order of magnitude (polls.py) -- not shared with it, since polls stay untouched
+    # by this card.
+    outbox_dispatch_timeout_s: float = 2.0
+    outbox_max_attempts: int = 8
+    outbox_backoff_base_s: float = 1.0
+    outbox_backoff_cap_s: float = 60.0
+    # How long a sweep's claim UPDATE holds a row before another sweep may reclaim it
+    # (next_attempt_at is pushed this far into the future at claim time, then
+    # overwritten with the real backoff/delivered outcome once the publish attempt
+    # finishes) -- the lease, not a retry backoff. Must comfortably exceed
+    # outbox_dispatch_timeout_s so a normal in-flight attempt is never reclaimed.
+    outbox_lease_s: float = 30.0
 
 
 @lru_cache
