@@ -332,7 +332,10 @@ async def test_actual_http_and_ready_ws_overlap_and_longer_ws_hold_survives(tmp_
                 # connections open behind it (c393): force-release them so
                 # any still-pending http_peer handler sees EOF instead of
                 # blocking readuntil forever, and cancel the rest directly.
-                await runner.aclose()
+                # Bounded too (defense in depth): aclose() is provably safe
+                # on an already-closed client (see the direct unit test
+                # below), but a hard bound here still costs nothing.
+                await asyncio.wait_for(runner.aclose(), 5)
                 for task in handlers:
                     if not task.done():
                         task.cancel()
@@ -407,7 +410,7 @@ async def test_cancelled_run_never_leaves_http_peer_handlers_hanging(tmp_path, m
                 # fired. Without this, the teardown below would prove nothing.
                 assert handler_started.is_set()
                 assert handlers, "no handler was pending - built nothing to prove teardown against"
-                await runner.aclose()
+                await asyncio.wait_for(runner.aclose(), 5)
                 for task in list(handlers):
                     if not task.done():
                         task.cancel()
@@ -418,6 +421,37 @@ async def test_cancelled_run_never_leaves_http_peer_handlers_hanging(tmp_path, m
     # loaded dev box can make even a correct teardown take real wall time.
     await asyncio.wait_for(body(), 20)
     assert not handlers
+
+
+@pytest.mark.asyncio
+async def test_runner_aclose_force_closes_a_live_http_client(tmp_path):
+    """c393: prove the substantive branch of Runner.aclose() directly.
+
+    Both harness tests above also cancel every handler task straight away in
+    their own finally block, so a run through them alone cannot tell whether
+    aclose() actually did anything: by the time either test's explicit call
+    runs, the client is already closed by its own async-with unwind, and the
+    direct task.cancel() loop is what actually unblocks the peer. Construct
+    the one condition those tests never build - a live, still-open client -
+    and confirm aclose() is what closes it.
+    """
+    import httpx
+    from loadtest.runner import Runner
+
+    runner = Runner(config_for(tmp_path), manifest())
+    client = httpx.AsyncClient()
+    runner._http_client = client
+    assert not client.is_closed, "test built nothing to prove force-close against"
+
+    await runner.aclose()
+
+    assert client.is_closed
+    assert runner._http_client is None
+
+    # Idempotent: a second call (e.g. one from the cancelled phase's own
+    # unwind, another from an outer finally) must not raise or reopen it.
+    await runner.aclose()
+    assert client.is_closed
 
 
 @pytest.mark.asyncio
