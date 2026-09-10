@@ -544,7 +544,9 @@ export const MOCK_MOMENTS: MockMoment[] = [
 // ---------- chirps (anonymous - no author IDENTIFIER, SPEC §8.3) ----------
 // c390: author_label is a daily-rotating pseudonym, so these fixtures mirror what
 // the server sends. Chirps 1 and 3 deliberately SHARE a label to represent one
-// author posting twice in a day, which is the whole behaviour the feature adds.
+// author posting twice in a day, which is the whole behaviour the feature adds -
+// so both of their created_at values must land on the SAME UTC day, which is the
+// key the server rotates on. They did not until c395; see chirp-3 below.
 
 export const MOCK_CHIRPS: ChirpOut[] = [
   {
@@ -569,7 +571,10 @@ export const MOCK_CHIRPS: ChirpOut[] = [
     author_label: "Quiet-Magnolia-07",
     body: "Jackson Library 4th floor AC is broken again. finals week speedrun any% sweat category",
     score: 12,
-    created_at: "2026-08-10T22:47:00Z",
+    // Same UTC DAY as chirp-1 (not merely close to it): the shared label above is
+    // only correct if both fall inside one rotation window, and 2026-08-10T22:47Z
+    // did not. Kept before chirp-2 09:02 so the rendered order is unchanged (c395).
+    created_at: "2026-08-11T00:47:00Z",
   },
   {
     id: "chirp-4",
