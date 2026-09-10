@@ -160,3 +160,43 @@ async def test_two_chirps_by_one_author_share_a_label_over_the_api(
     by_body = {row["body"]: row["author_label"] for row in listed.json()}
     assert by_body["first"] == by_body["second"]
     assert by_body["third"] != by_body["first"]
+
+
+async def test_every_viewer_sees_the_same_label_for_one_chirp(
+    client: AsyncClient, make_campus: MakeCampus
+) -> None:
+    """The label must be a property of the CHIRP, not of who is looking at it.
+
+    The wrong implementation this pins is not far-fetched and would pass every
+    other test in this file: salt the pseudonym with the requesting user as well
+    as the author, on the reasonable-sounding grounds that it leaks less. It does
+    not leak less, and it breaks the feature outright - two people cannot talk
+    about "what Quiet-Magnolia-07 said" if the board reads differently for each of
+    them, and the label stops being the shared handle braul asked for.
+
+    Three vantage points, because two would not separate the cases: the author's
+    own create response, and two DIFFERENT readers. A per-viewer salt could still
+    agree between one reader and the author by coincidence of ordering; it cannot
+    agree across all three.
+    """
+    campus_id = await make_campus()
+    author = await _campus_user(client, campus_id, name="Author")
+    reader_b = await _campus_user(client, campus_id, name="Reader B")
+    reader_c = await _campus_user(client, campus_id, name="Reader C")
+
+    created = await client.post(
+        f"/campuses/{campus_id}/chirps", json={"body": "one chirp, three viewers"}, headers=author.headers
+    )
+    assert created.status_code == 201, created.text
+    chirp_id = created.json()["id"]
+    author_view = created.json()["author_label"]
+    assert author_view
+
+    seen = {"author (create response)": author_view}
+    for who, reader in (("reader B", reader_b), ("reader C", reader_c)):
+        listed = await client.get(f"/campuses/{campus_id}/chirps", headers=reader.headers)
+        assert listed.status_code == 200, listed.text
+        row = next(r for r in listed.json() if r["id"] == chirp_id)
+        seen[who] = row["author_label"]
+
+    assert len(set(seen.values())) == 1, f"one chirp must carry one label for everyone: {seen}"
