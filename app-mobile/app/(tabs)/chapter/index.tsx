@@ -389,17 +389,12 @@ function OrgFeedSegment({
   return (
     <View style={{ gap: spacing.md }}>
       {hiddenNotice}
-      {(items ?? []).map((item, index) => (
+      {(items ?? []).map((item) => (
         <MediaPostCard
           key={item.post.id}
           post={item.post}
           authorName={item.post.display_name}
           authorPhotoUrl={item.post.avatar_url}
-          // Rotating card tint (c383), by position so no two neighbours match. This
-          // feed's cards are TintedPostCards exactly like the FYP's, which is what
-          // DESIGN section 8.7 already asked for ("same MediaPostCard system as the
-          // FYP"), just inside this org's accent scope.
-          tintIndex={index}
           timeLabel={age(item.post.created_at)}
           likeCount={item.likeCount}
           commentCount={item.post.comment_count}

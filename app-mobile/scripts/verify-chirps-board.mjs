@@ -1,16 +1,23 @@
 /**
  * Verifies the Chirps board's two launch-blocking invariants (board cards c297, c298):
- * the pinned-palette rule that keeps the vote score visible in dark mode, and the load
- * states that keep a failed fetch from rendering as an empty board.
+ * that the vote score is readable on a chirp card in BOTH schemes, and the load states
+ * that keep a failed fetch from rendering as an empty board.
  *
  *   npm run verify:chirps-board
  *
- * WHY THIS EXISTS AS A SCRIPT RATHER THAN A SCREENSHOT. The bug was a color resolving
- * through the LIVE theme onto a card that is pinned LIGHT in both schemes, and a
- * screenshot proves it for one build on one day. This computes the actual WCAG contrast
- * from the real palette source, so the regression cannot come back quietly — and it
- * asserts the BROKEN pairing is still broken, which is the falsification kept
- * permanently rather than performed once.
+ * WHAT c384 CHANGED, and why this script survived it rather than being deleted. The
+ * c297 bug was a colour resolving through the LIVE theme onto a card PINNED to the
+ * light palette: in system dark mode the score drew as dark.ink (near-white) on a
+ * near-white pastel tint and vanished. The fix was to pin the score too, and the
+ * checks below asserted that pin.
+ *
+ * c384 retired the tints and the pin together - chirp cards are now `surface` and
+ * follow the system scheme like every other card. That makes the c297 pairing
+ * STRUCTURALLY IMPOSSIBLE rather than prevented: there is no longer a second palette
+ * on this screen for the live one to disagree with. So the assertions are rewritten
+ * to the new invariant instead of dropped, because "the bug cannot happen any more"
+ * is a claim that needs a guard exactly as much as the pin did - the way it comes
+ * back is someone reintroducing a pinned palette here.
  *
  * Same approach as the sibling verify-*.mjs scripts: values are extracted from the real
  * source at run time, never hand-copied, so this cannot drift into agreeing with itself.
@@ -55,16 +62,13 @@ function inkOf(name) {
   return match[1];
 }
 
-function chirpTintsOf(name) {
-  const block = paletteBlock(name);
-  const start = block.indexOf("chirpTints:");
-  const slice = block.slice(start, block.indexOf("]", start));
-  const tints = slice.match(/#[0-9A-Fa-f]{6}/g) ?? [];
-  if (tints.length !== 4) {
-    console.error(`FAIL  expected 4 chirpTints in ${name}, found ${tints.length}`);
+function surfaceOf(name) {
+  const match = paletteBlock(name).match(/\n\s*surface:\s*"(#[0-9A-Fa-f]{6})"/);
+  if (!match) {
+    console.error(`FAIL  could not read ${name}.surface`);
     process.exit(1);
   }
-  return tints;
+  return match[1];
 }
 
 /** WCAG 2.1 relative luminance + contrast ratio. */
@@ -83,15 +87,25 @@ function contrast(a, b) {
 
 const lightInk = inkOf("light");
 const darkInk = inkOf("dark");
-const tints = chirpTintsOf("light");
+const lightSurface = surfaceOf("light");
+const darkSurface = surfaceOf("dark");
 
-console.log(`light.ink ${lightInk} | dark.ink ${darkInk} | tints ${tints.join(" ")}\n`);
+console.log(
+  `light ${lightInk} on ${lightSurface} | dark ${darkInk} on ${darkSurface}\n`,
+);
 
-// --- the fixed state: pinned light ink is readable on every card tint ---
-for (const tint of tints) {
-  const ratio = contrast(lightInk, tint);
+// --- the invariant: each mode's ink is readable on that mode's card ---
+//
+// A chirp card is `surface` in both modes now, and its content resolves through the
+// live palette, so the only pairing that can ever render is same-mode ink on same-mode
+// surface. Both must clear AA body text - the score is the number c297 was about.
+for (const [mode, ink, surface] of [
+  ["light", lightInk, lightSurface],
+  ["dark", darkInk, darkSurface],
+]) {
+  const ratio = contrast(ink, surface);
   check(
-    `light.ink on ${tint} clears WCAG AA body text (4.5:1) — got ${ratio.toFixed(1)}:1`,
+    `${mode}.ink on ${mode}.surface clears WCAG AA body text (4.5:1) — got ${ratio.toFixed(1)}:1`,
     ratio >= 4.5,
     true,
   );
@@ -99,28 +113,39 @@ for (const tint of tints) {
 
 // --- the falsification, kept rather than performed once ---
 //
-// This is the pairing the bug produced: the live palette in system dark mode drew the
-// score in dark.ink on a light chirp tint. If this ever starts PASSING, either the
-// palettes moved far enough that the whole pinning rule needs rethinking, or someone
-// "simplified" the tints — either way the c297 reasoning no longer applies and a human
-// has to look. It is not asserting that a bug exists; it is asserting that the thing we
-// went to the trouble of preventing is still worth preventing.
-for (const tint of tints) {
-  const ratio = contrast(darkInk, tint);
+// The CROSS-mode pairings are the ones that must never render, and they are exactly
+// what a reintroduced pin would produce. Asserting they are still unreadable is what
+// keeps the c297 reasoning honest: if either ever starts passing, the palettes have
+// moved far enough that "the modes cannot be mixed" stopped being load-bearing and a
+// human has to re-read this file rather than trust it.
+for (const [name, ink, surface] of [
+  ["dark.ink on light.surface", darkInk, lightSurface],
+  ["light.ink on dark.surface", lightInk, darkSurface],
+]) {
+  const ratio = contrast(ink, surface);
   check(
-    `dark.ink on ${tint} is still unreadable (<3:1) — the pairing c297 prevents, ${ratio.toFixed(1)}:1`,
+    `${name} is still unreadable (<3:1) — the mixing c297 prevents, ${ratio.toFixed(1)}:1`,
     ratio < 3,
     true,
   );
 }
 
-// --- the wiring: contrast is only safe while the pin is actually passed ---
+// --- the wiring: the invariant above only holds while NOTHING here is pinned ---
 const votePillSrc = readFileSync(VOTE_PILL, "utf8");
 const chirpsSrc = readFileSync(CHIRPS_SCREEN, "utf8");
 
+// c384. The cross-mode pairings above are unreachable only because this screen has a
+// single palette. These two checks are the ones that would catch a pin coming back -
+// as a VotePill prop, or as a bare `light.` read anywhere in the screen. Without them
+// the contrast section is a statement about colours rather than about the app.
 check(
-  "VotePill accepts a pinned palette and falls back to the live one",
-  /palette\s*=\s*pinnedPalette\s*\?\?\s*livePalette/.test(votePillSrc),
+  "VotePill has no palette-pinning prop — it resolves through useTheme() alone",
+  !/palette\?:\s*Palette/.test(votePillSrc) && !/pinnedPalette/.test(votePillSrc),
+  true,
+);
+check(
+  "chirps/index.tsx pins nothing to the light palette (no `light.` reads, no palette={light})",
+  !/\blight\.[a-zA-Z]/.test(chirpsSrc) && !/palette=\{light\}/.test(chirpsSrc),
   true,
 );
 check(
@@ -130,8 +155,8 @@ check(
   true,
 );
 check(
-  "chirps/index.tsx actually passes palette={light} — without this the contrast above is theoretical",
-  /<VotePill[\s\S]{0,600}?palette=\{light\}/.test(chirpsSrc),
+  "chirp cards take their shadow from cardShadow(palette), not a hardcoded light-mode elevation",
+  /\.\.\.cardShadow\(palette\)/.test(chirpsSrc) && !/\.\.\.elevation\.card/.test(chirpsSrc),
   true,
 );
 

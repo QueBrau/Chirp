@@ -94,24 +94,6 @@ export function cardShadow(palette: Palette): ViewStyle {
 }
 
 /**
- * The rotating pastel background every post card wears (DESIGN §5 TintedPostCard,
- * c383) — Chirps, the FYP and the org feed all draw from the same four tints, keyed
- * on the card's INDEX in its list so no two neighbours ever match.
- *
- * Index, deliberately, and not a hash of the post id: a hash is stable per post,
- * which sounds better until two adjacent cards collide and there is nothing anyone
- * can do about it. The tint's whole job is breaking up a scrolling column (§10.1),
- * and only position can guarantee that.
- *
- * The `?? surface` is not dead code under `noUncheckedIndexedAccess` — it is how
- * this returns a real color rather than `string | undefined` at every call site.
- */
-export function postTint(palette: Palette, index: number): string {
-  const tints = palette.chirpTints;
-  return tints[((index % tints.length) + tints.length) % tints.length] ?? palette.surface;
-}
-
-/**
  * Link/action TEXT colour on a bare canvas — text with no button behind it, like
  * "Forgot password?" or the sign-in/sign-up footer toggle (c385).
  *
@@ -139,19 +121,25 @@ export function canvasActionColor(palette: Palette, campusColors: CampusColors):
 }
 
 /**
- * Background for a small control sitting ON a tinted post card — today the circular
- * overflow button in a card header (§5 TintedPostCard).
+ * Background for a small control sitting ON a post card — today the circular
+ * overflow button in a card header (§5 PostCard).
  *
- * NOT `surface` in both modes, which is the obvious version and is wrong in dark:
- * the dark tints are 12% pale washes that sit LIGHTER than `surface` (#15161F), so a
- * surface-colored circle would sink into the card instead of floating on it. A light
- * ink wash lifts it in dark exactly as white does on the pastels in light.
+ * `surfaceAlt` in BOTH modes, which only became the right answer when c384 flattened
+ * the cards. While cards were tinted this returned `surface`: a white circle on a
+ * pastel card in light, and an ink wash in dark because the 12% tints sat LIGHTER
+ * than `surface` and a surface-colored circle would have sunk into the card. Both
+ * halves of that reasoning die with the tints - a `surface` circle on a card that is
+ * now itself `surface` is INVISIBLE in light mode, which is the bug this rename
+ * exists to make un-writable.
  *
- * Same role as cardShadow() above: a two-mode token pairing that has to move
- * together, in one place, so the modes cannot drift.
+ * surfaceAlt is the token whose whole job is "one step off surface", and it steps the
+ * correct DIRECTION in each mode without a mode switch: lighter than the card in dark
+ * (#1D1E2A on #15161F, distance 15.8), darker than it in light (#EFF1F7 on #FFFFFF,
+ * distance 22.7). It is also already the input background, so a control and a text
+ * field on the same card now agree instead of being two different near-whites.
  */
-export function onTintControl(palette: Palette): string {
-  return palette.mode === "dark" ? withAlpha(palette.ink, 0.1) : palette.surface;
+export function onCardControl(palette: Palette): string {
+  return palette.surfaceAlt;
 }
 
 /**
@@ -212,13 +200,13 @@ export const metrics = {
    * clearance a FAB screen reserves always matches the FAB actually rendered. */
   fabSize: 56,
   /**
-   * The circular soft control in a TintedPostCard's header row (§5, c383) — the
+   * The circular soft control in a PostCard's header row (§5, c383) — the
    * overflow button on a feed card and on a chirp. Shared rather than written twice
    * because those two cards are supposed to look like the same card, and the Chirps
    * board is hand-rolled: it is exactly the kind of pair that drifts by one edit.
-   * Its background comes from `onTintControl(palette)` above.
+   * Its background comes from `onCardControl(palette)` above.
    */
-  tintControlSize: 32,
+  cardControlSize: 32,
   /**
    * Header accent bar LEADING an oversized screen title (§10.1: "zones, not card
    * soup"). Dimensions only — color is the screen's own accent (campus primary by

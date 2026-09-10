@@ -88,8 +88,8 @@ export function contrastWithWhite(hex: string): number {
  * ensureAccentContrast and its single-expression form is exactly right there.
  *
  * BOTH ARGUMENTS MUST BE OPAQUE. relativeLuminance parses `#rrggbb` and has no
- * concept of alpha, so passing an rgba() token (accentSoft, dark chirpTints, the
- * border tokens) silently measures nonsense rather than throwing. Composite first
+ * concept of alpha, so passing an rgba() token (accentSoft, the dark-mode border
+ * tokens) silently measures nonsense rather than throwing. Composite first
  * with mix() if you need the contrast of a translucent layer.
  */
 export function contrastRatio(a: string, b: string): number {

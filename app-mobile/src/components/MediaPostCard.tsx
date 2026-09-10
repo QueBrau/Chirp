@@ -1,9 +1,9 @@
 /**
- * MediaPostCard (DESIGN §5 TintedPostCard, §7 FYP): the one card every post wears,
+ * MediaPostCard (DESIGN §5 PostCard, §7 FYP): the one card every post wears,
  * on Home, on Chirps' neighbour surfaces and in an org's own feed.
  *
  * ONE STRUCTURE FOR EVERY POST TYPE since c383 (braul, Sep 7, from a reference shot
- * he supplied for Home and Chirps): rotating pastel tint, header row (avatar + name
+ * he supplied for Home and Chirps): one flat surface, header row (avatar + name
  * over time, with a circular overflow control at the right end), body, an INSET
  * media block for photo/video, then the action row. `post_type` now changes only
  * whether that media block is present and what floats on it, never the chrome.
@@ -18,8 +18,8 @@
  *     scrim text on a pale surface, so the fallback had to switch tones back. An
  *     unavailable photo is now just an inset surfaceAlt block, and the header above
  *     it never changed tone in the first place.
- * Density contrast (§10.3) survives as padding and gaps only; the rotating tint is
- * what now keeps a scrolling column from reading as identical rectangles.
+ * Density contrast (§10.3) survives as padding and gaps only — every card is now
+ * one flat surface colour per mode (board c384 retired the rotating tint).
  *
  * Action row: Feather icon + a caption label, no chip circle. The label is THE COUNT
  * WHEN THERE IS ONE and the action's name when there is not - "Like" rather than a
@@ -52,7 +52,7 @@ import { Image, Modal, Pressable, View, type ViewStyle } from "react-native";
 
 import type { PostOut } from "@/api/feed";
 import { confirmAction } from "@/lib/alert";
-import { cardShadow, metrics, onTintControl, postTint, radii, spacing, useTheme, withAlpha } from "@/theme";
+import { cardShadow, metrics, onCardControl, radii, spacing, useTheme, withAlpha } from "@/theme";
 
 import { AppText } from "./AppText";
 import { Chip } from "./Chip";
@@ -66,7 +66,7 @@ const MEDIA_HEIGHT = 240;
 const PLAY_CIRCLE = 48;
 const AVATAR = 40;
 /** Shared with the Chirps board's own overflow button so the two cards cannot drift. */
-const OVERFLOW_CIRCLE = metrics.tintControlSize;
+const OVERFLOW_CIRCLE = metrics.cardControlSize;
 
 /** iOS HIG / WCAG 2.5.5 minimum tappable size. */
 const TOUCH_TARGET = 44;
@@ -99,9 +99,9 @@ interface SheetOption {
 }
 
 /**
- * Overflow trigger: the glyph in a circular soft control (DESIGN §5 TintedPostCard).
- * `onTintControl` rather than `surface` because the dark tints sit LIGHTER than
- * `surface` — see the token's own note.
+ * Overflow trigger: the glyph in a circular soft control (DESIGN §5 PostCard).
+ * `onCardControl` rather than `surface` because the control uses surfaceAlt so
+ * it steps off the card in both modes.
  */
 function OverflowButton({ onPress }: { onPress: () => void }) {
   const palette = useTheme();
@@ -117,7 +117,7 @@ function OverflowButton({ onPress }: { onPress: () => void }) {
         borderRadius: radii.pill,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: onTintControl(palette),
+        backgroundColor: onCardControl(palette),
         opacity: pressed ? 0.7 : 1,
       })}
     >
@@ -131,12 +131,6 @@ export interface MediaPostCardProps {
   authorName: string;
   /** Mock photo (§10.2), e.g. `https://i.pravatar.cc/150?u=<id>` — falls back to the initials gradient. */
   authorPhotoUrl?: string | null;
-  /**
-   * This card's position in its list, which picks the rotating tint (§5). REQUIRED
-   * rather than defaulted: a defaulted 0 would give a new call site a column of
-   * identically tinted cards and look deliberate, so the type makes you say it.
-   */
-  tintIndex: number;
   /** Precomputed relative-age label (e.g. "5m", "3h") — screen owns time formatting. */
   timeLabel: string;
   likeCount: number;
@@ -251,7 +245,6 @@ export function MediaPostCard({
   post,
   authorName,
   authorPhotoUrl,
-  tintIndex,
   timeLabel,
   likeCount,
   commentCount,
@@ -327,7 +320,7 @@ export function MediaPostCard({
   };
 
   const cardBase: ViewStyle = {
-    backgroundColor: postTint(palette, tintIndex),
+    backgroundColor: palette.surface,
     borderRadius: radii.card,
     borderWidth: 1,
     borderColor: palette.border,

@@ -33,7 +33,6 @@ never cluttered. Anonymous (Chirps) content gets playful pastel treatment.
 | like | #E5484D | a liked post's heart. Its OWN token, not `danger` (board c222) |
 | dangerSoft | #FDECEC | danger chip bg |
 | warning | #F5A623 | pending states |
-| chirpTints | #FFF3E9 / #EDF6FF / #F3EDFF / #EAF8F1 | rotating post-card tints by index % 4 - Chirps, the FYP and the org feed (see TintedPostCard, §5). Named for the surface that had them first; every post card wears them now (c383) |
 
 ### Dark
 | token | value |
@@ -49,20 +48,24 @@ never cluttered. Anonymous (Chirps) content gets playful pastel treatment.
 | accentSoft | rgba(124,124,255,0.16) |
 | accentGradient | #6366F1 → #8B5CF6 |
 | success/danger/warning | #2BD597 / #FF6369 / #FFB84D (softs = 16% alpha of each) |
-| chirpTints | 12% alpha versions of light tints. **These barely differ from each other in practice** and the rotation is effectively invisible in dark - see the note under the table (c383) |
 
-**Dark `chirpTints` are an open question, not a working set (measured Sep 7, c383).**
-Nothing rendered them until c383: Chirps pins its cards to the LIGHT palette (§10.5), so
-the FYP's post cards are the first real consumer this token has ever had. Composited over
-`bg`, the four land on #29292E / #272930 / #282830 / #27292F - a worst adjacent euclidean
-distance of **1.3/255**, which is no difference at all. That is inherent to the
-definition: all four light tints are near-white, so their differences are small in
-absolute terms and 12% alpha shrinks them a further 8x.
-A candidate replacement was derived and measured but NOT applied, because a dark palette
-is a design decision and the reference this card came from is a light design: take each
-light tint's own hue (27 / 210 / 260 / 150 degrees) at S 0.20, L 0.115 - #231D17 /
-#171D23 / #1B1723 / #17231D. Worst adjacent euclidean **7.0** (5x the current set), ink
-contrast 14.6:1 or better on all four. Board card for braul to accept or reject.
+**`chirpTints` is RETIRED (braul, Sep 10, c384). Post cards are `surface` in both
+modes - white in light, #15161F in dark - and nothing rotates.**
+
+The token is recorded here rather than simply deleted because the reasoning is the
+useful part. It shipped as four near-white pastels rotated by card index, and c383 gave
+every post card one. Dark was defined as 12% alpha versions of the same four, which
+composited over `bg` to #29292E / #272930 / #282830 / #27292F - a worst adjacent
+euclidean distance of **1.3/255**, i.e. no difference at all. That was inherent to the
+definition, not a bad choice of colour: all four light tints are near-white, so their
+differences are small in absolute terms and 12% alpha shrinks them a further 8x. A
+measured dark replacement (each light tint's own hue at S 0.20, L 0.115, worst adjacent
+7.0) was put to braul as one of three options.
+
+He took none of them and went further: no colour on post cards in EITHER mode. So the
+question "what should the dark tints be" is closed by there being no tints. What breaks
+up a scrolling column now is the card's own edge, shadow and spacing, plus density
+contrast (§10.3) - which §10.1 must therefore keep asking for, in both modes.
 
 Dark follows system (`useColorScheme`). Both palettes complete — no color defined
 in only one mode.
@@ -86,7 +89,7 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
 
 - Spacing scale (4-base): 4 / 8 / 12 / 16 / 20 / 24 / 32. Screen gutter = 20.
 - Radii: card 20, pill 999, input 14, avatar 16 (squircle feel), thumbnail 12,
-  media 16 (a post's inset photo/video block, §5 TintedPostCard). Media is its own
+  media 16 (a post's inset photo/video block, §5 PostCard). Media is its own
   token rather than borrowing `avatar`: they happen to share a number today, and a
   later squircle tweak to avatars must not silently reshape every photo in the feed.
 - Cards: surface bg + 1px border token + shadow `0 2px 16px rgba(16,18,35,0.06)`
@@ -123,21 +126,25 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
     the header accent bar. Taken knowingly at braul's request; if it reads as
     too much gold, the cheap revert is gold on the icon with the label left on
     a tone token.
-- **TintedPostCard** (c383) — the one card every post wears, on Chirps, the FYP and
-  the org feed. `chirpTints[index % 4]` background (never `surface`), radius 20,
-  hairline border, §4 card shadow. Structure top to bottom: header row (author
-  identity on the left, a circular soft control on the right), body, optional inset
-  media, action row. In LIGHT mode the rotating tint is what keeps a scrolling column
-  from reading as a stack of identical rectangles (§10.1), which is the job density
-  contrast used to do alone (§10.3). **In dark mode it currently does nothing** - the
-  dark tints are within 1.3/255 of each other, measured, see §2 - so a dark feed leans
-  on the card's own edge and spacing instead. Do not write a rule that depends on the
-  tint being visible in both modes until §2's open question is settled.
+- **PostCard** (c383, flattened by c384) — the one card every post wears, on Chirps,
+  the FYP and the org feed. `surface` background, radius 20, hairline border, §4 card
+  shadow. Structure top to bottom: header row (author identity on the left, a circular
+  soft control on the right), body, optional inset media, action row.
+  - It was a **TintedPostCard** until c384: a rotating `chirpTints[index % 4]`
+    background, explicitly "never `surface`". braul retired the colour in both modes
+    (§2). The name went with it, because a component called TintedPostCard is an
+    invitation to put the tint back.
+  - Breaking up a scrolling column is now the job of the card edge, the shadow and
+    density contrast (§10.3) — in BOTH modes, not just dark. §10.1 no longer has a
+    tint to delegate that to.
   - **Circular soft control** — the 32 circle behind an overflow glyph in the header
-    row. `surface` in light (white on a pastel tint, exactly the reference), a 10%
-    ink wash in dark, where `surface` would read DARKER than the lifted tint and the
-    button would sink instead of float. Both come from `onTintControl(palette)` in
-    `src/theme`, next to `cardShadow`, so the two modes cannot drift apart.
+    row. `surfaceAlt` in both modes, from `onCardControl(palette)` in `src/theme`,
+    next to `cardShadow`, so the modes cannot drift apart. It was `surface` in light
+    (white on a pastel tint) and a 10% ink wash in dark; both halves died with the
+    tints, and the light half became an active bug the moment the card underneath it
+    also became `surface` — a white circle on a white card. `surfaceAlt` steps the
+    correct direction in each mode without a mode switch, and matches the input
+    background, so a control and a text field on one card finally agree.
 - **Screen header** — display title + caption subtitle, no nav chrome, 24 top pad.
 - **EmptyState** — small geometric mark (outlined circle or squircle drawn with
   Views in accentSoft/accent — NEVER an emoji), headline, one-line caption,
@@ -219,7 +226,7 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
     segmented row — "For You" (active default) · "Campus" · "My Orgs". Active =
     accent bg white text; inactive = surfaceAlt inkSecondary. Mock: filters the
     post list by source.
-  - **MediaPostCard** is a TintedPostCard (§5). ONE structure for every post type,
+  - **MediaPostCard** is a PostCard (§5). ONE structure for every post type,
     changed Sep 7 (braul, board c383) from a reference shot he supplied:
     - header row: GradientAvatar 40 + name (headline) over time (caption), with the
       circular overflow control at the right end. Any tier Chip ("Actives only")
@@ -391,43 +398,66 @@ Generic-clean is not enough. Every screen must pass these:
    whether a photo is present - so the chrome is now shared and the contrast lives
    in the padding and the gaps alone (text `lg`/`sm`, media `lg`/`md` with the media
    block itself doing the breathing).
-   The anti-slop job that rule 3 used to carry on its own has moved to the rotating
-   tint: four alternating pastels down a scrolling column break up the "unbroken
-   stack of identical white rectangles" rule 1 warns about more effectively than two
-   spacing densities ever did, because it works on a run of posts that are all the
-   same type - which is what a real feed usually is.
+   *Un-narrowed Sep 10 (braul, board c384).* Between c383 and c384 this rule said the
+   anti-slop job had moved to the rotating tint - four alternating pastels breaking up
+   a scrolling column more effectively than two spacing densities, because a tint works
+   on a run of posts that are all the same type, which is what a real feed usually is.
 
-   THAT SENTENCE IS TRUE IN LIGHT MODE ONLY, and the honest version is worth having in
-   writing rather than discovering later: the dark tints are visually identical to one
-   another (§2, measured), so in dark mode this rule currently has NO mechanism behind
-   it at all. Narrowing rule 3 and finding out the replacement does not work in dark is
-   the sequence that leaves a feed with neither device, so if §2's open question is
-   rejected, rule 3's density contrast should come back for dark mode specifically.
+   That was recorded at the time as TRUE IN LIGHT MODE ONLY, since the dark tints were
+   measurably identical to one another, and it flagged the risk plainly: narrowing rule
+   3 and then finding the replacement does not work in dark is the sequence that leaves
+   a feed with neither device. braul resolved it by removing the tint in BOTH modes
+   rather than fixing the dark set, so that risk is now the situation in both.
+
+   **So density contrast is load-bearing again, in both modes, and is the only
+   mechanism rule 1's "unbroken stack of identical rectangles" has.** The chrome stays
+   shared - c383's reading of the reference was not overturned, and the header and
+   action row remain the same for both post types - but the padding and gap difference
+   (text `lg`/`sm`, media `lg`/`md`) is now doing that work alone and must not be
+   narrowed further without a replacement that has been measured in dark as well as
+   light. Card edge, shadow and spacing are what is left.
 4. **One gold moment per screen.** Spartan gold is the delight color: the accent
    bar, an active vote, the balance figure, an unread ring. Never gold-wash
    whole surfaces; never zero gold either.
 5. **Chirps is a PLACE, not a list.** The Chirps board renders on a deep-navy campus
-   canvas (campus primary dark wash over bg) **in dark mode**, with light tinted
-   cards floating on it and gold vote states. It should feel like the campus at
-   night — instantly distinct from Home. In **light mode** it uses the normal app
-   canvas: the wash applied in both schemes until Aug 27 (braul, board c219), which
-   made Chirps the one screen ignoring the system setting and reading as an island.
-   The cards stay light-tinted in both — correct under either canvas, since they
-   float on the navy at night and simply are the standard surfaces in light mode.
-   Whatever the canvas, the header tone must move with it: the board's header is
-   hand-rolled and white-on-navy, so a canvas change without a tone change ships
-   invisible text.
+   canvas (campus primary dark wash over bg) **in dark mode**, with gold vote states.
+   It should feel like the campus at night — instantly distinct from Home. In **light
+   mode** it uses the normal app canvas: the wash applied in both schemes until Aug 27
+   (braul, board c219), which made Chirps the one screen ignoring the system setting
+   and reading as an island. Whatever the canvas, the header tone must move with it:
+   the board's header is hand-rolled and white-on-navy, so a canvas change without a
+   tone change ships invisible text.
+
+   *The cards used to be pinned. They are not any more (braul, Sep 10, board c384).*
+   Until c384 the chirp cards were light-tinted in BOTH schemes, and everything drawn
+   on them — ink, icons, the vote score — was pinned to the `light` palette, because a
+   live-theme colour on a pinned card is what made the score vanish at night (c297).
+   With the tints retired (§2), the cards are ordinary `surface` cards following the
+   system scheme, and the pin is gone with them. **That is a stronger guarantee than
+   the pin was:** there is no second palette left on this screen for the live one to
+   disagree with, so the c297 pairing is now unreachable rather than merely prevented.
+   `verify-chirps-board.mjs` asserts the un-pinning directly, because the way this
+   comes back is someone reintroducing a pinned palette here.
+
+   The obvious objection — a dark card will not separate from the navy wash — was
+   measured before the change, not after: card #15161F on UNCG's wash #05101D is a
+   euclidean distance of 17.2, against 16.8 for an ordinary dark card on the ordinary
+   dark canvas and 12.7 in light mode. The flat card on navy separates no worse than
+   every other card in the app already does, and the border and shadow carry the edge
+   exactly as they do everywhere else.
 
    *Pressure on this rule, recorded Sep 7 (braul, board c383) rather than glossed.*
-   The FYP now wears the same rotating tints (§5 TintedPostCard), so in LIGHT mode -
-   where c219 correctly gave Chirps the ordinary canvas - the two boards read as
-   siblings rather than as different places. That was braul's explicit call, from a
-   single reference shot for both screens. What still separates them is everything
-   that carries meaning rather than decoration: the navy canvas at night, no avatar
-   and no name ever (§6, SPEC §8.3), the anonymity dot, the VotePill and gold vote
-   states instead of like/comment, and the composer sitting at the top of the board.
-   If it ever reads as too alike, the cheap fix is a second tint quartet for the FYP,
-   NOT re-forcing the navy in light mode - that is the island c219 already removed.
+   The FYP and Chirps use the same card (§5 PostCard), so in LIGHT mode — where c219
+   correctly gave Chirps the ordinary canvas — the two boards read as siblings rather
+   than as different places. That was braul's explicit call, from a single reference
+   shot for both screens, and c384 sharpened it by removing the tint that was the last
+   decorative difference. What still separates them is everything that carries meaning
+   rather than decoration: the navy canvas at night, no avatar and no name ever (§6,
+   SPEC §8.3), the anonymity dot, the VotePill and gold vote states instead of
+   like/comment, and the composer sitting at the top of the board. If it ever reads as
+   too alike, the fix is a structural difference, NOT re-forcing the navy in light mode
+   (the island c219 removed) and NOT a tint quartet for the FYP (the decoration c384
+   removed).
 6. **Numbers have personality.** All counts/scores/money in the stat type,
    tabular; notable numbers (top chirp score, balance) get gold.
 7. **Copy is specific.** Mock content and microcopy name real things (UNCG,
