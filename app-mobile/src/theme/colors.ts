@@ -44,9 +44,6 @@ export interface Palette {
   warning: string;
   warningSoft: string;
 
-  /** Rotating pastel card tints on Chirps (index % 4). */
-  chirpTints: readonly [string, string, string, string];
-
   /**
    * Categorical chart series (DESIGN §11). Fixed order, assigned in sequence and
    * NEVER cycled — slot order is the colour-blindness safety mechanism, not a
@@ -120,8 +117,6 @@ export const light: Palette = {
   warning: "#F5A623",
   warningSoft: "#FDF3E1",
 
-  chirpTints: ["#FFF3E9", "#EDF6FF", "#F3EDFF", "#EAF8F1"],
-
   // Validated on surface #FFFFFF: worst adjacent CVD dE 13.8, normal-vision 28.8,
   // all >= 3:1 contrast. Slot order chosen by enumerating all 120 permutations and
   // taking the one with the best worst-case adjacent separation.
@@ -163,13 +158,6 @@ export const dark: Palette = {
   like: "#FF6369",
   warning: "#FFB84D",
   warningSoft: "rgba(255,184,77,0.16)",
-
-  chirpTints: [
-    "rgba(255,243,233,0.12)",
-    "rgba(237,246,255,0.12)",
-    "rgba(243,237,255,0.12)",
-    "rgba(234,248,241,0.12)",
-  ],
 
   // Its own steps, not a flip of the light ramp: validated on surface #15161F,
   // worst adjacent CVD dE 8.1, normal-vision 24.4, all >= 3:1. The light steps sit

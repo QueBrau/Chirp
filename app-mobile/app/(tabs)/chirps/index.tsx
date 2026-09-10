@@ -5,23 +5,21 @@
  * rather than another list. In LIGHT mode it uses the app's normal canvas
  * (c219, braul Aug 27) — forcing navy in both schemes made this the one screen
  * that ignored the system setting, and it read as an island rather than as part
- * of the app. Cards stay light-tinted (chirpTints) in both, so all card content
- * is pinned to the LIGHT palette's ink tones on purpose (not `useTheme()`'s
- * system-following ones) — otherwise text would vanish on the navy. That pinning
- * is correct under both canvases: light cards float on the navy at night, and in
- * light mode they simply ARE the standard app surfaces. Active up-votes
- * and the single top-scoring chirp's number use campus gold (§10 rule 6);
- * down-votes stay danger red. NO mask/avatar of any kind (a small tinted dot
- * is the only marker, DESIGN §6).
+ * of the app. Cards now follow the system scheme like every other card in the
+ * app (board c384 retired the rotating light tint that used to pin all card
+ * content to the LIGHT palette): nothing here is pinned, and card content uses
+ * `useTheme()` normally. Active up-votes and the single top-scoring chirp's
+ * number use campus gold (§10 rule 6); down-votes stay danger red. NO
+ * mask/avatar of any kind (a small tinted dot is the only marker, DESIGN §6).
  *
  * The composer and the per-card overflow (report/block) control below follow
- * the same rule: they live inside light-tinted surfaces, so their text/icons
- * are pinned to the `light` palette too, never `useTheme()`.
+ * the same rule: they live inside the live-theme card surface, so their
+ * text/icons come from `useTheme()` like everything else on the card.
  */
 
 import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
-import { Modal, Pressable, TextInput, useColorScheme, View } from "react-native";
+import { Modal, Pressable, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 
 import { createReport, blockChirpAuthor } from "@/api/moderation";
@@ -32,11 +30,9 @@ import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { isOverLimit, MAX_CHIRP_BODY_LENGTH } from "@/lib/contentLimits";
 import {
   campusNightWash,
-  elevation,
-  light,
+  cardShadow,
   metrics,
-  onTintControl,
-  postTint,
+  onCardControl,
   radii,
   spacing,
   typography,
@@ -87,7 +83,7 @@ export default function ChirpScreen() {
   // tone="onAccent" (white) precisely BECAUSE the canvas was guaranteed dark. Changing
   // one without the other ships white text on a light canvas — invisible. That coupling
   // is the whole reason this is not a one-line background swap.
-  const onNavy = useColorScheme() === "dark";
+  const onNavy = palette.mode === "dark";
   const canvas = onNavy ? campusNightWash(campusColors) : palette.bg;
   // Matches Screen's own header exactly in light mode (micro/secondary, display/primary,
   // caption/secondary) so the two headers still cannot drift — the reason this one was
@@ -362,36 +358,31 @@ export default function ChirpScreen() {
         />
       ) : (
         <>
-          {/* Composer: light-tinted surface like the cards below, visually subordinate
-              to them (no display-scale text, no gold). Uses chirpTints[1] (cool
-              blue #EDF6FF), NOT chirpTints[0] (peach) — the first card below always
-              draws index 0, and the composer sitting directly above it must not
-              twin with that card's tint. c309: this was light.surface (pure white)
-              until now, a plain white box among the tinted cards — worst on the
-              navy Chirps canvas in dark mode. */}
+          {/* Composer: flat card surface like the cards below, visually subordinate
+              to them (no display-scale text, no gold). */}
           <View
             style={{
-              backgroundColor: light.chirpTints[1],
+              backgroundColor: palette.surface,
               borderRadius: radii.card,
               borderWidth: 1,
-              borderColor: light.border,
+              borderColor: palette.border,
               padding: spacing.md,
               marginBottom: spacing.md,
               gap: spacing.sm,
-              ...elevation.card,
+              ...cardShadow(palette),
             }}
           >
             <TextInput
               value={composerText}
               onChangeText={setComposerText}
               placeholder="Say something anonymously…"
-              placeholderTextColor={light.inkFaint}
+              placeholderTextColor={palette.inkFaint}
               multiline
               style={{
                 minHeight: 20,
                 fontSize: typography.body.fontSize,
                 lineHeight: typography.body.lineHeight,
-                color: light.ink,
+                color: palette.ink,
               }}
             />
             <View
@@ -410,11 +401,11 @@ export default function ChirpScreen() {
                   borderRadius: radii.pill,
                   alignItems: "center",
                   justifyContent: "center",
-                  backgroundColor: light.accent,
+                  backgroundColor: palette.accent,
                   opacity: !canCompose ? 0.4 : pressed ? 0.8 : 1,
                 })}
               >
-                <Feather name="send" size={16} color={light.onAccent} />
+                <Feather name="send" size={16} color={palette.onAccent} />
               </Pressable>
             </View>
           </View>
@@ -435,28 +426,24 @@ export default function ChirpScreen() {
             />
           ) : (
             <View style={{ gap: spacing.md }}>
-              {(chirps ?? []).map((chirp, index) => {
+              {(chirps ?? []).map((chirp) => {
                 const mine = myVotes[chirp.id];
-                // Same rotating tint helper the FYP's cards use (c383) - these boards
-                // are meant to be the same card, and this used to be an open-coded
-                // copy of the modulo plus its own `?? surface` fallback.
-                const tint = postTint(light, index);
                 const isTop = chirp.score === topScore && chirp.score > 0;
                 return (
                   <View
                     key={chirp.id}
                     style={{
-                      backgroundColor: tint,
+                      backgroundColor: palette.surface,
                       borderRadius: radii.card,
                       borderWidth: 1,
-                      borderColor: light.border,
+                      borderColor: palette.border,
                       padding: isTop ? spacing.xl : spacing.lg,
-                      ...elevation.card,
+                      ...cardShadow(palette),
                     }}
                   >
                     <View style={{ flexDirection: "row", gap: spacing.md }}>
                       <View style={{ flex: 1, gap: spacing.sm }}>
-                        {/* Header row in the shape a TintedPostCard's has (DESIGN §5,
+                        {/* Header row in the shape a PostCard's has (DESIGN §5,
                             c383): identity on the left, circular overflow control at
                             the right end, body underneath. The IDENTITY HALF IS THE ONE
                             THING THAT CANNOT BE COPIED ACROSS - a feed card puts an
@@ -471,10 +458,10 @@ export default function ChirpScreen() {
                               height: DOT_SIZE,
                               borderRadius: DOT_SIZE / 2,
                               overflow: "hidden",
-                              backgroundColor: tint,
+                              backgroundColor: palette.surface,
                             }}
                           >
-                            <View style={{ flex: 1, backgroundColor: light.ink, opacity: 0.28 }} />
+                            <View style={{ flex: 1, backgroundColor: palette.ink, opacity: 0.28 }} />
                           </View>
                           {/* c390: the daily pseudonym replaces the word "anonymous".
                               The DOT STAYS - it is the marker that says this is the
@@ -483,7 +470,7 @@ export default function ChirpScreen() {
                               client cannot compute or reverse it. */}
                           <AppText
                             variant="caption"
-                            style={{ color: light.inkSecondary, flex: 1 }}
+                            style={{ color: palette.inkSecondary, flex: 1 }}
                             numberOfLines={1}
                           >
                             {chirp.author_label} · {age(chirp.created_at)}
@@ -493,33 +480,26 @@ export default function ChirpScreen() {
                             accessibilityLabel="More options"
                             hitSlop={spacing.sm}
                             style={({ pressed }) => ({
-                              width: metrics.tintControlSize,
-                              height: metrics.tintControlSize,
+                              width: metrics.cardControlSize,
+                              height: metrics.cardControlSize,
                               borderRadius: radii.pill,
                               alignItems: "center",
                               justifyContent: "center",
-                              // `light`, like every other colour on this card - see the
-                              // file header. The board's canvas may be navy, the cards
-                              // never are.
-                              backgroundColor: onTintControl(light),
+                              backgroundColor: onCardControl(palette),
                               opacity: pressed ? 0.7 : 1,
                             })}
                             onPress={() => openMenu(chirp)}
                           >
-                            <Feather name="more-horizontal" size={16} color={light.inkSecondary} />
+                            <Feather name="more-horizontal" size={16} color={palette.inkSecondary} />
                           </Pressable>
                         </View>
-                        <AppText style={{ color: light.ink }}>{chirp.body}</AppText>
+                        <AppText style={{ color: palette.ink }}>{chirp.body}</AppText>
                       </View>
                       <VotePill
                         score={chirp.score}
                         vote={mine === 1 ? "up" : mine === -1 ? "down" : null}
                         upColor={campusColors.secondary}
                         scoreColor={isTop ? campusColors.secondary : undefined}
-                        // c297: same pinning rule as everything else on these cards
-                        // (see this file's header). Without it the score follows the
-                        // system theme and disappears into the light tint at night.
-                        palette={light}
                         onUpvote={() => void vote(chirp, 1)}
                         onDownvote={() => void vote(chirp, -1)}
                       />
@@ -533,7 +513,7 @@ export default function ChirpScreen() {
       )}
 
       {/* Action sheet for the overflow menu and the report-reason list. Card content
-          is pinned to the `light` palette like everything else on this board. */}
+          follows the live theme like everything else on this board. */}
       <Modal
         transparent
         visible={sheet !== null}
@@ -551,14 +531,14 @@ export default function ChirpScreen() {
         >
           <View
             style={{
-              backgroundColor: light.surface,
+              backgroundColor: palette.surface,
               borderRadius: radii.card,
               overflow: "hidden",
             }}
           >
             <AppText
               variant="micro"
-              style={{ color: light.inkFaint, padding: spacing.md, paddingBottom: spacing.sm }}
+              style={{ color: palette.inkFaint, padding: spacing.md, paddingBottom: spacing.sm }}
             >
               {sheet?.title.toUpperCase()}
             </AppText>
@@ -575,11 +555,11 @@ export default function ChirpScreen() {
                 style={({ pressed }) => ({
                   padding: spacing.md,
                   borderTopWidth: 1,
-                  borderTopColor: light.border,
-                  backgroundColor: pressed ? light.border : "transparent",
+                  borderTopColor: palette.border,
+                  backgroundColor: pressed ? palette.border : "transparent",
                 })}
               >
-                <AppText style={{ color: option.destructive ? light.danger : light.ink }}>
+                <AppText style={{ color: option.destructive ? palette.danger : palette.ink }}>
                   {option.label}
                 </AppText>
               </Pressable>
@@ -592,12 +572,12 @@ export default function ChirpScreen() {
               marginTop: spacing.sm,
               padding: spacing.md,
               alignItems: "center",
-              backgroundColor: light.surface,
+              backgroundColor: palette.surface,
               borderRadius: radii.card,
               opacity: pressed ? 0.8 : 1,
             })}
           >
-            <AppText style={{ color: light.ink }}>Cancel</AppText>
+            <AppText style={{ color: palette.ink }}>Cancel</AppText>
           </Pressable>
         </Pressable>
       </Modal>

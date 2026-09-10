@@ -129,13 +129,26 @@ export function resolvePalette(
 
 /**
  * The Chirps "campus at night" canvas (DESIGN §10.5). The Chirps board renders on a deep
- * dark wash of the user's campus PRIMARY color as its full-bleed background, the
- * SAME value in both light and dark mode — Chirp deliberately ignores system scheme
- * so it always feels like the campus at night, instantly distinct from Home.
+ * dark wash of the user's campus PRIMARY color as its full-bleed background, so at
+ * night the board feels like the campus rather than like another list.
+ *
+ * DARK MODE ONLY. The docstring here used to say "the SAME value in both light and
+ * dark mode - Chirp deliberately ignores system scheme", and that stopped being true
+ * at c219 (braul Aug 27) without this comment being updated: forcing navy in both
+ * schemes made Chirps the one screen ignoring the system setting, so LIGHT mode now
+ * uses the ordinary app canvas and only dark mode calls this.
+ *
  * Darkens toward black (rather than mixing toward a neutral bg like the §8.5
  * background-tint does) so the campus's own hue survives — UNCG's navy primary
  * stays navy, just deeper; a lighter campus primary still lands on a legible
- * dark canvas. Light tinted cards (palette.chirpTints) float on top of this.
+ * dark canvas.
+ *
+ * Cards on top of this are ordinary `surface` cards following the system scheme
+ * (c384). They used to be pinned-light tinted cards floating on the navy; that rule
+ * and the tints went together. The dark card still separates from this wash by the
+ * same margin every other card in the app manages - #15161F on UNCG's #05101D is
+ * distance 17.2, against 16.8 for the ordinary dark canvas - with the border and
+ * shadow carrying the edge as they do everywhere else.
  */
 export function campusNightWash(campusColors: CampusColors): string {
   return darken(campusColors.primary, 0.55);

@@ -124,7 +124,7 @@ console.log("\n-- (2) post-card action touch targets --");
 const TOUCH_TARGET = num(mediaCard, "TOUCH_TARGET");
 const ACTION_ICON = num(mediaCard, "ACTION_ICON");
 // Not re-declared here: read from the theme, where the card actually gets it.
-const CONTROL = matchNum(themeIndex, /tintControlSize: (\d+),/, "metrics.tintControlSize");
+const CONTROL = matchNum(themeIndex, /cardControlSize: (\d+),/, "metrics.cardControlSize");
 const CAPTION_LINE = matchNum(typographySrc, /caption: \{[^}]*lineHeight: (\d+)/, "typography.caption.lineHeight");
 
 // Re-derive what the component computes, from the same numbers it uses.
@@ -184,9 +184,9 @@ check(
 // Both cards must keep drawing the SAME control, which is the whole reason the diameter
 // moved into the theme (c383).
 check(
-  "both cards size their overflow control from metrics.tintControlSize",
-  /OVERFLOW_CIRCLE = metrics\.tintControlSize;/.test(mediaCard) &&
-    /width: metrics\.tintControlSize,/.test(chirpsBoard),
+  "both cards size their overflow control from metrics.cardControlSize",
+  /OVERFLOW_CIRCLE = metrics\.cardControlSize;/.test(mediaCard) &&
+    /width: metrics\.cardControlSize,/.test(chirpsBoard),
   true,
 );
 

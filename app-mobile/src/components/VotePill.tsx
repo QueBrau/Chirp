@@ -27,20 +27,6 @@ export interface VotePillProps {
   upColor?: string;
   /** Overrides the score color when the viewer hasn't voted (default "primary") — e.g. Chirp's top score. */
   scoreColor?: string;
-  /**
-   * Pin every color to a specific palette instead of the live (system-following) one.
-   *
-   * c297, and it was launch-blocking. Chirps cards are light-tinted in BOTH schemes
-   * (chirps/index.tsx's header explains why), so everything drawn on them is pinned to
-   * the `light` palette — except this component, which kept calling useTheme(). In
-   * system dark mode the score resolved to dark.ink (#F2F3FA, near-white) on a
-   * near-white pastel card and simply vanished; the only chirp that stayed readable was
-   * the single top scorer, because `scoreColor` happened to force gold there. That one
-   * visible number is exactly why it survived review.
-   *
-   * Optional and defaulting to useTheme(), so every other call site is untouched.
-   */
-  palette?: Palette;
   style?: ViewStyle;
 }
 
@@ -87,11 +73,9 @@ export function VotePill({
   onDownvote,
   upColor,
   scoreColor,
-  palette: pinnedPalette,
   style,
 }: VotePillProps) {
-  const livePalette = useTheme();
-  const palette = pinnedPalette ?? livePalette;
+  const palette = useTheme();
   const upFill = upColor ?? palette.accent;
 
   const scoreTone: TextTone = vote === "down" ? "danger" : "primary";
