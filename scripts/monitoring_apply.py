@@ -129,14 +129,22 @@ def parse_arguments(argv=None):
 
 
 def metric_types_referenced(policy: dict) -> list[str]:
-    """Every metric.type literal in a policy's condition filters, in order."""
+    """Every metric.type literal in a policy's condition filters, in order.
+
+    Scans both the numerator filter and (for ratio conditions) the
+    denominatorFilter -- a metric type hidden only in the denominator must
+    still be checked against the inventory allowlist.
+    """
     found = []
     for condition in policy.get("conditions", []) if isinstance(policy, dict) else []:
         for kind in ("conditionThreshold", "conditionAbsent"):
             spec = condition.get(kind) if isinstance(condition, dict) else None
-            filt = spec.get("filter") if isinstance(spec, dict) else None
-            if isinstance(filt, str):
-                found.extend(METRIC_TYPE_RE.findall(filt))
+            if not isinstance(spec, dict):
+                continue
+            for key in ("filter", "denominatorFilter"):
+                filt = spec.get(key)
+                if isinstance(filt, str):
+                    found.extend(METRIC_TYPE_RE.findall(filt))
     return found
 
 

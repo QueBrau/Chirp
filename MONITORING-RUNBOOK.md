@@ -295,7 +295,14 @@ TLS/redirect handling and diagnostic redaction without cloud credentials.
 zero-write-calls, the `--apply` without `--channel` guard, create-versus-update
 matching by `displayName`, a second `--apply` landing all no-ops against a
 stateful fake API, the required-shape and inventory-membership check (with a
-deliberately bad fixture proving it is discriminating), the strict REST-shape
+deliberately bad fixture covering a non-inventoried metric type hidden in
+either the primary `filter` or a ratio condition's `denominatorFilter`,
+proving it is discriminating in both places), the strict REST-shape
 round-trip that fails on any key outside the AlertPolicy allowlist, and the
 scan for a hardcoded project number or channel id outside the two templating
-points.
+points. That last scan (`_scan_for_hardcoded`) is a test-time-only guard: it
+lives in `scripts/tests/test_monitoring_apply.py`, not in
+`scripts/monitoring_apply.py` itself, so it protects the files committed to
+this repository via CI but does not stop a hand-edited policy file with a
+literal project number or channel id from being loaded and applied outside
+the test suite.

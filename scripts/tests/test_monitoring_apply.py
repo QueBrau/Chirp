@@ -227,6 +227,36 @@ class MonitoringApplyTests(unittest.TestCase):
             errors = m.required_shape_errors(bad_policy, available)
             self.assertTrue(any(e.startswith("metric_not_in_inventory:") for e in errors))
 
+        # Same vacuous-test guard, but for a metric type hidden only in a
+        # ratio condition's denominatorFilter: a checker that only scanned
+        # "filter" would report zero errors here, silently letting a
+        # non-inventoried denominator metric through.
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_ratio_path = Path(tmp) / "bad_ratio.json"
+            bad_ratio_path.write_text(json.dumps({
+                "displayName": "bad-ratio", "combiner": "OR",
+                "documentation": {"content": "See MONITORING-RUNBOOK.md."},
+                "conditions": [{"conditionThreshold": {
+                    "filter": 'metric.type="run.googleapis.com/request_count"',
+                    "denominatorFilter": 'metric.type="totally.fake/not_real_metric"',
+                }}],
+            }))
+            bad_ratio_policy = json.loads(bad_ratio_path.read_text())
+            self.assertIn(
+                "run.googleapis.com/request_count",
+                m.metric_types_referenced(bad_ratio_policy),
+            )
+            self.assertIn(
+                "totally.fake/not_real_metric",
+                m.metric_types_referenced(bad_ratio_policy),
+            )
+            ratio_errors = m.required_shape_errors(bad_ratio_policy, available)
+            self.assertTrue(
+                any(e == "metric_not_in_inventory:totally.fake/not_real_metric"
+                    for e in ratio_errors),
+                msg=str(ratio_errors),
+            )
+
     # --- strict REST-shape round-trip: unknown keys fail ---
     def test_strict_rest_shape_rejects_unknown_keys(self):
         good = json.loads((POLICIES_DIR / "redis-memory-pressure.json").read_text()
