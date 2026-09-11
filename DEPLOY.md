@@ -369,6 +369,32 @@ If you need current-moment proof rather than the board's record, re-run c140's t
 checks: a capability URL still renders, and a direct unauthenticated object URL
 still does not.
 
+## Media revocation window (board c350)
+
+GET /media/{token} now re-checks the viewer's entitlement (chapter membership,
+suspension, campus verification, post deletion) on every request before signing the
+redirect, instead of trusting a token's signature/expiry alone for its whole life.
+Two Settings values (env vars, both optional, both fine at their defaults):
+
+- `MEDIA_REVOCATION_WINDOW_HOURS` (default 6) — the bearer-revocation window a
+  capability token's TTL is derived from (2x this, so 12h at the default). Manager
+  ruling on c350 kept the number unchanged; only made it a Settings field instead of
+  a frozen import-time constant. **A new value takes effect on the NEXT Cloud Run
+  revision, not live** — Settings are not hot-reloaded here, same as every other env
+  var in this table. "Config change, not code change" means no PR is needed; it does
+  not mean no deploy is needed.
+- `MEDIA_ENTITLEMENT_MEMO_SECONDS` (default 60) — how long a POSITIVE entitlement
+  decision is reused in-process before the next request re-hits the database. Denials
+  are never memoized, so a re-grant is immediate; a genuine revocation's real-world
+  effect can lag by up to this many seconds on top of the token's own window. This is
+  the actual effective revocation floor: worst case, roughly window + this value
+  before a revoked viewer's already-held token stops working.
+
+Web: not applicable this pass — no web client renders post media today (`web/` is
+the marketing site, chirps-prod.web.app). Mobile: no change shipped with this card —
+see SPEC.md's media section for why the existing per-viewer capability token already
+gives RN's Image cache account-switch isolation without one.
+
 ## 8. Permanent-media reconciliation job
 
 `python -m app.jobs.media_reconcile` compares objects below `posts/` with every

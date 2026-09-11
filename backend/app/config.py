@@ -112,6 +112,26 @@ class Settings(BaseSettings):
     # visibly break instead, because the emitted urls would 403 against a private bucket.
     # That is the intended failure direction: loud and harmless, never silent and open.
     media_signing_secret: str | None = None
+    # The intentional bearer-revocation window (board c350): how long a still-valid
+    # capability token can keep redirecting to a photo after the viewer's entitlement
+    # to it is revoked (removed from the chapter, suspended, campus verification
+    # lapsed, or the post deleted), in the worst case. storage_service derives the
+    # token/signed-url TTL from this as 2x the window (see that module's WHY THE FIX
+    # IS QUANTIZED EXPIRY section) — unchanged at 6h/12h by manager ruling (c350 R1),
+    # only the FREEZE at import time is what changes: this now reads live from
+    # Settings on every mint/verify, so an operator can retune the window without a
+    # code change. "Without a code change" does NOT mean "without a deploy" — Settings
+    # are not hot-reloaded, so a new value here only takes effect on the next
+    # Cloud Run revision (see DEPLOY.md's "Media revocation window" section).
+    media_revocation_window_hours: int = 6
+    # How long a POSITIVE media-entitlement decision may be reused in-process before
+    # re-checking the database (board c350 R5). Bounds the cost of the per-request
+    # entitlement re-check GET /media/{token} now performs — a feed render can fan
+    # out to 20+ image requests per viewer — while adding this many seconds to the
+    # worst-case revocation floor on top of the window above. Denials are never
+    # memoized (see app.services.media_entitlement), so a re-grant after a mistaken
+    # revocation is immediate; only an actual revocation waits out this TTL.
+    media_entitlement_memo_seconds: int = 60
     # Durable delivery outbox sweeper (board c356) -- see app/services/outbox.py.
     # Disabling this only stops the background retry loop; the live/fast dispatch
     # path on send_message is unaffected.

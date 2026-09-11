@@ -103,6 +103,20 @@ def _install_fake_signer(monkeypatch: pytest.MonkeyPatch, calls: list) -> None:
     )
 
 
+def _grant_entitlement(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bypass the board c350 redirect-time entitlement re-check for tests whose
+    subject is route MECHANICS (redirect target, headers, no-auth, threading) rather
+    than entitlement itself - those tests mint a bare token with no backing post row,
+    which the real entitlement check would correctly deny. Entitlement logic has its
+    own dedicated coverage in tests/test_c350_media_revocation.py; duplicating a real
+    chapter/post/membership setup in every one of these mechanical tests would test
+    the same thing twice for no benefit and obscure what each test is actually about.
+    """
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(media_router, "check_media_entitlement", AsyncMock(return_value=True))
+
+
 # ---------------------------------------------------------------------------
 # Quantized expiry - the property the whole design rests on
 # ---------------------------------------------------------------------------
@@ -140,8 +154,11 @@ def test_different_viewers_get_different_tokens() -> None:
 
 
 def test_round_trip_returns_the_object_name() -> None:
+    """Board c350: verify_media_token's return shape widened from a bare object_name
+    to (object_name, viewer_id), so media.py can re-check entitlement without
+    re-parsing the token itself - see that function's docstring."""
     token = storage_service.mint_media_token(OBJECT, VIEWER)
-    assert storage_service.verify_media_token(token) == OBJECT
+    assert storage_service.verify_media_token(token) == (OBJECT, VIEWER)
 
 
 def test_a_tampered_payload_is_rejected() -> None:
@@ -189,7 +206,7 @@ def test_a_token_is_still_valid_just_before_its_expiry() -> None:
     token = storage_service.mint_media_token(OBJECT, VIEWER, now=minted_at)
     assert storage_service.verify_media_token(
         token, now=minted_at + timedelta(hours=11, minutes=59)
-    ) == OBJECT
+    ) == (OBJECT, VIEWER)
 
 
 def test_a_validly_signed_token_for_a_tmp_path_is_still_refused() -> None:
@@ -373,6 +390,7 @@ async def test_the_route_redirects_to_the_signed_url(
 ) -> None:
     calls: list = []
     _install_fake_signer(monkeypatch, calls)
+    _grant_entitlement(monkeypatch)
     token = storage_service.mint_media_token(OBJECT, VIEWER)
 
     response = await client.get(f"/media/{token}")
@@ -390,6 +408,7 @@ async def test_the_route_needs_no_auth_header(
     route images are fetched from cannot authenticate its caller. Adding an auth
     dependency here would break every photo in the app. The token IS the capability."""
     _install_fake_signer(monkeypatch, [])
+    _grant_entitlement(monkeypatch)
     token = storage_service.mint_media_token(OBJECT, VIEWER)
     response = await client.get(f"/media/{token}")
     assert response.status_code == 302, response.text
@@ -421,6 +440,7 @@ async def test_read_media_route_runs_the_signer_off_the_event_loop_thread(
         return f"https://storage.googleapis.com/{BUCKET}/{object_name}?sig=fake"
 
     monkeypatch.setattr(media_router, "signed_read_url", _fake_signed_read_url)
+    _grant_entitlement(monkeypatch)
     token = storage_service.mint_media_token(OBJECT, VIEWER)
 
     response = await client.get(f"/media/{token}")
@@ -455,6 +475,7 @@ async def test_two_read_media_requests_overlap_instead_of_serializing(
         return f"https://storage.googleapis.com/{BUCKET}/{object_name}?sig=fake"
 
     monkeypatch.setattr(media_router, "signed_read_url", _slow_signed_read_url)
+    _grant_entitlement(monkeypatch)
     token_a = storage_service.mint_media_token("posts/stress/a.jpg", VIEWER)
     token_b = storage_service.mint_media_token("posts/stress/b.jpg", VIEWER)
 
@@ -511,9 +532,9 @@ async def test_a_feed_post_serves_a_capability_url_not_the_stored_one(
     assert stored not in serialized[0]
     assert models.Post is not None  # import guard: the model module actually loaded
 
-    # and the capability url resolves back to the same object
+    # and the capability url resolves back to the same object, for this viewer
     token = serialized[0].rsplit("/", 1)[1]
-    assert storage_service.verify_media_token(token) == OBJECT
+    assert storage_service.verify_media_token(token) == (OBJECT, str(user.id))
 
 
 async def test_serialization_falls_through_when_signing_is_not_configured(
@@ -555,7 +576,7 @@ async def test_a_legacy_alternate_form_row_is_signed_rather_than_passed_through(
     assert serialized is not None
     assert serialized[0].startswith(f"{BASE_URL}/media/")
     token = serialized[0].rsplit("/", 1)[1]
-    assert storage_service.verify_media_token(token) == OBJECT
+    assert storage_service.verify_media_token(token) == (OBJECT, str(user.id))
 
 
 async def test_a_post_with_no_media_is_untouched(make_user: MakeUser) -> None:
@@ -624,7 +645,10 @@ async def test_listing_a_chapter_feed_serves_capability_urls(
     served = response.json()[0]["media_urls"][0]
     assert served.startswith(f"{BASE_URL}/media/")
     assert stored not in served
-    assert storage_service.verify_media_token(served.rsplit("/", 1)[1]) == OBJECT
+    assert storage_service.verify_media_token(served.rsplit("/", 1)[1]) == (
+        OBJECT,
+        str(setup.member.id),
+    )
 
 
 async def test_the_stored_column_is_not_rewritten_by_serving_it(
@@ -681,4 +705,7 @@ async def test_creating_a_post_returns_a_capability_url(
     assert response.status_code == 201, response.text
     served = response.json()["media_urls"][0]
     assert served.startswith(f"{BASE_URL}/media/")
-    assert storage_service.verify_media_token(served.rsplit("/", 1)[1]) == OBJECT
+    assert storage_service.verify_media_token(served.rsplit("/", 1)[1]) == (
+        OBJECT,
+        str(setup.member.id),
+    )

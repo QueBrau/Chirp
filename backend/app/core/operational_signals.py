@@ -21,6 +21,12 @@ _INTERVALS = {
     # settings.outbox_sweep_interval_s, so this is always-emit (0.0) rather than a
     # second, redundant interval gate here.
     "outbox_queue_age": 0.0,
+    # board c350: GET /media/{token} denied a redirect on the redirect-time
+    # entitlement re-check. Throttled like the other per-process health signals
+    # above (not the "always emit" outbox case) - a feed render can fan out to
+    # 20+ media GETs per viewer, so a burst of revocations must not become a log
+    # flood.
+    "media_access_revoked": 60.0,
 }
 _last_emitted: dict[str, float] = {}
 _lock = threading.Lock()
