@@ -74,6 +74,15 @@ jobs:
           # into a hard failure. If it ever fires, fix the service; do not
           # unset the flag.
           CHIRP_REQUIRE_DB: "1"
+          # c364: tests/test_c364_query_plans.py is an opt-in EXPLAIN evidence
+          # harness, gated module-wide by CHIRP_EXPLAIN=1 (never set here on
+          # purpose — it seeds 15,000+ rows and is meant to be run by hand,
+          # not on every PR). Its 6 tests always skip in this job. That is
+          # the one legitimate, deliberate skip this ceiling docstring asks
+          # for: raised on purpose, by a human decision, not to make a real
+          # failure quiet. If this number changes, it means the harness's
+          # test count changed, not that something else started skipping.
+          CHIRP_MAX_SKIPS: "6"
         run: python -m pytest -q
 
   migrations:
