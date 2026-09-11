@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp sql_pool_capacity_503 occurring",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: SQL availability and capacity (MONITORING-RUNBOOK.md, Runtime observations). Responder: on-call API responder. Log-based metric sql_pool_capacity_503 (infra/monitoring/metrics/sql-pool-capacity-503.json) crossing zero occurrences in a 5-minute window; the app.operational emitter already throttles to at most one record per 60 seconds per process, so this is a useful first notification, not an exact failure counter. Initial, review after 7 days.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "900s"}
+  },
+  "conditions": [
+    {
+      "displayName": "sql_pool_capacity_503 log occurrences over 0",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/sql_pool_capacity_503\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "0s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": []
+          }
+        ]
+      }
+    }
+  ]
+}

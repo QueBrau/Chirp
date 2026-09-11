@@ -1,0 +1,12 @@
+{
+  "name": "rate_limit_fallback",
+  "description": "Runbook row: Redis pressure and fallback (MONITORING-RUNBOOK.md, Runtime observations). Counts rate_limit_fallback warnings emitted by app.operational (backend/app/services/rate_limit.py, a limiter operation failing to use Redis and taking its local fallback), already throttled to at most one record per 600 seconds per process. rate_limit_redis_success_after_fallback intentionally has no metric: it must not automatically resolve a fleet incident, per the runbook's own signal-plan table. Validate this time series exists before activating the referencing alert policy.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.signal_family=\"chirp_operational\" AND jsonPayload.schema_version=1 AND jsonPayload.event=\"rate_limit_fallback\"",
+  "disabled": false,
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "chirp rate_limit_fallback occurrences"
+  }
+}

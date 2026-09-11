@@ -1,0 +1,16 @@
+{
+  "name": "chirp_purge_aggregate",
+  "description": "Runbook row: Purge backlog and blocked work (MONITORING-RUNBOOK.md, Current-service signal plan). Extracts status from chirp-purge's single stdout JSON report line (backend/app/jobs/purge.py) on Cloud Run Jobs. Risk: Cloud Run Jobs stdout-to-jsonPayload promotion is assumed by analogy with Cloud Run Services and is not separately verified in this change; validate this time series exists after the first successful dedicated-identity run (c369) before activating the referencing alert policy.",
+  "filter": "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"chirp-purge\" AND jsonPayload.status:* AND jsonPayload.batches_committed:*",
+  "disabled": false,
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "chirp-purge job status occurrences",
+    "labels": [
+      {"key": "status", "valueType": "STRING", "description": "purge job report status: preview, complete, blocked, incomplete, timed_out or failed"}
+    ]
+  },
+  "labelExtractors": {"status": "EXTRACT(jsonPayload.status)"}
+}

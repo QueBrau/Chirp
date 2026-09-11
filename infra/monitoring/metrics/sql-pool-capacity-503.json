@@ -1,0 +1,12 @@
+{
+  "name": "sql_pool_capacity_503",
+  "description": "Runbook row: SQL availability and capacity (MONITORING-RUNBOOK.md, Runtime observations). Counts sql_pool_capacity_503 warnings emitted by app.operational (backend/app/main.py, the SQLAlchemyTimeoutError handler), already throttled to at most one record per 60 seconds per process. Validate this time series exists before activating the referencing alert policy.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.signal_family=\"chirp_operational\" AND jsonPayload.schema_version=1 AND jsonPayload.event=\"sql_pool_capacity_503\"",
+  "disabled": false,
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "chirp sql_pool_capacity_503 occurrences"
+  }
+}

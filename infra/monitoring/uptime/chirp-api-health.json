@@ -1,0 +1,20 @@
+{
+  "displayName": "chirp-api /_health",
+  "period": "60s",
+  "timeout": "10s",
+  "selectedRegions": ["USA", "EUROPE", "ASIA_PACIFIC"],
+  "contentMatchers": [
+    {"content": "{\"status\":\"ok\"}", "matcher": "CONTAINS_STRING"}
+  ],
+  "monitoredResource": {
+    "type": "uptime_url",
+    "labels": {"project_id": "{{PROJECT}}", "host": "{{API_HOST}}"}
+  },
+  "httpCheck": {
+    "requestMethod": "GET",
+    "useSsl": true,
+    "path": "/_health",
+    "port": 443,
+    "validateSsl": true
+  }
+}
