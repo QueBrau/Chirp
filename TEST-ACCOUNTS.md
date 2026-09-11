@@ -147,3 +147,42 @@ docker exec chirp-dev-pg psql -U chirp -d postgres -c "DROP DATABASE chirp WITH 
 ```
 
 Then re-run the migrate and seed commands above.
+
+---
+
+## Prod search fixtures (Jose-only, NOT local/emulated) — board card c380
+
+Everything above this line is local and emulated. What follows is the opposite
+shape: **real rows in the production database**, seeded on purpose so
+`GET /users/search` has something to demo before real students exist on a
+campus. Read `backend/scripts/seed_prod_search_fixtures.py`'s module docstring
+before running this — it explains the marker, the proxy guard, and why a
+fixture can never authenticate.
+
+```bash
+DATABASE_URL='postgresql+asyncpg://chirp:...@localhost:5433/chirp' \
+  scripts/seed-prod-search-fixtures --campus-slug uncg --apply
+```
+
+Requires `cloud-sql-proxy` already forwarding prod to `localhost:5433` — the
+script refuses anything else, including a bare local dev port, before opening a
+connection. `DATABASE_URL` only ever comes from the environment; the script
+never prints it or any part of it. Dry-run is the default for both directions;
+`--apply` is required to write.
+
+The eight fixtures are marked two ways: every email ends `@fixtures.chirp.invalid`
+(the programmatic marker teardown keys on) and every display name starts
+`QA Fixture: `, so anyone scanning a roster or a search result sees immediately
+that a row is not a real person.
+
+**Tear these down before launch.** Run this against every campus that was ever
+seeded, before real students are expected to see search results:
+
+```bash
+DATABASE_URL='postgresql+asyncpg://chirp:...@localhost:5433/chirp' \
+  scripts/seed-prod-search-fixtures --campus-slug uncg --teardown --apply
+```
+
+Teardown deletes exactly the rows matching `campus_id = :cid AND email LIKE
+'%@fixtures.chirp.invalid'` — nothing broader, so a real student on the same
+campus is never at risk.
