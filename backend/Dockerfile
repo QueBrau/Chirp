@@ -48,4 +48,9 @@ EXPOSE 8080
 # c354: outbound-only sockets need no large incoming application messages. The
 # pinned sansio adapter enforces max-size but DOES NOT consume ws-max-queue;
 # do not add a queue flag and claim an effective limit. See the WS runbook.
-CMD exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port ${PORT} --ws websockets-sansio --ws-max-size 1024 --ws-per-message-deflate false
+# c354: --ws selects app.ws.transport:BoundedFragmentWebSocketsProtocol, a thin
+# subclass of the pinned sansio adapter that additionally bounds the count of
+# retained inbound continuation fragments (WS_MAX_CONTINUATION_FRAMES=64,
+# close code 1009) -- the byte-size cap above only ever checked the joined
+# total after FIN, so a never-FIN sender could grow that list without limit.
+CMD exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port ${PORT} --ws app.ws.transport:BoundedFragmentWebSocketsProtocol --ws-max-size 1024 --ws-per-message-deflate false
