@@ -170,7 +170,7 @@ def test_main_refuses_missing_database_url_before_any_db_call(
 def test_fixture_specs_carry_the_never_issued_uid_marker() -> None:
     """R6 structural half: the marker is present, and it can never look like a real
     Firebase uid (opaque, library-generated, 28-char base62 with no hyphens)."""
-    specs = fx._fixture_specs()
+    specs = fx._fixture_specs("uncg")
     assert len(specs) == 8
     firebase_shape = re.compile(r"^[A-Za-z0-9]{28}$")
     for spec in specs:
@@ -178,6 +178,21 @@ def test_fixture_specs_carry_the_never_issued_uid_marker() -> None:
         assert spec["email"].endswith(f"@{fx.FIXTURE_EMAIL_DOMAIN}")
         assert spec["display_name"].startswith(fx.FIXTURE_NAME_PREFIX)
         assert not firebase_shape.fullmatch(spec["firebase_uid"])
+
+
+def test_fixture_specs_are_campus_scoped_and_never_collide_across_campuses() -> None:
+    """The bug this test guards: emails/uids used to be keyed on the fixture slug
+    alone, so two campuses' rosters collided on users.email / users.firebase_uid
+    (both globally UNIQUE). Folding the target campus's own slug in must make
+    every campus's 8 specs textually distinct from every other campus's."""
+    specs_a = fx._fixture_specs("campus-a")
+    specs_b = fx._fixture_specs("campus-b")
+    emails_a = {spec["email"] for spec in specs_a}
+    emails_b = {spec["email"] for spec in specs_b}
+    uids_a = {spec["firebase_uid"] for spec in specs_a}
+    uids_b = {spec["firebase_uid"] for spec in specs_b}
+    assert emails_a.isdisjoint(emails_b)
+    assert uids_a.isdisjoint(uids_b)
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +266,48 @@ async def test_teardown_deletes_exactly_marked_rows_and_nothing_else(
     survivor = await _user_exists(real_user_id)
     assert survivor is not None, "teardown must not touch an unmarked real-looking user"
     assert survivor["display_name"] == "Jamie Rivera"
+
+
+@pytest.mark.asyncio
+async def test_seeding_a_second_campus_does_not_relocate_the_first_campus_fixtures(
+    client: AsyncClient, make_campus: MakeCampus,
+) -> None:
+    """The bug found in review: seeding campus B used to look up "existing"
+    fixtures by email alone, find campus A's 8 rows (created first), and UPDATE
+    them onto campus B's campus_id — leaving campus A with zero fixtures and no
+    error. Construct exactly that sequence (seed A, then seed a DIFFERENT
+    campus B) and assert BOTH campuses independently end up with their own 8
+    fixture rows, and that campus A's original fixture ids are unchanged."""
+    campus_a = await make_campus()
+    campus_b = await make_campus()
+
+    seeded_a = await fx.run_seed_job(campus_id=campus_a, apply=True)
+    assert seeded_a == {
+        "mode": "apply", "action": "seed", "campus_id": campus_a, "created": 8, "updated": 0,
+    }
+    rows_a_before = await _fixture_rows_for_campus(campus_a)
+    assert len(rows_a_before) == 8
+    ids_a_before = {row["id"] for row in rows_a_before}
+
+    seeded_b = await fx.run_seed_job(campus_id=campus_b, apply=True)
+
+    # The bug's exact signature was created=0, updated=8 here (it "found" campus
+    # A's rows via the email-only lookup and relocated them). The fix must
+    # create a genuinely new 8 for campus B instead.
+    assert seeded_b == {
+        "mode": "apply", "action": "seed", "campus_id": campus_b, "created": 8, "updated": 0,
+    }
+
+    rows_a_after = await _fixture_rows_for_campus(campus_a)
+    rows_b_after = await _fixture_rows_for_campus(campus_b)
+    assert len(rows_a_after) == 8, "campus A must still have its own 8 fixtures"
+    assert len(rows_b_after) == 8, "campus B must have its own independent 8 fixtures"
+    assert {row["id"] for row in rows_a_after} == ids_a_before, (
+        "campus A's original fixture rows must be untouched, not relocated"
+    )
+    emails_a = {row["email"] for row in rows_a_after}
+    emails_b = {row["email"] for row in rows_b_after}
+    assert emails_a.isdisjoint(emails_b), "the two campuses' fixture emails must never collide"
 
 
 @pytest.mark.asyncio

@@ -11,14 +11,29 @@ be demonstrated before real students exist. It is paired with
       scripts/seed-prod-search-fixtures --campus-slug uncg --apply
 
 THE MARKER (reused columns, no migration — Alembic head stays at 0039): every
-fixture's email is `<slug>@fixtures.chirp.invalid` (RFC 2606: `.invalid` can never
-be a real deliverable address and can never collide with a real student's), every
-display_name is prefixed `QA Fixture: ` so a human looking at a list sees it
-immediately, and every firebase_uid is prefixed `qa-fixture-`. Seeding is an
-upsert keyed on the email marker (idempotent). Teardown deletes exactly the rows
-matching `campus_id = :cid AND email LIKE '%@fixtures.chirp.invalid'` — nothing
-broader, so a real user who happens to share a campus with fixtures is never at
-risk.
+fixture's email is `<slug>+<campus-slug>@fixtures.chirp.invalid` (RFC 2606:
+`.invalid` can never be a real deliverable address and can never collide with a
+real student's), every display_name is prefixed `QA Fixture: ` so a human
+looking at a list sees it immediately, and every firebase_uid is
+`qa-fixture-<slug>-<campus-slug>`. Seeding is an upsert keyed on the (campus_id,
+email) pair (idempotent per campus). Teardown deletes exactly the rows matching
+`campus_id = :cid AND email LIKE '%@fixtures.chirp.invalid'` — nothing broader,
+so a real user who happens to share a campus with fixtures is never at risk.
+
+WHY THE EMAIL AND FIREBASE_UID ARE CAMPUS-SCOPED: `users.email` and
+`users.firebase_uid` are both globally UNIQUE columns (app/models/identity.py).
+A fixture roster keyed only on a fixed per-fixture slug (no campus component)
+would therefore be a single set of 8 rows for the WHOLE DATABASE — seeding a
+second campus would silently look up "existing" rows by email alone, find the
+first campus's rows, and UPDATE them onto the new campus_id, leaving the first
+campus with zero fixtures and no error. Folding the target campus's own unique
+`slug` into both the email local-part and the firebase_uid makes every
+campus's 8 rows genuinely independent: seeding campus B can never collide with
+or relocate campus A's rows, because their emails and uids are textually
+different. `+` is used as the email separator specifically because neither the
+roster slugs (fixed, hyphens only) nor a campus slug ever contains `+`, so the
+split between "which fixture" and "which campus" in the local-part is always
+unambiguous.
 
 WHY A FIXTURE CAN NEVER AUTHENTICATE: Firebase issues its own opaque, ~28-character
 base62 uid for every real account, generated server-side at signup — a client
@@ -117,13 +132,17 @@ ROSTER: list[tuple[str, str]] = [
 ]
 
 
-def _fixture_specs() -> list[dict[str, str]]:
+def _fixture_specs(campus_slug: str) -> list[dict[str, str]]:
+    """Build the 8 fixture specs for one campus. `campus_slug` (the target
+    campus's own unique `slug` column) is folded into the email and firebase_uid
+    so that two different campuses' fixture rows can never collide or relocate
+    one another (see the module docstring: both columns are globally unique)."""
     return [
         {
             "slug": slug,
-            "email": f"{slug}@{FIXTURE_EMAIL_DOMAIN}",
+            "email": f"{slug}+{campus_slug}@{FIXTURE_EMAIL_DOMAIN}",
             "display_name": f"{FIXTURE_NAME_PREFIX}{name}",
-            "firebase_uid": f"{FIXTURE_UID_PREFIX}{slug}",
+            "firebase_uid": f"{FIXTURE_UID_PREFIX}{slug}-{campus_slug}",
         }
         for slug, name in ROSTER
     ]
@@ -194,11 +213,18 @@ async def run_seed_job(
     factory = get_session_factory()
     async with factory() as session:
         campus = await _resolve_campus(session, campus_id, campus_slug)
-        specs = _fixture_specs()
+        specs = _fixture_specs(campus.slug)
+        # Scoped by campus_id AND email (belt-and-suspenders): the campus-scoped
+        # email already makes cross-campus collision impossible by construction,
+        # but this lookup staying scoped to THIS campus means it can never pick
+        # up another campus's row even if two campus slugs ever produced the
+        # same fixture email (which the docstring's `+` separator argument rules
+        # out, but the filter costs nothing and removes any doubt).
         existing = (
             await session.execute(
                 select(models.User).where(
-                    models.User.email.in_([spec["email"] for spec in specs])
+                    models.User.campus_id == campus.id,
+                    models.User.email.in_([spec["email"] for spec in specs]),
                 )
             )
         ).scalars().all()

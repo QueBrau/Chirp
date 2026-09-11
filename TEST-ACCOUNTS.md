@@ -175,8 +175,16 @@ The eight fixtures are marked two ways: every email ends `@fixtures.chirp.invali
 `QA Fixture: `, so anyone scanning a roster or a search result sees immediately
 that a row is not a real person.
 
-**Tear these down before launch.** Run this against every campus that was ever
-seeded, before real students are expected to see search results:
+Each campus gets its own independent set of 8 — the email and firebase_uid are
+scoped to the target campus's slug, so seeding a second campus can never
+collide with or relocate a first campus's rows. This means seeding campus A
+and later seeding campus B leaves campus A's 8 fixtures exactly as they were;
+you do not need to (and should not) re-run seeding on campus A just because you
+seeded campus B.
+
+**Tear these down before launch, per campus.** Run this against every campus
+that was ever seeded, before real students are expected to see search results
+on that campus — each campus needs its own teardown run:
 
 ```bash
 DATABASE_URL='postgresql+asyncpg://chirp:...@localhost:5433/chirp' \
