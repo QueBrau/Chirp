@@ -225,7 +225,7 @@
 </footer>
 
 <script id="board-data" type="application/json">{
-  "updated": 1789127694414,
+  "updated": 1789127792844,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -417,9 +417,9 @@
   "cards": [
     {
       "id": "c398",
-      "col": "backlog",
+      "col": "progress",
       "owner": "J",
-      "title": "c398 [P1 | launch monitoring, remainder of c370] Activate the checked-in alert policies and finish monitoring slice 2 (uptime checks, log-based metrics, purge missed-schedule)",
+      "title": "[Sep 11 08:05 chirps-17, Jose] CLAIMED, CODE SLICE 2 (planner running; cloud activation half stays Jose's, JOSE-CLOUD-BLOCK section 3) |  | was: c398 [P1 | launch monitoring, remainder of c370] Activate the checked-in alert policies and finish monitoring slice 2 (uptime checks, log-based metrics, purge missed-schedule)",
       "detail": "Split from c370 on Sep 11 2026 by chirps-17 when code slice 1 (#283, 76dd850) merged. CLOUD HALF (Jose, classifier refuses these from a session): (1) create the email notification channel (JOSE-CLOUD-BLOCK-2026-09-08.md section 3), (2) run scripts/monitoring-apply --project chirps-prod (dry-run, expect 11 creates and zero writes), then scripts/monitoring-apply --apply --channel <channel resource name>, (3) trip one policy on purpose or use a test notification and record delivery in the runbook. CODE SLICE 2 (any session, code-only): extend the apply tool to manage (a) uptime checks for /_health on chirp-api and chirp-ws, (b) the three app.operational log-based metrics (sql_pool_capacity_503, rate_limit_fallback, post-fallback) and their two policies, (c) the purge-backlog log-match policy, (d) the chirp-purge missed-schedule conditionAbsent policy using the OBSERVED Cloud Scheduler cadence. EVIDENCE: chirp-purge-daily read Sep 10 via gcloud scheduler jobs describe: schedule 0 9 * * *, timezone Etc/UTC, state ENABLED, attemptDeadline 180s (sanitized copy in the chirps-17 scratchpad as c370-scheduler-2026-09-10.json; commit a copy under infra/monitoring/evidence when slice 2 starts so the runbook's missed-schedule claim has a checked-in source). RULES carried from c370: dry-run by default, --apply requires --channel, idempotent by displayName, never deletes, strict REST-shape validator on the load path (test_run_skips_unknown_key_policy_before_planning is the pattern), thresholds not stated in MONITORING-RUNBOOK.md marked initial, review after 7 days. Backup/PITR alerting stays excluded until a scheduled recovery job exists. ACCEPTANCE: every new resource type has a fixture test shown red without the change; a real dry-run against chirps-prod plans creates with zero writes; delivery of at least one alert email is recorded in the runbook with date and policy name."
     },
     {
