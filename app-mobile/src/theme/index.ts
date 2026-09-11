@@ -50,7 +50,8 @@ export {
   mix,
   relativeLuminance,
   secondaryLabelColor,
-  SECONDARY_FILL_ALPHA,
+  SECONDARY_FILL_ALPHA_DARK,
+  SECONDARY_FILL_ALPHA_LIGHT,
   withAlpha,
 } from "./colorUtils";
 export { applyOrgAccent, OrgAccentScope, useOrgAccentColors } from "./orgScope";

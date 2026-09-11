@@ -136,40 +136,50 @@ export function compositeOver(fgHex: string, alpha: number, bgHex: string): stri
 }
 
 /**
- * The `secondary` fill's alpha (c386). Matches `accentSoft`'s dark-mode alpha in
- * appearance.tsx/orgScope.tsx (0.16) -- duplicated there rather than imported
- * because those two derivation sites predate this card and already had their own
- * literal before secondaryLabelColor existed; not touched here to keep this card's
- * diff to the contrast fix. Exported so at least the verify script (below) and
+ * The `secondary` fill's alpha, split per mode (c386 dark, c397 light). Matches
+ * `accentSoft`'s own alpha split in appearance.tsx/orgScope.tsx (0.16 dark / 0.15
+ * light) -- duplicated there rather than imported because those two derivation
+ * sites predate this card and already had their own literals before
+ * secondaryLabelColor existed; not touched here to keep this card's diff to the
+ * contrast fix. Exported so at least the verify script (below) and
  * secondaryLabelColor's own fill computation share one source instead of two.
+ * Two constants, not one, because the dark and light values differ (0.16 vs
+ * 0.15) and a single shared constant would force one mode to use the other's
+ * alpha.
  */
-export const SECONDARY_FILL_ALPHA = 0.16;
+export const SECONDARY_FILL_ALPHA_DARK = 0.16;
+export const SECONDARY_FILL_ALPHA_LIGHT = 0.15;
 
 /**
- * Board c386. `secondary` buttons fill with `accentSoft` (accent alpha-composited
- * at 16% dark / 15% light over `bg`, per appearance.tsx/orgScope.tsx) and label
- * with the raw accent. That reads fine whenever the accent itself is light enough
- * to clear AA against its own faint wash -- it does NOT when the accent is dark
- * (the default campus primary is often a school's navy), because a 15-16% wash of
- * a very dark color barely lifts off a dark canvas: UNCG navy on its own dark
- * fill measures ~1.2:1, effectively invisible.
+ * Board c386 (dark mode), extended to light mode by c397. `secondary` buttons
+ * fill with `accentSoft` (accent alpha-composited at 16% dark / 15% light over
+ * `bg`, per appearance.tsx/orgScope.tsx) and label with the accent, adjusted just
+ * enough to stay legible against that fill. That reads fine whenever the accent
+ * itself is light (dark mode) or dark (light mode) enough to clear AA against its
+ * own faint wash -- it does NOT for every accent: UNCG navy on its own dark fill
+ * measures ~1.2:1 (dark mode), and the default violet / Alpha Delta Pi's azure
+ * measure ~3.79:1 / ~2.49:1 on their own light fill (light mode) -- both below
+ * the 4.5:1 AA threshold.
  *
- * Light mode is untouched BY CONSTRUCTION: there is no branch that can reach it
- * except the unconditional early return, so it is always byte-identical to the
- * raw `accent` -- never gated on a contrast measurement, because two of the real
- * campus/org accents already fall below 4.5:1 in light mode today on their own
- * (a separate, pre-existing, out-of-scope defect).
+ * Both branches now share the same shape, mirrored around the mode's own
+ * direction of travel: composite the real fill the button actually paints (using
+ * the caller's live accent/bg, so campus tint and org-scoped accents are honored
+ * automatically); if the raw accent already clears 4.5:1 against that fill,
+ * return it UNCHANGED -- an already-legible accent (e.g. the default violet in
+ * dark mode, or UNCG navy / Sigma Chi in light mode) must not be silently
+ * relabeled. Otherwise adjust the accent in fine (1/64) steps -- LIGHTENED
+ * (toward white) in dark mode, DARKENED (toward black) in light mode -- and
+ * return the FIRST step whose contrast against the fill clears 4.5:1, so the
+ * result stays as close to the accent's own identity (and hue) as the threshold
+ * allows. `lighten(accent, 1)` is opaque white and `darken(accent, 1)` is opaque
+ * black, both of which always clear 4.5:1 against a fill this far from them, so
+ * each loop is guaranteed to terminate before exhausting its range; `ink` is an
+ * unreachable-in-practice fallback in both branches, never expected to fire.
  *
- * Dark mode composites the real fill the button actually paints (using the
- * caller's live accent/bg, so campus tint and org-scoped accents are honored
- * automatically), and if the raw accent already clears 4.5:1 against that fill it
- * is returned unchanged -- an already-legible accent (e.g. the default violet)
- * must not be silently relabeled. Otherwise the accent is lightened in fine (1/64)
- * steps, returning the FIRST step whose contrast against the fill clears 4.5:1, so
- * the result stays as close to the accent's own identity as the threshold allows.
- * `lighten(accent, 1)` is opaque white, which always clears 4.5:1 against a fill
- * this dark, so the loop is guaranteed to terminate before exhausting the range;
- * `ink` is an unreachable-in-practice fallback, never expected to fire.
+ * The dark branch's behavior is unchanged from c386: same alpha (0.16, now named
+ * SECONDARY_FILL_ALPHA_DARK instead of the old single SECONDARY_FILL_ALPHA),
+ * same threshold, same step, same lighten() direction, same output for every
+ * input -- pinned byte-identical in verify-button-contrast.mjs.
  */
 export function secondaryLabelColor(
   accent: string,
@@ -177,14 +187,27 @@ export function secondaryLabelColor(
   mode: "light" | "dark",
   ink: string,
 ): string {
-  if (mode === "light") {
-    return accent;
-  }
-
   const MIN_CONTRAST = 4.5;
   const STEP = 1 / 64;
 
-  const fill = compositeOver(accent, SECONDARY_FILL_ALPHA, bg);
+  if (mode === "light") {
+    const fill = compositeOver(accent, SECONDARY_FILL_ALPHA_LIGHT, bg);
+    if (contrastRatio(accent, fill) >= MIN_CONTRAST) {
+      return accent;
+    }
+
+    let steps = 1;
+    while (steps <= 64) {
+      const darkened = darken(accent, steps * STEP);
+      if (contrastRatio(darkened, fill) >= MIN_CONTRAST) {
+        return darkened;
+      }
+      steps += 1;
+    }
+    return ink;
+  }
+
+  const fill = compositeOver(accent, SECONDARY_FILL_ALPHA_DARK, bg);
   if (contrastRatio(accent, fill) >= MIN_CONTRAST) {
     return accent;
   }
