@@ -170,6 +170,9 @@ def required_shape_errors(policy: dict, available_metric_types: Iterable[str]) -
     for metric_type in metric_types_referenced(policy):
         if metric_type not in available:
             errors.append("metric_not_in_inventory:" + metric_type)
+    # The strict REST-shape check runs on this same path so that an unknown
+    # key skips the file at load time instead of reaching the live API.
+    errors.extend("rest_shape:" + problem for problem in validate_rest_shape(policy))
     return errors
 
 

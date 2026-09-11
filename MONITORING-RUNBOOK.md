@@ -1,9 +1,11 @@
 # Launch monitoring: preparation, not operational acceptance
 
 c370 remains **OPEN**. This slice supplies a read-only inventory checker, two
-runtime failure signals and a post-fallback observation. It does not install
-policies, notification channels, checks, schedulers or metrics, and it does not
-verify alert delivery. A deployment is required before the new runtime signals
+runtime failure signals and a post-fallback observation, plus eleven alert
+policy definitions under `infra/monitoring/policies` and `scripts/monitoring-apply`,
+which is dry-run by default and installs policies only under `--apply --channel`.
+It does not install notification channels, uptime checks, schedulers or metrics,
+and it does not verify alert delivery. A deployment is required before the new runtime signals
 can exist in production. No live inventory or recipient information belongs in
 this public repository.
 

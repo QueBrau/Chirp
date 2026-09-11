@@ -267,6 +267,34 @@ class MonitoringApplyTests(unittest.TestCase):
         errors = m.validate_rest_shape(bad)
         self.assertTrue(any("thresholdVal" in e and "unknown_key" in e for e in errors))
 
+    # --- the strict validator sits on the real load path, not only in a unit test ---
+    def test_run_skips_unknown_key_policy_before_planning(self):
+        good = json.loads((POLICIES_DIR / "redis-memory-pressure.json").read_text())
+        bad = json.loads(json.dumps(good))
+        bad["displayName"] = "bad shape"
+        bad["conditions"][0]["conditionThreshold"]["thresholdVal"] = 1  # typo of thresholdValue
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "good.json").write_text(json.dumps(good))
+            (Path(tmp) / "bad.json").write_text(json.dumps(bad))
+            report = m.run(_args(policies_dir=tmp), get=_no_op_get, post=_refusing, patch=_refusing)
+        self.assertEqual([entry["displayName"] for entry in report["policies"]], [good["displayName"]])
+        self.assertEqual([entry["file"] for entry in report["skipped_files"]], ["bad.json"])
+        self.assertIn("rest_shape:$.conditions[0].conditionThreshold.thresholdVal: unknown_key",
+                      report["skipped_files"][0]["reason"])
+        self.assertEqual(report["exit_code"], 1)
+
+    def test_documentation_without_runbook_reference_is_flagged(self):
+        policy = {
+            "displayName": "no runbook", "combiner": "OR",
+            "documentation": {"content": "Wake someone up."},
+            "conditions": [{"conditionThreshold": {
+                "filter": 'metric.type="run.googleapis.com/request_count"'}}],
+        }
+        available = _inventory_available_metrics()
+        self.assertIn("documentation_missing_runbook_reference", m.required_shape_errors(policy, available))
+        policy["documentation"]["content"] = "See MONITORING-RUNBOOK.md."
+        self.assertNotIn("documentation_missing_runbook_reference", m.required_shape_errors(policy, available))
+
     # --- test_no_hardcoded_project_number_or_channel_outside_templating_point ---
     def test_no_hardcoded_project_number_or_channel_outside_templating_point(self):
         project_number = "593616178468"
