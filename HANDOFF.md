@@ -185,7 +185,17 @@ Two very different Macs, both written up in `CLAUDE.md`.
 
 - **Jose**: Intel Mac, macOS 12, **no Docker**. Local Postgres 14 via
   `pg_ctl -D /usr/local/var/postgresql@14 start`. Backend venv at `backend/.venv`. No
-  `redis-server`, which is why the Redis fan-out tests skip locally.
+  `redis-server`, which is why the Redis fan-out tests skip locally. **His cluster's
+  `template1` (and therefore `chirp`/`chirp_test`) is SQL_ASCII, not UTF8** (board card
+  c399): any test writing non-ASCII text into a JSONB or text column fails locally with
+  `asyncpg.exceptions.FeatureNotSupportedError: conversion between UTF8 and SQL_ASCII is
+  not supported` while passing in CI (postgres:16, UTF8) and on Q's Docker Postgres. Since
+  c399, `backend/tests/conftest.py` creates each run's scratch database with an explicit
+  `ENCODING 'UTF8' TEMPLATE template0`, so the backend suite itself is unaffected regardless
+  of template1. To fix the underlying databases, `scripts/local-db-encoding` (dry run by
+  default; `--apply` only against localhost dev databases) backs up and swaps `chirp` and
+  `chirp_test` to UTF8 in place; `template1` needs a one-time superuser `psql -U joseperdomo
+  -d postgres` recreate that the tool prints but will not run itself.
 - **Q**: Apple Silicon, Docker available, no native Postgres — backend tests run against a
   `postgres:16` container on host port **5434**, so runs there match prod's PG16.
 

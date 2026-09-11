@@ -234,7 +234,11 @@ def database_url() -> AsyncIterator[str]:
                 admin_url,
                 [
                     f'DROP DATABASE IF EXISTS "{run_db}" WITH (FORCE)',
-                    f'CREATE DATABASE "{run_db}"',
+                    # c399: force UTF8 regardless of what template1 happens to be on
+                    # this machine (Jose's local cluster's template1 is SQL_ASCII), so
+                    # local runs match CI (postgres:16, UTF8) instead of silently
+                    # inheriting whatever encoding template1 has today.
+                    f'CREATE DATABASE "{run_db}" ENCODING \'UTF8\' TEMPLATE template0',
                     # Stamped immediately after creation so the sweep can tell this
                     # database apart from anything else sharing the name shape.
                     f"COMMENT ON DATABASE \"{run_db}\" IS '{RUN_DB_MARKER} {int(time.time())}'",
