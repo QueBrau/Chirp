@@ -96,9 +96,26 @@ async def no_subscribers(broker):
 
 
 def test_real_container_cli_selects_effective_frame_limit():
-    assert container_transport_options() == {
-        "ws": "websockets-sansio", "ws_max_size": 1024, "ws_per_message_deflate": False,
+    """chirps-17 condition 2: a real pin, not a string comparison.
+
+    Reads the Dockerfile CMD's --ws value the same way the container itself
+    would, importlib-imports it as module:attr, and asserts it IS a subclass of
+    uvicorn's own WebSocketsSansIOProtocol -- so a typo in the shipped import
+    string (module that doesn't exist, or a class that isn't actually a WS
+    protocol) fails this test rather than only failing at deploy time.
+    """
+    import importlib
+
+    from uvicorn.protocols.websockets.websockets_sansio_impl import WebSocketsSansIOProtocol
+
+    options = container_transport_options()
+    assert options == {
+        "ws": "app.ws.transport:BoundedFragmentWebSocketsProtocol",
+        "ws_max_size": 1024, "ws_per_message_deflate": False,
     }
+    module_name, _, attr_name = options["ws"].partition(":")
+    shipped_class = getattr(importlib.import_module(module_name), attr_name)
+    assert issubclass(shipped_class, WebSocketsSansIOProtocol)
 
 
 @pytest.mark.parametrize("payload", ["x" * 1025, "€" * 342, ["a" * 600, "b" * 425]])

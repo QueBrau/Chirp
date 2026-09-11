@@ -2,10 +2,12 @@
 
 This change bounds the gateway's outbound application work and waiting tasks.
 c354 remains open: the coordinated client slice and its release/device acceptance
-are tracked in [REALTIME-CLIENT-RECOVERY.md](REALTIME-CLIENT-RECOVERY.md), and the
-current inbound transport has a confirmed empty-continuation-fragment retention
-issue described below. These results do not establish a safe production user
-count or a total per-socket memory ceiling.
+are tracked in [REALTIME-CLIENT-RECOVERY.md](REALTIME-CLIENT-RECOVERY.md). The
+inbound transport's empty-continuation-fragment retention issue, described
+below, is now closed by construction with `BoundedFragmentWebSocketsProtocol`,
+but is not live in production until the next Cloud Run deploy window. These
+results do not establish a safe production user count or a total per-socket
+memory ceiling.
 
 ## Gateway contract
 
@@ -85,43 +87,93 @@ after ready and the resumed socket receives the next committed message. That doe
 not prove multi-page client catch-up or delivery during a publish failure. c356's
 durable outbox remains a separate implementation.
 
-## Transport limits and confirmed open issue
+## Transport limits and the inbound continuation-fragment bound
 
-The container explicitly selects the same installed `websockets-sansio` adapter
-that Uvicorn 0.52.3 auto-selection used. Its maximum incoming message payload is
-1024 bytes and per-message compression is disabled. The stream has no incoming
+The container CMD selects `app.ws.transport:BoundedFragmentWebSocketsProtocol`
+(`backend/app/ws/transport.py`), a thin subclass of the same installed
+`WebSocketsSansIOProtocol` (`websockets-sansio`) adapter Uvicorn 0.52.3
+auto-selection used. Its maximum incoming message payload is still 1024 bytes and
+per-message compression is still disabled. The stream has no legitimate incoming
 application messages today; ping/pong control traffic remains functional. Actual
 loopback tests send 1024-byte text successfully and reject oversized ASCII,
 multi-byte UTF-8 and fragmented-message payloads with 1009.
 
 `--ws-max-queue` is deliberately absent: this pinned adapter does not read that
-configuration option. It pauses transport reads after a complete message, but may
-already have parsed other frames in the received chunk. No strict inbound frame
-count is established. Switching to the legacy adapter was rejected after an
+configuration option, and switching to the legacy adapter was rejected after an
 actual-library proof showed its close coroutine suppressing cancellation and
 outliving the proposed close-attempt budget.
 
-More concretely, the current sansio adapter retains each nonfinal fragment in a
-Python list. A one-byte initial text fragment followed by 1000 then 2000 empty
-nonfinal continuation frames retained 1001 then 2001 fragment entries while total
-payload stayed one byte. The 1024-byte limit did not fire, reads did not pause and
-the transport stayed open. This is a confirmed unbounded-fragment-bookkeeping
-path, not merely uncertainty about RSS. It remains OPEN on c354 and needs a
-separately reviewed upstream/transport mitigation. This change does not fork
-Uvicorn, install private parser hooks, or claim to fix that path.
-An independent direct-adapter probe also reproduced retention before ASGI accept
-while application authorization was pending. Production ingress/proxy forwarding
-of that traffic was not tested; the issue is not limited here to authorized users.
-An isolated follow-up also reproduced it with Uvicorn 0.52.4 and websockets 17.1:
-the [adapter still appends fragments until FIN](https://github.com/Kludex/uvicorn/blob/0.52.4/uvicorn/protocols/websockets/websockets_sansio_impl.py#L272),
-and the [parser's payload-size check](https://github.com/python-websockets/websockets/blob/17.1/src/websockets/protocol.py#L671)
-does not cap empty-fragment count. A dependency bump alone is not a verified fix;
-this slice changes neither lockfile nor transport internals.
+The stock adapter retains each nonfinal fragment in a Python list with only a
+joined-byte-total check that runs after FIN, so a sender that starts a message
+(fin=False) and never sends FIN can grow that list without limit while every
+individual frame and the running byte total stay under `--ws-max-size`: a
+one-byte initial text fragment followed by 1000 then 2000 empty nonfinal
+continuation frames retained 1001 then 2001 fragment entries. This was a
+confirmed unbounded-fragment-bookkeeping path, not merely uncertainty about RSS,
+and an independent direct-adapter probe also reproduced retention before ASGI
+accept while application authorization was pending.
 
-`--include-fragment-evidence` runs a bounded 2000-continuation diagnostic through
-the actual installed parser and ASGI task with a controlled transport, recording
-whether that known issue is still observed. It is deliberately not a failing
-normal-CI test and does not make the issue part of the desired runtime contract.
+c354 closes that gap by construction. `BoundedFragmentWebSocketsProtocol`
+overrides only `handle_cont` to count `self.frames` before appending and, once
+`WS_MAX_CONTINUATION_FRAMES` (64) nonfinal continuation frames are retained,
+sends a 1009 close and stops -- the same close path the base class already uses
+one method away for a different malformed-input case. `self.frames` itself never
+exceeds the bound; a `close_sent` guard (found necessary at runtime: without it,
+a further CONT frame reaching `handle_cont` after the first close call raises
+`websockets.exceptions.InvalidState` from `conn.send_close` on an
+already-CLOSING connection) makes the no-op on repeat calls explicit rather than
+relying on the transport tearing down before another frame is parsed. This is an
+app-level fix, not a fork of Uvicorn or websockets, and does not touch
+`--ws-max-size` or `--ws-per-message-deflate`. The pre-accept sub-case (retention
+observed before ASGI accept) is covered by construction -- the override sits at
+the same protocol layer, below any app-level accept decision -- but is not
+separately tested.
+
+Runtime-verified 2026-09-11 from the worktree backend on loopback ports (not
+8080/8000): a real `uvicorn` process started with the exact Dockerfile CMD
+`--ws` value answered `GET /_health` 200, then a raw-socket client that opened a
+text frame (fin=False) and sent exactly 64 empty continuation frames (never FIN)
+was closed with code 1009 and `len(protocol.frames)` stayed at the bound. The
+identical byte sequence against a server started with `--ws websockets-sansio`
+(stock) produced no close and kept retaining fragments. This fix is **not live
+until the next Cloud Run deploy window**; the c361 deploy verifier's WS check is
+expected to exercise `BoundedFragmentWebSocketsProtocol` on that window.
+
+An isolated follow-up confirmed the same unbounded-append shape still exists in
+Uvicorn 0.52.4 and websockets 17.1 (the latest available releases as of
+2026-09-10): the [adapter still appends fragments until FIN](https://github.com/Kludex/uvicorn/blob/0.52.4/uvicorn/protocols/websockets/websockets_sansio_impl.py#L272),
+and the [parser's payload-size check](https://github.com/python-websockets/websockets/blob/17.1/src/websockets/protocol.py#L671)
+does not cap empty-fragment count -- a dependency bump alone would not have fixed
+this, and this slice changes neither lockfile nor transport internals.
+
+`--include-fragment-evidence` runs a bounded 2000-continuation diagnostic
+against a directly-imported, hardcoded `WebSocketsSansIOProtocol` instance (not
+`config.ws_protocol_class`, so not whatever class the container CMD's `--ws`
+value actually resolves to), recording whether the stock library's known
+limitation is still observed there. It intentionally keeps diagnosing the
+underlying stock adapter regardless of the shipped `--ws` value, so
+`known_limitation_observed` continues to read `True` by design -- that is the
+baseline evidence this fix responds to, not a regression check on the shipped
+class. The shipped class is instead covered by
+`backend/tests/test_c354_inbound_fragment_bound.py`'s parametrized bounded-vs-stock
+contrast and by `test_ws_resource_integration.py::test_real_container_cli_selects_effective_frame_limit`,
+which importlib-imports the Dockerfile's actual `--ws` string and asserts it IS a
+`WebSocketsSansIOProtocol` subclass. It is deliberately not a failing normal-CI
+test and does not make the issue part of the desired runtime contract.
+
+### Launch-point sweep (chirps-17 condition 4)
+
+Every place in the repo that starts or configures a real Uvicorn WS listener:
+
+| Launch point | Resolves to | Why |
+| --- | --- | --- |
+| `backend/Dockerfile` CMD (production/Cloud Run) | `BoundedFragmentWebSocketsProtocol` | The fix; ships the bound. |
+| `backend/loadtest/ws_resource_probe.py`'s `local_server()` / `container_transport_options()` (used by the probe CLI and by `backend/tests/test_ws_resource_integration.py`'s integration tests) | `BoundedFragmentWebSocketsProtocol` | Reads the Dockerfile CMD directly, so it always matches production. |
+| `backend/loadtest/ws_resource_probe.py`'s `fragment_bookkeeping_evidence()` diagnostic | stock `WebSocketsSansIOProtocol` (hardcoded import, not read from config) | Deliberate: this diagnostic exists to keep showing the underlying library's unbounded behavior as baseline evidence, independent of whatever the app ships. Stock is acceptable here because the function is explicitly a non-CI, non-regression diagnostic (see above), never the production path. |
+| `backend/tests/test_c354_inbound_fragment_bound.py` (STOCK parametrization only) | stock `WebSocketsSansIOProtocol` (explicit override) | Deliberate known-broken baseline, parametrized alongside the shipped class, to prove the fix by contrast under the identical frame sequence. Never the production path. |
+| `docker-compose.yml` | n/a | Only runs `db` (Postgres) and `redis` containers for local dev; it does not start the backend/Uvicorn at all. |
+| `.github/workflows/ci.yml` | n/a | CI never invokes `uvicorn` directly; it runs pytest, which reaches Uvicorn only through the two rows above. |
+| `scripts/*` | n/a | No script in this repo starts Uvicorn. |
 
 With the selected sansio adapter, a writable close is queued promptly and has a
 separate native 10-second physical-close timer. If flow control blocks the close,
