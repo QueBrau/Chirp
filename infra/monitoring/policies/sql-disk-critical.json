@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp-db disk utilization critical",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: SQL availability and capacity (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: on-call API responder. Escalation page at disk utilization over 90% sustained, per the runbook's stated threshold; the sustained duration itself is not stated there, so 10 minutes is chosen. Initial, review after 7 days.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "1800s"}
+  },
+  "conditions": [
+    {
+      "displayName": "chirp-db disk utilization over 90%",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloudsql_database\" AND resource.labels.project_id=\"{{PROJECT}}\" AND resource.labels.database_id=\"{{PROJECT}}:chirp-db\" AND metric.type=\"cloudsql.googleapis.com/database/disk/utilization\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0.9,
+        "duration": "600s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_MEAN",
+            "crossSeriesReducer": "REDUCE_MAX",
+            "groupByFields": []
+          }
+        ]
+      }
+    }
+  ]
+}

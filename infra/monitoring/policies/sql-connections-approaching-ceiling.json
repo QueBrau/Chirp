@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp-db connections approaching ceiling",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: SQL availability and capacity (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: on-call API responder. Warns at 80% of the deployment's reserved connection ceiling (infra/deployment.json: max_connections 100 minus superuser_reserved_connections 3 minus surge_allowance_connections 10 = 87; 80% of 87 rounds to 70), per the runbook's instruction to apply the connection reserve policy rather than a guessed universal count. Initial, review after 7 days.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "1800s"}
+  },
+  "conditions": [
+    {
+      "displayName": "chirp-db num_backends over 70",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloudsql_database\" AND resource.labels.project_id=\"{{PROJECT}}\" AND resource.labels.database_id=\"{{PROJECT}}:chirp-db\" AND metric.type=\"cloudsql.googleapis.com/database/postgresql/num_backends\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 70,
+        "duration": "600s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_MEAN",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": []
+          }
+        ]
+      }
+    }
+  ]
+}

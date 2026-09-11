@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp-api request latency p95",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: API latency (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: on-call API responder. p95 over 1000ms sustained 10 minutes, per the runbook's stated proposal; distribution-preserving ALIGN_SUM then REDUCE_PERCENTILE_95 across chirp-api revisions, per the runbook's aggregation rules.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "900s"}
+  },
+  "conditions": [
+    {
+      "displayName": "chirp-api request latency p95 over 1000ms",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.project_id=\"{{PROJECT}}\" AND resource.labels.service_name=\"chirp-api\" AND metric.type=\"run.googleapis.com/request_latencies\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 1000,
+        "duration": "600s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_PERCENTILE_95",
+            "groupByFields": ["resource.labels.service_name"]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp-media-reconcile job failure",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: Job failure and missed schedule (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: on-call API responder. Notifies on any non-succeeded chirp-media-reconcile execution in a 5-minute window. Slice 2 follow-up covers the missed-schedule half (conditionAbsent), out of scope here since no Cloud Scheduler cron/timezone/grace is checked in yet. The 5-minute evaluation window is a judgment call, not a runbook-stated number. Initial, review after 7 days.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "900s"}
+  },
+  "conditions": [
+    {
+      "displayName": "chirp-media-reconcile non-succeeded execution",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_job\" AND resource.labels.project_id=\"{{PROJECT}}\" AND resource.labels.job_name=\"chirp-media-reconcile\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result!=\"succeeded\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "0s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": ["metric.labels.result"]
+          }
+        ]
+      }
+    }
+  ]
+}
