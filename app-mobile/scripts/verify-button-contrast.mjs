@@ -322,9 +322,9 @@ for (const [label, accent] of LIGHT_ROSTER) {
     // Independently re-derive the step count by scanning darken() from step 1,
     // using the same imported darken/contrastRatio the function under test
     // uses internally -- not by reading secondaryLabelColor's internals. The
-    // step immediately BEFORE the one that produced `result` must still fail
-    // AA, proving the function returned the FIRST clearing step rather than a
-    // later, more-darkened one that would also happen to clear.
+    // FIRST step that clears must equal `result` byte-for-byte, catching a
+    // sabotage that darkens against the wrong fill (e.g. the dark alpha) and
+    // still happens to clear the real threshold.
     let step = 1;
     let derived = null;
     while (step <= 64) {
@@ -336,13 +336,32 @@ for (const [label, accent] of LIGHT_ROSTER) {
       step += 1;
     }
     check(`${label}: independently re-derived darken() step matches secondaryLabelColor's output`, derived === result, `derived=${derived} step=${step}/64`);
-    const prevStep = step > 1 ? darken(accent, (step - 1) * (1 / 64)) : accent;
-    const prevRatio = contrastRatio(prevStep, fill);
-    check(
-      `${label}: the step before the returned one still fails AA (first-clearing-step, not over-darkened)`,
-      prevRatio < 4.5,
-      `step=${step}/64 prevStep=${step - 1}/64 prevRatio=${prevRatio.toFixed(3)}`,
-    );
+
+    // Tie the "first clearing step" property to `result` itself rather than to
+    // the independent scan above: find which step k actually PRODUCES `result`
+    // (darken(accent, k/64) === result), then require the step before k to
+    // still fail AA. Using the scan's own `step` here instead would be
+    // vacuous -- that loop stops at its own first clearing step by
+    // construction, so "the step before it fails" would trivially hold no
+    // matter what `result` actually was; anchoring on `result` makes this
+    // assertion react to what the function under test actually returned.
+    let resultStep = null;
+    for (let k = 1; k <= 64; k++) {
+      if (darken(accent, k * (1 / 64)) === result) {
+        resultStep = k;
+        break;
+      }
+    }
+    check(`${label}: result matches some darken() step (not a value the loop cannot reach)`, resultStep !== null, `result=${result}`);
+    if (resultStep !== null) {
+      const prevCandidate = resultStep > 1 ? darken(accent, (resultStep - 1) * (1 / 64)) : accent;
+      const prevRatio = contrastRatio(prevCandidate, fill);
+      check(
+        `${label}: the step before the returned one still fails AA (first-clearing-step, not over-darkened)`,
+        prevRatio < 4.5,
+        `resultStep=${resultStep}/64 prevRatio=${prevRatio.toFixed(3)}`,
+      );
+    }
 
     lightTableRows.push({ label, accent, rawRatio, action: `darkened (${step}/64)`, result, resultRatio });
   }
