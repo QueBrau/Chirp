@@ -1,6 +1,7 @@
 """Fake-API/fixture tests only; no network, no credentials, no gcloud."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,8 +15,12 @@ spec.loader.exec_module(m)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 POLICIES_DIR = REPO_ROOT / "infra/monitoring/policies"
+METRICS_DIR = REPO_ROOT / "infra/monitoring/metrics"
+UPTIME_DIR = REPO_ROOT / "infra/monitoring/uptime"
 INVENTORY_PATH = REPO_ROOT / "infra/monitoring/evidence/c370-inventory-2026-09-08.json"
 PROJECT = "sample-project"
+API_HOST = "chirp-api.example.com"
+WS_HOST = "chirp-ws.example.com"
 
 
 def _inventory_available_metrics():
@@ -38,58 +43,102 @@ def _scan_for_hardcoded(text: str, project_number: str) -> list[str]:
 
 
 def _no_op_get(url, params):
-    # No local displayName ever matches: existing_policies() finds zero remote
-    # policies, so every local file is classified action="create".
+    # Nothing exists remotely yet: existing_metrics() gets a 404 for every
+    # wanted name, existing_uptime()/existing_policies() find zero remote
+    # entries, so every local file is classified action="create".
+    if url.startswith("https://logging.googleapis.com/") and "/metrics/" in url:
+        raise m.ApplyError("http_404")
+    if url.endswith("uptimeCheckConfigs"):
+        return {"uptimeCheckConfigs": []}
     if url.endswith("alertPolicies"):
         return {"alertPolicies": []}
     raise AssertionError("unexpected GET " + url)
 
 
-class FakeAlertPolicyAPI:
-    """A stateful fake keyed by displayName, mirroring the real REST surface."""
+class FakeMonitoringAPI:
+    """A stateful fake covering LogMetric, UptimeCheckConfig and AlertPolicy,
+    keyed the way each kind's real REST surface is keyed: LogMetric by its own
+    `name` field, the other two by displayName via a list-then-GET pattern."""
 
     def __init__(self):
-        self.store = {}
-        self._next_id = 1
+        self.metrics = {}
+        self.uptime = {}
+        self.policies = {}
+        self._next_uptime_id = 1
+        self._next_policy_id = 1
         self.post_calls = 0
         self.patch_calls = 0
+        self.put_calls = 0
 
     def get(self, url, params):
+        if url.startswith("https://logging.googleapis.com/") and "/metrics/" in url:
+            name = urllib.parse.unquote(url.rsplit("/metrics/", 1)[1])
+            if name in self.metrics:
+                return dict(self.metrics[name])
+            raise m.ApplyError("http_404")
+        if url.endswith("uptimeCheckConfigs"):
+            return {"uptimeCheckConfigs": [
+                {"name": body["name"], "displayName": body["displayName"]}
+                for body in self.uptime.values()
+            ]}
         if url.endswith("alertPolicies"):
             return {"alertPolicies": [
                 {"name": body["name"], "displayName": body["displayName"]}
-                for body in self.store.values()
+                for body in self.policies.values()
             ]}
-        name = url.rsplit("/v3/", 1)[1]
-        for body in self.store.values():
-            if body["name"] == name:
+        resource_name = url.rsplit("/v3/", 1)[1]
+        for body in list(self.uptime.values()) + list(self.policies.values()):
+            if body["name"] == resource_name:
                 return dict(body)
-        raise AssertionError("no such policy " + name)
+        raise AssertionError("no such resource " + resource_name)
 
     def post(self, url, body):
         self.post_calls += 1
-        name = "projects/%s/alertPolicies/%d" % (PROJECT, self._next_id)
-        self._next_id += 1
+        if url.startswith("https://logging.googleapis.com/"):
+            stored = dict(body)
+            self.metrics[body["name"]] = stored
+            return dict(stored)
+        if url.endswith("uptimeCheckConfigs"):
+            name = "projects/%s/uptimeCheckConfigs/%d" % (PROJECT, self._next_uptime_id)
+            self._next_uptime_id += 1
+            stored = dict(body)
+            stored["name"] = name
+            self.uptime[body["displayName"]] = stored
+            return dict(stored)
+        name = "projects/%s/alertPolicies/%d" % (PROJECT, self._next_policy_id)
+        self._next_policy_id += 1
         stored = dict(body)
         stored["name"] = name
-        self.store[body["displayName"]] = stored
+        self.policies[body["displayName"]] = stored
+        return dict(stored)
+
+    def put(self, url, body):
+        self.put_calls += 1
+        name = urllib.parse.unquote(url.rsplit("/metrics/", 1)[1])
+        if name not in self.metrics:
+            raise AssertionError("put target not found " + name)
+        stored = dict(body)
+        self.metrics[name] = stored
         return dict(stored)
 
     def patch(self, url, body):
         self.patch_calls += 1
-        name = url.split("?")[0].rsplit("/v3/", 1)[1]
-        for display, stored in self.store.items():
-            if stored["name"] == name:
-                updated = dict(body)
-                updated["name"] = name
-                self.store[display] = updated
-                return dict(updated)
-        raise AssertionError("patch target not found " + name)
+        resource_name = url.split("?")[0].rsplit("/v3/", 1)[1]
+        for store in (self.uptime, self.policies):
+            for display, stored in store.items():
+                if stored["name"] == resource_name:
+                    updated = dict(body)
+                    updated["name"] = resource_name
+                    store[display] = updated
+                    return dict(updated)
+        raise AssertionError("patch target not found " + resource_name)
 
 
 def _args(**overrides):
     values = {"project": PROJECT, "apply": False, "channel": None,
-              "policies_dir": str(POLICIES_DIR), "report": None}
+              "policies_dir": str(POLICIES_DIR), "metrics_dir": str(METRICS_DIR),
+              "uptime_dir": str(UPTIME_DIR), "api_host": API_HOST, "ws_host": WS_HOST,
+              "report": None}
     values.update(overrides)
     return type("Args", (), values)()
 
@@ -99,10 +148,15 @@ class MonitoringApplyTests(unittest.TestCase):
     # --- test_dry_run_makes_zero_write_calls ---
     def test_dry_run_makes_zero_write_calls(self):
         args = _args()
-        report = m.run(args, _no_op_get, _refusing, _refusing)
+        report = m.run(args, _no_op_get, _refusing, _refusing, _refusing)
         self.assertEqual(report["exit_code"], 0)
         self.assertTrue(report["read_only"])
-        self.assertEqual(len(report["policies"]), 11)
+        self.assertEqual(report["skipped_files"], [])
+        self.assertEqual(len(report["metrics"]), 3)
+        self.assertEqual(len(report["uptime"]), 2)
+        self.assertEqual(len(report["policies"]), 16)
+        self.assertEqual({p["action"] for p in report["metrics"]}, {"create"})
+        self.assertEqual({p["action"] for p in report["uptime"]}, {"create"})
         self.assertEqual({p["action"] for p in report["policies"]}, {"create"})
 
     # --- test_apply_without_channel_exits_2_before_any_call ---
@@ -120,6 +174,29 @@ class MonitoringApplyTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             m.parse_arguments(["--project", PROJECT, "--apply"])
         self.assertEqual(caught.exception.code, 2)
+
+    # --- test_uptime_requires_api_host_and_ws_host_before_any_call ---
+    def test_uptime_requires_api_host_and_ws_host_before_any_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "one.json").write_text(json.dumps({
+                "displayName": "x", "period": "60s", "timeout": "10s",
+                "monitoredResource": {"type": "uptime_url",
+                                       "labels": {"project_id": PROJECT, "host": "already-real.example.com"}},
+                "httpCheck": {"path": "/_health"},
+            }))
+            with patch.object(m, "reader") as fake_reader:
+                with self.assertRaises(SystemExit) as caught:
+                    m.main(["--project", PROJECT, "--uptime-dir", tmp])
+                self.assertEqual(caught.exception.code, 2)
+                fake_reader.assert_not_called()
+            # Only one of the two flags supplied is still a failure.
+            with self.assertRaises(SystemExit) as caught2:
+                m.parse_arguments(["--project", PROJECT, "--uptime-dir", tmp, "--api-host", "a.example.com"])
+            self.assertEqual(caught2.exception.code, 2)
+            # Both supplied: no longer blocked by this guard.
+            args_ok = m.parse_arguments(["--project", PROJECT, "--uptime-dir", tmp,
+                                          "--api-host", "a.example.com", "--ws-host", "b.example.com"])
+            self.assertEqual(args_ok.api_host, "a.example.com")
 
     # --- test_create_vs_update_decided_by_display_name_match ---
     def test_create_vs_update_decided_by_display_name_match(self):
@@ -139,32 +216,103 @@ class MonitoringApplyTests(unittest.TestCase):
 
     # --- test_second_apply_is_all_noop ---
     def test_second_apply_is_all_noop(self):
-        fake = FakeAlertPolicyAPI()
+        fake = FakeMonitoringAPI()
         args = _args(apply=True, channel="projects/%s/notificationChannels/1" % PROJECT)
 
-        first = m.run(args, fake.get, fake.post, fake.patch)
-        self.assertGreater(len({p["action"] for p in first["policies"]} - {"noop"}), 0)
-        self.assertGreater(fake.post_calls + fake.patch_calls, 0)
+        first = m.run(args, fake.get, fake.post, fake.patch, fake.put)
+        all_actions = {e["action"] for e in first["metrics"] + first["uptime"] + first["policies"]}
+        self.assertGreater(len(all_actions - {"noop"}), 0)
+        self.assertGreater(fake.post_calls + fake.patch_calls + fake.put_calls, 0)
 
-        fake.post_calls = fake.patch_calls = 0
-        second = m.run(args, fake.get, fake.post, fake.patch)
-        self.assertEqual({p["action"] for p in second["policies"]}, {"noop"})
+        fake.post_calls = fake.patch_calls = fake.put_calls = 0
+        second = m.run(args, fake.get, fake.post, fake.patch, fake.put)
+        second_actions = {e["action"] for e in second["metrics"] + second["uptime"] + second["policies"]}
+        self.assertEqual(second_actions, {"noop"})
         self.assertEqual(fake.post_calls, 0)
         self.assertEqual(fake.patch_calls, 0)
+        self.assertEqual(fake.put_calls, 0)
+
+    # --- test_apply_order_is_metrics_then_uptime_then_policies ---
+    def test_apply_order_is_metrics_then_uptime_then_policies(self):
+        order = []
+        fake = FakeMonitoringAPI()
+
+        def spying_post(url, body):
+            if url.startswith("https://logging.googleapis.com/"):
+                order.append("metrics")
+            elif url.endswith("uptimeCheckConfigs"):
+                order.append("uptime")
+            else:
+                order.append("policies")
+            return fake.post(url, body)
+
+        args = _args(apply=True, channel="projects/%s/notificationChannels/1" % PROJECT)
+        m.run(args, fake.get, spying_post, fake.patch, fake.put)
+        self.assertIn("metrics", order)
+        self.assertIn("uptime", order)
+        self.assertIn("policies", order)
+        weight = {"metrics": 0, "uptime": 1, "policies": 2}
+        self.assertEqual(order, sorted(order, key=lambda kind: weight[kind]))
+
+    # --- test_log_metric_identity_is_name_not_display_name ---
+    def test_log_metric_identity_is_name_not_display_name(self):
+        calls = []
+
+        def get(url, params):
+            calls.append(url)
+            if url.endswith("/metrics/metric-one"):
+                return {"name": "metric-one", "filter": "a"}
+            raise m.ApplyError("http_404")
+
+        result = m.existing_metrics(get, PROJECT, ["metric-one", "metric-two"])
+        expected_base = "https://logging.googleapis.com/v2/projects/%s/metrics/" % PROJECT
+        self.assertEqual(set(calls), {expected_base + "metric-one", expected_base + "metric-two"})
+        self.assertEqual(result, {"metric-one": {"name": "metric-one", "filter": "a"}})
+        # Falsification target: a naive generalization of _existing_by_display_name
+        # would list the metrics collection and match on displayName; LogMetric
+        # has no displayName field at all, so every call here must be a direct
+        # by-name GET, never a bare collection listing call.
+        for url in calls:
+            self.assertTrue(url.startswith(expected_base))
+            self.assertNotEqual(url, expected_base.rstrip("/"))
+
+    # --- test_metric_update_uses_put_without_updatemask ---
+    def test_metric_update_uses_put_without_updatemask(self):
+        captured = []
+
+        def get(url, params):
+            if url.endswith("/metrics/chirp_metric"):
+                return {"name": "chirp_metric", "filter": "old"}
+            raise m.ApplyError("http_404")
+
+        def put(url, body):
+            captured.append(("PUT", url))
+            return {"name": "chirp_metric"}
+
+        local = [{"name": "chirp_metric", "filter": "new", "description": "d MONITORING-RUNBOOK.md"}]
+        existing = m.existing_metrics(get, PROJECT, ["chirp_metric"])
+        plan = m.plan_metrics(local, existing)
+        self.assertEqual([p["action"] for p in plan], ["update"])
+        m.apply_metrics(plan, {"chirp_metric": local[0]}, PROJECT, _refusing, put)
+        self.assertEqual(len(captured), 1)
+        method, url = captured[0]
+        self.assertEqual(method, "PUT")
+        self.assertEqual(url, "https://logging.googleapis.com/v2/projects/%s/metrics/chirp_metric" % PROJECT)
+        self.assertNotIn("updateMask", url)
 
     # --- test_update_patches_by_resource_name_with_updatemask_limited_to_owned_fields ---
     def test_update_patches_by_resource_name_with_updatemask_limited_to_owned_fields(self):
-        fake = FakeAlertPolicyAPI()
+        fake = FakeMonitoringAPI()
         channel = "projects/%s/notificationChannels/1" % PROJECT
         args = _args(apply=True, channel=channel)
-        first = m.run(args, fake.get, fake.post, fake.patch)
+        first = m.run(args, fake.get, fake.post, fake.patch, fake.put)
         self.assertGreater(fake.post_calls, 0)
 
         # Force a genuine content diff: copy every real policy file into a
         # temp dir, verbatim, except one field of one file is bumped. Reading
         # the raw text with json.loads works even with the {{PROJECT}}/
-        # {{NOTIFICATION_CHANNEL}} placeholders still in place, since they are
-        # just string content inside valid JSON.
+        # {{NOTIFICATION_CHANNEL}}/{{API_HOST}}/{{WS_HOST}} placeholders still
+        # in place, since they are just string content inside valid JSON.
         target = None
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
@@ -177,7 +325,7 @@ class MonitoringApplyTests(unittest.TestCase):
                     raw = json.dumps(body)
                 (tmp_dir / path.name).write_text(raw, encoding="utf-8")
 
-            existing_name = fake.store[target]["name"]
+            existing_name = fake.policies[target]["name"]
             fake.post_calls = fake.patch_calls = 0
             captured_urls = []
             real_patch = fake.patch
@@ -187,7 +335,7 @@ class MonitoringApplyTests(unittest.TestCase):
                 return real_patch(url, body)
 
             args2 = _args(apply=True, channel=channel, policies_dir=str(tmp_dir))
-            second = m.run(args2, fake.get, fake.post, spying_patch)
+            second = m.run(args2, fake.get, fake.post, spying_patch, fake.put)
 
         by_name = {p["displayName"]: p for p in second["policies"]}
         self.assertEqual(by_name[target]["action"], "update")
@@ -202,14 +350,57 @@ class MonitoringApplyTests(unittest.TestCase):
         for owned_field in m.SERVER_ASSIGNED_FIELDS:
             self.assertNotIn(owned_field, mask)
 
+    # --- uptime PATCH uses an explicit updateMask too ---
+    def test_uptime_update_patches_with_explicit_updatemask(self):
+        fake = FakeMonitoringAPI()
+        channel = "projects/%s/notificationChannels/1" % PROJECT
+        args = _args(apply=True, channel=channel)
+        m.run(args, fake.get, fake.post, fake.patch, fake.put)
+        target_display = json.loads((UPTIME_DIR / "chirp-api-health.json").read_text())["displayName"]
+        existing_name = fake.uptime[target_display]["name"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            for path in sorted(UPTIME_DIR.glob("*.json")):
+                body = json.loads(path.read_text())
+                if body["displayName"] == target_display:
+                    body["period"] = "120s"
+                (tmp_dir / path.name).write_text(json.dumps(body), encoding="utf-8")
+
+            captured_urls = []
+            real_patch = fake.patch
+
+            def spying_patch(url, body):
+                captured_urls.append(url)
+                return real_patch(url, body)
+
+            fake.patch_calls = fake.post_calls = 0
+            args2 = _args(apply=True, channel=channel, uptime_dir=str(tmp_dir))
+            second = m.run(args2, fake.get, fake.post, spying_patch, fake.put)
+
+        by_display = {u["displayName"]: u for u in second["uptime"]}
+        self.assertEqual(by_display[target_display]["action"], "update")
+        self.assertEqual(len(captured_urls), 1)
+        resource_url, _, query = captured_urls[0].partition("?")
+        self.assertEqual(resource_url, "https://monitoring.googleapis.com/v3/" + existing_name)
+        mask = urllib.parse.parse_qs(query)["updateMask"][0].split(",")
+        self.assertEqual(set(mask), set(m.UPTIME_UPDATE_MASK_FIELDS) - {"checkerType"})
+
     # --- test_every_policy_json_validates_required_shape_and_inventory_membership ---
     def test_every_policy_json_validates_required_shape_and_inventory_membership(self):
         available = _inventory_available_metrics()
+        defined_log_metrics = {m.LOG_METRIC_TYPE_PREFIX + "sql_pool_capacity_503",
+                                m.LOG_METRIC_TYPE_PREFIX + "rate_limit_fallback",
+                                m.LOG_METRIC_TYPE_PREFIX + "chirp_purge_aggregate"}
+        defined_hosts = {API_HOST, WS_HOST}
         for path in sorted(POLICIES_DIR.glob("*.json")):
             with self.subTest(file=path.name):
-                policy = json.loads(path.read_text().replace("{{PROJECT}}", PROJECT)
-                                     .replace("{{NOTIFICATION_CHANNEL}}", "projects/x/notificationChannels/1"))
-                errors = m.required_shape_errors(policy, available)
+                policy = json.loads(path.read_text()
+                                     .replace("{{PROJECT}}", PROJECT)
+                                     .replace("{{NOTIFICATION_CHANNEL}}", "projects/x/notificationChannels/1")
+                                     .replace("{{API_HOST}}", API_HOST)
+                                     .replace("{{WS_HOST}}", WS_HOST))
+                errors = m.required_shape_errors(policy, available, defined_log_metrics, defined_hosts)
                 self.assertEqual(errors, [], msg=str(errors))
                 self.assertEqual(m.validate_rest_shape(policy), [], msg=str(m.validate_rest_shape(policy)))
 
@@ -257,6 +448,76 @@ class MonitoringApplyTests(unittest.TestCase):
                 msg=str(ratio_errors),
             )
 
+    # --- test_policy_referencing_undefined_uptime_check_or_log_metric_is_skipped ---
+    def test_policy_referencing_undefined_uptime_check_or_log_metric_is_skipped(self):
+        available = _inventory_available_metrics()
+        defined_log_metrics = {m.LOG_METRIC_TYPE_PREFIX + "sql_pool_capacity_503"}
+        defined_hosts = {API_HOST}
+
+        good = {
+            "displayName": "good-cross-ref", "combiner": "OR",
+            "documentation": {"content": "See MONITORING-RUNBOOK.md."},
+            "conditions": [{"conditionThreshold": {
+                "filter": 'metric.type="logging.googleapis.com/user/sql_pool_capacity_503"'}}],
+        }
+        bad_metric = {
+            "displayName": "bad-log-metric-ref", "combiner": "OR",
+            "documentation": {"content": "See MONITORING-RUNBOOK.md."},
+            "conditions": [{"conditionThreshold": {
+                "filter": 'metric.type="logging.googleapis.com/user/does_not_exist"'}}],
+        }
+        bad_uptime = {
+            "displayName": "bad-uptime-ref", "combiner": "OR",
+            "documentation": {"content": "See MONITORING-RUNBOOK.md."},
+            "conditions": [{"conditionThreshold": {
+                "filter": 'resource.labels.host="nope.example.com" '
+                          'AND metric.type="monitoring.googleapis.com/uptime_check/check_passed"'}}],
+        }
+
+        self.assertEqual(m.required_shape_errors(good, available, defined_log_metrics, defined_hosts), [])
+        bad_metric_errors = m.required_shape_errors(bad_metric, available, defined_log_metrics, defined_hosts)
+        self.assertIn("metric_not_in_inventory:logging.googleapis.com/user/does_not_exist", bad_metric_errors)
+        bad_uptime_errors = m.required_shape_errors(bad_uptime, available, defined_log_metrics, defined_hosts)
+        self.assertIn("uptime_check_host_not_in_repo:nope.example.com", bad_uptime_errors)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "good.json").write_text(json.dumps(good))
+            (Path(tmp) / "bad_metric.json").write_text(json.dumps(bad_metric))
+            (Path(tmp) / "bad_uptime.json").write_text(json.dumps(bad_uptime))
+            loaded, errors = m.load_local_policies(tmp, PROJECT, None, available,
+                                                     defined_log_metrics, defined_hosts)
+        self.assertEqual([p["displayName"] for p in loaded], ["good-cross-ref"])
+        self.assertEqual({e["file"] for e in errors}, {"bad_metric.json", "bad_uptime.json"})
+
+    # --- test_purge_missed_schedule_duration_matches_committed_evidence ---
+    def test_purge_missed_schedule_duration_matches_committed_evidence(self):
+        evidence_path = REPO_ROOT / "infra/monitoring/evidence/c398-scheduler-chirp-purge-daily-2026-09-10.json"
+        evidence = json.loads(evidence_path.read_text())
+        minute, hour, dom, month, dow = evidence["schedule"].split()
+        # Independently derived: a schedule with '*' in day-of-month, month and
+        # day-of-week and a single fixed hour:minute fires exactly once per day.
+        self.assertEqual((dom, month, dow), ("*", "*", "*"))
+        self.assertNotIn(",", hour)
+        self.assertNotIn("/", hour)
+        cadence_seconds = 24 * 60 * 60
+
+        policy = json.loads((POLICIES_DIR / "chirp-purge-job-failure.json").read_text())
+        absent_conditions = [c["conditionAbsent"] for c in policy["conditions"] if "conditionAbsent" in c]
+        self.assertEqual(len(absent_conditions), 1)
+        self.assertEqual(absent_conditions[0]["duration"], "%ds" % cadence_seconds)
+
+    # --- test_purge_aggregate_metric_and_policy_distinguish_healthy_from_unhealthy_status ---
+    def test_purge_aggregate_metric_and_policy_distinguish_healthy_from_unhealthy_status(self):
+        metric = json.loads((METRICS_DIR / "purge-job-aggregate.json").read_text())
+        self.assertEqual(metric.get("labelExtractors", {}).get("status"), "EXTRACT(jsonPayload.status)")
+
+        policy = json.loads((POLICIES_DIR / "purge-backlog-blocked.json").read_text())
+        filt = policy["conditions"][0]["conditionThreshold"]["filter"]
+        statuses = set(re.findall(r'metric\.labels\.status="([^"]+)"', filt))
+        self.assertEqual(statuses, {"blocked", "incomplete", "timed_out", "failed"})
+        self.assertNotIn("preview", statuses)
+        self.assertNotIn("complete", statuses)
+
     # --- strict REST-shape round-trip: unknown keys fail ---
     def test_strict_rest_shape_rejects_unknown_keys(self):
         good = json.loads((POLICIES_DIR / "redis-memory-pressure.json").read_text()
@@ -267,6 +528,22 @@ class MonitoringApplyTests(unittest.TestCase):
         errors = m.validate_rest_shape(bad)
         self.assertTrue(any("thresholdVal" in e and "unknown_key" in e for e in errors))
 
+    # --- LogMetric/UptimeCheckConfig strict shape also rejects unknown keys ---
+    def test_metric_and_uptime_rest_shape_reject_unknown_keys(self):
+        good_metric = json.loads((METRICS_DIR / "sql-pool-capacity-503.json").read_text())
+        self.assertEqual(m.validate_rest_shape(good_metric, m.LOG_METRIC_SCHEMA), [])
+        bad_metric = json.loads(json.dumps(good_metric))
+        bad_metric["metricDescriptor"]["metricKnd"] = "DELTA"  # typo of metricKind
+        errors = m.validate_rest_shape(bad_metric, m.LOG_METRIC_SCHEMA)
+        self.assertTrue(any("metricKnd" in e and "unknown_key" in e for e in errors))
+
+        good_uptime = json.loads((UPTIME_DIR / "chirp-api-health.json").read_text())
+        self.assertEqual(m.validate_rest_shape(good_uptime, m.UPTIME_CHECK_SCHEMA), [])
+        bad_uptime = json.loads(json.dumps(good_uptime))
+        bad_uptime["httpCheck"]["reqestMethod"] = "GET"  # typo of requestMethod
+        errors2 = m.validate_rest_shape(bad_uptime, m.UPTIME_CHECK_SCHEMA)
+        self.assertTrue(any("reqestMethod" in e and "unknown_key" in e for e in errors2))
+
     # --- the strict validator sits on the real load path, not only in a unit test ---
     def test_run_skips_unknown_key_policy_before_planning(self):
         good = json.loads((POLICIES_DIR / "redis-memory-pressure.json").read_text())
@@ -276,9 +553,10 @@ class MonitoringApplyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "good.json").write_text(json.dumps(good))
             (Path(tmp) / "bad.json").write_text(json.dumps(bad))
-            report = m.run(_args(policies_dir=tmp), get=_no_op_get, post=_refusing, patch=_refusing)
+            report = m.run(_args(policies_dir=tmp), get=_no_op_get, post=_refusing, patch=_refusing, put=_refusing)
         self.assertEqual([entry["displayName"] for entry in report["policies"]], [good["displayName"]])
-        self.assertEqual([entry["file"] for entry in report["skipped_files"]], ["bad.json"])
+        skipped_names = [entry["file"] for entry in report["skipped_files"]]
+        self.assertEqual(skipped_names, ["bad.json"])
         self.assertIn("rest_shape:$.conditions[0].conditionThreshold.thresholdVal: unknown_key",
                       report["skipped_files"][0]["reason"])
         self.assertEqual(report["exit_code"], 1)
@@ -295,6 +573,19 @@ class MonitoringApplyTests(unittest.TestCase):
         policy["documentation"]["content"] = "See MONITORING-RUNBOOK.md."
         self.assertNotIn("documentation_missing_runbook_reference", m.required_shape_errors(policy, available))
 
+    def test_metric_documentation_without_runbook_reference_is_flagged(self):
+        metric = {"name": "x", "filter": "f", "description": "Wake someone up."}
+        self.assertIn("documentation_missing_runbook_reference", m.required_shape_errors_metric(metric))
+        metric["description"] = "See MONITORING-RUNBOOK.md."
+        self.assertNotIn("documentation_missing_runbook_reference", m.required_shape_errors_metric(metric))
+
+    def test_uptime_missing_or_unsubstituted_host_is_flagged(self):
+        config = {"displayName": "x", "monitoredResource": {"type": "uptime_url",
+                                                              "labels": {"host": "{{API_HOST}}"}}}
+        self.assertIn("missing_or_unsubstituted_host", m.required_shape_errors_uptime(config))
+        config["monitoredResource"]["labels"]["host"] = "real.example.com"
+        self.assertNotIn("missing_or_unsubstituted_host", m.required_shape_errors_uptime(config))
+
     # --- test_no_hardcoded_project_number_or_channel_outside_templating_point ---
     def test_no_hardcoded_project_number_or_channel_outside_templating_point(self):
         project_number = "593616178468"
@@ -308,6 +599,13 @@ class MonitoringApplyTests(unittest.TestCase):
             body = json.loads(path.read_text())
             for channel in body.get("notificationChannels", []):
                 self.assertEqual(channel, "{{NOTIFICATION_CHANNEL}}")
+        # Every uptime file's host is exactly the {{API_HOST}}/{{WS_HOST}}
+        # placeholder, never a literal hostname (which would embed the live
+        # project number, the exact leak this scanner exists to catch).
+        for path in sorted(UPTIME_DIR.glob("*.json")):
+            body = json.loads(path.read_text())
+            host = body["monitoredResource"]["labels"]["host"]
+            self.assertIn(host, (m.API_HOST_PLACEHOLDER, m.WS_HOST_PLACEHOLDER))
 
         # The scanner must actually flag a bad fixture, or it is vacuous:
         # call the real _scan_for_hardcoded helper, not just check the fixture
@@ -320,11 +618,57 @@ class MonitoringApplyTests(unittest.TestCase):
                 ["hardcoded_project_number"],
             )
 
-    # --- reader() extends monitoring_check's GET-only closure with POST/PATCH ---
-    def test_reader_post_and_patch_use_bearer_auth_and_correct_verb(self):
+    # --- test_uptime_json_never_contains_the_literal_hostname ---
+    def test_uptime_json_never_contains_the_literal_hostname(self):
+        project_number = "593616178468"
+        real_host = "chirp-api-%s.us-central1.run.app" % project_number
+        bad_uptime_json = json.dumps({
+            "displayName": "leaked", "monitoredResource": {"type": "uptime_url",
+                                                             "labels": {"host": real_host}},
+        })
+        # Vacuous-test guard: the real committed uptime files never trip this
+        # scanner (asserted below); a fixture with the real hostname hardcoded
+        # instead of {{API_HOST}} must trip it, or the scanner protects nothing.
+        self.assertEqual(_scan_for_hardcoded(bad_uptime_json, project_number), ["hardcoded_project_number"])
+        for path in sorted(UPTIME_DIR.glob("*.json")):
+            text = path.read_text(encoding="utf-8")
+            self.assertEqual(_scan_for_hardcoded(text, project_number), [])
+
+    # --- test_new_kinds_registered_in_backend_ci ---
+    def test_new_kinds_registered_in_backend_ci(self):
+        # The existing c370 registration file (backend/tests/test_c370_monitoring_apply_collector.py)
+        # imports THIS module directly by file path and re-exports its
+        # MonitoringApplyTests class; since the c398 methods live in the same
+        # class in the same file, they are already pulled into backend CI
+        # without a second registration file. A second file mirroring the
+        # c370 pattern would just run this same class twice under two names.
+        backend_reg_path = REPO_ROOT / "backend/tests/test_c370_monitoring_apply_collector.py"
+        spec2 = importlib.util.spec_from_file_location("c370_backend_registration_check", backend_reg_path)
+        module2 = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(module2)
+        suite = unittest.TestLoader().loadTestsFromModule(module2)
+
+        test_ids = set()
+
+        def _collect(container):
+            for item in container:
+                if isinstance(item, unittest.TestSuite):
+                    _collect(item)
+                else:
+                    test_ids.add(item.id())
+
+        _collect(suite)
+        for expected in ("test_apply_order_is_metrics_then_uptime_then_policies",
+                          "test_metric_update_uses_put_without_updatemask",
+                          "test_log_metric_identity_is_name_not_display_name"):
+            self.assertTrue(any(expected in test_id for test_id in test_ids),
+                             msg="%s missing from backend CI registration; test_ids=%s" % (expected, test_ids))
+
+    # --- reader() extends monitoring_check's GET-only closure with POST/PATCH/PUT ---
+    def test_reader_post_patch_and_put_use_bearer_auth_and_correct_verb(self):
         import io
         import ssl
-        args = m.parse_arguments(["--project", PROJECT])
+        args = m.parse_arguments(["--project", PROJECT, "--api-host", "api.example.test", "--ws-host", "ws.example.test"])
         captured = []
 
         class Opener:
@@ -345,12 +689,14 @@ class MonitoringApplyTests(unittest.TestCase):
 
         with patch.object(m.subprocess, "run", return_value=type("R", (), {"returncode": 0, "stdout": "tok"})()):
             with patch.object(m.urllib.request, "build_opener", side_effect=build):
-                get, post, patch_fn = m.reader(args)
+                get, post, patch_fn, put_fn = m.reader(args)
                 post("https://monitoring.googleapis.com/v3/projects/x/alertPolicies", {"displayName": "d"})
                 patch_fn("https://monitoring.googleapis.com/v3/projects/x/alertPolicies/1", {"displayName": "d"})
+                put_fn("https://logging.googleapis.com/v2/projects/x/metrics/foo", {"displayName": "d"})
 
         self.assertEqual(captured[0]["method"], "POST")
         self.assertEqual(captured[1]["method"], "PATCH")
+        self.assertEqual(captured[2]["method"], "PUT")
         for call in captured:
             self.assertEqual(call["auth"], "Bearer tok")
             self.assertEqual(call["content_type"], "application/json")

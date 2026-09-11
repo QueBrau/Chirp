@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp rate_limit_fallback occurring",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: Redis pressure and fallback (MONITORING-RUNBOOK.md, Runtime observations). Responder: on-call API responder. Log-based metric rate_limit_fallback (infra/monitoring/metrics/rate-limit-fallback.json) crossing zero occurrences in a 5-minute window; the app.operational emitter already throttles to at most one record per 600 seconds per process. A useful first notification, with the runbook's reviewed 15-minute notification throttle and an explicit incident follow-up; not a request-error-rate calculation. Initial, review after 7 days.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "900s"}
+  },
+  "conditions": [
+    {
+      "displayName": "rate_limit_fallback log occurrences over 0",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/rate_limit_fallback\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "0s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": []
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "displayName": "chirp-api uptime check failing",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: API and WS process availability (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: on-call API responder. An UptimeCheckConfig's check id is server-assigned at creation and unknowable when this file is authored, so this condition scopes by the checked host (resource.labels.host, substituted from --api-host at apply time, the same value infra/monitoring/uptime/chirp-api-health.json's own monitoredResource.labels.host carries) instead of a check id, and groups by metric.labels.check_id so each checker region's series stays distinct going into the fraction-true aggregation. This endpoint proves only process responsiveness; do not infer SQL, Redis or authenticated WS success from it. Initial, review after 7 days.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "900s"}
+  },
+  "conditions": [
+    {
+      "displayName": "chirp-api /_health check failing",
+      "conditionThreshold": {
+        "filter": "resource.type=\"uptime_url\" AND resource.labels.project_id=\"{{PROJECT}}\" AND resource.labels.host=\"{{API_HOST}}\" AND metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 1,
+        "duration": "60s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "60s",
+            "perSeriesAligner": "ALIGN_FRACTION_TRUE",
+            "crossSeriesReducer": "REDUCE_COUNT_FALSE",
+            "groupByFields": ["metric.labels.check_id"]
+          }
+        ]
+      }
+    }
+  ]
+}

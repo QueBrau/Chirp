@@ -4,7 +4,7 @@
   "enabled": true,
   "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
   "documentation": {
-    "content": "Runbook row: Job failure and missed schedule (MONITORING-RUNBOOK.md, Current-service signal plan; coordinated with RECOVERY-RETENTION.md's c369 alerting requirement). Responder: on-call API responder. Notifies on any non-succeeded chirp-purge execution in a 5-minute window. Slice 2 follow-up covers the missed-schedule half (conditionAbsent), out of scope here since no Cloud Scheduler cron/timezone/grace is checked in yet. The 5-minute evaluation window is a judgment call, not a runbook-stated number. Initial, review after 7 days.",
+    "content": "Runbook row: Job failure and missed schedule (MONITORING-RUNBOOK.md, Current-service signal plan; coordinated with RECOVERY-RETENTION.md's c369 alerting requirement). Responder: on-call API responder. Two independent conditions under OR: (1) any non-succeeded chirp-purge execution in a 5-minute window; (2) no completed_execution_count data point for 86400s, matching the committed Cloud Scheduler cadence in infra/monitoring/evidence/c398-scheduler-chirp-purge-daily-2026-09-10.json (schedule '0 9 * * *' UTC, daily, so cadence is exactly 24h). MetricAbsence.duration's live REST reference (docs.cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.alertPolicies#MetricAbsence) states only a 120-second minimum and a must-be-a-multiple-of-60-seconds constraint; no maximum is documented there. With no verified upper bound, this ships exactly the cadence with no additional grace rather than guessing a larger value that might be rejected. The 5-minute evaluation window on condition (1) is a judgment call, not a runbook-stated number. Initial, review after 7 days.",
     "mimeType": "text/markdown"
   },
   "alertStrategy": {
@@ -25,6 +25,22 @@
             "perSeriesAligner": "ALIGN_SUM",
             "crossSeriesReducer": "REDUCE_SUM",
             "groupByFields": ["metric.labels.result"]
+          }
+        ]
+      }
+    },
+    {
+      "displayName": "chirp-purge missed its daily schedule",
+      "conditionAbsent": {
+        "filter": "resource.type=\"cloud_run_job\" AND resource.labels.project_id=\"{{PROJECT}}\" AND resource.labels.job_name=\"chirp-purge\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\"",
+        "duration": "86400s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": []
           }
         ]
       }
