@@ -153,14 +153,18 @@ def test_undecodable_bytes_are_rejected_as_a_400_not_a_crash():
     assert excinfo.value.detail == "invalid_media_content"
 
 
-def test_a_decompression_bomb_is_rejected_as_a_400_and_logged_distinctly(
+def test_an_extreme_bomb_is_caught_by_pillows_own_open_time_check(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A small, highly-compressible file can still decode to an enormous pixel count.
-    This fixture (400 megapixels) is more than 2x Image.MAX_IMAGE_PIXELS, so Pillow's
-    own DecompressionBombError fires natively during image.load() - the redundant
-    safety-net branch in _decode_and_normalize_image, not the explicit 1x-threshold
-    check (see the test below for the gap that check exists to close)."""
+    This fixture (400 megapixels) is more than 2x Pillow's own Image.MAX_IMAGE_PIXELS,
+    which means Pillow's native _decompression_bomb_check raises DecompressionBombError
+    from INSIDE Image.open() itself (verified against the installed source - Image.py's
+    _open_core calls it immediately after header size is known, not deferred to
+    load()) - before this module's own explicit header check (DERIVATIVE_MAX_SOURCE_
+    PIXELS_OTHER) ever runs. That explicit check is still what closes Pillow's 1x-2x
+    warn-only gap for a SMALLER bomb (see the test below) - this one is caught even
+    earlier, by Pillow itself."""
     bomb = Image.new("RGB", (20000, 20000), (10, 10, 10))
     buffer = io.BytesIO()
     bomb.save(buffer, format="PNG", optimize=True)
@@ -178,19 +182,22 @@ def test_a_decompression_bomb_is_rejected_as_a_400_and_logged_distinctly(
     assert "decompression bomb" in "\n".join(r.getMessage() for r in caplog.records)
 
 
-def test_a_bomb_in_pillows_warn_only_1x_to_2x_gap_is_still_rejected():
-    """Pillow's own DecompressionBombError only fires above 2x MAX_IMAGE_PIXELS; between
-    1x and 2x it only emits an unenforced DecompressionBombWarning that nothing escalates
-    to an exception. A 10000x10000 (100-megapixel) solid-color PNG sits squarely in that
-    gap - above 1x (~89.5M px) but under 2x (~179M px) - and would decode and re-encode
-    successfully with NO rejection at all if this code relied on Pillow's default
-    behavior alone. This is the actual regression test for that gap, exercising the
-    explicit pixel-count check in _decode_and_normalize_image, not the test above's
-    Pillow-native >2x raise."""
+def test_a_bomb_in_pillows_old_warn_only_1x_to_2x_gap_is_still_rejected(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Historical regression test: Pillow's own DecompressionBombError only fires above
+    2x MAX_IMAGE_PIXELS, and only WARNS (does not raise) between 1x and 2x - a
+    10000x10000 (100-megapixel) solid-color PNG sits in that gap (above Pillow's 1x
+    ~89.5M px, under its 2x ~179M px) and would decode and re-encode successfully with
+    NO rejection at all if this code relied on Pillow's own default behavior alone
+    (Image.open() would only warn, not raise, unlike the test above). This is the ONE
+    fixture in this file that actually reaches this module's own explicit header check
+    rather than Pillow's native open()-time raise - confirmed by asserting the distinct
+    "before decode" log line that check emits, not just the shared 400 status/detail."""
     size = 10000
     assert Image.MAX_IMAGE_PIXELS < size * size < 2 * Image.MAX_IMAGE_PIXELS, (
-        "fixture must sit inside Pillow's 1x-2x warn-only gap for this test to mean "
-        "anything - otherwise it's indistinguishable from the >2x test above"
+        "fixture must sit inside Pillow's own 1x-2x warn-only gap for this test's "
+        "history to mean anything - otherwise it's indistinguishable from the test above"
     )
     bomb = Image.new("RGB", (size, size), (10, 10, 10))
     buffer = io.BytesIO()
@@ -198,8 +205,59 @@ def test_a_bomb_in_pillows_warn_only_1x_to_2x_gap_is_still_rejected():
     bomb_bytes = buffer.getvalue()
     assert len(bomb_bytes) < storage_service.MAX_UPLOAD_BYTES
 
+    with caplog.at_level(logging.WARNING, logger=storage_service.logger.name):
+        with pytest.raises(HTTPException) as excinfo:
+            storage_service._build_media_derivative(bomb_bytes)
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "invalid_media_content"
+    assert "before decode" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_jpeg_draft_scales_the_decode_before_any_resize():
+    """image.draft() DCT-scales libjpeg's decode itself, before load() runs - proven by
+    checking the decoded size right out of _decode_and_normalize_image (before
+    _build_media_derivative's own separate final thumbnail() resize), which should be
+    meaningfully smaller than the 8000x6000 source, not unchanged.
+
+    8000x6000 (48 megapixels) is deliberately the same size this module's own docstring
+    cites as the target case, and is NOT an arbitrary choice: draft()'s scale is gated
+    by min(width // box_width, height // box_height), so a source has to clear roughly
+    2x the draft box in BOTH dimensions before any DCT step applies at all (verified
+    empirically against the installed Pillow - a smaller fixture like 4000x3000 gets
+    ZERO reduction regardless of box choice, which would make this test pass vacuously
+    without proving draft() did anything). At 8000x6000 the aspect-correct box this
+    module computes (proportional to DERIVATIVE_MAX_DIMENSION*2, not a bare square -
+    see storage_service's draft() call site for why a square box fails here) achieves a
+    real 1/2 DCT step: 4000x3000 decoded, not 8000x6000."""
+    source = _jpeg_bytes((8000, 6000))
+    decoded = storage_service._decode_and_normalize_image(source)
+    assert decoded.size == (4000, 3000), (
+        f"expected a real 1/2 DCT scale step (4000x3000), got {decoded.size} - either "
+        "draft() did not run, or the box passed to it was not aspect-correct"
+    )
+
+
+def test_oversized_image_is_rejected_before_load_is_ever_called(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The header pixel-count check must reject BEFORE image.load() runs, not after
+    paying for a full decode. Proven directly, not inferred: image.load() is patched to
+    raise if called AT ALL, with the caps set low enough that an otherwise perfectly
+    ordinary small fixture image trips the header check - so if load() runs, the test
+    fails on the patch, not on the real assertions below."""
+    source = _jpeg_bytes((40, 30))  # built BEFORE patching load(), so the fixture itself
+    # (Image.new(...).save(...)) is never affected by the patch below.
+
+    monkeypatch.setattr(storage_service, "DERIVATIVE_MAX_SOURCE_PIXELS_JPEG", 10)
+    monkeypatch.setattr(storage_service, "DERIVATIVE_MAX_SOURCE_PIXELS_OTHER", 10)
+
+    def _fail_if_called(self, *args, **kwargs):
+        raise AssertionError("image.load() was called - the header check did not reject first")
+
+    monkeypatch.setattr(Image.Image, "load", _fail_if_called)
+
     with pytest.raises(HTTPException) as excinfo:
-        storage_service._build_media_derivative(bomb_bytes)
+        storage_service._build_media_derivative(source)
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail == "invalid_media_content"
 

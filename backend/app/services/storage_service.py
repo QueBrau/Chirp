@@ -101,22 +101,25 @@ quality 82. Three separate reasons converge on one pipeline rather than three bo
     a byte string that merely CLAIMED to be an image at upload time is a free, incidental
     content-type check this design gets without adding one on purpose.
 
-A decoded-pixel-count check (Image.MAX_IMAGE_PIXELS, Pillow's own default threshold) is
-load-bearing precisely because MAX_UPLOAD_BYTES bounds compressed size, not decoded pixel
-count: a small, highly-compressible file (a solid-color PNG, for instance) can still
-decode to gigapixels well within the 10MB cap. Decoding is now real work this process
-does in-process, so this check is the only thing standing between an accepted upload and
-an OOM on the request path - not a defense against a threat that only mattered once, but
-one MAX_UPLOAD_BYTES alone cannot cover.
+A HEADER pixel-count check (DERIVATIVE_MAX_SOURCE_PIXELS_JPEG / _OTHER, checked before
+any pixel data is decoded) is load-bearing precisely because MAX_UPLOAD_BYTES bounds
+compressed size, not decoded pixel count: a small, highly-compressible file (a
+solid-color PNG, for instance) can still decode to gigapixels well within the 10MB cap.
+Decoding is now real work this process does in-process, so this check - and, for JPEG,
+image.draft() DCT-scaling the decode itself - is what stands between an accepted upload
+and an OOM on the request path, not a defense against a threat that only mattered once.
 
-THIS IS AN EXPLICIT CHECK IN OUR OWN CODE, not a bare reliance on Pillow raising by
-itself - Pillow's built-in guard only raises DecompressionBombError above 2x
-MAX_IMAGE_PIXELS; between 1x and 2x it only emits a DecompressionBombWarning, which
-nothing escalates to an exception by default, so a 100-megapixel image (comfortably
-inside that 1x-2x gap) would decode and re-encode successfully with no rejection at all
-if this code relied on Pillow's default behavior alone. _decode_and_normalize_image
-below checks the decoded pixel count itself, at the 1x threshold, right after decode -
-this is verified against Pillow's actual installed source (Image.py's
+THIS REJECTS BEFORE image.load() RUNS, not after decoding the full image just to throw
+it away. An earlier version of this check ran AFTER image.load() (comparing the decoded
+size against Pillow's own Image.MAX_IMAGE_PIXELS) - which meant the process paid the
+exact memory cost of decoding the oversized image before rejecting it, on a service
+(chirp-api) running at 512Mi with concurrency=80, where one such decode can OOM the
+instance and kill every other in-flight request on it. Checking image.size from the
+lazy Image.open() header, before load(), closes that: a pathological image is rejected
+before it is ever fully decoded. Pillow's own DecompressionBombError (which only raises
+above 2x MAX_IMAGE_PIXELS, and only WARNS - does not raise - between 1x and 2x) is kept
+as a redundant safety net on the load() call in _decode_and_normalize_image, not the
+real enforcement; this is verified against Pillow's actual installed source (Image.py's
 _decompression_bomb_check), not assumed from the constant's name.
 
 Everything the module docstring's earlier sections say about tmp/-then-move, the
@@ -340,11 +343,36 @@ def generate_upload_url(user_id: str, content_type: str, byte_size: int) -> Sign
 
 
 # Board c374. See the module docstring's "DERIVATIVES, NOT COPIES" section for why
-# these three numbers are what they are - this is just where they live.
+# these numbers are what they are - this is just where they live.
 DERIVATIVE_MAX_DIMENSION = 1600
 DERIVATIVE_JPEG_QUALITY = 82
 DERIVATIVE_CONTENT_TYPE = "image/jpeg"
 DERIVATIVE_EXTENSION = "jpg"
+
+# chirp-api runs at 512Mi with concurrency=80 (infra/deployment.json) - many requests can
+# be decoding an image on the same instance at once, so per-decode memory is not a
+# theoretical concern. These two caps are checked against the image HEADER, before any
+# pixel data is decoded (see _decode_and_normalize_image), and are deliberately format-
+# specific rather than one shared Image.MAX_IMAGE_PIXELS-style number:
+#
+# JPEG gets the higher cap because image.draft() lets libjpeg DCT-scale the decode
+# itself for images large enough to clear a discrete scale step. HONEST LIMIT, verified
+# empirically against the installed Pillow, not assumed: draft() only has whole-number
+# steps (1, 1/2, 1/4, 1/8), gated by the SHORTER source dimension relative to the
+# requested box - a source that is not at least ~2x the target box in BOTH dimensions
+# gets no reduction at all. A standard 4:3 photo needs roughly an 8-megapixel-plus long
+# edge before any step applies; below that, this cap (not draft) is the real worst-case
+# memory bound - up to ~150MB for a full-resolution RGB decode at 50 megapixels, before
+# the alpha-composite/exif_transpose working copies on top of that. Still strictly
+# better than PNG/WebP's fully-undraftable 20-megapixel cap below, and the common case
+# (an actual phone photo well above 8MP) does get real draft-time savings.
+DERIVATIVE_MAX_SOURCE_PIXELS_JPEG = 50_000_000
+
+# PNG/WebP have no equivalent draft mechanism in Pillow - the full claimed pixel count
+# decodes at full resolution with no way to pre-scale, so this cap has to bound memory
+# directly: 20 megapixels is roughly 80MB as decoded RGBA, before the alpha-composite
+# copy _decode_and_normalize_image makes on top of that.
+DERIVATIVE_MAX_SOURCE_PIXELS_OTHER = 20_000_000
 
 
 def _decode_and_normalize_image(raw_bytes: bytes):
@@ -364,11 +392,34 @@ def _decode_and_normalize_image(raw_bytes: bytes):
         failure surfaces in this function's own try block instead of downstream.
       - A decompression bomb: a decoded pixel count enormously out of proportion to what
         MAX_UPLOAD_BYTES allows as compressed bytes - a small, highly-compressible file
-        can still decode to gigapixels. Checked EXPLICITLY against Image.MAX_IMAGE_PIXELS
-        below, at the 1x threshold, rather than left to Pillow's own DecompressionBombError
-        (which only fires above 2x that threshold and would silently let a 1x-2x bomb
-        through as a mere warning). Logged distinctly from an ordinary bad upload because
-        an actual bomb attempt is worth being able to grep for on its own.
+        can still decode to gigapixels. Checked against the image's HEADER size (from the
+        lazy Image.open(), before any pixel data is decoded) against
+        DERIVATIVE_MAX_SOURCE_PIXELS_JPEG/_OTHER, and REJECTED BEFORE image.load() runs -
+        catching this only after a full decode, the way an earlier version of this
+        function did, means paying the exact memory cost being rejected for before
+        rejecting it. Pillow's own DecompressionBombError (which only fires above 2x
+        Image.MAX_IMAGE_PIXELS, and only WARNS - does not raise - between 1x and 2x) is
+        kept as a redundant safety net on the load() call below, not the real
+        enforcement.
+
+    JPEG SPECIFICALLY GETS image.draft() BEFORE load(), which is what actually bounds
+    JPEG decode memory for large-enough sources (the header-size check above only
+    rejects a pathologically large CLAIMED size). draft() tells libjpeg to DCT-scale the
+    decode itself instead of decoding full-resolution and downscaling after - an
+    8000x6000 (48-megapixel) phone JPEG decodes at 4000x3000, not 48 megapixels. THE
+    REQUESTED BOX MUST BE ASPECT-RATIO-CORRECT, not a bare square: verified empirically
+    against the installed Pillow, JpegImageFile.draft()'s achievable scale is
+    min(width // box_width, height // box_height), so a plain
+    (2*DERIVATIVE_MAX_DIMENSION, 2*DERIVATIVE_MAX_DIMENSION) box is gated by whichever
+    source dimension is shorter relative to that square and achieves NO reduction at all
+    for a standard 4:3 photo, even at 48 megapixels - see the draft() call site in
+    _decode_and_normalize_image for the aspect-correct box this module actually uses.
+    HONEST LIMIT: a source that is not at least ~2x the draft box in BOTH dimensions
+    gets no reduction regardless of box shape - below that, DERIVATIVE_MAX_SOURCE_PIXELS_
+    JPEG (not draft) is the real worst-case memory bound. PNG/WebP have no draft
+    equivalent in Pillow at all, which is why DERIVATIVE_MAX_SOURCE_PIXELS_OTHER is a
+    much tighter cap: for those formats the header check is the ONLY memory bound, since
+    the full claimed pixel count decodes at full resolution with no way to pre-scale it.
 
     exif_transpose() BAKES ORIENTATION INTO THE PIXELS and returns an image with the
     Orientation tag removed - this is what makes a rotated phone photo display right-side
@@ -388,29 +439,68 @@ def _decode_and_normalize_image(raw_bytes: bytes):
 
     try:
         image = Image.open(io.BytesIO(raw_bytes))
-        image.load()
     except Image.DecompressionBombError as exc:
-        # Pillow's own 2x-threshold raise. Kept as a redundant safety net; the real
-        # enforcement is the explicit 1x-threshold check just below, since Pillow itself
-        # only WARNS (does not raise) between 1x and 2x MAX_IMAGE_PIXELS.
+        # Verified against the installed source (Image.py's _open_core): Pillow calls
+        # _decompression_bomb_check(im.size) INSIDE Image.open() itself, immediately
+        # after a format plugin determines size from the header - not deferred to
+        # load(). This only catches sizes past Pillow's own 2x-threshold raise; the
+        # explicit header check below (DERIVATIVE_MAX_SOURCE_PIXELS_*) is what actually
+        # enforces this module's own, tighter bound and closes Pillow's 1x-2x warn-only
+        # gap - this except exists so an extreme size doesn't surface as an uncaught 500
+        # before this function even reaches its own check.
         logger.warning("media finalize rejected a decompression bomb, size=%s", len(raw_bytes))
         raise HTTPException(status_code=400, detail="invalid_media_content") from exc
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="invalid_media_content") from exc
 
-    pixel_count = image.size[0] * image.size[1]
-    if pixel_count > Image.MAX_IMAGE_PIXELS:
-        # Explicit check, not a reliance on Pillow raising by itself: Pillow's own
-        # DecompressionBombError only fires above 2x MAX_IMAGE_PIXELS, and only emits an
-        # unenforced DecompressionBombWarning between 1x and 2x - a 100-megapixel image
-        # (well inside that gap) would otherwise decode and re-encode successfully with
-        # no rejection at all. This enforces at the 1x threshold ourselves.
+    # image.size here comes from the HEADER only - Image.open() is lazy about pixel
+    # data (nothing has been decoded yet, only the header). Reject an oversized source
+    # BEFORE ever calling .load(), so a pathological image is never fully decoded into
+    # memory just to be thrown away immediately after.
+    is_jpeg = image.format == "JPEG"
+    max_source_pixels = (
+        DERIVATIVE_MAX_SOURCE_PIXELS_JPEG if is_jpeg else DERIVATIVE_MAX_SOURCE_PIXELS_OTHER
+    )
+    header_pixel_count = image.size[0] * image.size[1]
+    if header_pixel_count > max_source_pixels:
         logger.warning(
-            "media finalize rejected an oversized image, pixels=%s limit=%s",
-            pixel_count,
-            Image.MAX_IMAGE_PIXELS,
+            "media finalize rejected an oversized image before decode, pixels=%s limit=%s format=%s",
+            header_pixel_count,
+            max_source_pixels,
+            image.format,
         )
         raise HTTPException(status_code=400, detail="invalid_media_content")
+
+    if is_jpeg:
+        # DCT-scale the decode itself, before load(). THE REQUESTED BOX MUST BE
+        # ASPECT-RATIO-CORRECT, NOT A BARE SQUARE - verified empirically, not assumed:
+        # JpegImageFile.draft()'s scale is min(width // box_width, height // box_height),
+        # so a square box is gated by whichever source dimension is SHORTER relative to
+        # the box. For a standard 4:3 photo, a plain (3200, 3200) box (2x
+        # DERIVATIVE_MAX_DIMENSION, matching this module's own long-edge cap) achieves
+        # ZERO reduction even at 8000x6000 (48 megapixels - deliberately the same size
+        # this module's docstring cites as the target case): min(8000//3200, 6000//3200)
+        # = min(2, 1) = 1. The box below scales proportionally to the source's own
+        # aspect ratio instead, which brings that same 8000x6000 source down to 4000x3000
+        # (a real 4x pixel-count reduction) - confirmed against the installed Pillow
+        # source (JpegImagePlugin.draft), not assumed from the method's docstring.
+        width, height = image.size
+        if width >= height:
+            box = (2 * DERIVATIVE_MAX_DIMENSION, round(2 * DERIVATIVE_MAX_DIMENSION * height / width))
+        else:
+            box = (round(2 * DERIVATIVE_MAX_DIMENSION * width / height), 2 * DERIVATIVE_MAX_DIMENSION)
+        image.draft("RGB", box)
+
+    try:
+        image.load()
+    except Image.DecompressionBombError as exc:
+        # Redundant safety net: the header check above already rejects anything past
+        # this module's own (tighter) caps, so Pillow's own 2x-Image.MAX_IMAGE_PIXELS
+        # raise should not be reachable in practice. Kept anyway as defense in depth.
+        logger.warning("media finalize rejected a decompression bomb, size=%s", len(raw_bytes))
+        raise HTTPException(status_code=400, detail="invalid_media_content") from exc
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid_media_content") from exc
 
     image = ImageOps.exif_transpose(image)
     if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
