@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.parse
 from unittest.mock import patch
 
 PATH = Path(__file__).resolve().parents[1] / "monitoring_apply.py"
@@ -24,6 +25,16 @@ def _inventory_available_metrics():
 
 def _refusing(*_a, **_k):
     raise AssertionError("write call made when none should have been")
+
+
+def _scan_for_hardcoded(text: str, project_number: str) -> list[str]:
+    """Real scanner, called on both the real files and the bad fixture below
+    (the way m.required_shape_errors is called on both), so the vacuous-test
+    guard exercises the same function the real-file assertion relies on."""
+    problems = []
+    if project_number in text:
+        problems.append("hardcoded_project_number")
+    return problems
 
 
 def _no_op_get(url, params):
@@ -141,6 +152,56 @@ class MonitoringApplyTests(unittest.TestCase):
         self.assertEqual(fake.post_calls, 0)
         self.assertEqual(fake.patch_calls, 0)
 
+    # --- test_update_patches_by_resource_name_with_updatemask_limited_to_owned_fields ---
+    def test_update_patches_by_resource_name_with_updatemask_limited_to_owned_fields(self):
+        fake = FakeAlertPolicyAPI()
+        channel = "projects/%s/notificationChannels/1" % PROJECT
+        args = _args(apply=True, channel=channel)
+        first = m.run(args, fake.get, fake.post, fake.patch)
+        self.assertGreater(fake.post_calls, 0)
+
+        # Force a genuine content diff: copy every real policy file into a
+        # temp dir, verbatim, except one field of one file is bumped. Reading
+        # the raw text with json.loads works even with the {{PROJECT}}/
+        # {{NOTIFICATION_CHANNEL}} placeholders still in place, since they are
+        # just string content inside valid JSON.
+        target = None
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            for path in sorted(POLICIES_DIR.glob("*.json")):
+                raw = path.read_text(encoding="utf-8")
+                if target is None:
+                    body = json.loads(raw)
+                    body["alertStrategy"]["notificationRateLimit"]["period"] = "1234s"
+                    target = body["displayName"]
+                    raw = json.dumps(body)
+                (tmp_dir / path.name).write_text(raw, encoding="utf-8")
+
+            existing_name = fake.store[target]["name"]
+            fake.post_calls = fake.patch_calls = 0
+            captured_urls = []
+            real_patch = fake.patch
+
+            def spying_patch(url, body):
+                captured_urls.append(url)
+                return real_patch(url, body)
+
+            args2 = _args(apply=True, channel=channel, policies_dir=str(tmp_dir))
+            second = m.run(args2, fake.get, fake.post, spying_patch)
+
+        by_name = {p["displayName"]: p for p in second["policies"]}
+        self.assertEqual(by_name[target]["action"], "update")
+        self.assertEqual(fake.post_calls, 0)
+        self.assertEqual(fake.patch_calls, 1)
+        self.assertEqual(len(captured_urls), 1)
+
+        resource_url, _, query = captured_urls[0].partition("?")
+        self.assertEqual(resource_url, "https://monitoring.googleapis.com/v3/" + existing_name)
+        mask = urllib.parse.parse_qs(query)["updateMask"][0].split(",")
+        self.assertEqual(set(mask), set(m.UPDATE_MASK_FIELDS))
+        for owned_field in m.SERVER_ASSIGNED_FIELDS:
+            self.assertNotIn(owned_field, mask)
+
     # --- test_every_policy_json_validates_required_shape_and_inventory_membership ---
     def test_every_policy_json_validates_required_shape_and_inventory_membership(self):
         available = _inventory_available_metrics()
@@ -182,7 +243,7 @@ class MonitoringApplyTests(unittest.TestCase):
         for path in sorted(Path(REPO_ROOT / "infra/monitoring").rglob("*.json")):
             text = path.read_text(encoding="utf-8")
             with self.subTest(file=str(path)):
-                self.assertNotIn(project_number, text)
+                self.assertEqual(_scan_for_hardcoded(text, project_number), [])
         # Every notificationChannels value in a policy file is exactly the
         # placeholder token, never a literal channel id.
         for path in sorted(POLICIES_DIR.glob("*.json")):
@@ -190,11 +251,16 @@ class MonitoringApplyTests(unittest.TestCase):
             for channel in body.get("notificationChannels", []):
                 self.assertEqual(channel, "{{NOTIFICATION_CHANNEL}}")
 
-        # The scanner must actually flag a bad fixture, or it is vacuous.
+        # The scanner must actually flag a bad fixture, or it is vacuous:
+        # call the real _scan_for_hardcoded helper, not just check the fixture
+        # contains what it wrote.
         with tempfile.TemporaryDirectory() as tmp:
             bad_path = Path(tmp) / "bad.json"
             bad_path.write_text(json.dumps({"note": "belongs to project " + project_number}))
-            self.assertIn(project_number, bad_path.read_text())
+            self.assertEqual(
+                _scan_for_hardcoded(bad_path.read_text(), project_number),
+                ["hardcoded_project_number"],
+            )
 
     # --- reader() extends monitoring_check's GET-only closure with POST/PATCH ---
     def test_reader_post_and_patch_use_bearer_auth_and_correct_verb(self):

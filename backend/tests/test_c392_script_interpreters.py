@@ -36,6 +36,7 @@ WRAPPERS = [
     ("deploy-verify", "deploy_verify.py"),
     ("deployment-config", "deployment_config.py"),
     ("monitoring-check", "monitoring_check.py"),
+    ("monitoring-apply", "monitoring_apply.py"),
     ("network-audit", "network_audit.py"),
     ("spend-report", "spend_report.py"),
     ("recovery-check", "recovery_check.py"),

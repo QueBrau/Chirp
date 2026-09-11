@@ -59,6 +59,16 @@ ALERT_POLICY_SCHEMA: dict = {
                 "crossSeriesReducer": str,
                 "groupByFields": [str],
             }],
+            # Native REST v3 ratio support (numerator filter/aggregations
+            # above, denominator here): no query-language condition type is
+            # needed for a ratio rule.
+            "denominatorFilter": str,
+            "denominatorAggregations": [{
+                "alignmentPeriod": str,
+                "perSeriesAligner": str,
+                "crossSeriesReducer": str,
+                "groupByFields": [str],
+            }],
         },
         "conditionAbsent": {
             "filter": str,

@@ -236,7 +236,8 @@ permissions, parallel to the read permissions listed above, are
 
 Field names (`conditionThreshold`, `comparison`, `thresholdValue`, `duration`,
 `trigger`, `aggregations` with `alignmentPeriod`/`perSeriesAligner`/
-`crossSeriesReducer`/`groupByFields`, `combiner`, `alertStrategy`) were checked
+`crossSeriesReducer`/`groupByFields`, `denominatorFilter`,
+`denominatorAggregations`, `combiner`, `alertStrategy`) were checked
 against the [AlertPolicy REST v3 reference](https://docs.cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.alertPolicies)
 and the [Aggregation reference](https://docs.cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.alertPolicies#Aggregation)
 at build time; `scripts/tests/test_monitoring_apply.py` round-trips every
@@ -251,17 +252,17 @@ SQL-up duration, the disk-warning/critical durations, the connections
 ceiling's absolute number, the Redis eviction window, and the job-failure
 evaluation window) are judgment calls, marked in each policy's own
 `documentation.content` as initial and due for review after 7 days once real
-traffic exists. The API request-failure-rate policy is a simplified absolute
-5xx-count proxy for the runbook's percentage-ratio rule above, documented the
-same way, because a true ratio needs a query-language condition outside the
-REST field-name allowlist this slice uses.
+traffic exists. The API request-failure-rate policy alerts directly on the
+runbook's 5xx-count/total-count ratio using `MetricThreshold`'s native
+`denominatorFilter`/`denominatorAggregations` fields (no query-language
+condition type is needed for a ratio rule); the runbook's proposed total
+>= 20 requests floor is not separately enforced by this condition and is
+documented as a known limitation in the policy's own `documentation.content`.
 
-`scripts/monitoring-apply` follows `scripts/deploy-verify`'s inline
-interpreter-resolution shape (`CHIRP_PYTHON`, then `backend/.venv/bin/python`,
-then `python3`, with the pre-flight CA-store check), duplicated rather than
-shared, because `scripts/lib/pick-python.sh` (c392) is only carded on the
-board and not merged as of this writing. Once it lands, both wrappers should
-be rebased onto the shared helper instead of keeping their own copies.
+`scripts/monitoring-apply` sources the shared `scripts/lib/pick-python.sh`
+helper (c392, merged) via `chirp_pick_python`, the same as
+`scripts/monitoring-check` and every other wrapper listed in
+`backend/tests/test_c392_script_interpreters.py`'s `WRAPPERS`.
 
 **Out of scope for this slice, deliberately** (tracked as the c370 follow-up):
 uptime checks for the two `/_health` endpoints and the alert policies that
@@ -269,12 +270,13 @@ reference their check id; the three log-based metrics for
 `sql_pool_capacity_503`, `rate_limit_fallback` and the purge job's stdout
 aggregate; the alert policies built on those log-based metrics; and the
 missed-schedule half of the job-failure signal (`conditionAbsent` against a
-Cloud Scheduler cadence). On that last point: as of 2026-09-08, `chirp-purge`
-does have a live Cloud Scheduler job in production -
-`chirp-purge-daily`, cron `0 9 * * *` (UTC), state `ENABLED` - observed via
-`gcloud scheduler jobs list`, but that schedule is not checked into this
-repository. It is recorded here as the input the follow-up's missed-schedule
-window will need; this slice does not build that condition from it.
+Cloud Scheduler cadence). On that last point: no Cloud Scheduler cron,
+timezone or grace period for `chirp-purge` or `chirp-media-reconcile` is
+checked into this repository (repo-wide grep for `schedule`/`cron`/
+`Scheduler` in `infra/*.json` and beyond finds nothing outside this
+runbook's own prose and `board.html`), so a `conditionAbsent` window cannot
+be built without fabricating a cadence. The follow-up slice needs a
+checked-in schedule for both jobs before this half can be built.
 `rate_limit_redis_success_after_fallback` intentionally gets nothing in
 either slice - the signal-plan table above already states it "must not
 automatically resolve a fleet incident", so it is not alert-worthy.
