@@ -12,10 +12,11 @@
  * the defect was dark-only). surfaceAlt + ink is ~15:1 in both modes by
  * construction. Reach for it when a filled button should not be an accent moment;
  * the sign-in screen's Apple/Google row is the first user. `secondary` itself is
- * now fixed everywhere it appears (board c386): its label runs through
- * `secondaryLabelColor()` (theme/colorUtils.ts), which lifts a too-dark accent
- * just enough to clear 4.5:1 against its own translucent fill in dark mode, and
- * returns the accent unchanged in light mode by construction.
+ * now fixed everywhere it appears (board c386 dark mode, c397 light mode): its
+ * label runs through `secondaryLabelColor()` (theme/colorUtils.ts), which lifts a
+ * too-dark accent in dark mode, or darkens a too-light accent in light mode, just
+ * enough to clear 4.5:1 against its own translucent fill, and returns the accent
+ * unchanged when it already clears that threshold.
  *
  * `brand` (c385) is the gold-moment CTA — §10.4 rule 4, one per screen. It is a
  * NAMED VARIANT rather than a `labelColor` prop on purpose: an arbitrary-colour
