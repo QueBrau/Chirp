@@ -225,7 +225,7 @@
 </footer>
 
 <script id="board-data" type="application/json">{
-  "updated": 1789157308932,
+  "updated": 1789157438838,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -417,11 +417,11 @@
   "cards": [
     {
       "id": "c399",
-      "col": "backlog",
+      "col": "progress",
       "owner": "J",
       "tag": "env",
       "area": "process",
-      "title": "c399 [FOUND Sep 11 by the c345 builder, confirmed by its verifier and the manager via psql] Jose's local Postgres 14 is SQL_ASCII on template1, postgres, chirp and chirp_test, so every per-run scratch test DB inherits it and any test writing non-ASCII text into a JSONB column via asyncpg fails locally with 'conversion between UTF8 and SQL_ASCII is not supported' (today: the two Unicode cases of tests/test_c345_poll_delivery.py). CI's postgres:16 is UTF8 and passes, as does Q's Docker Postgres. Jose-only local fix: recreate template1 and chirp_test as UTF8 (createdb -E UTF8 -T template0), then rerun those two cases. Until then a red local run of those two cases is expected and CI is the gate",
+      "title": "c399 [CLAIMED Sep 11 16:15, chirps-36, branch jose/c399-w36; deliverable agreed with chirps-17: scripts/local-db-encoding (pick-python wrapper) + scripts/local_db_encoding.py that reads pg_database for chirp, chirp_test and template1, plans a dump -> create UTF8 (template0) -> restore -> rename swap that keeps the old DB as a renamed backup, dry-run by default, --apply refuses any host but localhost/127.0.0.1 on a dev port and any non-dev database name; unit tests on constructed pg_database rows and URLs plus an integration test against a throwaway SQL_ASCII database on the local server; HANDOFF.md works-in-CI-fails-locally note. --apply on Jose's real chirp/chirp_test/template1 stays Jose's step. Builder running. FOUND Sep 11 by the c345 builder, confirmed by its verifier and the manager via psql] Jose's local Postgres 14 is SQL_ASCII on template1, postgres, chirp and chirp_test, so every per-run scratch test DB inherits it and any test writing non-ASCII text into a JSONB column via asyncpg fails locally with 'conversion between UTF8 and SQL_ASCII is not supported' (today: the two Unicode cases of tests/test_c345_poll_delivery.py). CI's postgres:16 is UTF8 and passes, as does Q's Docker Postgres. Jose-only local fix: recreate template1 and chirp_test as UTF8 (createdb -E UTF8 -T template0), then rerun those two cases. Until then a red local run of those two cases is expected and CI is the gate",
       "detail": "Evidence: psql -Atc \"select datname, pg_encoding_to_char(encoding) from pg_database\" on localhost shows SQL_ASCII for chirp, chirp_test, postgres and template1 (Sep 11 09:30). tests/conftest.py creates each run's scratch DB with CREATE DATABASE, which inherits template1's encoding. Text columns tolerated the mismatch for months; the JSONB payload write on delivery_outbox (c356, now reached by polls via c345) is what surfaces it. Not an application defect; do not edit the tests."
     },
     {
