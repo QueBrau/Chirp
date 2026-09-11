@@ -212,6 +212,75 @@ gateOrder(
   '"Secretary/president only" must never be shown to an actual secretary',
 );
 
+console.log("\n-- secretary.tsx: the meetings unreachable-button lie (c396) --");
+
+// The bug: "Load earlier meetings" is nested inside the non-empty render branch, so a
+// delete that empties `items` removes the button along with everything else in that
+// branch even when older meetings genuinely still exist (hasOlderMeetings === true).
+// The fix mirrors moderation.tsx/c353: a derived refill flag, checked BEFORE the
+// accessLost early return (React's rules of hooks), that auto-fires loadOlderMeetings.
+// Anchor on the derived flag's OWN statement rather than the untouched render ternary
+// at "items.length === 0 ?" further down - the render predicate is deliberately left
+// alone (contract point 2), so the discriminating new syntax is the refill construct.
+{
+  const src = sources[SECRETARY];
+  const stateIdx = src.indexOf("const [hasOlderMeetings, setHasOlderMeetings] = useState(false);");
+  const earlyReturnIdx = src.indexOf("if (accessLost && queryRef.current.owner === renderOwner) return (");
+  const firstPredicateIdx = stateIdx === -1 ? -1 : src.indexOf("items.length === 0", stateIdx);
+
+  let refillIdentifier = null;
+  if (stateIdx === -1 || earlyReturnIdx === -1 || firstPredicateIdx === -1 || firstPredicateIdx > earlyReturnIdx) {
+    fail(
+      "secretary.tsx: could not locate hasOlderMeetings state, an items.length === 0 check before the accessLost gate, or the gate itself",
+      "an anchor this pair of checks depends on is gone",
+    );
+  } else {
+    const stmtStart = src.lastIndexOf(";", firstPredicateIdx) + 1;
+    const stmtEnd = src.indexOf(";", firstPredicateIdx);
+    const statement = src.slice(stmtStart, stmtEnd + 1);
+    const nameMatch = statement.match(/const\s+(\w+)\s*=/);
+    if (statement.includes("hasOlderMeetings")) {
+      pass("secretary.tsx: the first items-empty check reached (before the accessLost gate) also consults hasOlderMeetings");
+      refillIdentifier = nameMatch?.[1] ?? null;
+    } else {
+      fail(
+        "secretary.tsx: the items-empty check nearest the top of the component must also consult hasOlderMeetings",
+        `statement: ${statement.trim()}`,
+      );
+    }
+  }
+
+  if (refillIdentifier !== null) {
+    const afterStatement = src.indexOf(";", firstPredicateIdx) + 1;
+    const effectIdx = src.indexOf("useEffect(", afterStatement);
+    let body = "";
+    if (effectIdx !== -1 && effectIdx < earlyReturnIdx) {
+      const open = effectIdx + "useEffect(".length - 1;
+      let depth = 0;
+      for (let i = open; i < src.length; i++) {
+        if (src[i] === "(") depth++;
+        else if (src[i] === ")") {
+          depth--;
+          if (depth === 0) {
+            body = src.slice(open, i + 1);
+            break;
+          }
+        }
+      }
+    }
+    if (effectIdx !== -1 && effectIdx < earlyReturnIdx && body.includes("loadOlderMeetings") && body.includes(refillIdentifier)) {
+      pass(`secretary.tsx: a useEffect before the accessLost gate calls loadOlderMeetings, gated on ${refillIdentifier}`);
+    } else {
+      fail(
+        "secretary.tsx: no useEffect between the hasOlderMeetings-derived flag and the accessLost gate calls loadOlderMeetings gated on that flag",
+        "the meetings refill effect is missing, misplaced after the early return, or not wired to the derived flag",
+      );
+    }
+  } else {
+    fail("secretary.tsx: could not name the refill flag to check the effect against", "the preceding statement check must pass first");
+  }
+}
+
 console.log("\n-- member/[id].tsx: the they-left lie (c316) --");
 
 // Ternary arms rather than early returns, but the trap is identical: `member` is null in

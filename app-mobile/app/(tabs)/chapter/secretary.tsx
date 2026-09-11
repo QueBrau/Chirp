@@ -11,7 +11,7 @@
  * sees an EmptyState instead of a wall of 403s.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "expo-router";
 import { Pressable, TextInput, View } from "react-native";
 
@@ -519,6 +519,16 @@ export default function SecretaryScreen() {
     if (query !== queryRef.current || !query.focused || query.owner !== renderOwner || !ownsIdentity(renderOwner)) return;
     setRetryKey(key => key + 1);
   };
+
+  // Refill automatically when a delete empties the visible page while older
+  // meetings still exist, so the "Load earlier meetings" control (nested in
+  // the non-empty branch below) never goes unreachable behind an empty state
+  // (c396, mirrors the moderation.tsx c353 refill pattern). loadOlderMeetings's
+  // own beginOlderPage pending-guard collapses this with a concurrent manual tap.
+  const needsMeetingRefill = items !== null && items.length === 0 && hasOlderMeetings && !loadingOlderMeetings;
+  useEffect(() => {
+    if (needsMeetingRefill) void loadOlderMeetings();
+  }, [needsMeetingRefill]);
 
   if (accessLost && queryRef.current.owner === renderOwner) return (
     <Screen title="Secretary" subtitle="Minutes, polls, and attendance">
