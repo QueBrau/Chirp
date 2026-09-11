@@ -668,7 +668,7 @@ class MonitoringApplyTests(unittest.TestCase):
     def test_reader_post_patch_and_put_use_bearer_auth_and_correct_verb(self):
         import io
         import ssl
-        args = m.parse_arguments(["--project", PROJECT])
+        args = m.parse_arguments(["--project", PROJECT, "--api-host", "api.example.test", "--ws-host", "ws.example.test"])
         captured = []
 
         class Opener:
