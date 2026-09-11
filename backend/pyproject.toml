@@ -27,6 +27,12 @@ dependencies = [
     # runtime the way auth_mode switches firebase-admin on/off, so it always needs to
     # be importable once app.routers.media exists.
     "google-cloud-storage",
+    # Bounded image derivatives at finalize time (c374): storage_service decodes every
+    # uploaded photo, strips EXIF, downsizes, and re-encodes to JPEG before it ever
+    # reaches posts/ or avatars/ - a copy_blob no longer runs at all. >=10 is required
+    # for Image.Resampling (the pre-9.1 top-level Image.LANCZOS constant was removed in
+    # 10.0), which is what this module's derivative resize uses.
+    "Pillow>=10",
 ]
 
 [project.optional-dependencies]

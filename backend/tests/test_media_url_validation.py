@@ -23,11 +23,13 @@ exact-prefix-against-MY-tmp-namespace check failing.
 
 from __future__ import annotations
 
+import io
 import logging
 from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
+from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.routers import feed
@@ -41,14 +43,43 @@ def _configure_bucket(monkeypatch) -> None:
     monkeypatch.setattr(storage_service.get_settings(), "media_bucket_name", TEST_BUCKET)
 
 
+def _real_image_bytes(fmt: str = "JPEG", size: tuple[int, int] = (40, 30)) -> bytes:
+    """A REAL, Pillow-decodable image - board c374 has finalize_media_object() decode
+    every tmp/ upload, so a fake tmp blob must hand back bytes Pillow can actually open,
+    not an opaque placeholder. This file's own tests are about the move's plumbing
+    (paths, status codes, what got deleted), not the derivative's pixels - those are
+    covered on their own in test_c374_bounded_image_derivatives.py - so a small solid
+    image is enough here."""
+    buffer = io.BytesIO()
+    Image.new("RGB", size, (120, 60, 200)).save(buffer, format=fmt)
+    return buffer.getvalue()
+
+
 class _FakeBlob:
-    def __init__(self, name: str, captured: dict) -> None:
+    def __init__(self, name: str, captured: dict, content: bytes | None = None) -> None:
         self.name = name
         self._captured = captured
+        self._content = content
 
     def generate_signed_url(self, **kwargs):
         self._captured["signed_url_kwargs"] = kwargs
         return "https://storage.googleapis.com/fake-bucket/signed?sig=abc"
+
+    def download_as_bytes(self) -> bytes:
+        if self._captured.get("download_should_404"):
+            from google.api_core.exceptions import NotFound
+
+            raise NotFound("simulated missing tmp object")
+        return self._content if self._content is not None else _real_image_bytes()
+
+    def upload_from_string(self, data: bytes, **kwargs) -> None:
+        if self._captured.get("upload_should_fail"):
+            from google.api_core.exceptions import Forbidden
+
+            raise Forbidden("simulated destination create-permission requirement")
+        self._captured.setdefault("upload_calls", []).append(
+            {"new_name": self.name, "data": data, "kwargs": kwargs}
+        )
 
     def delete(self) -> None:
         self._captured.setdefault("deleted", []).append(self.name)
@@ -63,25 +94,11 @@ class _FakeBucket:
     def blob(self, name: str) -> _FakeBlob:
         return _FakeBlob(name, self._captured)
 
-    def copy_blob(self, blob: _FakeBlob, destination_bucket, new_name: str, **kwargs):
-        if self._captured.get("copy_should_404"):
-            from google.api_core.exceptions import NotFound
-
-            raise NotFound("simulated missing tmp object")
-        if self._captured.get("copy_should_403"):
-            from google.api_core.exceptions import Forbidden
-
-            raise Forbidden("simulated destination delete-permission requirement")
-        self._captured.setdefault("copy_blob_calls", []).append(
-            {"source": blob.name, "new_name": new_name, "kwargs": kwargs}
-        )
-        return _FakeBlob(new_name, self._captured)
-
 
 def _install_fake_gcs(monkeypatch: pytest.MonkeyPatch, captured: dict) -> None:
     """Same network-crossing-boundary fake as test_media_upload_url.py, extended with
-    copy_blob/delete so finalize_media_object()'s move is exercised for real (against a
-    fake), not skipped."""
+    download_as_bytes/upload_from_string/delete so finalize_media_object()'s move is
+    exercised for real (against a fake), not skipped."""
     fake_bucket = _FakeBucket(captured)
     fake_client = SimpleNamespace(bucket=lambda name: fake_bucket)
     monkeypatch.setattr(storage_service, "_storage_client", lambda: fake_client)
@@ -127,19 +144,15 @@ async def test_own_tmp_object_is_moved_and_the_permanent_url_is_stored(
     media_urls = created.json()["media_urls"]
     assert media_urls == [f"https://storage.googleapis.com/{TEST_BUCKET}/posts/{setup.member.id}/abc123.jpg"]
 
-    # the move actually happened: copy from the tmp path to the permanent one, with
-    # if_generation_match=0 (asserts the destination doesn't exist, which only requires
-    # create - an unconditional copy would need delete on posts/, which the service
-    # account deliberately lacks; found live against the real bucket, not by any fake).
-    # preserve_acl is deliberately NOT passed - the default (True) is what SKIPS the
-    # object-ACL API call copy_blob's implementation makes when preserve_acl is False,
-    # which is what a uniform-bucket-level-access bucket rejects (second real-bucket-
-    # only finding, also missed by every fake here - see finalize_media_object's
+    # the move actually happened: the tmp object was downloaded, re-encoded, and
+    # uploaded to the permanent path with if_generation_match=0 (asserts the
+    # destination doesn't exist, which only requires create - an unconditional write
+    # would need delete on posts/, which the service account deliberately lacks; found
+    # live against the real bucket, not by any fake - see finalize_media_object's
     # docstring for the full story). Then the tmp source was deleted.
-    [call] = captured["copy_blob_calls"]
-    assert call["source"] == tmp_name
+    [call] = captured["upload_calls"]
     assert call["new_name"] == f"posts/{setup.member.id}/abc123.jpg"
-    assert "preserve_acl" not in call["kwargs"]
+    assert call["kwargs"]["content_type"] == "image/jpeg"
     assert call["kwargs"]["if_generation_match"] == 0
     assert captured["deleted"] == [tmp_name]
 
@@ -266,7 +279,7 @@ async def test_referencing_a_tmp_object_that_does_not_exist_is_a_400(
     """Never uploaded, or the tmp/ lifecycle rule already reclaimed it — either way the
     caller referenced something that isn't there to move, a 400 not a 500."""
     _configure_bucket(monkeypatch)
-    _install_fake_gcs(monkeypatch, {"copy_should_404": True})
+    _install_fake_gcs(monkeypatch, {"download_should_404": True})
     setup = await make_chapter_with("member")
 
     created = await client.post(
@@ -278,15 +291,17 @@ async def test_referencing_a_tmp_object_that_does_not_exist_is_a_400(
     assert created.json()["detail"] == "media_upload_not_found"
 
 
-async def test_an_unexpected_copy_failure_is_a_clean_502_not_a_bare_500(
+async def test_an_unexpected_finalize_failure_is_a_clean_502_not_a_bare_500(
     client: AsyncClient, make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The manager's real-bucket E2E hit exactly this as an unhandled exception before
-    this catch existed - GCS refused an unconditional copy_blob (403, needs delete on
-    the destination) since the fix (if_generation_match=0) hadn't landed yet. Any
-    non-NotFound copy failure must surface as a clean, specific error, not a 500."""
+    """The manager's real-bucket E2E hit exactly this shape as an unhandled exception
+    before this catch existed - GCS refused an unconditional destination write (403,
+    needs delete on the destination) since the fix (if_generation_match=0) hadn't
+    landed yet. Any non-NotFound failure on the upload leg must surface as a clean,
+    specific error, not a 500 - regardless of which of the two GCS calls
+    finalize_media_object() makes (download, then upload) is the one that fails."""
     _configure_bucket(monkeypatch)
-    _install_fake_gcs(monkeypatch, {"copy_should_403": True})
+    _install_fake_gcs(monkeypatch, {"upload_should_fail": True})
     setup = await make_chapter_with("member")
 
     created = await client.post(
@@ -298,13 +313,13 @@ async def test_an_unexpected_copy_failure_is_a_clean_502_not_a_bare_500(
     assert created.json()["detail"] == "media_finalize_failed"
 
 
-async def test_a_failed_tmp_delete_after_a_successful_copy_does_not_fail_the_post(
+async def test_a_failed_tmp_delete_after_a_successful_upload_does_not_fail_the_post(
     client: AsyncClient,
     make_chapter_with: MakeChapterWith,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The post already has its permanent url from the copy; a delete failure just
+    """The post already has its permanent url from the upload; a delete failure just
     leaves an extra tmp/ object for the lifecycle rule to reclaim later, logged as a
     warning rather than raised."""
     _configure_bucket(monkeypatch)
@@ -343,7 +358,7 @@ async def test_commit_failure_after_a_successful_move_is_logged_loudly_not_delet
     async def _raise(self, *args, **kwargs):
         # c355 releases authentication reads before copying. The orphan claim is
         # specifically about a failure AFTER a successful provider move.
-        if captured.get("copy_blob_calls"):
+        if captured.get("upload_calls"):
             raise RuntimeError("simulated commit failure")
         return await original_commit(self, *args, **kwargs)
 
@@ -360,8 +375,8 @@ async def test_commit_failure_after_a_successful_move_is_logged_loudly_not_delet
     assert "orphan" in logged
     assert f"posts/{setup.member.id}/abc123.jpg" in logged
 
-    assert len(captured["copy_blob_calls"]) == 1
-    assert captured["copy_blob_calls"][0]["new_name"] == f"posts/{setup.member.id}/abc123.jpg"
+    assert len(captured["upload_calls"]) == 1
+    assert captured["upload_calls"][0]["new_name"] == f"posts/{setup.member.id}/abc123.jpg"
     assert captured["deleted"] == [f"tmp/{setup.member.id}/abc123.jpg"]
     from tests.test_c349_settlement_binding import rows
     assert await rows("SELECT id FROM posts") == []
@@ -392,7 +407,11 @@ async def test_update_post_route_moves_a_newly_attached_photo(
     client: AsyncClient, make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Third write site: PATCH /chapters/{id}/posts/{id}, attaching media that wasn't
-    there at create time — goes through the identical validate+move path."""
+    there at create time — goes through the identical validate+move path.
+
+    The tmp source is a .png name; the permanent object is .jpg regardless (board
+    c374: the derivative is always a re-encoded JPEG, so the extension the destination
+    name carries must reflect what is actually stored there, not what was uploaded)."""
     _configure_bucket(monkeypatch)
     captured: dict = {}
     _install_fake_gcs(monkeypatch, captured)
@@ -413,9 +432,9 @@ async def test_update_post_route_moves_a_newly_attached_photo(
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["media_urls"] == [
-        f"https://storage.googleapis.com/{TEST_BUCKET}/posts/{setup.member.id}/xyz789.png"
+        f"https://storage.googleapis.com/{TEST_BUCKET}/posts/{setup.member.id}/xyz789.jpg"
     ]
-    assert captured["copy_blob_calls"][0]["new_name"] == f"posts/{setup.member.id}/xyz789.png"
+    assert captured["upload_calls"][0]["new_name"] == f"posts/{setup.member.id}/xyz789.jpg"
 
 
 async def test_update_post_route_rejects_someone_elses_tmp_object(
@@ -534,7 +553,8 @@ async def test_patch_replacing_a_photo_leaves_the_previous_permanent_object_orph
     first_tmp = f"tmp/{setup.member.id}/first.jpg"
     first_permanent = f"posts/{setup.member.id}/first.jpg"
     second_tmp = f"tmp/{setup.member.id}/second.png"
-    second_permanent = f"posts/{setup.member.id}/second.png"
+    # .png in, .jpg out - the derivative is always a re-encoded JPEG (board c374).
+    second_permanent = f"posts/{setup.member.id}/second.jpg"
 
     created = await client.post(
         f"/chapters/{setup.chapter_id}/posts",

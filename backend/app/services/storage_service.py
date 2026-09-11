@@ -69,15 +69,54 @@ identity's tmp/-only condition is deliberately left alone (manager decision on c
 the ability to delete a published photo belongs to a scheduled job, never to the account
 serving requests.
 
-THIS ALMOST BROKE THE COPY ITSELF, found live against the real bucket (a fake client
-cannot surface it): GCS requires storage.objects.delete on the DESTINATION for an
-UNCONDITIONAL copy/write, even though it is only ever creating a new object there —
-because an unconditional write CAN overwrite an existing object, and overwrite implies
-delete. finalize_media_object() passes if_generation_match=0 on the copy specifically to
-avoid needing that permission: it asserts "the destination must not exist," which only
+THE DESTINATION WRITE IS CONDITIONAL, NOT UNCONDITIONAL, for the same reason a plain
+copy would have needed it: GCS requires storage.objects.delete on the DESTINATION for an
+UNCONDITIONAL write, even though it is only ever creating a new object there — because
+an unconditional write CAN overwrite an existing object, and overwrite implies delete.
+finalize_media_object() passes if_generation_match=0 on the upload specifically to avoid
+needing that permission: it asserts "the destination must not exist," which only
 requires create. This is not an unrelated workaround; it is the correct way to express
 "always creates a new, never-before-seen object" to GCS, and it happens to also make
 no-overwrite a server-enforced guarantee instead of a probabilistic one from UUID names.
+This was originally learned against a plain bucket.copy_blob() (a fake client cannot
+surface an IAM permission requirement); it applies unchanged now that the destination
+write is a re-encoded derivative's bytes rather than a copy of the source object.
+
+DERIVATIVES, NOT COPIES (board c374). finalize_media_object() used to be a straight
+bucket.copy_blob() — the tmp/ bytes became the posts/ (or avatars/) bytes, unexamined.
+It now downloads the tmp/ object, decodes it with Pillow, and re-encodes what it writes
+to the permanent prefix: EXIF-stripped, downscaled to a 1600px long edge, always JPEG at
+quality 82. Three separate reasons converge on one pipeline rather than three bolt-ons:
+
+  - PRIVACY. A phone photo's EXIF routinely carries GPS coordinates. Those coordinates
+    have no reason to travel from "someone's camera roll" to "public post byte-for-byte,
+    forever" and every reason not to. The strip is unconditional and not configurable.
+  - BOUNDED COST. A single unresized photo from a modern phone can be tens of megapixels;
+    every post/avatar re-serve was paying for that in bandwidth and in RN's decode cost
+    on a phone that will never render it above a feed-card width. 1600px long-edge covers
+    every layout this app has today with headroom, not just the current card size.
+  - A CONSISTENT, BOUNDED FORMAT. Whatever a client uploaded (jpeg/png/webp, per
+    ALLOWED_CONTENT_TYPES), what leaves this function is always one format at one quality
+    setting. Nothing downstream needs to branch on it, and Pillow's own decode failing on
+    a byte string that merely CLAIMED to be an image at upload time is a free, incidental
+    content-type check this design gets without adding one on purpose.
+
+Pillow's decompression-bomb guard (Image.MAX_IMAGE_PIXELS, on by default - never raised
+or disabled here) is load-bearing precisely because MAX_UPLOAD_BYTES bounds compressed
+size, not decoded pixel count: a small, highly-compressible file (a solid-color PNG, for
+instance) can still decode to gigapixels well within the 10MB cap. Decoding is now real
+work this process does in-process, so that guard is the only thing standing between an
+accepted upload and an OOM on the request path - not a defense against a threat that
+only mattered once, but one MAX_UPLOAD_BYTES alone cannot cover.
+
+Everything the module docstring's earlier sections say about tmp/-then-move, the
+service account's posts/ delete restriction, and the orphan-on-commit-failure tradeoff
+is UNCHANGED by this: the object that lands in posts/ or avatars/ is simply built
+differently now. destination_prefix is still the only thing that varies between the
+post-media and avatar call sites (see finalize_media_object's own docstring for why
+avatars get their own prefix) - the derivative pipeline runs identically either way, on
+purpose: an avatar is not exempt from the same privacy and cost reasoning a post photo
+gets.
 """
 
 from __future__ import annotations
@@ -86,6 +125,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import io
 import logging
 import threading
 import uuid
@@ -289,62 +329,161 @@ def generate_upload_url(user_id: str, content_type: str, byte_size: int) -> Sign
     )
 
 
+# Board c374. See the module docstring's "DERIVATIVES, NOT COPIES" section for why
+# these three numbers are what they are - this is just where they live.
+DERIVATIVE_MAX_DIMENSION = 1600
+DERIVATIVE_JPEG_QUALITY = 82
+DERIVATIVE_CONTENT_TYPE = "image/jpeg"
+DERIVATIVE_EXTENSION = "jpg"
+
+
+def _decode_and_normalize_image(raw_bytes: bytes):
+    """Pillow-decode one uploaded object into an EXIF-transposed RGB image, or 400.
+
+    A 400, not a 500 or 502: everything caught here is a property of the BYTES the
+    caller's own tmp/ upload contains, not of GCS or this process. That covers three
+    distinct cases, deliberately collapsed into one outcome rather than three:
+
+      - Not decodable as an image at all (UnidentifiedImageError) - including a file
+        whose declared content-type at upload time (validate_upload_request) was a lie,
+        since nothing checked the BYTES against that claim until now. This function is
+        that check, arrived at as a side effect of needing to decode anyway.
+      - A truncated or otherwise corrupt body that identifies fine from its header but
+        fails during the real decode (OSError/ValueError from libjpeg/libpng/libwebp) -
+        image.load() forces that decode to happen HERE rather than lazily later, so the
+        failure surfaces in this function's own try block instead of downstream.
+      - A decompression bomb: Image.MAX_IMAGE_PIXELS (Pillow's own default, never raised
+        or disabled by this code) rejects a decoded pixel count enormously out of
+        proportion to what MAX_UPLOAD_BYTES allows as compressed bytes - a small,
+        highly-compressible file can still decode to gigapixels. Logged distinctly from
+        an ordinary bad upload because an actual bomb attempt is worth being able to
+        grep for on its own.
+
+    exif_transpose() BAKES ORIENTATION INTO THE PIXELS and returns an image with the
+    Orientation tag removed - this is what makes a rotated phone photo display right-side
+    up without every future reader needing to know EXIF exists. It is not, by itself,
+    what strips the rest of the EXIF block (GPS, make/model, timestamp): the returned
+    image can still carry a smaller `exif` blob in its .info dict. The actual strip
+    happens where this image is later saved - see _build_media_derivative.
+
+    Modes with an alpha channel are composited onto white rather than bluntly
+    `.convert("RGB")`-ed, because a plain mode conversion DROPS the alpha channel
+    without compositing and leaves whatever the original RGB values under a transparent
+    pixel happened to be - not necessarily white, sometimes visibly wrong. JPEG has no
+    alpha channel, so something has to be decided for every transparent pixel in a PNG
+    upload; white is the least surprising choice for a photo/avatar context.
+    """
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    try:
+        image = Image.open(io.BytesIO(raw_bytes))
+        image.load()
+    except Image.DecompressionBombError as exc:
+        logger.warning("media finalize rejected a decompression bomb, size=%s", len(raw_bytes))
+        raise HTTPException(status_code=400, detail="invalid_media_content") from exc
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid_media_content") from exc
+
+    image = ImageOps.exif_transpose(image)
+    if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+        rgba = image.convert("RGBA")
+        background = Image.new("RGB", image.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.split()[-1])
+        image = background
+    elif image.mode != "RGB":
+        image = image.convert("RGB")
+    return image
+
+
+def _build_media_derivative(raw_bytes: bytes) -> bytes:
+    """Decode -> EXIF-strip -> downscale to a 1600px long edge -> re-encode as JPEG.
+
+    THE STRIP IS "DON'T PASS exif=", NOT AN EXPLICIT CLEAR CALL - confirmed against the
+    installed Pillow body, not assumed (the c132 standing lesson, applied again here):
+    JpegImagePlugin._save reads `im.encoderinfo.get("exif", ...)` - i.e. ONLY what a
+    caller explicitly passes to save() as the `exif=` kwarg. It does NOT fall back to
+    image.info["exif"], even though _decode_and_normalize_image's exif_transpose() call
+    can leave that key populated (with a smaller, orientation-removed blob) on the image
+    object it returns. So the image handed to save() below can still be carrying EXIF
+    internally; what guarantees none of it reaches the output is simply that this call
+    never mentions `exif=`. Do not "helpfully" thread image.info through as exif= here -
+    that would silently undo the strip this function exists to guarantee.
+
+    thumbnail() only ever shrinks, never enlarges - an upload already under 1600px on its
+    long edge is re-encoded at its original size (still EXIF-stripped, still requantized
+    to quality 82). DERIVATIVE_MAX_DIMENSION is applied to BOTH bounds of thumbnail()'s
+    (width, height) argument, which is what makes it a long-edge cap under Pillow's own
+    aspect-preserving contract rather than a fixed square.
+    """
+    from PIL import Image
+
+    image = _decode_and_normalize_image(raw_bytes)
+    image.thumbnail(
+        (DERIVATIVE_MAX_DIMENSION, DERIVATIVE_MAX_DIMENSION), Image.Resampling.LANCZOS
+    )
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=DERIVATIVE_JPEG_QUALITY)
+    return buffer.getvalue()
+
+
 def finalize_media_object(
     user_id: str, tmp_object_name: str, *, destination_prefix: str = PERMANENT_PREFIX
 ) -> str:
-    """Move one tmp/ upload to a permanent location; returns the new public url.
+    """Turn one tmp/ upload into a bounded derivative at a permanent location; returns
+    the new public url.
 
     destination_prefix DEFAULTS TO posts/ so every existing caller is unchanged. Avatars
     pass AVATAR_PREFIX (board c221) because media_reconcile diffs posts/ against
     posts.media_urls alone - an avatar under posts/ is unreferenced by definition and
     would be collected about a day after it was set. Keyword-only so a new destination
     is always an explicit, greppable decision at the call site rather than a
-    positional argument someone can slip in.
+    positional argument someone can slip in. The derivative pipeline itself does not
+    branch on destination_prefix at all - an avatar gets the identical EXIF-strip,
+    downscale, and re-encode a post photo gets (see the module docstring).
 
-    Board c132. Called once per media_object_names entry, at post-create/update time,
-    AFTER validate_media_object_names() has already confirmed the shape and ownership
-    prefix — this function re-derives and re-checks the same prefix rather than trusting
-    the caller ran that check, on the same "validate again where it actually matters"
-    reasoning the double size-enforcement already follows.
+    Board c132, reshaped by board c374 from a straight bucket.copy_blob() into a
+    download-decode-reencode-upload pipeline (see _decode_and_normalize_image and
+    _build_media_derivative for that half). Called once per media_object_names entry,
+    at post-create/update time, AFTER validate_media_object_names() has already
+    confirmed the shape and ownership prefix — this function re-derives and re-checks
+    the same prefix rather than trusting the caller ran that check, on the same
+    "validate again where it actually matters" reasoning the double size-enforcement
+    already follows.
 
-    preserve_acl is DELIBERATELY LEFT AT ITS DEFAULT (True) - the opposite of what an
-    earlier version of this function did, and the opposite of what the parameter's own
-    docstring reads like at a glance. Ground truth is the IMPLEMENTATION, not the
-    docstring: copy_blob's body ends with `if not preserve_acl: new_blob.acl.save(...)`
-    - the ACL API call only happens when preserve_acl is FALSE. True (the default) skips
-    it entirely. On a uniform-bucket-level-access bucket, that acl.save call 403s (there
-    is no per-object ACL to touch), so passing preserve_acl=False HERE, as this function
-    used to, made copy_blob's own destination copy succeed and then fail on the ACL call
-    immediately after - manager's real-bucket E2E confirmed this precisely, via SA
-    impersonation: the exact conditional copyTo authorized cleanly (412 destination-
-    exists, not 403), proving the copy itself was never the problem. Do not set
-    preserve_acl=False again without re-reading copy_blob's source first.
+    THE OUTPUT OBJECT NAME DROPS THE ORIGINAL EXTENSION. The derivative is always a
+    JPEG regardless of what was uploaded (jpg/png/webp, per ALLOWED_CONTENT_TYPES), so
+    the permanent object name is always {destination_prefix}/{user_id}/{uuid}.jpg even
+    when the tmp/ source was {uuid}.png or {uuid}.webp - an object name that still
+    ended in .png while holding JPEG bytes would be a lie the extension tells about the
+    content.
 
-    if_generation_match=0 on the copy is ALSO required, not optional, and for a subtler
-    reason a fake client cannot surface either: it applies to the DESTINATION generation
+    if_generation_match=0 on the upload is REQUIRED, not optional, and for a subtler
+    reason a fake client cannot surface: it applies to the DESTINATION generation
     (confirmed against the installed client's own docstring, not assumed), and an
-    UNCONDITIONAL copy destination requires storage.objects.delete on posts/ even though
-    it is only ever creating a new object there - because an unconditional write CAN
-    overwrite an existing one, and overwrite implies delete. Our service account
-    deliberately has create-only on posts/ (see below), so an unconditional copy_blob
-    was refused with a 403 on the real bucket during the manager's E2E pass, even though
-    every fake-backed test here passed. if_generation_match=0 asserts "the destination
-    must not already exist," which only requires create - and, as a bonus, turns
-    no-overwrite from a probabilistic property of UUID naming into a server-enforced
-    guarantee.
+    UNCONDITIONAL write to a destination that might already exist requires
+    storage.objects.delete on posts/ even though it is only ever creating a new object
+    there - because an unconditional write CAN overwrite an existing one, and overwrite
+    implies delete. Our service account deliberately has create-only on posts/ (see
+    below). if_generation_match=0 asserts "the destination must not already exist,"
+    which only requires create - and, as a bonus, turns no-overwrite from a
+    probabilistic property of UUID naming into a server-enforced guarantee. This was
+    originally learned against copy_blob's destination argument; it applies identically
+    to upload_from_string's destination now.
 
-    A tmp_blob.delete() failure AFTER a successful copy is NOT fatal and does not raise:
-    the post still gets its permanent url from the copy, and the leftover tmp/ object
-    becomes the tmp/ lifecycle rule's job, the same safety net an abandoned upload
-    already relies on. It is logged as a warning so a persistent delete-permission
-    problem is still visible, just not blocking.
+    A tmp_blob.delete() failure AFTER a successful upload is NOT fatal and does not
+    raise: the post still gets its permanent url, and the leftover tmp/ object becomes
+    the tmp/ lifecycle rule's job, the same safety net an abandoned upload already
+    relies on. It is logged as a warning so a persistent delete-permission problem is
+    still visible, just not blocking.
 
-    A copy failure because the tmp object doesn't exist (never uploaded, or the tmp/
-    lifecycle rule already reclaimed it) is a 400, not a 500 - the caller sent a
-    reference to something that isn't there to move. Any OTHER copy failure (permission,
-    precondition, transient GCS error) is a 502 media_finalize_failed, not a bare 500 -
-    the manager's E2E pass hit exactly this as an unhandled exception before this catch
-    existed.
+    DOWNLOAD and UPLOAD each get their own try/except, both mapping to the same 400/502
+    split the old copy had: a download 404 (tmp object never uploaded, or the tmp/
+    lifecycle rule already reclaimed it) is a 400 media_upload_not_found - the caller
+    referenced something that isn't there to move. Any OTHER GCS failure on either leg
+    (permission, precondition, transient error) is a 502 media_finalize_failed, not a
+    bare 500. A bad IMAGE (undecodable, corrupt, or a decompression bomb) is a separate
+    400 - invalid_media_content - raised by _decode_and_normalize_image between the two
+    GCS calls; that path never reaches the upload try/except at all.
 
     THIS FUNCTION NEVER DELETES FROM posts/. The service account's delete grant is
     IAM-conditioned to tmp/ only (manager-run infra step) - deliberately, so no bug,
@@ -360,23 +499,36 @@ def finalize_media_object(
     if not tmp_object_name.startswith(expected_prefix):
         raise HTTPException(status_code=400, detail="invalid_media_url")
     suffix = tmp_object_name[len(expected_prefix):]  # "{uuid}.{ext}"
+    stem = suffix.rsplit(".", 1)[0]
     bucket_name = _bucket_name()
     bucket = _storage_client().bucket(bucket_name)
     tmp_blob = bucket.blob(tmp_object_name)
-    permanent_object_name = f"{destination_prefix}/{user_id}/{suffix}"
+    permanent_object_name = f"{destination_prefix}/{user_id}/{stem}.{DERIVATIVE_EXTENSION}"
 
     try:
-        bucket.copy_blob(
-            tmp_blob,
-            bucket,
-            permanent_object_name,
-            if_generation_match=0,
-        )
+        raw_bytes = tmp_blob.download_as_bytes()
     except NotFound:
         raise HTTPException(status_code=400, detail="media_upload_not_found")
     except Exception as exc:
         logger.error(
-            "media finalize copy failed tmp_object=%s error=%s",
+            "media finalize download failed tmp_object=%s error=%s",
+            tmp_object_name,
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail="media_finalize_failed") from exc
+
+    derivative_bytes = _build_media_derivative(raw_bytes)
+
+    permanent_blob = bucket.blob(permanent_object_name)
+    try:
+        permanent_blob.upload_from_string(
+            derivative_bytes,
+            content_type=DERIVATIVE_CONTENT_TYPE,
+            if_generation_match=0,
+        )
+    except Exception as exc:
+        logger.error(
+            "media finalize upload failed tmp_object=%s error=%s",
             tmp_object_name,
             type(exc).__name__,
         )

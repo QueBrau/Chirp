@@ -20,11 +20,13 @@ prefix be asserted at all.
 """
 from __future__ import annotations
 
+import io
 import uuid
 from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
+from PIL import Image
 
 from app.services import storage_service
 from tests.conftest import ApiUser
@@ -36,10 +38,27 @@ def _configure_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(storage_service, "_bucket_name", lambda: TEST_BUCKET)
 
 
+def _real_image_bytes() -> bytes:
+    """A REAL, Pillow-decodable image - finalize_media_object() decodes every tmp/
+    upload (board c374), so a fake tmp blob's download_as_bytes() must hand back
+    something Pillow can actually open."""
+    buffer = io.BytesIO()
+    Image.new("RGB", (40, 30), (10, 200, 90)).save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
 class _FakeBlob:
     def __init__(self, name: str, captured: dict) -> None:
         self.name = name
         self._captured = captured
+
+    def download_as_bytes(self) -> bytes:
+        return _real_image_bytes()
+
+    def upload_from_string(self, data: bytes, **kwargs) -> None:
+        self._captured.setdefault("upload_calls", []).append(
+            {"new_name": self.name, "data": data, "kwargs": kwargs}
+        )
 
     def delete(self) -> None:
         self._captured.setdefault("deleted", []).append(self.name)
@@ -51,12 +70,6 @@ class _FakeBucket:
 
     def blob(self, name: str) -> _FakeBlob:
         return _FakeBlob(name, self._captured)
-
-    def copy_blob(self, blob, _bucket, new_name, **kwargs):
-        self._captured.setdefault("copy_blob_calls", []).append(
-            {"source": blob.name, "new_name": new_name, "kwargs": kwargs}
-        )
-        return _FakeBlob(new_name, self._captured)
 
 
 def _install_fake_gcs(monkeypatch: pytest.MonkeyPatch, captured: dict) -> None:
@@ -113,16 +126,16 @@ async def test_the_avatar_is_finalized_to_avatars_not_posts(
         "will collect every profile picture about a day after it is set (c221)."
     )
 
-    move = captured["copy_blob_calls"][0]
-    assert move["source"] == tmp_name
+    move = captured["upload_calls"][0]
     assert move["new_name"].startswith("avatars/"), move["new_name"]
     assert not move["new_name"].startswith("posts/"), (
         "finalized into posts/, which is media_reconcile's delete territory"
     )
-    # Same conditional-copy contract post media relies on: asserts the destination does
-    # not exist, which needs only create. An unconditional copy would require delete on
+    # Same conditional-write contract post media relies on: asserts the destination does
+    # not exist, which needs only create. An unconditional write would require delete on
     # the destination prefix, which the runtime account deliberately lacks.
     assert move["kwargs"].get("if_generation_match") == 0
+    assert move["kwargs"].get("content_type") == "image/jpeg"
 
 
 async def test_setting_a_picture_survives_a_reread(
@@ -140,7 +153,8 @@ async def test_setting_a_picture_survives_a_reread(
     )
     me = await client.get("/auth/me", headers=user.headers)
     assert me.status_code == 200, me.text
-    assert me.json()["user"]["avatar_url"].endswith(f"/avatars/{user.id}/pic.png")
+    # .png in, .jpg out - the derivative is always a re-encoded JPEG (board c374).
+    assert me.json()["user"]["avatar_url"].endswith(f"/avatars/{user.id}/pic.jpg")
 
 
 async def test_explicit_null_removes_the_picture_and_omission_leaves_it(
