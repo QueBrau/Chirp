@@ -39,7 +39,7 @@ from sqlalchemy import text
 from starlette.testclient import TestClient, WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
-from tests.conftest import b64
+from tests.conftest import _padded, b64
 
 
 def _redis_reachable() -> bool:
@@ -162,13 +162,13 @@ def _register_device(client: TestClient, user: WsUser) -> dict[str, Any]:
     body = {
         "device_label": "pytest-ws-device",
         "registration_id": 4242,
-        "identity_key_b64": b64(b"identity-" + uuid.uuid4().bytes),
+        "identity_key_b64": b64(_padded(b"identity-" + uuid.uuid4().bytes, 32)),
         "signed_prekey": {
             "key_id": 1,
-            "public_key_b64": b64(b"spk-" + uuid.uuid4().bytes),
-            "signature_b64": b64(b"sig-" + uuid.uuid4().bytes),
+            "public_key_b64": b64(_padded(b"spk-" + uuid.uuid4().bytes, 32)),
+            "signature_b64": b64(_padded(b"sig-" + uuid.uuid4().bytes, 64)),
         },
-        "one_time_prekeys": [{"key_id": 1, "public_key_b64": b64(b"otk-1")}],
+        "one_time_prekeys": [{"key_id": 1, "public_key_b64": b64(_padded(b"otk-1", 32))}],
     }
     response = client.post("/devices", json=body, headers=user.headers)
     assert response.status_code == 201, response.text

@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     # days have passed since deleted_at/removed_at. Matches the 30-day response window
     # /privacy section 14 already commits to (board c69) — do not let these drift apart.
     purge_retention_days: int = 30
+    # Grace window before ALREADY-USELESS e2ee key material (consumed one-time prekeys,
+    # superseded signed prekeys, any prekey row belonging to a long-revoked device) is
+    # hard-deleted by app.jobs.purge's key-retirement phase. Deliberately separate from
+    # purge_retention_days: that setting governs user-CONTENT soft-delete grace, this one
+    # governs crypto-hygiene cleanup of material nothing can use any more — the two have
+    # different reasons to change and should not be forced to move together (board c347).
+    e2ee_key_retirement_grace_days: int = 7
     # Transactional email (board c87). "log" records the send and delivers nothing,
     # which is the correct default for local dev and the whole test suite: no key is
     # required and no test can accidentally mail a real person. Production sets

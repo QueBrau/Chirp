@@ -14,18 +14,33 @@ from app import models
 from app.db import get_session_factory
 from app.routers import keys
 from app.schemas.e2ee import (
+    EXACT_KYBER_PUBLIC_KEY_BYTES,
+    EXACT_PUBLIC_KEY_BYTES,
+    EXACT_SIGNATURE_BYTES,
     MAX_KYBER_PUBLIC_KEY_BYTES,
     MAX_PUBLIC_KEY_BYTES,
     MAX_SIGNATURE_BYTES,
     DeviceCreate,
 )
-from tests.conftest import MakeUser, RegisterDevice, b64
+from tests.conftest import MakeUser, RegisterDevice, _padded, b64
 
 
-def _key(key_id: int = 1, *, signed: bool = False) -> dict[str, object]:
-    result: dict[str, object] = {"key_id": key_id, "public_key_b64": b64(b"public")}
+def _key(key_id: int = 1, *, signed: bool = False, kyber: bool = False) -> dict[str, object]:
+    """Build one prekey field at its EXACT accepted byte length (board c347).
+
+    kyber=True is for kyber_last_resort/kyber_one_time entries (1568-byte public key);
+    the default is the EC (Curve25519) shape shared by identity/signed/one-time keys
+    (32 bytes), which also applies to signed_prekey even though it takes signed=True.
+    """
+    public_bytes = EXACT_KYBER_PUBLIC_KEY_BYTES if kyber else EXACT_PUBLIC_KEY_BYTES
+    result: dict[str, object] = {
+        "key_id": key_id,
+        "public_key_b64": b64(_padded(f"public-{key_id}".encode(), public_bytes)),
+    }
     if signed:
-        result["signature_b64"] = b64(b"signature")
+        result["signature_b64"] = b64(
+            _padded(f"signature-{key_id}".encode(), EXACT_SIGNATURE_BYTES)
+        )
     return result
 
 
@@ -33,11 +48,11 @@ def _device_body() -> dict[str, object]:
     return {
         "device_label": "resource-bound-test",
         "registration_id": 1,
-        "identity_key_b64": b64(b"identity"),
+        "identity_key_b64": b64(_padded(b"identity", EXACT_PUBLIC_KEY_BYTES)),
         "signed_prekey": _key(signed=True),
         "one_time_prekeys": [_key()],
-        "kyber_last_resort": _key(signed=True),
-        "kyber_one_time": [_key(signed=True)],
+        "kyber_last_resort": _key(signed=True, kyber=True),
+        "kyber_one_time": [_key(signed=True, kyber=True)],
     }
 
 
@@ -115,12 +130,118 @@ async def test_replenishment_rejects_oversize_before_storing_any_keys(
     assert counts.json()["kyber_last_resort_registered"] is False
 
 
-def test_exact_byte_ceilings_preserve_legacy_opaque_payload_contract() -> None:
-    body = _device_body()
-    for path, maximum in _BYTE_FIELDS:
-        _set_path(body, path, b64(b"x" * maximum))
-    assert DeviceCreate.model_validate(body).identity_key_b64 == body["identity_key_b64"]
+def test_exact_byte_lengths_are_the_accepted_contract() -> None:
+    """The old ceiling-only contract (1..max_bytes accepted) is no longer true (c347):
+    a payload built entirely at the CEILING length must now be refused, while one built
+    entirely at the EXACT length must be accepted."""
+    exact_body = _device_body()
+    assert DeviceCreate.model_validate(exact_body).identity_key_b64 == (
+        exact_body["identity_key_b64"]
+    )
     assert DeviceCreate.model_validate(_device_body()).registration_id == 1
+
+    ceiling_body = _device_body()
+    for path, maximum in _BYTE_FIELDS:
+        _set_path(ceiling_body, path, b64(b"x" * maximum))
+    with pytest.raises(ValueError):
+        DeviceCreate.model_validate(ceiling_body)
+
+
+_EXACT_BYTE_FIELDS = [
+    (("identity_key_b64",), EXACT_PUBLIC_KEY_BYTES),
+    (("signed_prekey", "public_key_b64"), EXACT_PUBLIC_KEY_BYTES),
+    (("signed_prekey", "signature_b64"), EXACT_SIGNATURE_BYTES),
+    (("one_time_prekeys", 0, "public_key_b64"), EXACT_PUBLIC_KEY_BYTES),
+    (("kyber_last_resort", "public_key_b64"), EXACT_KYBER_PUBLIC_KEY_BYTES),
+    (("kyber_last_resort", "signature_b64"), EXACT_SIGNATURE_BYTES),
+    (("kyber_one_time", 0, "public_key_b64"), EXACT_KYBER_PUBLIC_KEY_BYTES),
+    (("kyber_one_time", 0, "signature_b64"), EXACT_SIGNATURE_BYTES),
+]
+
+
+def _assert_boundary_rejected(response: Any, exact_size: int) -> None:
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail[0]["type"] == "value_error", detail
+    assert str(exact_size) in detail[0]["msg"], detail
+
+
+@pytest.mark.parametrize("path,exact_size", _EXACT_BYTE_FIELDS)
+async def test_exact_length_boundary_at_registration(
+    client: AsyncClient, make_user: MakeUser, path: tuple[str | int, ...], exact_size: int,
+) -> None:
+    """One byte under or over the exact size is refused; exactly on it is accepted."""
+    owner = await make_user(f"Boundary Registration {path}")
+
+    under = _device_body()
+    _set_path(under, path, b64(b"x" * (exact_size - 1)))
+    response = await client.post("/devices", json=under, headers=owner.headers)
+    _assert_boundary_rejected(response, exact_size)
+
+    over = _device_body()
+    _set_path(over, path, b64(b"x" * (exact_size + 1)))
+    response = await client.post("/devices", json=over, headers=owner.headers)
+    _assert_boundary_rejected(response, exact_size)
+
+    async with get_session_factory()() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(models.Device).where(
+                models.Device.user_id == uuid.UUID(owner.id)
+            )
+        ) == 0
+
+    exact = _device_body()
+    exact_value = b64(b"x" * exact_size)
+    _set_path(exact, path, exact_value)
+    response = await client.post("/devices", json=exact, headers=owner.headers)
+    assert response.status_code == 201, response.text
+    if path == ("identity_key_b64",):
+        assert response.json()["identity_key_b64"] == exact_value
+
+
+@pytest.mark.parametrize("path,exact_size", _EXACT_BYTE_FIELDS[1:])
+async def test_exact_length_boundary_at_replenishment(
+    client: AsyncClient, make_user: MakeUser, register_device: RegisterDevice,
+    path: tuple[str | int, ...], exact_size: int,
+) -> None:
+    owner = await make_user(f"Boundary Replenish {path}")
+    device = await register_device(owner, one_time_prekey_count=0)
+
+    def _prekey_body(value: str) -> dict[str, object]:
+        body = _device_body()
+        body = {name: value for name, value in body.items() if name in {
+            "signed_prekey", "one_time_prekeys", "kyber_last_resort", "kyber_one_time"
+        }}
+        _set_path(body, path, value)
+        return body
+
+    for delta in (-1, 1):
+        response = await client.post(
+            f"/devices/{device['id']}/prekeys",
+            json=_prekey_body(b64(b"x" * (exact_size + delta))),
+            headers=owner.headers,
+        )
+        _assert_boundary_rejected(response, exact_size)
+        counts = await client.get(
+            f"/devices/{device['id']}/prekeys/count", headers=owner.headers
+        )
+        assert counts.json()["one_time_prekeys_available"] == 0
+        assert counts.json()["kyber_one_time_prekeys_available"] == 0
+        assert counts.json()["kyber_last_resort_registered"] is False
+
+    response = await client.post(
+        f"/devices/{device['id']}/prekeys",
+        json=_prekey_body(b64(b"x" * exact_size)),
+        headers=owner.headers,
+    )
+    assert response.status_code == 200, response.text
+    counts = await client.get(f"/devices/{device['id']}/prekeys/count", headers=owner.headers)
+    if path[0] == "one_time_prekeys":
+        assert counts.json()["one_time_prekeys_available"] == 1
+    elif path[0] == "kyber_one_time":
+        assert counts.json()["kyber_one_time_prekeys_available"] == 1
+    elif path[0] == "kyber_last_resort":
+        assert counts.json()["kyber_last_resort_registered"] is True
 
 
 @pytest.mark.parametrize("value", ["", "====", "not base64!", "é", "AA==\n"])
@@ -202,13 +323,13 @@ async def test_repeated_full_batches_stop_at_retained_ceiling(
     owner = await make_user("Repeated Upload Owner")
     body = _device_body()
     body["one_time_prekeys"] = [_key(index) for index in range(200)]
-    body["kyber_one_time"] = [_key(index, signed=True) for index in range(200)]
+    body["kyber_one_time"] = [_key(index, signed=True, kyber=True) for index in range(200)]
     response = await client.post("/devices", json=body, headers=owner.headers)
     assert response.status_code == 201, response.text
     device_id = response.json()["id"]
     response = await client.post(f"/devices/{device_id}/prekeys", headers=owner.headers, json={
         "one_time_prekeys": [_key(index) for index in range(200, 400)],
-        "kyber_one_time": [_key(index, signed=True) for index in range(200, 400)],
+        "kyber_one_time": [_key(index, signed=True, kyber=True) for index in range(200, 400)],
     })
     assert response.status_code == 200, response.text
     assert response.json()["one_time_prekeys_available"] == 400
@@ -237,7 +358,7 @@ async def test_concurrent_replenishment_cannot_exceed_retained_quota(
     elif pool == "kyber":
         model = models.KyberPrekey
         limit = keys.MAX_RETAINED_ONE_TIME_PREKEYS
-        payload = {"kyber_one_time": [_key(999, signed=True)]}
+        payload = {"kyber_one_time": [_key(999, signed=True, kyber=True)]}
         extra = {"signature": b"sig", "is_last_resort": False}
         existing = 0
     elif pool == "signed":
@@ -249,7 +370,7 @@ async def test_concurrent_replenishment_cannot_exceed_retained_quota(
     else:
         model = models.KyberPrekey
         limit = keys.MAX_RETAINED_LAST_RESORT_PREKEYS
-        payload = {"kyber_last_resort": _key(999, signed=True)}
+        payload = {"kyber_last_resort": _key(999, signed=True, kyber=True)}
         extra = {"signature": b"sig", "is_last_resort": True}
         existing = 0
     async with get_session_factory()() as session:
@@ -284,7 +405,7 @@ async def test_consumed_rows_remain_in_storage_quota_and_are_not_deleted(
             consumed_at=datetime.now(timezone.utc), **extra,
         ) for index in range(keys.MAX_RETAINED_ONE_TIME_PREKEYS))
         await session.commit()
-    payload = {"kyber_one_time": [_key(999, signed=True)]} if kyber else {
+    payload = {"kyber_one_time": [_key(999, signed=True, kyber=True)]} if kyber else {
         "one_time_prekeys": [_key(999)]
     }
     # A rejected mixed upload must not rotate its otherwise-valid signed prekey.

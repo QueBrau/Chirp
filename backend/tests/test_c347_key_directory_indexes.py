@@ -11,7 +11,7 @@ from httpx import AsyncClient
 from sqlalchemy import Connection, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from tests.conftest import MakeUser, RegisterDevice, b64
+from tests.conftest import MakeUser, RegisterDevice, _padded, b64
 
 
 _INDEX_COLUMNS = {
@@ -47,7 +47,9 @@ async def test_index_migration_round_trip_preserves_keys_and_available_pool_inde
     device_id = uuid.UUID(device["id"])
     response = await client.post(f"/devices/{device_id}/prekeys", headers=owner.headers, json={
         "kyber_last_resort": {
-            "key_id": 2, "public_key_b64": b64(b"kyber"), "signature_b64": b64(b"signature"),
+            "key_id": 2,
+            "public_key_b64": b64(_padded(b"kyber", 1568)),
+            "signature_b64": b64(_padded(b"signature", 64)),
         },
     })
     assert response.status_code == 200, response.text
