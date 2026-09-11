@@ -33,10 +33,21 @@ never silently truncated. Legacy oversized option text is unchanged and requires
 an explicit operational review. Async cancellation bounds cooperative broker waits;
 it is not a hard deadline for synchronous JSON serialization or arbitrary CPU work.
 
-This is the immediate c345/c357 repair. Database reads remain authoritative when a
-delivery is missed. It does not add durable retries, aggregate coalescing, delivery
-ordering, queue-lag monitoring or a guarantee that every member eventually receives
-the final update. Those remain c356 and the outstanding c345 acceptance criteria.
+This was the immediate c345/c357 repair, now extended by the remainder of c345:
+every poll write also enqueues a `delivery_outbox` row (kind='poll') in the same
+transaction as the domain write, coalesced so at most one pending snapshot exists
+per poll at a time, and the c356 sweeper now carries a real 'poll' dispatcher
+branch. Database reads remain authoritative when a delivery is missed, but a
+missed live delivery is no longer only a log line: it is a durable, at-least-once
+retry with exponential backoff (dead-lettered after `outbox_max_attempts`), and
+queue age is now visible via `outbox.queue_stats()`. This does not add real push,
+offline catch-up beyond the existing `GET` re-read, or any delivery-ORDERING
+guarantee across two close-together writes to the same poll: the client applies
+each incoming snapshot directly with no sequence or version check, so a sweep
+that was already in flight when a fresher event was enqueued can still land after
+it and briefly show a stale tally until the next read or event. That race is
+pre-existing and unchanged by this card, not newly introduced or newly fixed.
 Recipient collection is still proportional to chapter membership. Local synthetic
-chapter/broker tests establish transaction release and correct persisted tallies;
-they do not establish production traffic capacity or outage recovery guarantees.
+chapter/broker tests establish transaction release, coalescing and correct
+persisted tallies; they do not establish production traffic capacity or outage
+recovery guarantees.

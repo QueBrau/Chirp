@@ -5,8 +5,8 @@ recipient list calling the WS/push fan-out inline. A crash or Redis outage
 between that commit and the loop — or an exception partway through it — lost a
 recipient's delivery permanently, with no record it was ever owed and no retry.
 `delivery_outbox` (migration 0039) and `app/services/outbox.py` close that gap
-for messages. Polls are not wired into this table in this PR; see "Not covered"
-below.
+for messages. Board card c345 wired polls onto this same table and module; see
+the `kind='poll'` section below and "Not covered" for what still does not exist.
 
 Three states, defined precisely because they are easy to conflate:
 
@@ -68,27 +68,47 @@ is explicitly covered by the client's own dedupe on `message_id`
 (`app-mobile/app/(tabs)/messages/[id].tsx`, around line 160), not by anything
 on the server — no mobile change is needed or made here.
 
+## Polls (`kind='poll'`, board card c345)
+
+Board card c345's remainder wired `app/routers/polls.py` onto this same table
+and module, following the exact same enqueue-before-commit /
+`dispatch_now`-after-commit / sweeper-retries-on-failure shape as messages,
+with three differences specific to polls. First, the payload is the aggregate
+snapshot `_prepare_broadcast` already builds — counts only, never voter
+identity, matching this file's own module docstring rule and `polls.py`'s
+secret-ballot rule — so `dispatch_pending`'s `kind == 'poll'` branch uses the
+payload directly with no hydration step and no `source_missing` dead-letter
+path; there is no separate source table a poll row could outlive the way a
+`message` row depends on the `messages` table. Second, `polls.py` coalesces at
+enqueue time: before inserting a new row it deletes every other still-open
+(`delivered_at IS NULL AND dead_at IS NULL`) pending `'poll'` row for the same
+`poll_id`, unconditionally — not scoped to `next_attempt_at <= now()`, the
+predicate that would look like the natural match for "still pending,
+unleased." That scoped predicate was floated early on this card and is wrong:
+`dispatch_now`'s own failure branch pushes a row's `next_attempt_at` into the
+future synchronously inside the same request that failed, so a second write
+minutes later would find the first row already looking "leased" and both
+rows would survive uncoalesced. The correct predicate is delivered/dead-scoped
+only, so at most one pending snapshot per poll ever exists, always the latest
+tally. Third, `sender_id` is always `None` for polls — there is no per-
+recipient content-free push for a poll to skip, unlike a message's sender.
+`_broadcast`'s contract changed from returning `None` to returning the list of
+recipient ids (as strings) that did not receive the event, matching the
+`Dispatcher` shape `dispatch_now`/`dispatch_pending` call generically; it is
+registered as `outbox.register_dispatcher('poll', _broadcast)` at
+`polls.py` import time.
+
 ## Not covered
 
 - Real push. `app/services/fcm_service.py` remains a log-only stub, unchanged.
 - Delivery to a recipient who never reconnects. Catch-up is still `GET
-  /conversations/{id}/messages`; this card adds retry for the live fan-out
-  path, not a new delivery mechanism.
-- **Polls.** c345 already made poll writes commit before best-effort broadcast
-  (`app/routers/polls.py`'s `_prepare_broadcast`/`_broadcast`), but that
-  broadcast still has no durable record and no retry — a Redis outage during
-  a poll write drops the event just as unrecoverably as before this card, it
-  just fails quietly (one throttled warning log) instead of loudly. Wiring
-  polls into this same outbox is a real, separate piece of work, deliberately
-  left as a named follow-up rather than done in this PR: `_broadcast`
-  currently returns nothing, and `tests/test_c345_poll_delivery.py` pins the
-  literal `_broadcast` function object (its monkeypatches target
-  `polls.publish_to_user` and `polls.POLL_BROADCAST_TIMEOUT_SECONDS` by name)
-  as the thing that runs post-commit — a generic, kind-agnostic dispatcher
-  living in `app/services/outbox.py` would not be intercepted by those
-  monkeypatches and would break both tests. The follow-up needs to register a
-  `'poll'` dispatcher in `app/services/outbox.py` and change `_broadcast`'s
-  return contract from `None` to a delivered/failed accounting, then have the
-  four poll write routes enqueue in-transaction and call `dispatch_now`
-  instead of `_broadcast` directly. `polls.py` has zero references to
-  `app.services.outbox` in this PR.
+  /conversations/{id}/messages` for messages, or the equivalent poll `GET`
+  for polls; this card adds retry for the live fan-out path, not a new
+  delivery mechanism.
+- Delivery ordering. Neither messages nor polls guarantee two close-together
+  events for the same conversation/poll arrive in write order — a sweep
+  already in flight when a fresher event is enqueued can still land after it.
+  For polls the mobile client applies each incoming snapshot directly with no
+  sequence or version check, so an out-of-order delivery can briefly show a
+  stale tally until the next read or event; this is a pre-existing
+  best-effort property, not something c345 newly introduces or newly fixes.

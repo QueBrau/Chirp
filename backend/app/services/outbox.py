@@ -39,10 +39,17 @@ covered by the client's own message_id dedupe (app-mobile
 app/(tabs)/messages/[id].tsx, around line 160), not by anything here. See
 DELIVERY-OUTBOX.md for the full STORED/DELIVERED/READ contract.
 
-Polls are deliberately NOT wired into this module in this PR -- see
-DELIVERY-OUTBOX.md and plan-c356 decision 3. `_dispatchers` only ever has a
-'message' entry today; a 'poll' row is left pending, untouched, if one somehow
-existed (kind is CHECKed at the database, but nothing in this PR ever inserts one).
+Polls are wired into this module as of board card c345: `app/routers/polls.py`
+registers a 'poll' dispatcher (its module-level `_broadcast`) at import time via
+`register_dispatcher`, and its four write routes (create/vote/close/delete) each
+enqueue a 'poll' row before commit and call `dispatch_now` after, the same shape
+`send_message` uses for 'message' rows. The one real difference from 'message':
+a 'poll' row's payload already IS the full event to publish -- the aggregate
+snapshot `_prepare_broadcast` built at enqueue time -- so `dispatch_pending`'s
+poll branch, below, uses the payload directly with no hydration step and no
+`source_missing` dead-letter path (there is no separate source table a poll row
+could outlive). polls.py also coalesces at enqueue time to at most one pending
+row per poll; see its `_enqueue_poll_event` and DELIVERY-OUTBOX.md.
 """
 
 from __future__ import annotations
@@ -218,10 +225,15 @@ async def dispatch_pending(limit: int | None = None) -> DispatchStats:
                         "ciphertext": base64.b64encode(message.ciphertext).decode("ascii"),
                         "created_at": row["payload"]["created_at"],
                     }
+            elif row["kind"] == "poll":
+                # No hydration needed: the payload already IS the full snapshot
+                # polls.py's _prepare_broadcast built at enqueue time, unlike
+                # 'message' which re-reads ciphertext from its source table.
+                entry["event"] = row["payload"]
             else:
-                # No dispatcher is wired for any other kind in this PR (polls stay on
-                # their own best-effort path). Leave it exactly as the claim left it
-                # rather than silently discarding it; nothing inserts one today.
+                # No dispatcher is wired for any other kind. Leave it exactly as the
+                # claim left it rather than silently discarding it; nothing inserts
+                # an unrecognized kind today.
                 continue
             claimed.append(entry)
         await session.commit()
