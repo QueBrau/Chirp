@@ -1,9 +1,11 @@
 """send_message's delivery intent must survive a crash and retry without duplicating
 (board card c356). See DELIVERY-OUTBOX.md for the STORED/DELIVERED/READ contract.
 
-Polls are NOT touched by this card -- test_poll_delivery_paths_are_unmodified_by_this_change
-below is a smoke guard proving app/routers/polls.py has zero references to the new
-outbox module and its pinned _broadcast/_prepare_broadcast shape is untouched.
+Polls were wired onto this same outbox by board card c345 --
+test_poll_delivery_paths_are_wired_to_the_outbox below is a wiring guard pinning
+_broadcast's new Dispatcher-shaped signature and its registration identity;
+poll-outbox coverage (coalescing, sweeper delivery, partial-failure narrowing,
+delete's bodyless snapshot) lives in tests/test_c345_poll_outbox.py.
 """
 from __future__ import annotations
 
@@ -11,7 +13,6 @@ import inspect
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -396,16 +397,19 @@ async def test_published_event_key_set_excludes_sender_id_on_live_and_sweeper_pa
         assert event["message_id"] == message_id_2
 
 
-def test_poll_delivery_paths_are_unmodified_by_this_change() -> None:
-    """polls.py is not touched in this PR -- see DELIVERY-OUTBOX.md's 'Not covered'."""
+def test_poll_delivery_paths_are_wired_to_the_outbox() -> None:
+    """Board card c345 wired polls onto this outbox -- pin _broadcast's new
+    Dispatcher-shaped signature and its dispatcher-registry identity so a future
+    change here (or a regression that quietly reverts polls.py) is caught. Detailed
+    coalescing/sweeper/narrowing coverage lives in tests/test_c345_poll_outbox.py.
+    """
     from app.routers import polls
 
     assert hasattr(polls, "_broadcast")
     assert hasattr(polls, "_prepare_broadcast")
     assert polls.POLL_BROADCAST_TIMEOUT_SECONDS == 1.0
     assert inspect.iscoroutinefunction(polls._broadcast)
-    assert list(inspect.signature(polls._broadcast).parameters) == ["batch"]
-    assert inspect.signature(polls._broadcast).return_annotation in (None, "None")
-
-    source = Path(polls.__file__).read_text()
-    assert "outbox" not in source, "polls.py must have zero references to the outbox module"
+    assert list(inspect.signature(polls._broadcast).parameters) == [
+        "recipient_ids", "event", "sender_id",
+    ]
+    assert outbox._dispatchers.get("poll") is polls._broadcast

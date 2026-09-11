@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import delete, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -34,6 +34,7 @@ from app.db import get_session
 from app.middleware.auth import get_verified_uid
 from app.middleware.org_scope import get_current_membership
 from app.schemas.polls import PollCreate, PollOptionResult, PollOut, PollVoteIn
+from app.services import outbox
 from app.ws.pubsub import publish_to_user
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,9 @@ router = APIRouter(tags=["polls"])
 # account/poll pair has its own shared Redis budget, with the existing fallback.
 POLL_VOTE_LIMIT = (30, 60)
 # A total chapter-delivery budget, not a fresh timeout for each recipient. Durable
-# retries and aggregate coalescing belong to c356; these updates remain best effort.
+# retries and aggregate coalescing are wired onto the c356 delivery outbox (board
+# card c345); this deadline still bounds only this one best-effort live attempt --
+# a row that misses it is left pending for the sweeper, not retried in-process.
 POLL_BROADCAST_TIMEOUT_SECONDS = 1.0
 
 
@@ -143,38 +146,95 @@ async def _prepare_broadcast(
     return _PollBroadcast(tuple(str(user_id) for user_id in members.scalars()), event)
 
 
-async def _broadcast(batch: _PollBroadcast) -> None:
-    """Deliver a committed snapshot with one deadline and no database session."""
+async def _enqueue_poll_event(
+    session: AsyncSession,
+    poll_id: uuid.UUID,
+    recipient_ids: list[uuid.UUID],
+    event: dict[str, object],
+) -> uuid.UUID:
+    """Coalesce to at most one pending 'poll' outbox row per poll, then enqueue the
+    latest snapshot in the caller's own (not yet committed) transaction.
+
+    Deliberately NOT scoped to `next_attempt_at <= now()`, even though that looks
+    like the natural match for "still pending, unleased" -- it is wrong for this
+    predicate. `dispatch_now`'s own failure branch (app/services/outbox.py) pushes
+    a row's `next_attempt_at` into the future SYNCHRONOUSLY, inside the same
+    request/response cycle as the failed live dispatch; there is no live-path
+    window that spans two separate HTTP requests. So by the time a SECOND vote's
+    coalescing check runs here, a first vote's already-backed-off row would look
+    "leased" under a next_attempt_at filter and survive uncoalesced -- two failed
+    votes in a row would leave two pending rows instead of one, with the first
+    (stale) row's superseded tally still queued for delivery. Delete every other
+    still-open ('poll', not yet delivered, not dead) pending row for this poll_id
+    unconditionally instead; a genuinely in-flight sweeper claim is safe against
+    this race too (SKIP LOCKED avoids deadlock, and the sweeper has already
+    captured its own in-memory event/recipient copy before its own commit, so a
+    concurrent delete here just makes the sweeper's later outcome-write a
+    harmless no-op against a missing row id).
+    """
+    await session.execute(
+        delete(models.DeliveryOutbox).where(
+            models.DeliveryOutbox.kind == "poll",
+            models.DeliveryOutbox.payload["poll_id"].astext == str(poll_id),
+            models.DeliveryOutbox.delivered_at.is_(None),
+            models.DeliveryOutbox.dead_at.is_(None),
+        )
+    )
+    return await outbox.enqueue(session, kind="poll", recipient_ids=recipient_ids, payload=event)
+
+
+async def _broadcast(
+    recipient_ids: list[uuid.UUID], event: dict[str, object], sender_id: str | None
+) -> list[str]:
+    """Deliver one snapshot with one deadline and no database session; return the
+    recipient ids (as strings) that did not receive it.
+
+    Registered below as the 'poll' outbox dispatcher (board c345) -- this is the
+    literal module-level function `outbox.dispatch_now`/`dispatch_pending` call for
+    kind='poll', and the one `test_c356_outbox_message_delivery.py`'s wiring pin
+    checks by identity. `sender_id` is unused: polls never skip delivery to their
+    own author (there is no per-recipient content-free push for polls to skip), it
+    exists only because every Dispatcher must share this same signature.
+    """
     started = asyncio.get_running_loop().time()
-    delivered = 0
-    failures = 0
+    failed: list[str] = []
+    reached = 0
     timed_out = False
     try:
         async with asyncio.timeout(POLL_BROADCAST_TIMEOUT_SECONDS):
-            for user_id in batch.recipients:
+            for index, user_id in enumerate(recipient_ids):
                 try:
-                    await publish_to_user(user_id, batch.event)
-                    delivered += 1
+                    await publish_to_user(str(user_id), event)
                 except Exception:
                     # Do not log per recipient or include exception text: a failed
                     # client can carry credentials, and ballots must remain secret.
-                    failures += 1
+                    failed.append(str(user_id))
+                reached = index + 1
     except TimeoutError:
         timed_out = True
-    if failures or timed_out:
+    if timed_out:
+        # Never reached the try/except for these -- count every untried recipient
+        # as failed too, so the outbox actually retries them instead of the old
+        # behavior of silently dropping an untried-on-timeout tail from both counts.
+        failed.extend(str(user_id) for user_id in recipient_ids[reached:])
+    if failed or timed_out:
         # JSON in the existing application log message. This is delivery telemetry,
         # not an assertion that Cloud Logging's formatter/sink has been reconfigured.
         logger.warning(json.dumps({
             "event": "poll_broadcast_incomplete",
-            "poll_id": batch.event["poll_id"],
-            "chapter_id": batch.event["chapter_id"],
-            "action": batch.event["action"],
-            "recipients": len(batch.recipients),
-            "delivered": delivered,
-            "failures": failures,
+            "poll_id": event["poll_id"],
+            "chapter_id": event["chapter_id"],
+            "action": event["action"],
+            "recipients": len(recipient_ids),
+            "delivered": len(recipient_ids) - len(failed),
+            "failures": len(failed),
             "timed_out": timed_out,
             "elapsed_ms": round((asyncio.get_running_loop().time() - started) * 1000),
         }))
+    return failed
+
+
+outbox.register_dispatcher("poll", _broadcast)
 
 
 def _assemble(
@@ -236,8 +296,22 @@ async def create_poll(
     poll = await _get_chapter_poll(session, chapter_id, poll.id)
     response = _assemble(poll, {}, None)
     broadcast = await _prepare_broadcast(session, poll, "opened", {})
+    recipient_ids = [uuid.UUID(r) for r in broadcast.recipients]
+    outbox_row_id = await _enqueue_poll_event(session, poll.id, recipient_ids, broadcast.event)
     await session.commit()
-    await _broadcast(broadcast)
+    try:
+        # Best-effort immediate delivery. Any failure here -- including the follow-up
+        # write inside dispatch_now itself -- leaves the outbox row exactly as
+        # enqueued above, pending for the sweeper.
+        await outbox.dispatch_now(
+            session, outbox_row_id, kind="poll",
+            recipient_ids=recipient_ids, event=broadcast.event, sender_id=None,
+        )
+    except Exception:
+        # poll_id only -- never poll.id post-commit (see _enqueue_poll_event's
+        # docstring on delete_poll's expired-instance hazard; the same call shape
+        # is kept identical across all four sites rather than varying it per site).
+        logger.warning("outbox live dispatch follow-up failed poll_id=%s", broadcast.event["poll_id"])
     return response
 
 
@@ -367,6 +441,8 @@ async def cast_vote(
     counts = await _tally(session, poll.id)
     response = _assemble(poll, counts, body.option_id)
     broadcast = await _prepare_broadcast(session, poll, "updated", counts)
+    recipient_ids = [uuid.UUID(r) for r in broadcast.recipients]
+    outbox_row_id = await _enqueue_poll_event(session, poll.id, recipient_ids, broadcast.event)
     await session.commit()
     # Board c227: SECRET BALLOT, same rule this file's module docstring already
     # states for every other response here - poll_id + a scope id, deliberately NO
@@ -375,7 +451,13 @@ async def cast_vote(
     # app/models/polls.py), so chapter_id is what is actually emitted - already in
     # hand from the path, no extra query added purely for telemetry on every vote.
     emit("poll_voted", poll_id=poll_id, chapter_id=chapter_id)
-    await _broadcast(broadcast)
+    try:
+        await outbox.dispatch_now(
+            session, outbox_row_id, kind="poll",
+            recipient_ids=recipient_ids, event=broadcast.event, sender_id=None,
+        )
+    except Exception:
+        logger.warning("outbox live dispatch follow-up failed poll_id=%s", broadcast.event["poll_id"])
     return response
 
 
@@ -399,15 +481,25 @@ async def close_poll(
         poll.closed_at = datetime.now(timezone.utc)
     response = await _read_one(session, poll, membership.user_id)
     broadcast = None
+    recipient_ids: list[uuid.UUID] = []
+    outbox_row_id: uuid.UUID | None = None
     if changed:
         broadcast = await _prepare_broadcast(
             session, poll, "updated", {option.id: option.votes for option in response.options}
         )
+        recipient_ids = [uuid.UUID(r) for r in broadcast.recipients]
+        outbox_row_id = await _enqueue_poll_event(session, poll.id, recipient_ids, broadcast.event)
     await session.commit()
-    # Only the transition broadcasts. A second officer tapping close must not
-    # re-push an event that says nothing changed.
+    # Only the transition broadcasts/enqueues. A second officer tapping close must
+    # not re-push an event that says nothing changed.
     if broadcast is not None:
-        await _broadcast(broadcast)
+        try:
+            await outbox.dispatch_now(
+                session, outbox_row_id, kind="poll",
+                recipient_ids=recipient_ids, event=broadcast.event, sender_id=None,
+            )
+        except Exception:
+            logger.warning("outbox live dispatch follow-up failed poll_id=%s", broadcast.event["poll_id"])
     return response
 
 
@@ -435,6 +527,19 @@ async def delete_poll(
     if ballot_exists is not None:
         raise conflict("poll_has_ballots")
     broadcast = await _prepare_broadcast(session, poll, "deleted", None)
+    recipient_ids = [uuid.UUID(r) for r in broadcast.recipients]
+    # Enqueue BEFORE session.delete(poll): poll.id is still safe to read here, but
+    # the ORM instance is expired-on-commit the moment session.delete(poll) commits,
+    # and touching poll.id afterward would trigger an ObjectDeletedError refresh
+    # attempt against a row that no longer exists -- this is why every dispatch_now
+    # failure log below reads broadcast.event["poll_id"], never poll.id.
+    outbox_row_id = await _enqueue_poll_event(session, poll.id, recipient_ids, broadcast.event)
     await session.delete(poll)
     await session.commit()
-    await _broadcast(broadcast)
+    try:
+        await outbox.dispatch_now(
+            session, outbox_row_id, kind="poll",
+            recipient_ids=recipient_ids, event=broadcast.event, sender_id=None,
+        )
+    except Exception:
+        logger.warning("outbox live dispatch follow-up failed poll_id=%s", broadcast.event["poll_id"])
