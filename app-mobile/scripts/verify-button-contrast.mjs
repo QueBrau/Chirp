@@ -367,6 +367,44 @@ for (const [label, accent] of LIGHT_ROSTER) {
   }
 }
 
+// Exactly-one-step accent (c397 verifier minor): no roster accent needs exactly
+// ONE darken() step to clear AA, so a loop that skipped step 1 (started at 2)
+// would be invisible to every check above. Construct one deliberately: darken the
+// default light accent in 1/256 increments until its raw ratio sits just under
+// 4.5:1 against its own fill while a single 1/64 step clears, assert that accent
+// exists, then require the function's result to be the loop's literal first
+// candidate.
+{
+  let synthetic = null;
+  for (let k = 0; k <= 255; k++) {
+    const candidate = darken(LIGHT_ACCENT, k / 256);
+    const fill = compositeOver(candidate, SECONDARY_FILL_ALPHA_LIGHT, LIGHT_BG);
+    if (contrastRatio(candidate, fill) < 4.5 && contrastRatio(darken(candidate, 1 / 64), fill) >= 4.5) {
+      synthetic = candidate;
+      break;
+    }
+  }
+  check(
+    "synthetic one-step accent exists (raw fails AA, a single 1/64 darken() step clears)",
+    synthetic !== null,
+    synthetic ?? "none found in 256 increments",
+  );
+  if (synthetic !== null) {
+    const fill = compositeOver(synthetic, SECONDARY_FILL_ALPHA_LIGHT, LIGHT_BG);
+    const result = secondaryLabelColor(synthetic, LIGHT_BG, "light", LIGHT_INK);
+    check(
+      "synthetic one-step accent: result is exactly darken(accent, 1/64), the loop's literal first candidate",
+      result === darken(synthetic, 1 / 64),
+      `accent=${synthetic} result=${result} expected=${darken(synthetic, 1 / 64)}`,
+    );
+    check(
+      "synthetic one-step accent: result clears AA against its fill",
+      contrastRatio(result, fill) >= 4.5,
+      `ratio=${contrastRatio(result, fill).toFixed(3)}`,
+    );
+  }
+}
+
 // Regression trap (pins the defect, mirrors the dark-mode trap above): the
 // RAW, unlifted default light accent and Alpha Delta Pi ratios against their
 // own light fill must stay inside the exact measured band. This does not
