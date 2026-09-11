@@ -217,8 +217,13 @@ export async function runSecretaryCollectionCases(options = {}) {
     // c396: deleting a full page's worth of meetings down to zero must refill from the
     // still-exhausted-false server cursor rather than strand the user behind an empty state.
     ["deleting every meeting on a full page with more pages left refills instead of going empty", async e => {
+      // Polls get a SHORT page here so hasOlderPolls is false while hasOlderMeetings is
+      // true: the refill must read the meetings flag specifically, and this case is the
+      // executed proof (a flag swap would now leave items empty instead of refilling).
+      e.api.listPolls = async () => [poll(3), poll(2), poll(1)];
       await e.mount();
       assert.equal(e.value().hasOlderMeetings, true, "the default 50-row fixture must report more pages before this case proves anything");
+      assert.equal(e.value().hasOlderPolls, false, "the short poll fixture must report no more polls, or the two flags cannot be told apart");
       e.api.listMeetingsWithAttendance = async (_id, query) => (query.before ? [meeting(50), meeting(49), meeting(48)] : descending(meeting));
       for (let n = 100; n >= 51; n--) { await e.value().removeMeeting(meeting(n).meeting); await e.settle(); }
       const refill = e.apiCalls.filter(call => call.name === "listMeetingsWithAttendance").at(-1);
