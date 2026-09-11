@@ -55,6 +55,23 @@ def _png_bytes_half_transparent(size: tuple[int, int]) -> bytes:
     return buffer.getvalue()
 
 
+def _png_bytes_palette_with_transparency(size: tuple[int, int]) -> bytes:
+    """A real palette-mode (P) PNG carrying a tRNS chunk - the OTHER transparency shape
+    _decode_and_normalize_image must composite onto white, distinct from the RGBA/LA
+    fixture above (common real-world shape: many simple-graphics/sticker PNGs save this
+    way). Index 0 is the transparent background, index 1 opaque red - same top/bottom
+    two-region layout as _png_bytes_half_transparent, for the same assertion style."""
+    image = Image.new("P", size, 0)
+    image.putpalette([255, 255, 255, 220, 20, 20] + [0, 0, 0] * 254)
+    top = Image.new("P", (size[0], size[1] // 2), 1)
+    top.putpalette(image.getpalette())
+    image.paste(top, (0, 0))
+    image.info["transparency"] = 0
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # _decode_and_normalize_image / _build_media_derivative - pure functions on bytes
 # ---------------------------------------------------------------------------
@@ -115,6 +132,20 @@ def test_transparency_is_composited_onto_white_not_left_black():
     )
 
 
+def test_palette_mode_transparency_is_also_composited_onto_white():
+    source = _png_bytes_palette_with_transparency((40, 40))
+    derivative = storage_service._build_media_derivative(source)
+    out = Image.open(io.BytesIO(derivative)).convert("RGB")
+
+    opaque_pixel = out.getpixel((20, 5))  # top quarter: was opaque red (palette index 1)
+    transparent_pixel = out.getpixel((20, 35))  # bottom quarter: was the transparent index
+
+    assert opaque_pixel[0] > 180 and opaque_pixel[1] < 80 and opaque_pixel[2] < 80, opaque_pixel
+    assert all(channel > 220 for channel in transparent_pixel), (
+        f"transparent region did not composite onto white: got {transparent_pixel}"
+    )
+
+
 def test_undecodable_bytes_are_rejected_as_a_400_not_a_crash():
     with pytest.raises(HTTPException) as excinfo:
         storage_service._build_media_derivative(b"this is not an image, just text")
@@ -125,9 +156,11 @@ def test_undecodable_bytes_are_rejected_as_a_400_not_a_crash():
 def test_a_decompression_bomb_is_rejected_as_a_400_and_logged_distinctly(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A small, highly-compressible file can still decode to an enormous pixel count -
-    Pillow's own MAX_IMAGE_PIXELS guard (never raised or disabled by this module) is
-    what catches it, not MAX_UPLOAD_BYTES, which bounds compressed size only."""
+    """A small, highly-compressible file can still decode to an enormous pixel count.
+    This fixture (400 megapixels) is more than 2x Image.MAX_IMAGE_PIXELS, so Pillow's
+    own DecompressionBombError fires natively during image.load() - the redundant
+    safety-net branch in _decode_and_normalize_image, not the explicit 1x-threshold
+    check (see the test below for the gap that check exists to close)."""
     bomb = Image.new("RGB", (20000, 20000), (10, 10, 10))
     buffer = io.BytesIO()
     bomb.save(buffer, format="PNG", optimize=True)
@@ -143,6 +176,32 @@ def test_a_decompression_bomb_is_rejected_as_a_400_and_logged_distinctly(
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail == "invalid_media_content"
     assert "decompression bomb" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_a_bomb_in_pillows_warn_only_1x_to_2x_gap_is_still_rejected():
+    """Pillow's own DecompressionBombError only fires above 2x MAX_IMAGE_PIXELS; between
+    1x and 2x it only emits an unenforced DecompressionBombWarning that nothing escalates
+    to an exception. A 10000x10000 (100-megapixel) solid-color PNG sits squarely in that
+    gap - above 1x (~89.5M px) but under 2x (~179M px) - and would decode and re-encode
+    successfully with NO rejection at all if this code relied on Pillow's default
+    behavior alone. This is the actual regression test for that gap, exercising the
+    explicit pixel-count check in _decode_and_normalize_image, not the test above's
+    Pillow-native >2x raise."""
+    size = 10000
+    assert Image.MAX_IMAGE_PIXELS < size * size < 2 * Image.MAX_IMAGE_PIXELS, (
+        "fixture must sit inside Pillow's 1x-2x warn-only gap for this test to mean "
+        "anything - otherwise it's indistinguishable from the >2x test above"
+    )
+    bomb = Image.new("RGB", (size, size), (10, 10, 10))
+    buffer = io.BytesIO()
+    bomb.save(buffer, format="PNG", optimize=True)
+    bomb_bytes = buffer.getvalue()
+    assert len(bomb_bytes) < storage_service.MAX_UPLOAD_BYTES
+
+    with pytest.raises(HTTPException) as excinfo:
+        storage_service._build_media_derivative(bomb_bytes)
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "invalid_media_content"
 
 
 # ---------------------------------------------------------------------------

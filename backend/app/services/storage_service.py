@@ -101,13 +101,23 @@ quality 82. Three separate reasons converge on one pipeline rather than three bo
     a byte string that merely CLAIMED to be an image at upload time is a free, incidental
     content-type check this design gets without adding one on purpose.
 
-Pillow's decompression-bomb guard (Image.MAX_IMAGE_PIXELS, on by default - never raised
-or disabled here) is load-bearing precisely because MAX_UPLOAD_BYTES bounds compressed
-size, not decoded pixel count: a small, highly-compressible file (a solid-color PNG, for
-instance) can still decode to gigapixels well within the 10MB cap. Decoding is now real
-work this process does in-process, so that guard is the only thing standing between an
-accepted upload and an OOM on the request path - not a defense against a threat that
-only mattered once, but one MAX_UPLOAD_BYTES alone cannot cover.
+A decoded-pixel-count check (Image.MAX_IMAGE_PIXELS, Pillow's own default threshold) is
+load-bearing precisely because MAX_UPLOAD_BYTES bounds compressed size, not decoded pixel
+count: a small, highly-compressible file (a solid-color PNG, for instance) can still
+decode to gigapixels well within the 10MB cap. Decoding is now real work this process
+does in-process, so this check is the only thing standing between an accepted upload and
+an OOM on the request path - not a defense against a threat that only mattered once, but
+one MAX_UPLOAD_BYTES alone cannot cover.
+
+THIS IS AN EXPLICIT CHECK IN OUR OWN CODE, not a bare reliance on Pillow raising by
+itself - Pillow's built-in guard only raises DecompressionBombError above 2x
+MAX_IMAGE_PIXELS; between 1x and 2x it only emits a DecompressionBombWarning, which
+nothing escalates to an exception by default, so a 100-megapixel image (comfortably
+inside that 1x-2x gap) would decode and re-encode successfully with no rejection at all
+if this code relied on Pillow's default behavior alone. _decode_and_normalize_image
+below checks the decoded pixel count itself, at the 1x threshold, right after decode -
+this is verified against Pillow's actual installed source (Image.py's
+_decompression_bomb_check), not assumed from the constant's name.
 
 Everything the module docstring's earlier sections say about tmp/-then-move, the
 service account's posts/ delete restriction, and the orphan-on-commit-failure tradeoff
@@ -352,12 +362,13 @@ def _decode_and_normalize_image(raw_bytes: bytes):
         fails during the real decode (OSError/ValueError from libjpeg/libpng/libwebp) -
         image.load() forces that decode to happen HERE rather than lazily later, so the
         failure surfaces in this function's own try block instead of downstream.
-      - A decompression bomb: Image.MAX_IMAGE_PIXELS (Pillow's own default, never raised
-        or disabled by this code) rejects a decoded pixel count enormously out of
-        proportion to what MAX_UPLOAD_BYTES allows as compressed bytes - a small,
-        highly-compressible file can still decode to gigapixels. Logged distinctly from
-        an ordinary bad upload because an actual bomb attempt is worth being able to
-        grep for on its own.
+      - A decompression bomb: a decoded pixel count enormously out of proportion to what
+        MAX_UPLOAD_BYTES allows as compressed bytes - a small, highly-compressible file
+        can still decode to gigapixels. Checked EXPLICITLY against Image.MAX_IMAGE_PIXELS
+        below, at the 1x threshold, rather than left to Pillow's own DecompressionBombError
+        (which only fires above 2x that threshold and would silently let a 1x-2x bomb
+        through as a mere warning). Logged distinctly from an ordinary bad upload because
+        an actual bomb attempt is worth being able to grep for on its own.
 
     exif_transpose() BAKES ORIENTATION INTO THE PIXELS and returns an image with the
     Orientation tag removed - this is what makes a rotated phone photo display right-side
@@ -379,10 +390,27 @@ def _decode_and_normalize_image(raw_bytes: bytes):
         image = Image.open(io.BytesIO(raw_bytes))
         image.load()
     except Image.DecompressionBombError as exc:
+        # Pillow's own 2x-threshold raise. Kept as a redundant safety net; the real
+        # enforcement is the explicit 1x-threshold check just below, since Pillow itself
+        # only WARNS (does not raise) between 1x and 2x MAX_IMAGE_PIXELS.
         logger.warning("media finalize rejected a decompression bomb, size=%s", len(raw_bytes))
         raise HTTPException(status_code=400, detail="invalid_media_content") from exc
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="invalid_media_content") from exc
+
+    pixel_count = image.size[0] * image.size[1]
+    if pixel_count > Image.MAX_IMAGE_PIXELS:
+        # Explicit check, not a reliance on Pillow raising by itself: Pillow's own
+        # DecompressionBombError only fires above 2x MAX_IMAGE_PIXELS, and only emits an
+        # unenforced DecompressionBombWarning between 1x and 2x - a 100-megapixel image
+        # (well inside that gap) would otherwise decode and re-encode successfully with
+        # no rejection at all. This enforces at the 1x threshold ourselves.
+        logger.warning(
+            "media finalize rejected an oversized image, pixels=%s limit=%s",
+            pixel_count,
+            Image.MAX_IMAGE_PIXELS,
+        )
+        raise HTTPException(status_code=400, detail="invalid_media_content")
 
     image = ImageOps.exif_transpose(image)
     if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
