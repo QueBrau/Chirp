@@ -214,6 +214,44 @@ export async function runSecretaryCollectionCases(options = {}) {
       page.resolve([meeting(100), meeting(50)]); await pending; await e.settle();
       assert.equal(e.value().items.some(row => row.meeting.id === "m100"), false);
     }],
+    // c396: deleting a full page's worth of meetings down to zero must refill from the
+    // still-exhausted-false server cursor rather than strand the user behind an empty state.
+    ["deleting every meeting on a full page with more pages left refills instead of going empty", async e => {
+      // Polls get a SHORT page here so hasOlderPolls is false while hasOlderMeetings is
+      // true: the refill must read the meetings flag specifically, and this case is the
+      // executed proof (a flag swap would now leave items empty instead of refilling).
+      e.api.listPolls = async () => [poll(3), poll(2), poll(1)];
+      await e.mount();
+      assert.equal(e.value().hasOlderMeetings, true, "the default 50-row fixture must report more pages before this case proves anything");
+      assert.equal(e.value().hasOlderPolls, false, "the short poll fixture must report no more polls, or the two flags cannot be told apart");
+      e.api.listMeetingsWithAttendance = async (_id, query) => (query.before ? [meeting(50), meeting(49), meeting(48)] : descending(meeting));
+      for (let n = 100; n >= 51; n--) { await e.value().removeMeeting(meeting(n).meeting); await e.settle(); }
+      const refill = e.apiCalls.filter(call => call.name === "listMeetingsWithAttendance").at(-1);
+      assert.equal(refill.args[1].before, time(51)); assert.equal(refill.args[1].beforeId, "m051");
+      assert.equal(e.value().items.length, 3);
+    }],
+    ["deleting the last meeting on an exhausted page renders the empty state and does not reload", async e => {
+      e.api.listMeetingsWithAttendance = async (_id, query) => (query.before ? [] : [meeting(4), meeting(3), meeting(2), meeting(1)]);
+      await e.mount();
+      assert.equal(e.value().hasOlderMeetings, false, "the short fixture must report no more pages before this case proves anything");
+      for (let n = 4; n >= 1; n--) { await e.value().removeMeeting(meeting(n).meeting); await e.settle(); }
+      assert.equal(e.value().items.length, 0);
+      assert.equal(e.value().hasOlderMeetings, false);
+      assert.equal(e.apiCalls.filter(call => call.name === "listMeetingsWithAttendance").length, 1);
+    }],
+    ["a delete while an older page is already pending does not start a second load", async e => {
+      await e.mount();
+      assert.equal(e.value().hasOlderMeetings, true);
+      const page = deferred(); e.api.listMeetingsWithAttendance = () => page.promise;
+      const pending = e.value().loadOlderMeetings(); await e.settle();
+      assert.equal(e.value().loadingOlderMeetings, true, "the manual load must be visibly in flight before this case proves anything");
+      for (let n = 100; n >= 51; n--) { await e.value().removeMeeting(meeting(n).meeting); await e.settle(); }
+      assert.equal(e.value().items.length, 0);
+      assert.equal(e.apiCalls.filter(call => call.name === "listMeetingsWithAttendance").length, 2);
+      page.resolve([meeting(50), meeting(49), meeting(48)]); await pending; await e.settle();
+      assert.equal(e.apiCalls.filter(call => call.name === "listMeetingsWithAttendance").length, 2);
+      assert.equal(e.value().items.length, 3);
+    }],
     ["account/chapter switch retires old pages, live callbacks and mutation completion", async e => {
       await e.mount(); const page = deferred(), write = deferred();
       const normal = e.api.listPolls; e.api.listPolls = () => page.promise; e.api.castVote = () => write.promise;
