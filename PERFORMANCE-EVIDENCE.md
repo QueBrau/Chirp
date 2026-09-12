@@ -24,9 +24,12 @@ exact, uneven 4-option vote split plus the harness caller's own vote), a 3% targ
 `user_blocks` rate, and 1-2 devices/user each with a 20-prekey one-time pool (the
 designated quota-count device additionally carries 5 already-consumed prekeys, seeded
 directly, to prove the count excludes them). Local Postgres on this Mac is
-**PostgreSQL 14.20 (Homebrew)**, `server_encoding` **SQL_ASCII** (board c399) — every seeded display name, email and
-poll question/option is plain ASCII on purpose, and prod/CI both run Postgres 16, so
-these numbers are informative, not authoritative. A PG16 run is the one to trust before
+**PostgreSQL 14.20 (Homebrew)**, `server_encoding` **UTF8** — board c399's scratch-database
+fixture forces `ENCODING 'UTF8' TEMPLATE template0` for every test run regardless of what
+this machine's own `template1` defaults to (which is SQL_ASCII), so the harness's seed data
+is ASCII-only on purpose but the connection itself is UTF8, same as prod/CI. Prod and CI both
+run Postgres 16 rather than this Mac's local 14, so these numbers are informative, not
+authoritative. A PG16 run is the one to trust before
 acting on any of the recommendations below; obtain it by running this same harness
 (`CHIRP_EXPLAIN=1 .venv/bin/python -m pytest tests/test_c364_query_plans.py -q`)
 against a local PG16 instance, or a throwaway Cloud SQL PG16 instance, pointed at via
@@ -45,8 +48,8 @@ selective rather than a no-op (15 returned, not 0 and not the full campus).
 - **Plan**: `Limit` at the top, with a `Seq Scan` on `users` underneath — no functional
   index backs the leading-wildcard ILIKE, so the planner has no choice but to scan the
   table.
-- **Execution time**: 9.218ms at 15,000 users (`infra/evidence/c364-query-plans-2026-09-11.json`, `people_search`/`ilike_reachable_select`).
-- **Recommendation**: no index added in this pass. 9.218ms at 15,000 users is not the
+- **Execution time**: 7.416ms at 15,000 users (`infra/evidence/c364-query-plans-2026-09-11.json`, `people_search`/`ilike_reachable_select`).
+- **Recommendation**: no index added in this pass. 7.416ms at 15,000 users is not the
   "large execution time" this card's STOP condition (ruling R3) is about, so no
   follow-up card is opened from this run. There is no index on `users.display_name`
   today, and a leading-wildcard `ILIKE '%...%'` cannot use a plain B-tree index
@@ -63,7 +66,7 @@ not empty.
 
 - **Plan**: `Seq Scan` on `user_blocks`, both from within `search_users` (0 rows, the
   search caller has no blockers) and standalone (5 rows, the constructed case).
-- **Execution time**: 0.142ms (from search, `blockers_of_from_search`) / 0.131ms
+- **Execution time**: 0.062ms (from search, `blockers_of_from_search`) / 0.064ms
   (standalone, `blockers_of_select`) — from the same evidence file's `people_search`
   and `blockers_of` families.
 - **Recommendation**: no index. `blocker_id` leads `user_blocks`' composite primary key
@@ -90,13 +93,13 @@ carries an exact, deliberately uneven 4-option vote split plus the caller's own 
 vote, so the tally and "mine" assertions check the real SHAPE (exact per-option counts,
 `my_option_id` equal to exactly what this caller cast) rather than a status code.
 
-- **Page select plan**: `Limit` at the top, no Seq Scan anywhere in the plan; 0.186ms
+- **Page select plan**: `Limit` at the top, no Seq Scan anywhere in the plan; 0.11ms
   (`list_polls`/`page_select`).
 - **Tally plan**: `Aggregate` at the top, WITH a `Seq Scan` on `poll_votes`
-  underneath; 7.682ms (`poll_tally`/`tally_group_by`).
-- **Mine plan**: `Bitmap Heap Scan` on `poll_votes`, no Seq Scan; 0.332ms
+  underneath; 3.546ms (`poll_tally`/`tally_group_by`).
+- **Mine plan**: `Bitmap Heap Scan` on `poll_votes`, no Seq Scan; 0.191ms
   (`poll_tally`/`mine_select`).
-- **Recommendation**: no index added. The page select is fast (0.186ms) even without a
+- **Recommendation**: no index added. The page select is fast (0.11ms) even without a
   composite `(chapter_id, created_at, id)` index backing the `ORDER BY` — today only a
   plain single-column index on `chapter_id` backs the equality filter, and a
   LIMIT-bounded sort over the matching rows is evidently cheap enough at this scale.
@@ -120,13 +123,15 @@ The harness therefore hard-codes a regression assertion here — `not has_seq_sc
 — that the other three families deliberately do not. Constructed: a quota-count device
 with exactly 20 unconsumed and 5 already-consumed one-time prekeys (available count
 must read 20, not 25); a bundle-fetch target with two active devices, each with a
-nonzero unconsumed pool, so the bundle covers both devices and hands back a real
-(non-null) one-time prekey for each.
+nonzero unconsumed pool, plus a third, revoked device on the same target with its
+own nonzero pool, so the bundle covers only the two active devices and hands back a
+real (non-null) one-time prekey for each, while the revoked device's
+`Device.revoked_at.is_(None)` filter is proven to actually exclude something.
 
-- **All 11 sub-plans** (devices select, 2x signed-prekey select, 2x OTK consume, 2x
-  Kyber consume across the bundle's two devices, plus the 3 quota-count selects):
+- **All 10 sub-plans** (devices select, 2x signed-prekey select, 2x OTK consume, 2x
+  Kyber consume across the bundle's two active devices, plus the 3 quota-count selects):
   **zero Seq Scans**, at 15,000 users / roughly 16,500 devices / roughly 330,000
-  one-time-prekey rows and roughly 66,000 Kyber-prekey rows. The harness's own
+  one-time-prekey rows and roughly 99,000 Kyber-prekey rows. The harness's own
   assertion (`not has_seq_scan(...)`) enforces this as a hard regression guard for this
   one family, unlike the other three above.
 - **Recommendation**: none. The existing indexes (migrations 0001/0002/0035) already

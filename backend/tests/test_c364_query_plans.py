@@ -32,11 +32,14 @@ documented here -- see `_CARDINALITY` below and infra/evidence/c364-query-plans-
 NO INDEX AND NO MIGRATION ARE ADDED HERE (ruling R3). This harness only measures.
 Any index decision is a separate, evidence-gated follow-up card.
 
-Local Postgres on this Mac is SQL_ASCII (board c399, ruling R6): every seeded display
-name, email and poll question/option is plain ASCII on purpose. The evidence file
-records `server_version`/`server_encoding` from the connection; prod and CI run
-Postgres 16, so a PG14/SQL_ASCII run here is informative but NOT authoritative -- see
-PERFORMANCE-EVIDENCE.md for how to obtain the authoritative PG16 numbers.
+Board c399's scratch-database fixture forces every test run's database to
+`ENCODING 'UTF8' TEMPLATE template0`, regardless of what this Mac's own template1
+defaults to (SQL_ASCII, ruling R6) -- so every seeded display name, email and poll
+question/option here is still plain ASCII on purpose, but the connection itself is
+UTF8, matching prod/CI. The evidence file records `server_version`/`server_encoding`
+from the connection; prod and CI run Postgres 16 rather than this Mac's local 14, so
+a run here is informative but NOT authoritative -- see PERFORMANCE-EVIDENCE.md for how
+to obtain the authoritative PG16 numbers.
 """
 from __future__ import annotations
 
@@ -244,6 +247,7 @@ class Handles:
     prekey_bundle_requester_id: uuid.UUID
     prekey_bundle_target_id: uuid.UUID
     prekey_bundle_device_ids: list[uuid.UUID]
+    prekey_bundle_revoked_device_id: uuid.UUID
 
 
 async def _bulk(session: AsyncSession, model: type, rows: list[dict], chunk: int = 5000) -> None:
@@ -427,7 +431,14 @@ async def _seed(session: AsyncSession) -> Handles:
     otk_rows = []
     kyber_rows = []
 
-    def _add_device(uid: uuid.UUID, *, otk_unconsumed: int, otk_consumed: int, kyber_unconsumed: int) -> uuid.UUID:
+    def _add_device(
+        uid: uuid.UUID,
+        *,
+        otk_unconsumed: int,
+        otk_consumed: int,
+        kyber_unconsumed: int,
+        revoked_at: datetime | None = None,
+    ) -> uuid.UUID:
         did = uuid.uuid4()
         device_rows.append(
             {
@@ -436,7 +447,7 @@ async def _seed(session: AsyncSession) -> Handles:
                 "device_label": "c364-explain",
                 "registration_id": rng.randint(1, 1_000_000),
                 "identity_key": b"c364-identity-key",
-                "revoked_at": None,
+                "revoked_at": revoked_at,
             }
         )
         signed_rows.append(
@@ -509,6 +520,18 @@ async def _seed(session: AsyncSession) -> Handles:
         _add_device(prekey_bundle_target_id, otk_unconsumed=OTK_POOL, otk_consumed=0, kyber_unconsumed=KYBER_OTK_POOL)
         for _ in range(2)
     ]
+    # A third device on the same target, revoked, with its own nonzero available
+    # prekey pool -- fetch_prekey_bundle's `Device.revoked_at.is_(None)` filter must
+    # exclude it. Without a revoked device actually present in the seed, that filter
+    # has zero discriminating test coverage (a dropped/narrowed filter would still
+    # return exactly the 2 active devices and every assertion below would stay green).
+    prekey_bundle_revoked_device_id = _add_device(
+        prekey_bundle_target_id,
+        otk_unconsumed=OTK_POOL,
+        otk_consumed=0,
+        kyber_unconsumed=KYBER_OTK_POOL,
+        revoked_at=now,
+    )
 
     await _bulk(session, models.Device, device_rows)
     await _bulk(session, models.SignedPrekey, signed_rows)
@@ -657,6 +680,7 @@ async def _seed(session: AsyncSession) -> Handles:
         prekey_bundle_requester_id=prekey_bundle_requester_id,
         prekey_bundle_target_id=prekey_bundle_target_id,
         prekey_bundle_device_ids=prekey_bundle_device_ids,
+        prekey_bundle_revoked_device_id=prekey_bundle_revoked_device_id,
     )
 
 
@@ -887,20 +911,36 @@ async def test_prekey_bundle_plan(explain_dataset: Handles, evidence: Evidence) 
         result = bundle_out.devices
 
         # Constructed: the target has exactly 2 active devices, each with a nonzero
-        # available one-time-prekey pool -- the bundle must cover both devices and
-        # hand back a real (non-null) one-time prekey for each, not degrade silently.
-        assert {b.device_id for b in result} == set(ds.prekey_bundle_device_ids)
+        # available one-time-prekey pool, PLUS a third, revoked device on the same
+        # target with its own nonzero pool -- the bundle must cover only the 2 active
+        # devices and hand back a real (non-null) one-time prekey for each, not degrade
+        # silently, and the revoked device's `Device.revoked_at.is_(None)` filter must
+        # actually exclude it (there IS something present for it to exclude).
+        result_device_ids = {b.device_id for b in result}
+        assert result_device_ids == set(ds.prekey_bundle_device_ids)
+        assert ds.prekey_bundle_revoked_device_id not in result_device_ids, (
+            "revoked device must never receive a prekey bundle"
+        )
         assert len(result) == 2
         assert all(b.one_time_prekey is not None for b in result)
 
         # statements[0] = fetch_prekey_bundle's own target-user existence check
         # (session.get(models.User, user_id)); [1] = devices select; then per device:
         # signed_prekey select, OTK consume UPDATE...RETURNING, Kyber consume
-        # UPDATE...RETURNING (index 2..7).
+        # UPDATE...RETURNING (index 2..7). Still 2 devices' worth of per-device
+        # statements even with 3 devices seeded on the target, because the revoked
+        # one must never reach the per-device loop at all.
         assert len(statements) == 2 + 2 * 3
         sql, params = statements[1]
         plan = await explain(session, sql, params)
-        evidence.record(family="prekey_bundle", query="devices_select", sql=sql, row_count=2, plan=plan)
+        devices_actual_rows = plan["Plan"]["Actual Rows"]
+        assert devices_actual_rows == 2, (
+            "devices_select must return exactly the 2 non-revoked devices, not the "
+            f"revoked third -- got {devices_actual_rows} actual rows"
+        )
+        evidence.record(
+            family="prekey_bundle", query="devices_select", sql=sql, row_count=devices_actual_rows, plan=plan
+        )
         assert not has_seq_scan(plan), f"devices_select plan unexpectedly contains a Seq Scan: {plan}"
 
         labels = ["signed_prekey_select", "otk_consume", "kyber_consume"]
