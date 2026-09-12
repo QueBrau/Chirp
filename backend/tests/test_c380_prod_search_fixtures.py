@@ -269,6 +269,51 @@ async def test_teardown_deletes_exactly_marked_rows_and_nothing_else(
 
 
 @pytest.mark.asyncio
+def test_safe_campus_slug_regex_rejects_what_cannot_go_in_an_email_local_part() -> None:
+    """The charset guard must actually reject, or it is decoration.
+
+    Each bad string is a slug shape that would build a malformed fixture email
+    (an "@", a space, a "+", which is this tool's own fixture/campus separator)
+    or read as a LIKE metacharacter; an ordinary slug must still pass.
+    """
+    assert fx.SAFE_CAMPUS_SLUG_RE.match("state-university")
+    assert fx.SAFE_CAMPUS_SLUG_RE.match("u.of.x_2")
+    for bad in ("evil@campus", "two words", "pct%slug", "UPPER", "", "sl/ash", "plus+slug"):
+        assert not fx.SAFE_CAMPUS_SLUG_RE.match(bad), bad
+
+
+@pytest.mark.asyncio
+async def test_seed_refuses_a_campus_whose_slug_is_not_email_safe(
+    client: AsyncClient, make_campus: MakeCampus
+) -> None:
+    """A campus whose slug carries an "@" is refused before any write.
+
+    The discriminating condition is constructed, not incidental: an ordinary
+    campus is created and its slug is then set to an unsafe value, and that row
+    is read back and asserted before the refusal is exercised.
+    """
+    from app.db import get_session_factory
+
+    campus_id = await make_campus()
+    async with get_session_factory()() as session:
+        await session.execute(
+            text("UPDATE campuses SET slug = :slug WHERE id = :id"),
+            {"slug": "evil@campus", "id": campus_id},
+        )
+        await session.commit()
+        slug = (
+            await session.execute(
+                text("SELECT slug FROM campuses WHERE id = :id"), {"id": campus_id}
+            )
+        ).scalar_one()
+    assert slug == "evil@campus", "the unsafe-slug precondition must exist before the assertion"
+
+    with pytest.raises(fx.CampusNotFound) as caught:
+        await fx.run_seed_job(campus_id=campus_id, apply=True)
+    assert "not safe to fold" in str(caught.value)
+    assert await _fixture_rows_for_campus(campus_id) == [], "a refused seed must write nothing"
+
+
 async def test_seeding_a_second_campus_does_not_relocate_the_first_campus_fixtures(
     client: AsyncClient, make_campus: MakeCampus,
 ) -> None:

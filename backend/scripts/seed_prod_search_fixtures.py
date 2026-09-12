@@ -67,6 +67,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -148,6 +149,15 @@ def _fixture_specs(campus_slug: str) -> list[dict[str, str]]:
     ]
 
 
+# Every character a campus slug may contain for this tool to fold it into an email
+# local-part and a firebase_uid. Excludes "@" (which would build a two-at address),
+# whitespace, "+" (this tool's own fixture/campus separator) and "%" (a LIKE
+# metacharacter). "_" is allowed: teardown's LIKE pattern only ever varies the
+# DOMAIN side ("%@fixtures.chirp.invalid") and never the local-part, so an
+# underscore in a slug cannot widen that match.
+SAFE_CAMPUS_SLUG_RE = re.compile(r"^[a-z0-9._-]+$")
+
+
 class CampusNotFound(ValueError):
     """Raised by `_resolve_campus` when the given id/slug matches no campus row."""
 
@@ -182,6 +192,17 @@ async def _resolve_campus(
     if campus is None:
         raise CampusNotFound(
             f"no campus found for campus_id={campus_id!r} campus_slug={campus_slug!r}"
+        )
+    # The resolved campus's own slug is folded into every fixture email's local-part
+    # and into every firebase_uid (see _fixture_specs), so a slug carrying a
+    # character that is not legal there would build a malformed address. Refusing
+    # here keeps that impossible rather than relying on campus slugs happening to
+    # stay tame: this is a production tool and the check costs one regex.
+    if not SAFE_CAMPUS_SLUG_RE.match(campus.slug or ""):
+        raise CampusNotFound(
+            f"campus {campus.id} has slug {campus.slug!r}, which is not safe to fold into "
+            "a fixture email local-part or firebase_uid (allowed: lowercase letters, "
+            "digits, hyphen, underscore, dot)"
         )
     return campus
 
@@ -354,6 +375,13 @@ def main(argv: list[str] | None = None) -> None:
         )
     except CampusNotFound as exc:
         _refuse(f"REFUSING: {exc}")
+        return
+    except Exception as exc:  # noqa: BLE001 - operator tool: refuse cleanly, never a traceback
+        # Anything else (a dead proxy, a permission error, an unexpected schema) exits
+        # 2 in this module's own refusal shape instead of a raw traceback. Only the
+        # exception type and message are printed; DATABASE_URL is never interpolated
+        # here.
+        _refuse(f"REFUSING: {type(exc).__name__}: {exc}")
         return
     print(json.dumps(result, sort_keys=True))
 
