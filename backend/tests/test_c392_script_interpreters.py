@@ -40,6 +40,7 @@ WRAPPERS = [
     ("network-audit", "network_audit.py"),
     ("spend-report", "spend_report.py"),
     ("recovery-check", "recovery_check.py"),
+    ("local-db-encoding", "local_db_encoding.py"),
 ]
 WRAPPER_NAMES = [name for name, _ in WRAPPERS]
 

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Detect (and, with --apply, repair) a local Postgres server whose databases
+# were created SQL_ASCII instead of UTF8; see local_db_encoding.py and
+# board card c399. Dry run by default; --apply is gated by a localhost +
+# dev-port + dev-database-name guard inside the module itself.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+source "$here/lib/pick-python.sh"
+python=$(chirp_pick_python local-db-encoding) || exit $?
+exec "$python" "$here/local_db_encoding.py" "$@"
