@@ -45,8 +45,8 @@ selective rather than a no-op (15 returned, not 0 and not the full campus).
 - **Plan**: `Limit` at the top, with a `Seq Scan` on `users` underneath — no functional
   index backs the leading-wildcard ILIKE, so the planner has no choice but to scan the
   table.
-- **Execution time**: 5.4ms at 15,000 users.
-- **Recommendation**: no index added in this pass. 5.4ms at 15,000 users is not the
+- **Execution time**: 9.218ms at 15,000 users (`infra/evidence/c364-query-plans-2026-09-11.json`, `people_search`/`ilike_reachable_select`).
+- **Recommendation**: no index added in this pass. 9.218ms at 15,000 users is not the
   "large execution time" this card's STOP condition (ruling R3) is about, so no
   follow-up card is opened from this run. There is no index on `users.display_name`
   today, and a leading-wildcard `ILIKE '%...%'` cannot use a plain B-tree index
@@ -63,7 +63,9 @@ not empty.
 
 - **Plan**: `Seq Scan` on `user_blocks`, both from within `search_users` (0 rows, the
   search caller has no blockers) and standalone (5 rows, the constructed case).
-- **Execution time**: 0.066ms (from search) / 0.095ms (standalone).
+- **Execution time**: 0.142ms (from search, `blockers_of_from_search`) / 0.131ms
+  (standalone, `blockers_of_select`) — from the same evidence file's `people_search`
+  and `blockers_of` families.
 - **Recommendation**: no index. `blocker_id` leads `user_blocks`' composite primary key
   `(blocker_id, blocked_id)`, and the plan's earlier guess (in the approved plan's
   `proposed_contract`) was that this would make an Index Scan the likely shape — that
@@ -88,11 +90,13 @@ carries an exact, deliberately uneven 4-option vote split plus the caller's own 
 vote, so the tally and "mine" assertions check the real SHAPE (exact per-option counts,
 `my_option_id` equal to exactly what this caller cast) rather than a status code.
 
-- **Page select plan**: `Limit` at the top, no Seq Scan anywhere in the plan; 0.1ms.
+- **Page select plan**: `Limit` at the top, no Seq Scan anywhere in the plan; 0.186ms
+  (`list_polls`/`page_select`).
 - **Tally plan**: `Aggregate` at the top, WITH a `Seq Scan` on `poll_votes`
-  underneath; 4.3ms.
-- **Mine plan**: `Bitmap Heap Scan` on `poll_votes`, no Seq Scan; 0.27ms.
-- **Recommendation**: no index added. The page select is fast (0.1ms) even without a
+  underneath; 7.682ms (`poll_tally`/`tally_group_by`).
+- **Mine plan**: `Bitmap Heap Scan` on `poll_votes`, no Seq Scan; 0.332ms
+  (`poll_tally`/`mine_select`).
+- **Recommendation**: no index added. The page select is fast (0.186ms) even without a
   composite `(chapter_id, created_at, id)` index backing the `ORDER BY` — today only a
   plain single-column index on `chapter_id` backs the equality filter, and a
   LIMIT-bounded sort over the matching rows is evidently cheap enough at this scale.
