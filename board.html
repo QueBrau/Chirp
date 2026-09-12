@@ -3901,11 +3901,11 @@
     },
     {
       "id": "c400",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "J",
       "tag": "P2 audit",
       "area": "fyp",
-      "title": "c400 [SPLIT FROM c374 Sep 11, chirps-fb, agreed with chirps-17: c374's server-side derivative slice is done/merged and closes on its own evidence, this is the remaining CLIENT half] Measure feed media bytes/cache hits/render smoothness on target devices - queued; suggested Q.",
+      "title": "c400 [CLAIMED Sep 12, chirps-fb, branch jose/c400-fb; scope agreed with chirps-17: backend-measurable half only - serve a representative feed page, sum actual derivative bytes a client would fetch vs pre-c374 originals, record as evidence the way c364's harness does] Measure feed media bytes/cache hits/render smoothness on target devices - device-render half stays open, no device needed for this slice.",
       "detail": "Split out of board card c374's original acceptance item 3 (\"Measure transferred bytes, cache hits/expiry, signing misses and render smoothness on target devices\") once c374's server-side derivative pipeline (bounded feed-size JPEG re-encode, EXIF strip, orientation fix) merged via PR #291 - that slice closes on its own server-side evidence (a posted photo's stored object is JPEG, EXIF-free, <=1600px long edge) and should not stay open waiting on unrelated client-side instrumentation.\n\nSCOPE: client-side measurement only, now that the server always emits a bounded derivative. Confirm actual transferred bytes per feed image against the ~100-300KB hypothesis from c374's original card, measure RN Image cache hit rate against the capability-url quantized-expiry window (storage_service.MEDIA_TOKEN_WINDOW, see c140), count avoidable signing misses, and check render smoothness (frame drops / jank) on real target devices scrolling a media-heavy feed. Both this and the deferred async-worker/quota/detail-derivative half of c374 can proceed independently of each other.\n\nCOORDINATION: c374 (server-side derivative it measures), c140 (capability-url/signed-read design being measured)."
     }
   ],
