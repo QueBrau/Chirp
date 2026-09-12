@@ -10,6 +10,16 @@ Every test below is skipped unless CHIRP_MEDIA_EVIDENCE=1 (see pytestmark), matc
 tests/test_c364_query_plans.py's convention: this produces a dated evidence file, it is
 not a correctness gate that should run on every commit.
 
+WRITE PATH (board c404): the command above writes its artefact OUTSIDE the repo, then
+compares its STRUCTURE (which image shapes were measured, the hypothesis range, whether
+window-determinism was recorded - never exact bytes, which legitimately vary by Pillow
+build) against the committed infra/evidence/c400-feed-bytes-2026-09-12.json, and fails
+only if that structure no longer matches. See tests/_evidence_write.py for why. To
+deliberately regenerate the COMMITTED file itself:
+
+    CHIRP_MEDIA_EVIDENCE=1 CHIRP_EVIDENCE_OUT=infra/evidence/c400-feed-bytes-2026-09-12.json \
+        .venv/bin/python -m pytest tests/test_c400_feed_bytes.py -q
+
 DRIFT GUARD, same standard c364 holds itself to: nothing here reimplements the
 derivative pipeline. Every measurement calls the actual production function,
 storage_service._build_media_derivative(), on real bytes this module builds - never a
@@ -48,6 +58,8 @@ from PIL import Image, ImageFilter
 from app import config
 from app.services import storage_service
 
+from . import _evidence_write
+
 pytestmark = pytest.mark.skipif(
     os.environ.get("CHIRP_MEDIA_EVIDENCE") != "1",
     reason="opt-in evidence harness (board c400) -- set CHIRP_MEDIA_EVIDENCE=1 to run",
@@ -55,6 +67,10 @@ pytestmark = pytest.mark.skipif(
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE_PATH = REPO_ROOT / "infra" / "evidence" / "c400-feed-bytes-2026-09-12.json"
+REGENERATE_COMMAND = (
+    "CHIRP_MEDIA_EVIDENCE=1 CHIRP_EVIDENCE_OUT=infra/evidence/c400-feed-bytes-2026-09-12.json "
+    ".venv/bin/python -m pytest tests/test_c400_feed_bytes.py -q"
+)
 
 # Real phone-camera shapes: 12MP landscape/portrait 4:3 (the most common shape by far),
 # a 16:9-ish wide shot, and one already-small case (a re-share or a low-end camera) that
@@ -104,6 +120,22 @@ def _configure_signing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "app_public_base_url", "https://chirps-prod.example")
 
 
+def _structural_signature(payload: dict[str, Any]) -> dict[str, Any]:
+    """The SET of things this run measured - never a timing or a byte count.
+
+    Board c404: this is what gets compared against the committed file. A
+    changed image_labels set or hypothesis range means the committed file no
+    longer describes the same thing the harness measures, which is a real
+    regression; the actual byte counts are expected to vary by Pillow build
+    and are compared nowhere near this function.
+    """
+    return {
+        "image_labels": sorted(e["label"] for e in payload["images"]),
+        "hypothesis_range_bytes": payload["hypothesis_range_bytes"],
+        "has_window_determinism": bool(payload.get("capability_url_window_determinism")),
+    }
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _write_evidence_on_teardown(request: pytest.FixtureRequest):
     request.node.session._c400_evidence: list[dict[str, Any]] = []  # type: ignore[attr-defined]
@@ -122,6 +154,7 @@ def _write_evidence_on_teardown(request: pytest.FixtureRequest):
             "shapes, run through the real storage_service._build_media_derivative() - "
             "not a substitute for measuring real uploads. See module docstring."
         ),
+        "regenerate_command": REGENERATE_COMMAND,
         "hypothesis_range_bytes": [HYPOTHESIS_MIN_BYTES, HYPOTHESIS_MAX_BYTES],
         "images": entries,
         "feed_page_totals": {
@@ -134,8 +167,29 @@ def _write_evidence_on_teardown(request: pytest.FixtureRequest):
         },
         "capability_url_window_determinism": window_evidence,
     }
-    EVIDENCE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    EVIDENCE_PATH.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+
+    out_path = _evidence_write.evidence_output_path(EVIDENCE_PATH)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+
+    if out_path == EVIDENCE_PATH:
+        return  # deliberate write to the committed path - nothing to compare against
+
+    committed = _evidence_write.load_committed(EVIDENCE_PATH)
+    if committed is None:
+        return  # no committed file yet - a future deliberate run creates it
+    diff = _evidence_write.structural_diff(_structural_signature(committed), _structural_signature(payload))
+    if diff:
+        report = "\n".join(
+            [
+                f"c400 evidence ({out_path}) no longer matches what the committed "
+                f"file ({EVIDENCE_PATH}) describes:",
+                *[f"  - {line}" for line in diff],
+                "",
+                f"If this is a deliberate, reviewed change: {REGENERATE_COMMAND}",
+            ]
+        )
+        pytest.fail(report, pytrace=False)
 
 
 @pytest.mark.parametrize("label,width,height", REPRESENTATIVE_SHAPES)
