@@ -225,7 +225,7 @@
 </footer>
 
 <script id="board-data" type="application/json">{
-  "updated": 1789221172588,
+  "updated": 1789221325584,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -415,6 +415,13 @@
     }
   ],
   "cards": [
+    {
+      "id": "c403",
+      "col": "backlog",
+      "owner": "",
+      "title": "c403 [P2 | test isolation, follow-up of c401] no_subscribers() waits on a server-wide Redis client count and can time out on another suite's clients",
+      "detail": "Opened Sep 12 2026 by chirps-17 from chirps-36's c401 review, which found the mechanism and correctly left it out of scope. WHAT c401 FIXED: test_ws_resource_integration.py's churn test asserted an exact delta against redis_totals(), which reads client_list() and is therefore SERVER-WIDE; any neighbouring test or suite moves it, observed as '33 - 0 == 16' and '16 - 16 == 16'. That one assertion now counts subscribers on the test's own user channel with PUBSUB NUMSUB, which nothing outside the test can move, and matched the server-wide count exactly in six isolated runs. WHAT REMAINS: the same file's no_subscribers() helper has the identical server-wide weakness at six other call sites, where it WAITS for a count to reach zero with a 3-second timeout. On a shared machine (two other Claude sessions running suites, which is normal here) it can wait on clients it does not own and time out, producing a red that looks like a leak in the code under test. SCOPE: give those six call sites the same own-channel precision, using the PUBSUB NUMSUB helper c401 already added, or state per call site why a server-wide count is the question actually being asked there. ACCEPTANCE: (1) each converted call site still fails when the thing it guards genuinely leaks, shown by reintroducing that leak; (2) the file passes with another backend suite running concurrently against the same Redis, which is the condition that makes the current version flake; (3) no timeout is merely raised."
+    },
     {
       "id": "c402",
       "col": "done",
