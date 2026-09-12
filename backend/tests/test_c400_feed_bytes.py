@@ -170,6 +170,19 @@ def test_derivative_bytes_vs_pre_c374_original(
     assert max(out.size) <= storage_service.DERIVATIVE_MAX_DIMENSION, (
         f"{label}: derivative dimensions {out.size} exceed the long-edge cap"
     )
+    # UPPER bound only, not the lower one: within_hypothesis_range was being computed
+    # into the evidence file above but never actually asserted, which means nothing in
+    # this repo would catch DERIVATIVE_JPEG_QUALITY drifting upward (82 -> 95 roughly
+    # doubles feed bytes) - every other assertion here still passes on a quality bump
+    # since it only checks dimensions, and the evidence file would quietly go stale
+    # instead (found in review, chirps-17). A derivative landing UNDER 100KB is good
+    # news, not a regression, so only the upper bound is a real gate; the lower bound
+    # stays evidence-only in the recorded within_hypothesis_range field above.
+    assert len(derivative_bytes) <= HYPOTHESIS_MAX_BYTES, (
+        f"{label}: derivative is {len(derivative_bytes)}B, over the {HYPOTHESIS_MAX_BYTES}B "
+        "feed-image ceiling - check DERIVATIVE_JPEG_QUALITY/DERIVATIVE_MAX_DIMENSION "
+        "before assuming this is just fixture drift"
+    )
 
 
 def test_capability_url_is_identical_within_one_window_and_differs_across_windows(

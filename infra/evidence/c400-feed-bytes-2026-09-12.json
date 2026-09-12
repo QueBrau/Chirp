@@ -1,5 +1,5 @@
 {
-  "observed_at": "2026-09-12T13:39:17.644929+00:00",
+  "observed_at": "2026-09-12T14:12:31.438012+00:00",
   "method": "Synthetic Gaussian-noise-then-blurred JPEGs at representative phone-camera shapes, run through the real storage_service._build_media_derivative() - not a substitute for measuring real uploads. See module docstring.",
   "hypothesis_range_bytes": [
     100000,
