@@ -110,18 +110,61 @@ async def own_channel_subscribers(broker, user_id) -> int:
 async def no_own_subscribers(broker, user_id):
     """Wait for THIS test's channel to drain (see own_channel_subscribers).
 
-    The server-wide no_subscribers() below cannot be satisfied while an unrelated
-    suite holds a socket open, so it is the wrong wait on a shared machine.
+    A server-wide wait cannot be satisfied while an unrelated suite holds a socket
+    open, so it is the wrong wait on a shared machine (board c401's finding).
     """
     async with asyncio.timeout(3):
         while await own_channel_subscribers(broker, user_id):
             await asyncio.sleep(.01)
 
 
-async def no_subscribers(broker):
-    async with asyncio.timeout(3):
-        while (await redis_totals(broker))["redis_pubsub_clients"]:
-            await asyncio.sleep(.01)
+async def own_channel_subscribed(broker, user_id):
+    """Assert this test's own channel currently has at least one live subscriber.
+
+    Board c403. Vacuity trap (chirps-17): no_own_subscribers() alone returns
+    immediately, and silently, if user_id's channel was never subscribed to
+    begin with -- e.g. because the connect meant to precede a drain wait never
+    happened, or the wait was scoped to the wrong id. A wait that can pass
+    without ever observing a real subscriber proves nothing about draining.
+
+    Call this BEFORE the action that closes/kills the socket, not after. A
+    graceful close, and a forced close from suspension or CLIENT KILL, both
+    synchronize with the server's own unsubscribe -- by the time close()
+    (or the read that observes the forced disconnect) returns, the channel is
+    routinely already back to zero. Checking nonzero at that point would not
+    catch a vacuous wait; it would make every genuinely-passing run fail
+    instead, which is worse than the trap it is meant to catch. Falsified
+    exactly this way while building this helper: see the c403 PR/report.
+    """
+    assert await own_channel_subscribers(broker, user_id), (
+        f"expected channel user:{user_id} to already have a live subscriber "
+        "here -- if it doesn't, the connect this test relies on never "
+        "actually subscribed, and a drain wait later would pass vacuously"
+    )
+
+
+async def new_pubsub_client_id(broker, before_ids):
+    """The single Redis pubsub client id that appeared since `before_ids`.
+
+    Board c403. Used to identify a fixture's own dedicated pubsub connection so it
+    can be CLIENT KILLed without touching anyone else's. A plain before/after set
+    difference narrows the window but does not close it: a concurrent suite on the
+    same shared Redis can open its own pubsub client between the two snapshots,
+    landing in the difference too. Asserting exactly one new id appeared closes
+    that window by refusing to act -- rather than guessing which of several new
+    ids is ours -- when the difference is ambiguous. Killing another session's
+    Redis client would break its suite in a way it could never trace back to us,
+    which is worse than failing this assertion, so this raises with every
+    candidate id named instead of picking one.
+    """
+    after_ids = {row["id"] for row in await broker.client_list() if "P" in row["flags"]}
+    new_ids = after_ids - before_ids
+    assert len(new_ids) == 1, (
+        f"cannot uniquely identify this test's own pubsub client: new ids since "
+        f"the last snapshot were {sorted(new_ids)} (before={sorted(before_ids)}, "
+        f"after={sorted(after_ids)}) -- refusing to CLIENT KILL any of them"
+    )
+    return next(iter(new_ids))
 
 
 def test_real_container_cli_selects_effective_frame_limit():
@@ -284,7 +327,11 @@ async def test_churn_delivery_sql_and_memory(client, make_user, broker, monkeypa
                     })
                 finally:
                     await asyncio.gather(*(socket.close() for socket in sockets))
-                await no_subscribers(broker)
+                # Nonzero-before-close is already proven above (== count, right
+                # after connecting); re-checking nonzero here would race the
+                # close and fail vacuously -- see own_channel_subscribed's
+                # docstring.
+                await no_own_subscribers(broker, user.id)
                 assert not [t for t in asyncio.all_tasks() if t.get_name().startswith("ws-") and not t.done()]
                 assert metrics["checked_out"] == 0
                 assert engine.pool.checkedout() == 0
@@ -304,6 +351,7 @@ async def test_live_suspension_unsuspend_and_broker_churn(client, make_user, bro
     user = await make_user()
     async with local_server(create_app()) as (base, server):
         socket = await connected(base, user.firebase_uid)
+        await own_channel_subscribed(broker, user.id)
         start = time.monotonic()
         async with get_session_factory()() as session:
             await session.execute(text("UPDATE users SET suspended_at=now() WHERE id=:id"), {"id": user.id})
@@ -312,22 +360,23 @@ async def test_live_suspension_unsuspend_and_broker_churn(client, make_user, bro
             await asyncio.wait_for(socket.recv(), 1)
         assert suspended.value.rcvd.code == 4403
         await socket.close()
-        await no_subscribers(broker)
+        await no_own_subscribers(broker, user.id)
 
         record_result({"case": "live_suspension", "poll_seconds": .04, "close_code": 4403, "latency_ms": (time.monotonic() - start) * 1000})
         async with get_session_factory()() as session:
             await session.execute(text("UPDATE users SET suspended_at=NULL WHERE id=:id"), {"id": user.id})
             await session.commit()
+        before_ids = {row["id"] for row in await broker.client_list() if "P" in row["flags"]}
         socket = await connected(base, user.firebase_uid)
-        owned = [row for row in await broker.client_list() if "P" in row["flags"]]
-        assert len(owned) == 1
+        await own_channel_subscribed(broker, user.id)
+        target_id = await new_pubsub_client_id(broker, before_ids)
         # Kill exactly this fixture's dedicated subscription, not the Redis server.
-        await broker.execute_command("CLIENT", "KILL", "ID", owned[0]["id"])
+        await broker.execute_command("CLIENT", "KILL", "ID", target_id)
         with pytest.raises(ConnectionClosed) as unavailable:
             await asyncio.wait_for(socket.recv(), 3)
         assert unavailable.value.rcvd.code == 4503
         await socket.close()
-        await no_subscribers(broker)
+        await no_own_subscribers(broker, user.id)
 
 @needs_redis
 async def test_actual_slow_reader_is_released_without_starving_peer(client, make_user, broker, caplog):
@@ -336,6 +385,7 @@ async def test_actual_slow_reader_is_released_without_starving_peer(client, make
     user = await make_user()
     async with local_server(create_app()) as (base, server):
         slow, fast = await connected(base, user.firebase_uid), await connected(base, user.firebase_uid)
+        await own_channel_subscribed(broker, user.id)
         slow_port = slow.transport.get_extra_info("sockname")[1]
         protocol = next(p for p in server.server_state.connections if p.client[1] == slow_port)
         # Fixed LOCAL transport budgets force backpressure with <=4MiB traffic.
@@ -387,7 +437,7 @@ async def test_actual_slow_reader_is_released_without_starving_peer(client, make
         finally:
             slow.transport.resume_reading()
             await asyncio.gather(slow.close(), fast.close())
-        await no_subscribers(broker)
+        await no_own_subscribers(broker, user.id)
 
 
 
@@ -407,8 +457,9 @@ async def test_disconnect_resume_preserves_durable_message_catchup(client, make_
     conversation_id = created.json()["id"]
     async with local_server(create_app()) as (base, server):
         first = await connected(base, recipient.firebase_uid)
+        await own_channel_subscribed(broker, recipient.id)
         await first.close()
-        await no_subscribers(broker)
+        await no_own_subscribers(broker, recipient.id)
         response = await client.post(f"/conversations/{conversation_id}/messages", headers=sender.headers,
             json={"sender_device_id": device.json()["id"], "ciphertext_b64": b64(b"opaque-offline-fixture")})
         assert response.status_code == 201
@@ -427,4 +478,7 @@ async def test_disconnect_resume_preserves_durable_message_catchup(client, make_
             assert event["message_id"] == response.json()["id"]
         finally:
             await resumed.close()
-        await no_subscribers(broker)
+        # Nonzero-before-close is already proven above (pubsub_numsub == 1,
+        # right after connecting); re-checking nonzero here would race the
+        # close and fail vacuously -- see own_channel_subscribed's docstring.
+        await no_own_subscribers(broker, recipient.id)
