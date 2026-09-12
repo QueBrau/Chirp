@@ -1,23 +1,26 @@
-"""Signed upload URLs and capability-gated reads for post media (board cards c70, c140).
+"""Signed upload URLs and capability-gated reads for post media (board cards c70, c140,
+c350).
 
 See app.services.storage_service for why uploads are client-direct-to-GCS rather than
 proxied, why signing is keyless, and why reads are a capability url in front of a signed
-redirect rather than a signed url handed straight to the client.
+redirect rather than a signed url handed straight to the client. See
+app.services.media_entitlement for the redirect-time entitlement re-check c350 added.
 """
 
 import asyncio
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core import operational_signals
 from app.core.rate_limits import MEDIA_UPLOAD_URL_LIMIT, limit_per_user
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.schemas.media import MediaUploadUrlOut, MediaUploadUrlRequest
+from app.services.media_entitlement import check_media_entitlement
 from app.services.storage_service import (
-    MEDIA_TOKEN_WINDOW,
     generate_upload_url,
     signed_read_url,
     verify_media_token,
@@ -68,7 +71,9 @@ async def create_upload_url(
 
 
 @router.get("/media/{token}")
-async def read_media(token: str) -> RedirectResponse:
+async def read_media(
+    token: str, session: AsyncSession = Depends(get_session)
+) -> RedirectResponse:
     """Redirect a capability token to a short-lived signed GCS url for that object.
 
     DELIBERATELY UNAUTHENTICATED, and this is the one route in the app where that is a
@@ -81,28 +86,67 @@ async def read_media(token: str) -> RedirectResponse:
     Anyone adding an auth dependency here will break every photo in the app, and the
     breakage will look like a caching bug rather than an auth change. Do not.
 
+    ENTITLEMENT IS RE-CHECKED HERE NOW (board c350). A valid signature used to be
+    treated as permanent proof of access for the token's whole TTL (up to 12h) -
+    removal, suspension, a lapsed campus verification, or the post itself being
+    deleted had no effect on a token someone already held. verify_media_token's
+    viewer_id (HMAC-proven, not caller-asserted - see that function's docstring) is
+    now re-checked against the CURRENT database state via
+    app.services.media_entitlement before this route will sign a redirect. A denial
+    is 403 media_access_revoked, not 410: this is not an expiry, the token is still
+    within its lifetime and the signature still verifies - what changed is that the
+    thing it was minted for is no longer true. The check memoizes only POSITIVE
+    decisions for a short, separately configured TTL (media_entitlement_memo_seconds,
+    default 60s), so a revocation's real-world effect can lag by up to that long on
+    top of the token's own window - see media_entitlement.check_media_entitlement's
+    docstring and DEPLOY.md's "Media revocation window" section for the honest bound.
+
     302, not 307/308: this is a "the thing you want is over there right now" redirect
     whose target legitimately changes between windows, which is exactly what 302's
     non-permanent semantics mean. A 308 would invite intermediaries to cache the mapping
     permanently, and the target is anything but permanent.
 
-    Cache-Control is set to the remaining life of the memo window so a client that caches
-    the REDIRECT does not re-ask us on every image load. `private` because a capability
-    url is per-viewer by construction and must never land in a shared/proxy cache.
+    Cache-Control is `private, no-store` (board c350; used to be cacheable for the
+    remaining life of the memo window). `private` because a capability url is
+    per-viewer by construction and must never land in a shared/proxy cache; `no-store`
+    so a client that respects Cache-Control cannot keep replaying a REDIRECT past a
+    revocation without hitting this route - and therefore the entitlement check -
+    again. This closes the gap only for clients whose caching layer honors the header;
+    it does not and cannot reach a native Image component's own byte cache once a
+    photo has already been fetched and decoded - see storage_service's signed-reads
+    section and media_entitlement's module docstring for what remains a documented,
+    accepted residual gap rather than something this backend-only change can close.
     """
-    object_name = verify_media_token(token)
+    object_name, viewer_id = verify_media_token(token)
+    allowed = await check_media_entitlement(session, object_name, viewer_id)
+    if not allowed:
+        # Ids only, never the token or object_name - see operational_signals' own
+        # module docstring on why observe() takes no payload argument at all.
+        operational_signals.observe("media_access_revoked")
+        raise HTTPException(status_code=403, detail="media_access_revoked")
+    # c350 + c355: give the pool connection BACK before the signing call below.
+    # The entitlement check above checked out one of this instance's five
+    # connections (db_pool_size 3 + db_max_overflow 2); signed_read_url() can
+    # spend a network round trip on a google.auth refresh plus an IAM signBlob,
+    # and FastAPI would otherwise hold the session open until the response is
+    # finished. On a cold instance right after a deploy both memos are empty and
+    # one feed render fans out to 20+ of these, so holding a connection across the
+    # signing call is how five requests exhaust the pool and the sixth waits out
+    # db_pool_timeout. Same fix c355 applied to the provider waits. A memo HIT
+    # never opened a session at all (get_session is lazy), and closing twice is
+    # harmless: the dependency's own teardown runs after this and finds an
+    # already-closed session.
+    await session.close()
     # c211: same reasoning as create_upload_url() above - signed_read_url() is
     # synchronous and, on a memo miss, makes the same google.auth refresh + IAM
     # signBlob network call. Offload to a worker thread so a cold cache entry cannot
     # stall the single event loop this process serves every other in-flight request
-    # on. The 6h memo (storage_service._signed_read_cache) keeps most calls off this
-    # path entirely; see that dict's own lock for what changed once misses can now
-    # happen concurrently from multiple worker threads.
+    # on. The signed-url memo (storage_service._signed_read_cache) keeps most calls
+    # off this path entirely; see that dict's own lock for what changed once misses
+    # can now happen concurrently from multiple worker threads.
     target = await asyncio.to_thread(signed_read_url, object_name)
     return RedirectResponse(
         target,
         status_code=302,
-        headers={
-            "Cache-Control": f"private, max-age={int(MEDIA_TOKEN_WINDOW.total_seconds())}",
-        },
+        headers={"Cache-Control": "private, no-store"},
     )

@@ -212,6 +212,24 @@ CREATE TABLE posts (
 );
 CREATE INDEX idx_posts_chapter_time ON posts(chapter_id, created_at DESC);
 
+**Media capability tokens (board c140, revocation re-check added c350).** A post's
+`media_urls` stays a fixed, server-assigned `storage.googleapis.com/...` string; what a
+client receives is a per-viewer, expiring capability token instead (see
+app.services.storage_service and app.routers.media). Since c350, GET /media/{token}
+re-checks the token's viewer against current chapter/suspension/campus/deletion state
+on every request rather than trusting the token's signature for its whole ~12h life —
+see DEPLOY.md's "Media revocation window" section for the exact Settings and the honest
+effective-revocation-floor bound.
+
+Account-switch cache isolation on mobile rests on one property, not on any client-side
+cache-clearing logic: `mint_media_token` embeds `viewer_id` in the signed payload, so
+two different accounts requesting the SAME photo receive two DIFFERENT app URLs. React
+Native's `Image` keys its cache on the URL string, so a URL that already differs per
+viewer is already isolated per viewer — this is why c350 shipped with no mobile change.
+If a future change ever made two viewers' tokens collide (e.g. dropping viewer_id from
+the payload), this isolation silently breaks; storage_service.py's own docstring and
+tests/test_c350_media_revocation.py's per-viewer test are the tripwire.
+
 CREATE TABLE post_likes (
     post_id UUID NOT NULL REFERENCES posts(id),
     user_id UUID NOT NULL REFERENCES users(id),

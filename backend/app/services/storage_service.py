@@ -696,15 +696,35 @@ def finalize_media_object(
 # keeps working exactly as it does today.
 # ---------------------------------------------------------------------------
 
-MEDIA_TOKEN_WINDOW = timedelta(hours=6)
-# TTL is deliberately 2x the window, not 1x: a token minted at the very END of a window
-# would otherwise be seconds from expiring. 2x means the worst-case token still has a full
-# window of validity left, which covers "app left open overnight" with no client refresh
-# path - and there is no such path to lean on (MediaPostCard has no expiry/refresh logic).
-MEDIA_TOKEN_TTL = 2 * MEDIA_TOKEN_WINDOW
-# The GCS signed url BEHIND the redirect. Only has to outlive its memo entry, which lives
-# at most one window - 2x the window again, for the same margin reason.
-READ_URL_TTL = MEDIA_TOKEN_TTL
+def _revocation_window() -> timedelta:
+    """The bearer-revocation window, read LIVE from Settings (board c350).
+
+    Used to be a module-level constant frozen at import time. Board c350 promotes it
+    to a Settings field (app.config.Settings.media_revocation_window_hours, default 6
+    unchanged - manager ruling R1 kept the number, only made it configurable) so an
+    operator can retune it without a code change. Read live, not cached, on every
+    call: Settings itself is not hot-reloaded (see DEPLOY.md), so "without a code
+    change" still means "on the next deploy/restart", but this function is what makes
+    that true at all - a value computed once at import would need a process restart
+    AND a code deploy to change, same as the old constant did.
+    """
+    return timedelta(hours=get_settings().media_revocation_window_hours)
+
+
+def _media_token_ttl() -> timedelta:
+    """TTL is deliberately 2x the window, not 1x: a token minted at the very END of a
+    window would otherwise be seconds from expiring. 2x means the worst-case token
+    still has a full window of validity left, which covers "app left open overnight"
+    with no client refresh path - and there is no such path to lean on (MediaPostCard
+    has no expiry/refresh logic)."""
+    return 2 * _revocation_window()
+
+
+def _read_url_ttl() -> timedelta:
+    """The GCS signed url BEHIND the redirect. Only has to outlive its memo entry,
+    which lives at most one window - 2x the window again, for the same margin
+    reason."""
+    return _media_token_ttl()
 
 
 def _signing_secret() -> bytes | None:
@@ -730,7 +750,7 @@ def media_signing_enabled() -> bool:
 def _window_expiry(now: datetime) -> int:
     """Quantized expiry as a unix timestamp - the reason capability urls are cacheable.
 
-    Floors `now` to the current MEDIA_TOKEN_WINDOW boundary and adds MEDIA_TOKEN_TTL, so
+    Floors `now` to the current revocation-window boundary and adds the token TTL, so
     every call inside one window returns the SAME number. Since the expiry is the only
     time-varying part of the token payload, identical expiry means an identical token
     string, which means an identical RN image-cache key. Do not "improve" this into a
@@ -738,9 +758,9 @@ def _window_expiry(now: datetime) -> int:
     exists to avoid, and it would do so invisibly - the urls would still work, they would
     just quietly stop being cache hits.
     """
-    window = int(MEDIA_TOKEN_WINDOW.total_seconds())
+    window = int(_revocation_window().total_seconds())
     window_start = (int(now.timestamp()) // window) * window
-    return window_start + int(MEDIA_TOKEN_TTL.total_seconds())
+    return window_start + int(_media_token_ttl().total_seconds())
 
 
 def _b64(raw: bytes) -> str:
@@ -779,8 +799,19 @@ def mint_media_token(object_name: str, viewer_id: str, *, now: datetime | None =
     return f"{_b64(payload)}.{_b64(signature)}"
 
 
-def verify_media_token(token: str, *, now: datetime | None = None) -> str:
-    """Return the object name a valid token refers to; 403 on tampering, 410 on expiry.
+def verify_media_token(token: str, *, now: datetime | None = None) -> tuple[str, str]:
+    """Return (object_name, viewer_id) a valid token refers to; 403 on tampering, 410
+    on expiry.
+
+    RETURN SHAPE CHANGED UNDER BOARD C350: used to return only the object name.
+    viewer_id was already embedded in the signed payload (for leak attribution - see
+    mint_media_token's docstring) but this function threw it away. c350's redirect-time
+    entitlement re-check (app.services.media_entitlement) needs exactly this
+    tamper-proof viewer_id to know WHO to re-check access for, and re-parsing the token
+    a second time in the caller would duplicate this function's own unb64/hmac/split
+    logic rather than reuse it. Every caller of this function - routers/media.py and
+    this module's own test suite - was updated in the same change; grep for
+    `verify_media_token(` before assuming a caller still expects a bare string.
 
     Expiry is 410 rather than 403 on purpose: the two are operationally different and get
     confused otherwise. 410 means "this url was genuine and has aged out" - the client
@@ -804,7 +835,7 @@ def verify_media_token(token: str, *, now: datetime | None = None) -> str:
         raise HTTPException(status_code=403, detail="invalid_media_token")
 
     try:
-        object_name, _viewer_id, expiry_raw = payload.decode("utf-8").split("\x00")
+        object_name, viewer_id, expiry_raw = payload.decode("utf-8").split("\x00")
         expiry = int(expiry_raw)
     except (ValueError, UnicodeDecodeError):
         raise HTTPException(status_code=403, detail="invalid_media_token")
@@ -820,7 +851,7 @@ def verify_media_token(token: str, *, now: datetime | None = None) -> str:
     # reasoning finalize_media_object() already applies to its own caller's work.
     if not object_name.startswith(f"{PERMANENT_PREFIX}/"):
         raise HTTPException(status_code=403, detail="invalid_media_token")
-    return object_name
+    return object_name, viewer_id
 
 
 def media_capability_url(object_name: str, viewer_id: str) -> str:
@@ -927,7 +958,7 @@ def signed_read_url(object_name: str, *, now: datetime | None = None) -> str:
     per-instance-stable in the worst case, never to broken.
     """
     current = now or datetime.now(timezone.utc)
-    window = int(MEDIA_TOKEN_WINDOW.total_seconds())
+    window = int(_revocation_window().total_seconds())
     window_index = int(current.timestamp()) // window
     key = (object_name, window_index)
     with _signed_read_cache_lock:
@@ -946,7 +977,7 @@ def signed_read_url(object_name: str, *, now: datetime | None = None) -> str:
 
     url = blob.generate_signed_url(
         version="v4",
-        expiration=READ_URL_TTL,
+        expiration=_read_url_ttl(),
         method="GET",
         service_account_email=credentials.service_account_email,
         access_token=credentials.token,
