@@ -261,8 +261,28 @@ class TestInvalidBytesNeverSwap:
                         "INSERT INTO t (col) VALUES (convert_from($1::bytea, 'SQL_ASCII'))",
                         INVALID_UTF8_BYTES,
                     )
+                    # Ordinary rows whose TEXT contains backslashes. These are
+                    # perfectly valid UTF-8 and must not be counted as offenders,
+                    # but text-to-bytea input syntax interprets backslash escapes,
+                    # so a probe that casts the column to bytea in the SELECT dies
+                    # on them ("invalid input syntax for type bytea" / "invalid
+                    # hexadecimal digit") OUTSIDE the plpgsql handler, aborts the
+                    # whole count, and makes apply_ordinary report ZERO offenders
+                    # and swap a corrupt database in as clean. Seeded deliberately
+                    # so this test discriminates that shape (manager review, #294).
+                    await c.executemany(
+                        "INSERT INTO t (col) VALUES ($1)",
+                        [(r"path C:\temp\new",), (r"\x41 hexish",), ("plain ascii",)],
+                    )
                     count = await c.fetchval("SELECT count(*) FROM t")
-                    assert count == 1
+                    assert count == 4
+                    backslashed = await c.fetchval(
+                        r"SELECT count(*) FROM t WHERE col LIKE '%\\%'"
+                    )
+                    assert backslashed == 2, (
+                        "the backslash rows must exist before this test can prove "
+                        f"the probe survives them (found {backslashed})"
+                    )
                 finally:
                     await c.close()
 
@@ -280,7 +300,10 @@ class TestInvalidBytesNeverSwap:
             assert Path(result.dump_path).exists()
 
             offenders = {(o.table, o.column): o.count for o in result.offenders}
-            assert offenders.get(("t", "col")) == 1, result.offenders
+            assert offenders.get(("t", "col")) == 1, (
+                "exactly one row holds invalid bytes; the three backslash/ascii rows "
+                f"are valid UTF-8 and must not be counted: {result.offenders}"
+            )
 
             still_ascii = asyncio.run(_encoding_of(local_admin_url, scratch_name))
             assert still_ascii == "SQL_ASCII", "a failed restore must never swap the original"
@@ -294,6 +317,6 @@ class TestInvalidBytesNeverSwap:
                 finally:
                     await c.close()
 
-            assert asyncio.run(_row_still_present()) == 1
+            assert asyncio.run(_row_still_present()) == 4
         finally:
             asyncio.run(_drop_scratch_family(local_admin_url, scratch_name))

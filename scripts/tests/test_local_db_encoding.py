@@ -100,8 +100,27 @@ class GuardTests(unittest.TestCase):
         self.assertIsNotNone(reason)
         self.assertIn("prod", reason)
 
+    def test_cloud_sql_proxy_port_refused_by_name(self):
+        """5433 is the Cloud SQL Auth Proxy port on this project's machines, and
+        production's database is itself named 'chirp' -- host, port and name would
+        ALL have looked like a dev target. Refused explicitly, with a reason that
+        says why, so nobody re-adds it to DEV_LOCAL_PORTS as a tidy-up."""
+        parsed = m.ParsedUrl(user="chirp", password="secret", host="localhost", port=5433, dbname="chirp")
+        reason = m.check_local_dev_target(parsed, ["chirp"])
+        self.assertIsNotNone(reason, "localhost:5433/chirp is PRODUCTION through the proxy")
+        self.assertIn("5433", reason)
+        self.assertIn("PRODUCTION", reason)
+        self.assertNotIn(5433, m.DEV_LOCAL_PORTS)
+
+    def test_hostless_socket_url_is_refused_at_parse_time(self):
+        """The /cloudsql/<instance> unix-socket form has no TCP host, so it can
+        never be classified as a local dev target."""
+        with self.assertRaises(ValueError) as caught:
+            m.parse_database_url("postgresql://chirp:secret@/chirp?host=/cloudsql/chirps-prod:us-central1:chirp-db")
+        self.assertIn("host", str(caught.exception))
+
     def test_dev_ports_and_names_accepted(self):
-        for port in (5432, 5433, 5434):
+        for port in (5432, 5434):
             parsed = m.ParsedUrl(user="chirp", password="chirp", host="localhost", port=port, dbname="postgres")
             self.assertIsNone(m.check_local_dev_target(
                 parsed, ["chirp", "chirp_test", "template1", "chirp_test_p123", "c399_scratch_abc123"]
@@ -265,6 +284,62 @@ class DryRunTests(unittest.TestCase):
         parsed = m.ParsedUrl(user="chirp", password="chirp", host="localhost", port=5432, dbname="postgres")
         with self.assertRaises(AssertionError):
             asyncio.run(m.apply_ordinary(executor, parsed, entry, "/private/tmp", False, "20260101000000"))
+
+
+class OffenderProbeTests(unittest.TestCase):
+    """The probe must take TEXT. A ::bytea cast in the SELECT is evaluated before
+    the plpgsql function runs, so its EXCEPTION handler does not cover it, and
+    text-to-bytea input syntax interprets backslashes: one ordinary row such as
+    'path C:\\temp\\new' aborts the whole count, apply_ordinary swallows the error
+    and reports ZERO offenders, and a corrupt database gets swapped in as clean."""
+
+    class _FakeConn:
+        def __init__(self, columns):
+            self.statements = []
+            self._columns = columns
+
+        async def execute(self, sql, *params):
+            self.statements.append(sql)
+
+        async def fetch(self, sql, *params):
+            self.statements.append(sql)
+            return self._columns
+
+        async def fetchval(self, sql, *params):
+            self.statements.append(sql)
+            return 0
+
+        async def close(self):
+            pass
+
+    def _run_probe(self):
+        conn = self._FakeConn([
+            {"table_name": "t", "column_name": "col", "data_type": "text"},
+            {"table_name": "t", "column_name": "name", "data_type": "character varying"},
+            {"table_name": "t", "column_name": "j", "data_type": "jsonb"},
+        ])
+        asyncio.run(m.find_utf8_offenders(conn))
+        return conn.statements
+
+    def test_probe_function_takes_text_not_bytea(self):
+        create = self._run_probe()[0]
+        self.assertIn("val text", create)
+        self.assertNotIn("val bytea", create)
+        self.assertIn("convert_to(val, 'UTF8')", create)
+
+    def test_no_count_query_casts_a_column_to_bytea(self):
+        counts = [sql for sql in self._run_probe() if sql.startswith("SELECT count(")]
+        self.assertEqual(len(counts), 3, "one count per text/varchar/jsonb column")
+        for sql in counts:
+            self.assertNotIn("::bytea", sql,
+                              "a ::bytea cast sits OUTSIDE the plpgsql handler and aborts on backslash text")
+
+    def test_falsification_the_bytea_form_is_what_this_pins(self):
+        # The shape this test rejects is exactly the shape that shipped in the
+        # first draft; assert it would fail the check above.
+        bytea_form = 'SELECT count(*) FROM "t" WHERE "col" IS NOT NULL AND NOT pg_temp.c399_is_valid_utf8("col"::bytea)'
+        self.assertIn("::bytea", bytea_form,
+                       "if this ever stops containing ::bytea the check above proves nothing")
 
 
 class RenderedPlanTests(unittest.TestCase):

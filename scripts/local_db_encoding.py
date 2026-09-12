@@ -55,7 +55,18 @@ DEFAULT_TARGET_NAMES = ("chirp", "chirp_test", "template1")
 DEFAULT_DUMP_DIR = "/private/tmp"
 
 DEV_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-DEV_LOCAL_PORTS = {5432, 5433, 5434}
+DEV_LOCAL_PORTS = {5432, 5434}
+# 5433 is NOT a development port on this project's machines: it is the port the
+# Cloud SQL Auth Proxy binds for PRODUCTION (INFRA-PRIVATE.html's proxy URL is
+# postgresql+asyncpg://chirp:...@localhost:5433/chirp, and production's database
+# is itself named "chirp", which DEV_NAME_RE accepts). An --apply against that
+# URL would have pg_dump'd production, created chirp_utf8 on production and
+# rename-swapped the production database. Every part of the guard would have
+# passed: the host really is localhost and the name really is a dev name. The
+# port is the only thing that distinguishes the proxy from local Postgres, so it
+# is refused explicitly and by name rather than merely omitted from the allowed
+# set. Found by chirps-17 reviewing PR #294 before merge.
+PROXY_PORTS = {5433}
 DEV_NAME_RE = re.compile(
     r"^(chirp|chirp_test|template1|chirp_test_[A-Za-z0-9_]+|c399_scratch_[0-9a-fA-F]+)$"
 )
@@ -88,7 +99,11 @@ def strip_asyncpg_marker(url: str) -> str:
 def parse_database_url(url: str) -> ParsedUrl:
     parts = urlsplit(strip_asyncpg_marker(url))
     if not parts.hostname:
-        raise ValueError(f"could not parse a host from the database URL")
+        raise ValueError(
+            "could not parse a TCP host from the database URL; a hostless or "
+            "unix-socket form (for example ?host=/cloudsql/<instance>) is not a "
+            "local development target and is not supported by this tool"
+        )
     return ParsedUrl(
         user=parts.username or "",
         password=parts.password,
@@ -137,6 +152,12 @@ def check_local_dev_target(parsed: ParsedUrl, names: Sequence[str]) -> Optional[
         return (
             f"host {parsed.host!r} is not a local development host "
             f"(allowed: {sorted(DEV_LOCAL_HOSTS)})"
+        )
+    if parsed.port in PROXY_PORTS:
+        return (
+            f"port {parsed.port} is the Cloud SQL Auth Proxy port on this project's "
+            f"machines, which forwards to PRODUCTION (whose database is also named "
+            f"'chirp'); this tool never runs against it"
         )
     if parsed.port not in DEV_LOCAL_PORTS:
         return (
@@ -322,10 +343,20 @@ async def gather_state(executor: Executor, admin_url: str, names: Sequence[str])
 # ---------------------------------------------------------------------------
 
 async def find_utf8_offenders(conn) -> list:
+    # The probe takes TEXT and does the byte conversion INSIDE the function, so the
+    # plpgsql EXCEPTION handler actually covers it. An earlier version cast the
+    # column in the SELECT ("col"::bytea): that cast is evaluated BEFORE the
+    # function is called, so it sits outside the handler, and text-to-bytea input
+    # syntax interprets backslashes -- an ordinary row holding 'path C:\temp\new'
+    # or '\x41 hexish' raises "invalid input syntax for type bytea" / "invalid
+    # hexadecimal digit" and aborts the whole count. apply_ordinary catches that
+    # and reports ZERO offenders, so a database holding BOTH invalid bytes and any
+    # backslash text would have been reported clean and swapped in. Verified on a
+    # real SQL_ASCII database (manager review of PR #294).
     await conn.execute(
-        "CREATE OR REPLACE FUNCTION pg_temp.c399_is_valid_utf8(val bytea) "
-        "RETURNS boolean AS $$ BEGIN PERFORM convert_from(val, 'UTF8'); RETURN true; "
-        "EXCEPTION WHEN OTHERS THEN RETURN false; END; $$ LANGUAGE plpgsql"
+        "CREATE OR REPLACE FUNCTION pg_temp.c399_is_valid_utf8(val text) "
+        "RETURNS boolean AS $$ BEGIN PERFORM convert_from(convert_to(val, 'UTF8'), 'UTF8'); "
+        "RETURN true; EXCEPTION WHEN OTHERS THEN RETURN false; END; $$ LANGUAGE plpgsql"
     )
     columns = await conn.fetch(
         "SELECT table_name, column_name, data_type FROM information_schema.columns "
@@ -334,7 +365,7 @@ async def find_utf8_offenders(conn) -> list:
     offenders = []
     for row in columns:
         table, column, data_type = row["table_name"], row["column_name"], row["data_type"]
-        cast_expr = f'("{column}"::text)::bytea' if data_type == "jsonb" else f'"{column}"::bytea'
+        cast_expr = f'"{column}"::text' if data_type == "jsonb" else f'"{column}"'
         count = await conn.fetchval(
             f'SELECT count(*) FROM "{table}" WHERE "{column}" IS NOT NULL '
             f'AND NOT pg_temp.c399_is_valid_utf8({cast_expr})'
