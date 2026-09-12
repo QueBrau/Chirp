@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Jose-only: seeds/tears down the QA search fixtures on prod (board c380). Read
+# backend/scripts/seed_prod_search_fixtures.py's module docstring before running
+# this — it writes to production over the cloud-sql-proxy on port 5433.
+#
+# Follows the c392 shared-interpreter pattern (scripts/lib/pick-python.sh); the
+# module itself lives under backend/scripts/, one directory further down than the
+# other scripts/*.py entry points, because it needs the same backend-venv `app`
+# import path seed_dev_accounts.py already solved.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+source "$here/lib/pick-python.sh"
+python=$(chirp_pick_python seed-prod-search-fixtures) || exit $?
+exec "$python" "$here/../backend/scripts/seed_prod_search_fixtures.py" "$@"

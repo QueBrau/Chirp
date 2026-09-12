@@ -41,6 +41,14 @@ WRAPPERS = [
     ("spend-report", "spend_report.py"),
     ("recovery-check", "recovery_check.py"),
     ("local-db-encoding", "local_db_encoding.py"),
+    # c380: the one wrapper whose module lives a directory further down, in
+    # backend/scripts/ rather than directly under scripts/ (it needs the same
+    # backend-venv `app` import path seed_dev_accounts.py already solved). The
+    # ".." resolves correctly on both sides: reading from
+    # ROOT / "scripts" / module lands on backend/scripts/seed_prod_search_fixtures.py,
+    # and _sandbox's mkdir(parents=True) below makes the matching destination
+    # directory under the sandboxed tmp_path.
+    ("seed-prod-search-fixtures", "../backend/scripts/seed_prod_search_fixtures.py"),
 ]
 WRAPPER_NAMES = [name for name, _ in WRAPPERS]
 
@@ -78,6 +86,7 @@ def _sandbox(tmp_path: Path, name: str) -> Path:
     (scripts / name).write_bytes((ROOT / "scripts" / name).read_bytes())
     (scripts / name).chmod(0o755)
     for _wrapper_name, module in WRAPPERS:
+        (scripts / module).parent.mkdir(parents=True, exist_ok=True)
         (scripts / module).write_bytes((ROOT / "scripts" / module).read_bytes())
     (scripts / "lib" / "pick-python.sh").write_bytes(LIB.read_bytes())
     assert not (tmp_path / "backend" / ".venv").exists(), "the sandbox must start without a venv"
