@@ -120,16 +120,42 @@ def test_the_failure_names_the_offending_tests() -> None:
 
 
 def test_a_declared_prefix_does_not_excuse_a_different_file() -> None:
-    """Prefix matching must not be so loose that declaring one file blesses others."""
+    """Declaring one file must not bless another."""
     result = _run_pytest(
-        ALWAYS_SKIPPING_TARGET, require_db="1", max_skips="6", allowed="tests/test_c364_"
+        ALWAYS_SKIPPING_TARGET,
+        require_db="1",
+        max_skips="6",
+        allowed="tests/test_c365_query_plans.py",
     )
+    assert result.returncode != 0, result.stdout[-3000:]
+
+
+def test_a_directory_prefix_covers_the_files_under_it() -> None:
+    """A prefix ending on a "/" boundary is the legitimate broad declaration."""
+    result = _run_pytest(ALWAYS_SKIPPING_TARGET, require_db="1", max_skips="6", allowed="tests")
     assert result.returncode == 0, result.stdout[-3000:]
 
-    narrower = _run_pytest(
-        ALWAYS_SKIPPING_TARGET, require_db="1", max_skips="6", allowed="tests/test_c365_"
+
+def test_a_partial_filename_prefix_blesses_nothing() -> None:
+    """The anchoring case, found in review by constructing a file that went green.
+
+    "tests/test_c364" is not a file or a directory, it is half a filename. Under
+    a bare startswith it would bless tests/test_c364_query_plans.py AND an
+    unrelated tests/test_c3640_probe.py, which is the silent coverage drift this
+    card exists to prevent. A prefix must end on the whole nodeid, a "/" or a
+    "::" boundary, so a half-filename matches nothing at all.
+
+    Falsification: red without the boundary check in _unexpected_skips, because
+    the six skips would be blessed and the run would exit 0.
+    """
+    result = _run_pytest(
+        ALWAYS_SKIPPING_TARGET, require_db="1", max_skips="6", allowed="tests/test_c364"
     )
-    assert narrower.returncode != 0, narrower.stdout[-3000:]
+    assert result.returncode != 0, (
+        "a half-filename prefix blessed a real module's skips - prefix matching is "
+        f"unanchored: {result.stdout[-3000:]}"
+    )
+    assert "skipped that no one declared" in result.stdout
 
 
 def test_unset_variable_keeps_c103_zero_tolerance() -> None:

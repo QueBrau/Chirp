@@ -69,21 +69,36 @@ _ALLOWED_SKIP_PREFIXES_ENV = "CHIRP_ALLOWED_SKIP_PREFIXES"
 def _unexpected_skips(skip_reports) -> list[str]:
     """Nodeids that skipped without being declared allowed (board card c402).
 
-    Declared as a comma-separated list of nodeid PREFIXES so one entry covers a
+    Declared as a comma-separated list of nodeid prefixes so one entry covers a
     whole module without listing every test in it, and so a file that gains a
     seventh test does not need a second edit here. An empty or unset variable
     means nothing may skip, which is c103's original zero-tolerance stance and
     stays the default for anyone running the suite by hand.
+
+    A prefix must end ON A BOUNDARY: the whole nodeid, or the next character is
+    "/" (a directory) or ":" (the "::" before a test name). A bare
+    `nodeid.startswith(prefix)` would let "tests/test_c364" silently bless an
+    unrelated "tests/test_c3640_probe.py", which is exactly the quiet coverage
+    drift this card exists to stop - found by chirps-fb's review with a
+    constructed file that went green, not by reading the code.
     """
     allowed = [
         prefix.strip()
         for prefix in os.environ.get(_ALLOWED_SKIP_PREFIXES_ENV, "").split(",")
         if prefix.strip()
     ]
+    def declared(nodeid: str) -> bool:
+        for prefix in allowed:
+            if nodeid == prefix:
+                return True
+            if nodeid.startswith(prefix) and nodeid[len(prefix) :][:1] in ("/", ":"):
+                return True
+        return False
+
     unexpected = []
     for report in skip_reports:
         nodeid = getattr(report, "nodeid", "") or ""
-        if not any(nodeid.startswith(prefix) for prefix in allowed):
+        if not declared(nodeid):
             unexpected.append(nodeid or "<unknown test>")
     return unexpected
 
