@@ -63,6 +63,31 @@ def _database_of(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_ALLOWED_SKIP_PREFIXES_ENV = "CHIRP_ALLOWED_SKIP_PREFIXES"
+
+
+def _unexpected_skips(skip_reports) -> list[str]:
+    """Nodeids that skipped without being declared allowed (board card c402).
+
+    Declared as a comma-separated list of nodeid PREFIXES so one entry covers a
+    whole module without listing every test in it, and so a file that gains a
+    seventh test does not need a second edit here. An empty or unset variable
+    means nothing may skip, which is c103's original zero-tolerance stance and
+    stays the default for anyone running the suite by hand.
+    """
+    allowed = [
+        prefix.strip()
+        for prefix in os.environ.get(_ALLOWED_SKIP_PREFIXES_ENV, "").split(",")
+        if prefix.strip()
+    ]
+    unexpected = []
+    for report in skip_reports:
+        nodeid = getattr(report, "nodeid", "") or ""
+        if not any(nodeid.startswith(prefix) for prefix in allowed):
+            unexpected.append(nodeid or "<unknown test>")
+    return unexpected
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Under CHIRP_REQUIRE_DB=1, refuse to exit green on a collapsed run (board card c103).
 
@@ -81,8 +106,35 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is None:
         return
-    skipped = len(reporter.stats.get("skipped", []))
+    skip_reports = reporter.stats.get("skipped", [])
+    skipped = len(skip_reports)
     allowed = int(os.environ.get("CHIRP_MAX_SKIPS", "0"))
+
+    # c402: WHICH tests skipped, not just how many. A bare count is a checksum,
+    # and a checksum cannot tell one-in-one-out from nothing-changed: with the
+    # ceiling at 6 for c364's opt-in harness, six unrelated tests could start
+    # skipping the day that harness stops (renamed, no longer collected, or
+    # CHIRP_EXPLAIN set in CI) and the total would still read 6. The allowed set
+    # is therefore stated by identity, as nodeid prefixes, and anything outside
+    # it fails the run no matter what the total is.
+    unexpected = _unexpected_skips(skip_reports)
+    if unexpected:
+        shown = unexpected[:10]
+        reporter.write_line("")
+        reporter.write_line(
+            f"CHIRP_REQUIRE_DB=1 and {len(unexpected)} test(s) skipped that no one "
+            f"declared. Allowed skips are named by nodeid prefix in "
+            f"{_ALLOWED_SKIP_PREFIXES_ENV} (currently "
+            f"{os.environ.get(_ALLOWED_SKIP_PREFIXES_ENV, '') or 'empty'}). "
+            "A skip is not a pass, and raising a count would not have caught this. "
+            "Undeclared: " + ", ".join(shown)
+            + (f" (+{len(unexpected) - len(shown)} more)" if len(unexpected) > len(shown) else ""),
+            red=True,
+            bold=True,
+        )
+        session.exitstatus = 1
+        return
+
     if skipped > allowed:
         reporter.write_line("")
         reporter.write_line(
