@@ -225,7 +225,7 @@
 </footer>
 
 <script id="board-data" type="application/json">{
-  "updated": 1789179206606,
+  "updated": 1789185612195,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -415,6 +415,13 @@
     }
   ],
   "cards": [
+    {
+      "id": "c401",
+      "col": "backlog",
+      "owner": "",
+      "title": "c401 [P1 | CI signal integrity] Three WebSocket tests flake in CI, so a red backend check no longer means a broken PR",
+      "detail": "Opened Sep 11 2026 by chirps-17 (manager) after a flake blocked a merge and cost a review cycle. EVIDENCE, all on main or on a PR whose diff cannot touch the failing path: (1) main cc510a6 (the c398 merge, monitoring JSON and scripts only) failed tests/test_ws_connection_pool.py::test_an_open_socket_holds_no_pooled_connection; (2) main ca052a2 (the c374 merge, image derivatives) failed tests/test_ws_resource_bounds.py::test_hanging_subscribe_times_out_and_cleans; (3) main 8a45f42 (c397, a mobile colour change) failed tests/test_ws_resource_integration.py::test_churn_delivery_sql_and_memory; (4) PR #295 at 342bb9f failed the same test as (1) while all five media suites passed locally together, and main at 20ef2df and 287d64d passed. MECHANISM for (1), read from the CI log: the test samples baseline = pool.checkedout() immediately after an HTTP bootstrap request, then asserts the count inside an open socket EQUALS that baseline. Under CI load the previous request's connection has not always been returned when the baseline is taken, so baseline is 1 while the in-socket sample is the correct 0, and the assertion fails with 'assert 0 == 1' - the failure direction is FEWER connections held, which the message misreports as the c205 leak. WHY THIS IS P1 EVEN THOUGH NO PRODUCT CODE IS BROKEN: the whole point of c205's file is that a pool leak is invisible to every other test, so this is the only guard for it; a test that cries wolf gets ignored or deselected, and then the real leak ships. Also every session now has to spend a cycle proving a red check is not theirs. SCOPE: make the three tests robust without weakening what they guard. For (1) that means settling the pool before the baseline (poll until checkedout stops changing, with a bounded wait) and asserting the in-socket count is NOT GREATER than the settled baseline, so the direction that matters still fails; do not just relax it to a range. For (2) and (3) read the CI logs first and fix the actual timing assumption, or state plainly that they are environment-dependent and gate them the way c394 gated its Redis guard. ACCEPTANCE: each changed test still fails against the bug it was written for (re-introduce the pre-c205 session dependency and show the pool test red), and ten consecutive CI runs on main are green."
+    },
     {
       "id": "c399",
       "col": "done",
