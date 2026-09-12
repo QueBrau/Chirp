@@ -89,6 +89,35 @@ async def connected(base, uid):
         raise
 
 
+async def own_channel_subscribers(broker, user_id) -> int:
+    """Subscribers on THIS test's own user channel, not the whole Redis server.
+
+    Board c401. redis_totals() reads client_list(), which is server-wide: it counts
+    every pubsub client on the instance, including ones belonging to other tests in
+    the same session and, on a shared developer machine, other suites entirely. The
+    churn test below asserted an exact delta against that number and failed with
+    counts like 33 where 16 sockets were open, and like 16 against a baseline of 16.
+    PUBSUB NUMSUB on the channel these sockets actually subscribe to answers the
+    question the assertion means to ask, and nothing outside this test can move it.
+    Measured in isolation across 6 runs: the scoped count equalled the server-wide
+    count exactly every time, so this is a strictly more precise assertion rather
+    than a looser one.
+    """
+    rows = await broker.pubsub_numsub(f"user:{user_id}")
+    return int(rows[0][1]) if rows else 0
+
+
+async def no_own_subscribers(broker, user_id):
+    """Wait for THIS test's channel to drain (see own_channel_subscribers).
+
+    The server-wide no_subscribers() below cannot be satisfied while an unrelated
+    suite holds a socket open, so it is the wrong wait on a shared machine.
+    """
+    async with asyncio.timeout(3):
+        while await own_channel_subscribers(broker, user_id):
+            await asyncio.sleep(.01)
+
+
 async def no_subscribers(broker):
     async with asyncio.timeout(3):
         while (await redis_totals(broker))["redis_pubsub_clients"]:
@@ -203,7 +232,15 @@ async def test_churn_delivery_sql_and_memory(client, make_user, broker, monkeypa
     event.listen(engine, "checkout", checkout)
     event.listen(engine, "checkin", checkin)
     event.listen(engine, "before_cursor_execute", query)
-    baseline = await redis_totals(broker)
+    # Board c401: scoped to this test's own channel, because the server-wide count
+    # this used to baseline against moves when any neighbouring test or suite holds a
+    # pubsub client. There is no cross-test baseline to subtract any more; the wait
+    # just establishes that this channel starts empty, which is the precondition for
+    # "subscribers after connecting == count" to mean anything.
+    await no_own_subscribers(broker, user.id)
+    assert await own_channel_subscribers(broker, user.id) == 0, (
+        "this test's own channel must start empty or the counts below measure leftovers"
+    )
     try:
         async with local_server(create_app()) as (base, server):
             for round_no in range(rounds):
@@ -217,8 +254,11 @@ async def test_churn_delivery_sql_and_memory(client, make_user, broker, monkeypa
                             "elapsed_ms": (time.monotonic() - connect_started) * 1000, **metrics})
                     for value in outcomes:
                         if isinstance(value, BaseException): raise value
+                    assert await own_channel_subscribers(broker, user.id) == count
+                    # Server-wide totals still feed the recorded memory/bytes metrics
+                    # below; deliberately NOT the correctness assertion above, which
+                    # must not move when a neighbouring test holds a client open.
                     opened = await redis_totals(broker)
-                    assert opened["redis_pubsub_clients"] - baseline["redis_pubsub_clients"] == count
                     start = time.perf_counter_ns()
                     await pubsub.publish_to_user(user.id, {"type": "probe", "sequence": round_no})
                     arrivals = []

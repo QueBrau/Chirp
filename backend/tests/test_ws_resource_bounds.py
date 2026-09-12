@@ -101,6 +101,30 @@ class Harness:
         return task
 
 
+def _budget(*, floor: float = 1.0, multiplier: float = 8.0) -> float:
+    """A liveness ceiling derived from the gateway's own patched budgets.
+
+    board c401. The old flat .35s ceiling in _ended assumed a specific machine speed;
+    under load this Mac (and a busy CI runner) can blow well past it on product code
+    that is not actually slow. Reading WS_SUBSCRIBE_SECONDS / WS_CLOSE_SECONDS /
+    WS_CLEANUP_SECONDS live off the gateway module (rather than importing a constant
+    once) means each test's own monkeypatch of those values is picked up, since
+    monkeypatch is per-test. multiplier=8 gives generous headroom over the real
+    controlled path (subscribe-timeout, then close, then cleanup: about .12s with
+    this file's default .04s-per-stage patches) while staying under the unpatched
+    production sum of 4.0s, so a regression that ignores a patched budget and falls
+    through to the production value still fails this ceiling. floor=1.0 keeps a
+    tiny patched sum from producing a ceiling too small to survive scheduler jitter.
+    """
+    total = gateway.WS_SUBSCRIBE_SECONDS + gateway.WS_CLOSE_SECONDS + gateway.WS_CLEANUP_SECONDS
+    return max(floor, multiplier * total)
+
+
+async def _await_event(event: asyncio.Event, *, ceiling: float | None = None) -> None:
+    """Wait for a harness event using the derived budget instead of a flat .2s."""
+    await asyncio.wait_for(event.wait(), ceiling if ceiling is not None else _budget())
+
+
 @pytest.fixture
 async def env(monkeypatch):
     h = Harness()
@@ -139,23 +163,31 @@ async def env(monkeypatch):
     yield h
     for gate in (h.send_gate, h.subscribe_gate, h.cleanup_gate, h.close_gate, h.poll_gate): gate.set()
     for task in h.tasks: task.cancel()
-    await asyncio.wait_for(asyncio.gather(*h.tasks, return_exceptions=True), 1)
+    await asyncio.wait_for(asyncio.gather(*h.tasks, return_exceptions=True), _budget())
     assert not [t for t in asyncio.all_tasks() if t.get_name().startswith("ws-") and not t.done()]
 
 
-async def _ended(task):
-    done, _ = await asyncio.wait({task}, timeout=.35)
-    assert task in done, "gateway did not finish within its controlled local budgets"
+async def _ended(task, *, ceiling: float | None = None):
+    budget = ceiling if ceiling is not None else _budget()
+    done, _ = await asyncio.wait({task}, timeout=budget)
+    assert task in done, f"gateway did not finish within its derived budget ({budget:.3f}s)"
     await task
 
 
 async def test_ready_requires_actual_subscription_ack(env):
     task = env.run()
-    await asyncio.wait_for(env.subscribe_started.wait(), .2)
+    await _await_event(env.subscribe_started)
+    # Left as a flat sleep deliberately: this is the NEGATIVE assertion (nothing was
+    # sent before the ack), which a bounded wait cannot express — there is no event to
+    # wait on for something not having happened. The positive assertion just below
+    # waits on ready_sent instead of a flat sleep (board c401): a flat sleep-then-assert
+    # fails in the LOAD direction (a slow machine loses the race and a real ready would
+    # be reported missing), which is strictly worse than the ceiling-based waits used
+    # everywhere else in this file.
     await asyncio.sleep(.01)
     assert env.sent == []
     env.ack()
-    await asyncio.sleep(.02)
+    await _await_event(env.ready_sent)
     assert [json.loads(value) for value in env.sent] == [{"type": "ready"}]
     assert not task.done()
 
@@ -179,7 +211,7 @@ async def test_slow_reader_has_send_deadline(env):
     env.ack()
     env.message()
     task = env.run()
-    await asyncio.wait_for(env.send_started.wait(), .2)
+    await _await_event(env.send_started)
     await _ended(task)
     assert env.closes == [4503]
     assert env.order.index("send-canceled") < env.order.index("close")
@@ -191,7 +223,7 @@ async def test_queue_count_includes_inflight_frame(env, monkeypatch):
     env.ack()
     env.message("first")
     task = env.run()
-    await asyncio.wait_for(env.send_started.wait(), .2)
+    await _await_event(env.send_started)
     env.message("second")
     env.message("third")
     await _ended(task)
@@ -207,9 +239,9 @@ async def test_queue_bytes_count_utf8_and_inflight(env, monkeypatch):
     monkeypatch.setattr(gateway, "WS_SEND_SECONDS", 10, raising=False)
     env.ack()
     task = env.run()
-    await asyncio.wait_for(env.ready_sent.wait(), .2)
+    await _await_event(env.ready_sent)
     env.message("€" * 10)
-    await asyncio.wait_for(env.send_started.wait(), .2)
+    await _await_event(env.send_started)
     env.message("€" * 10)
     await _ended(task)
     assert env.closes == [4503]
@@ -240,7 +272,7 @@ async def test_suspension_cancels_inflight_sender_before_close(env, monkeypatch)
     env.ack()
     env.message()
     task = env.run()
-    await asyncio.wait_for(env.send_started.wait(), .2)
+    await _await_event(env.send_started)
     env.suspended = True
     await _ended(task)
     assert env.closes == [4403]
@@ -258,7 +290,7 @@ async def test_reconciliation_wait_is_bounded_independently_of_redis(env, monkey
 async def test_broker_resubscribe_forces_reconnect_catchup(env):
     env.ack()
     task = env.run()
-    await asyncio.wait_for(env.ready_sent.wait(), .2)
+    await _await_event(env.ready_sent)
     env.ack()
     await _ended(task)
     assert env.closes == [4503]
@@ -280,7 +312,7 @@ async def test_queue_age_bounds_an_inflight_send_even_with_long_send_budget(env,
     env.ack()
     env.message()
     task = env.run()
-    await asyncio.wait_for(env.send_started.wait(), .2)
+    await _await_event(env.send_started)
     await _ended(task)
     assert env.closes == [4503]
 
@@ -289,7 +321,7 @@ async def test_parent_cancellation_releases_sender_and_pubsub(env):
     env.ack()
     env.message()
     task = env.run()
-    await asyncio.wait_for(env.send_started.wait(), .2)
+    await _await_event(env.send_started)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -364,7 +396,7 @@ async def test_anyio_level_cancellation_finishes_owned_cleanup(env):
     env.message()
     async with anyio.create_task_group() as group:
         group.start_soon(gateway.websocket_gateway, env)
-        await asyncio.wait_for(env.send_started.wait(), .2)
+        await _await_event(env.send_started)
         group.cancel_scope.cancel()
     assert env.cleaned == 1
     assert "send-canceled" in env.order
