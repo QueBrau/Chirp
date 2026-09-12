@@ -78,18 +78,27 @@ jobs:
           # harness, gated module-wide by CHIRP_EXPLAIN=1 (never set here on
           # purpose — it seeds 15,000+ rows and is meant to be run by hand,
           # not on every PR). Its 6 tests always skip in this job. That is
-          # the one legitimate, deliberate skip this ceiling docstring asks
-          # for: raised on purpose, by a human decision, not to make a real
-          # failure quiet. If this number changes, it means the harness's
-          # test count changed, not that something else started skipping.
-          CHIRP_MAX_SKIPS: "6"
+          # a legitimate, deliberate skip this ceiling docstring asks for:
+          # raised on purpose, by a human decision, not to make a real
+          # failure quiet.
+          # c400: tests/test_c400_feed_bytes.py is the same shape, gated by
+          # CHIRP_MEDIA_EVIDENCE=1 (never set here — it's an evidence dump,
+          # not a correctness gate). Its 6 tests (5 parametrized + 1) always
+          # skip here too — verified directly against a real CI run before
+          # this number was picked, not assumed from the file's test count.
+          # 6 + 6 = 12. If this number changes, it means one of these
+          # harnesses' test count changed, not that something else started
+          # skipping.
+          CHIRP_MAX_SKIPS: "12"
           # c402: the ceiling above is a count, and a count cannot tell
           # one-in-one-out from nothing-changed. This names WHICH tests are
-          # allowed to skip, by nodeid prefix. If the c364 harness ever stops
-          # skipping here, six unrelated skips would still satisfy the number
-          # above; they will not satisfy this. Anything skipping outside this
-          # list fails the run and is named in the failure.
-          CHIRP_ALLOWED_SKIP_PREFIXES: "tests/test_c364_query_plans.py"
+          # allowed to skip, by nodeid prefix (each entry must be the full
+          # filename — a prefix has to end on a "/" or "::" boundary, so half
+          # a filename declares nothing). If either harness above ever stops
+          # skipping here, twelve unrelated skips would still satisfy the
+          # number above; they will not satisfy this. Anything skipping
+          # outside this list fails the run and is named in the failure.
+          CHIRP_ALLOWED_SKIP_PREFIXES: "tests/test_c364_query_plans.py,tests/test_c400_feed_bytes.py"
         run: python -m pytest -q
 
   migrations:
