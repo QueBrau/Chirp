@@ -83,6 +83,13 @@ jobs:
           # failure quiet. If this number changes, it means the harness's
           # test count changed, not that something else started skipping.
           CHIRP_MAX_SKIPS: "6"
+          # c402: the ceiling above is a count, and a count cannot tell
+          # one-in-one-out from nothing-changed. This names WHICH tests are
+          # allowed to skip, by nodeid prefix. If the c364 harness ever stops
+          # skipping here, six unrelated skips would still satisfy the number
+          # above; they will not satisfy this. Anything skipping outside this
+          # list fails the run and is named in the failure.
+          CHIRP_ALLOWED_SKIP_PREFIXES: "tests/test_c364_query_plans.py"
         run: python -m pytest -q
 
   migrations:
