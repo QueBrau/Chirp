@@ -27,6 +27,15 @@ dependencies = [
     # runtime the way auth_mode switches firebase-admin on/off, so it always needs to
     # be importable once app.routers.media exists.
     "google-cloud-storage",
+    # Bounded image derivatives at finalize time (c374): storage_service decodes every
+    # uploaded photo, strips EXIF, downsizes, and re-encodes to JPEG before it ever
+    # reaches posts/ or avatars/ - a copy_blob no longer runs at all. >=10 is required
+    # Image.Resampling.LANCZOS (what this module's derivative resize uses) has existed
+    # since Pillow 9.1, not 10 - verified against the installed 12.3.0 source, which
+    # still keeps the top-level Image.LANCZOS alias too (Image.ANTIALIAS, a different,
+    # now-removed alias, was the one actually dropped in 10.0). >=10 here is just a
+    # conservative modern floor, not a hard technical requirement.
+    "Pillow>=10",
 ]
 
 [project.optional-dependencies]
