@@ -114,12 +114,22 @@ async def _load_owning_post(session: AsyncSession, object_name: str) -> models.P
     if canonical is None:
         return None
     result = await session.execute(
-        select(models.Post).where(
+        # limit(1) + first(), NOT scalar_one_or_none(): two live posts sharing one
+        # canonical url would make scalar_one_or_none() raise MultipleResultsFound
+        # and turn a photo fetch into a 500 instead of a decision. That is
+        # unreachable today - the permanent object name is deterministic from the
+        # tmp name and finalize_media_object copies with if_generation_match=0, so a
+        # second finalize fails rather than producing a duplicate - but a restore or
+        # a future duplicate-post feature must degrade to an entitlement decision on
+        # the first owning post, never to an exception on the read path.
+        select(models.Post)
+        .where(
             models.Post.media_urls.any(canonical),
             models.Post.deleted_at.is_(None),
         )
+        .limit(1)
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
 
 
 async def _decide(
@@ -140,6 +150,19 @@ async def _decide(
         return False
 
     if post.audience == "campus":
+        # NARROWER THAN THE FEED'S CAMPUS RULE, AND THAT IS ONLY SAFE BECAUSE OF AN
+        # INVARIANT ABOUT WHO CAN HOLD A CAMPUS TOKEN AT ALL. feed.py's
+        # _load_interactable_post allows a campus post to a viewer verified on the
+        # post's campus OR an active member of the authoring chapter, and its own
+        # docstring calls that second half load-bearing because users.campus_id and
+        # chapters.campus_id drift independently. This branch implements only the
+        # verified-campus half. It cannot produce a false 403 today: every route that
+        # serialises a campus post's media (and therefore mints a capability token for
+        # it) already sits behind require_campus_member or require_verified_campus, so
+        # no viewer can be holding a campus token without satisfying the stricter rule.
+        # THE DAY a route serves campus media through the membership half instead, this
+        # branch must gain that half too, or revocation will start denying members who
+        # are legitimately entitled. Do not delete this comment without checking that.
         if viewer.campus_id != post.campus_id:
             return False
         return is_campus_verified(viewer, now=now)

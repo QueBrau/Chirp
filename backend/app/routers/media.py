@@ -124,6 +124,19 @@ async def read_media(
         # module docstring on why observe() takes no payload argument at all.
         operational_signals.observe("media_access_revoked")
         raise HTTPException(status_code=403, detail="media_access_revoked")
+    # c350 + c355: give the pool connection BACK before the signing call below.
+    # The entitlement check above checked out one of this instance's five
+    # connections (db_pool_size 3 + db_max_overflow 2); signed_read_url() can
+    # spend a network round trip on a google.auth refresh plus an IAM signBlob,
+    # and FastAPI would otherwise hold the session open until the response is
+    # finished. On a cold instance right after a deploy both memos are empty and
+    # one feed render fans out to 20+ of these, so holding a connection across the
+    # signing call is how five requests exhaust the pool and the sixth waits out
+    # db_pool_timeout. Same fix c355 applied to the provider waits. A memo HIT
+    # never opened a session at all (get_session is lazy), and closing twice is
+    # harmless: the dependency's own teardown runs after this and finds an
+    # already-closed session.
+    await session.close()
     # c211: same reasoning as create_upload_url() above - signed_read_url() is
     # synchronous and, on a memo miss, makes the same google.auth refresh + IAM
     # signBlob network call. Offload to a worker thread so a cold cache entry cannot

@@ -179,6 +179,80 @@ def test_window_is_read_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
+async def test_session_is_released_before_the_signing_call(
+    client: AsyncClient, make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """read_media must release its database session BEFORE it signs the redirect.
+
+    c350 + c355. The entitlement lookup checks out one of an instance's five
+    connections (db_pool_size 3 + db_max_overflow 2) and signed_read_url can spend
+    a network round trip on a google.auth refresh plus an IAM signBlob, so a
+    session still open across that call is how a cold instance's feed fan-out
+    (20+ media GETs, both memos empty) exhausts the pool and makes the next
+    request wait out db_pool_timeout.
+
+    ORDERING IS ASSERTED, NOT POOL COUNTS, AND THAT IS DELIBERATE. The obvious
+    version of this test samples `engine.pool.checkedout()` during signing and
+    expects zero (or a drop of one). That number is process-wide AND conftest's
+    client fixture rebuilds app.db's engine per test, so the same assertion passes
+    when this file runs alone and fails when it runs after other media files - a
+    global measure masquerading as a local one, which is a flake, not a guard.
+    What this card actually requires is an ordering: the session is closed before
+    the signing call happens. That is what is asserted here, and SQLAlchemy's
+    documented contract for close() is what turns it into a returned connection.
+
+    The discriminating condition is CONSTRUCTED, not incidental: the memo is reset
+    so this request must really open a session and hit the database (a memo hit
+    never touches the pool at all, which would make the assertion vacuous), and
+    the decision is asserted to have been made on this request.
+
+    Falsification: red without `await session.close()` in read_media - the signing
+    call runs with the session still open and `closed` is empty.
+    """
+    setup = await make_chapter_with(role="member")
+    _, token = await _create_chapter_photo_post(client, setup, monkeypatch)
+
+    decided: list[bool] = []
+    closed: list[str] = []
+    real_check = media_entitlement.check_media_entitlement
+
+    async def _recording_check(session, object_name, viewer_id, **kwargs):
+        allowed = await real_check(session, object_name, viewer_id, **kwargs)
+        decided.append(allowed)
+        real_close = session.close
+
+        async def _tracking_close():
+            closed.append("closed")
+            return await real_close()
+
+        session.close = _tracking_close  # instance attribute, not a class patch
+        return allowed
+
+    import app.routers.media as media_router
+
+    monkeypatch.setattr(media_router, "check_media_entitlement", _recording_check)
+
+    signed_with_session_open: list[bool] = []
+    real_signer = media_router.signed_read_url
+
+    def _sampling_signer(object_name: str) -> str:
+        signed_with_session_open.append(not closed)
+        return real_signer(object_name)
+
+    monkeypatch.setattr(media_router, "signed_read_url", _sampling_signer)
+
+    media_entitlement._reset_memo_for_tests()
+    response = await client.get(f"/media/{token}")
+    assert response.status_code == 302, response.text
+    assert decided == [True], "the entitlement check must really have run on this request"
+    assert signed_with_session_open, "the signing call must really have been reached"
+    assert signed_with_session_open[0] is False, (
+        "signed_read_url ran while the entitlement session was still open; read_media "
+        "must close the session after the decision and before signing"
+    )
+
+
 async def test_redirect_denies_after_chapter_removal(
     client: AsyncClient, make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
 ) -> None:
