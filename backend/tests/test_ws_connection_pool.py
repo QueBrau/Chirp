@@ -124,6 +124,32 @@ def _checked_out(client: TestClient) -> int:
     return client.portal.call(_sample)  # type: ignore[arg-type]
 
 
+def test_the_outbox_sweeper_is_off_in_tests() -> None:
+    """Board c401. The pool assertions in this file are EXACT, which is only sound
+    while nothing else touches the pool behind them.
+
+    app/main.py's lifespan always starts _sweep_outbox, whose loop opens a session
+    every outbox_sweep_interval_s (5s default). With it running, an exact pool count
+    under a booted app is a coin flip - about one sample in eight lands inside a
+    checkout burst - and that is what failed this file's guard and the c363 churn test
+    in CI on unrelated commits. tests/conftest.py turns it off for the suite; this
+    asserts it stayed off, because re-enabling it would not fail with a clear reason,
+    it would come back as a rare red on somebody else's PR, which is the failure mode
+    board c401 exists to end.
+
+    Turning it off costs no coverage of the sweeper: test_c356_outbox_sweeper.py,
+    test_c356_outbox_message_delivery.py and test_c345_poll_outbox.py call
+    outbox.dispatch_pending directly rather than relying on the background task.
+    """
+    from app.config import get_settings
+
+    assert get_settings().outbox_sweeper_enabled is False, (
+        "the background outbox sweeper is enabled under tests; it takes a pooled "
+        "connection every few seconds and makes every exact pool assertion in the "
+        "suite flaky - see tests/conftest.py and board c401"
+    )
+
+
 @needs_redis
 def test_an_open_socket_holds_no_pooled_connection(ws_client: TestClient) -> None:
     """The whole point of c205, stated as one number.

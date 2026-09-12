@@ -16,6 +16,31 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+# Board c401. app/main.py's lifespan ALWAYS creates the _sweep_outbox task (the
+# enabled-check is inside the coroutine, not at the call site), and its loop is
+# "dispatch_pending(); sleep(outbox_sweep_interval_s)" with the interval defaulting
+# to 5s. Each pass opens a session, so every test that boots the app has a background
+# task checking a pooled connection out and back at moments no test controls.
+# Measured two ways: sampling pool.checkedout() every 50ms for 12s under a TestClient
+# app found 24 of 202 samples non-zero, in bursts; and the WS pool/resource files went
+# 1 red in 6 runs with the loop on versus 6 green in 6 with it off. That is what made
+# the c205 pool guard and the c363 churn test fail in CI on commits whose diffs could
+# not touch them.
+#
+# Turned off for the whole suite rather than tolerated per assertion, so those counts
+# stay EXACT. A settle-then-compare heuristic was tried first and rejected on
+# evidence: an independent verifier reproduced it converging on an inflated baseline
+# and then silently PASSING a fully reintroduced c205 leak in 2 of 20 runs, which is
+# strictly worse than the flake it replaced. With the perturbation gone instead, the
+# exact guard caught that same reintroduced leak in 10 of 10 runs.
+#
+# This costs no coverage of the sweeper itself: test_c356_outbox_sweeper.py,
+# test_c356_outbox_message_delivery.py and test_c345_poll_outbox.py drive
+# outbox.dispatch_pending directly and never reference the background task (checked by
+# c356's owner before this landed). setdefault, not assignment, so a run that wants
+# the loop can still ask for it.
+os.environ.setdefault("OUTBOX_SWEEPER_ENABLED", "false")
+
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://chirp:chirp@localhost:5432/chirp_test"
 # Connected to for CREATE/DROP DATABASE only. Always present on both the official
