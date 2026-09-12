@@ -4,6 +4,18 @@ RUN THIS FILE ON ITS OWN, NEVER AS PART OF A NORMAL SUITE RUN:
 
     CHIRP_EXPLAIN=1 .venv/bin/python -m pytest tests/test_c364_query_plans.py -q
 
+WRITE PATH (board c404): the command above writes its artefact OUTSIDE the repo, then
+compares its STRUCTURE (which (family, query) pairs were measured, the cardinality
+parameters - never execution times or row counts, which legitimately vary by machine and
+Postgres version) against the committed infra/evidence/c364-query-plans-2026-09-11.json,
+and fails only if that structure no longer matches. server_version/server_encoding
+differences are printed, not failed - they describe WHERE this ran, not WHAT the harness
+measures. See tests/_evidence_write.py for why. To deliberately regenerate the COMMITTED
+file itself:
+
+    CHIRP_EXPLAIN=1 CHIRP_EVIDENCE_OUT=infra/evidence/c364-query-plans-2026-09-11.json \
+        .venv/bin/python -m pytest tests/test_c364_query_plans.py -q
+
 Every test below is skipped unless CHIRP_EXPLAIN=1 (see pytestmark). This module
 defines its OWN module-scoped seed fixture (`explain_dataset`) rather than using the
 per-test `client` fixture from conftest.py: `client` TRUNCATEs every table before each
@@ -65,6 +77,8 @@ from app.routers.keys import _prekey_count_out, fetch_prekey_bundle
 from app.routers.messages import search_users
 from app.routers.polls import list_polls
 
+from . import _evidence_write
+
 pytestmark = pytest.mark.skipif(
     os.environ.get("CHIRP_EXPLAIN") != "1",
     reason="opt-in performance harness (board c364) -- set CHIRP_EXPLAIN=1 to run",
@@ -72,6 +86,10 @@ pytestmark = pytest.mark.skipif(
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE_PATH = REPO_ROOT / "infra" / "evidence" / "c364-query-plans-2026-09-11.json"
+REGENERATE_COMMAND = (
+    "CHIRP_EXPLAIN=1 CHIRP_EVIDENCE_OUT=infra/evidence/c364-query-plans-2026-09-11.json "
+    ".venv/bin/python -m pytest tests/test_c364_query_plans.py -q"
+)
 
 CAMPUS_COUNT = 3
 USERS_PER_CAMPUS = int(os.environ.get("CHIRP_EXPLAIN_USERS", "5000"))
@@ -696,12 +714,36 @@ async def explain_dataset(migrated_db: str) -> AsyncIterator[Handles]:
     await app_db.get_engine().dispose()
 
 
+def _structural_signature(payload: dict) -> dict:
+    """The SET of things this run measured - never a timing or a row count.
+
+    Board c404: a missing/added (family, query) pair or a changed cardinality
+    parameter means the committed file no longer describes the same queries
+    the harness measures now, which is a real regression - the actual
+    execution times and row counts are expected to vary by machine and
+    Postgres version and are compared nowhere near this function.
+    """
+    return {
+        "query_identities": sorted(f"{q['family']}::{q['query']}" for q in payload["queries"]),
+        "cardinality": payload["cardinality"],
+    }
+
+
+def _informational_signature(payload: dict) -> dict:
+    """Printed, never asserted: server_version/encoding are facts about WHERE
+    this ran, not WHAT the harness measures (chirps-17, review)."""
+    return {
+        "server_version": payload["postgres"]["server_version"],
+        "server_encoding": payload["postgres"]["server_encoding"],
+    }
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _write_evidence_on_teardown(request: pytest.FixtureRequest, evidence: Evidence, explain_dataset: Handles) -> Iterator[None]:
     yield
-    EVIDENCE_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "observed_at": datetime.now(timezone.utc).isoformat(),
+        "regenerate_command": REGENERATE_COMMAND,
         "cardinality": _CARDINALITY,
         "postgres": {
             "server_version": explain_dataset.pg_version,
@@ -713,7 +755,43 @@ def _write_evidence_on_teardown(request: pytest.FixtureRequest, evidence: Eviden
         },
         "queries": evidence.entries,
     }
-    EVIDENCE_PATH.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+
+    out_path = _evidence_write.evidence_output_path(EVIDENCE_PATH)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+
+    if out_path == EVIDENCE_PATH:
+        return  # deliberate write to the committed path - nothing to compare against
+
+    committed = _evidence_write.load_committed(EVIDENCE_PATH)
+    if committed is None:
+        return  # no committed file yet - a future deliberate run creates it
+
+    info_diff = _evidence_write.structural_diff(
+        _informational_signature(committed), _informational_signature(payload)
+    )
+    if info_diff:
+        print(
+            "\n".join(
+                ["c364 evidence environment differs from the committed file (informational only):"]
+                + [f"  - {line}" for line in info_diff]
+            )
+        )
+
+    diff = _evidence_write.structural_diff(
+        _structural_signature(committed), _structural_signature(payload)
+    )
+    if diff:
+        report = "\n".join(
+            [
+                f"c364 evidence ({out_path}) no longer matches what the committed "
+                f"file ({EVIDENCE_PATH}) describes:",
+                *[f"  - {line}" for line in diff],
+                "",
+                f"If this is a deliberate, reviewed change: {REGENERATE_COMMAND}",
+            ]
+        )
+        pytest.fail(report, pytrace=False)
 
 
 # --------------------------------------------------------------------------------
