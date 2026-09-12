@@ -1,0 +1,97 @@
+{
+  "observed_at": "2026-09-12T14:12:31.438012+00:00",
+  "method": "Synthetic Gaussian-noise-then-blurred JPEGs at representative phone-camera shapes, run through the real storage_service._build_media_derivative() - not a substitute for measuring real uploads. See module docstring.",
+  "hypothesis_range_bytes": [
+    100000,
+    300000
+  ],
+  "images": [
+    {
+      "label": "12mp_landscape_4x3",
+      "source_dimensions": [
+        4032,
+        3024
+      ],
+      "derivative_dimensions": [
+        1600,
+        1200
+      ],
+      "original_bytes": 1459381,
+      "derivative_bytes": 257391,
+      "reduction_pct": 82.4,
+      "within_hypothesis_range": true
+    },
+    {
+      "label": "12mp_portrait_4x3",
+      "source_dimensions": [
+        3024,
+        4032
+      ],
+      "derivative_dimensions": [
+        1200,
+        1600
+      ],
+      "original_bytes": 1458934,
+      "derivative_bytes": 257296,
+      "reduction_pct": 82.4,
+      "within_hypothesis_range": true
+    },
+    {
+      "label": "8mp_landscape_4x3",
+      "source_dimensions": [
+        3264,
+        2448
+      ],
+      "derivative_dimensions": [
+        1600,
+        1200
+      ],
+      "original_bytes": 898119,
+      "derivative_bytes": 219147,
+      "reduction_pct": 75.6,
+      "within_hypothesis_range": true
+    },
+    {
+      "label": "wide_16x9",
+      "source_dimensions": [
+        4032,
+        2268
+      ],
+      "derivative_dimensions": [
+        1600,
+        900
+      ],
+      "original_bytes": 1013047,
+      "derivative_bytes": 176808,
+      "reduction_pct": 82.5,
+      "within_hypothesis_range": true
+    },
+    {
+      "label": "small_already_under_cap",
+      "source_dimensions": [
+        1200,
+        900
+      ],
+      "derivative_dimensions": [
+        1200,
+        900
+      ],
+      "original_bytes": 134643,
+      "derivative_bytes": 106059,
+      "reduction_pct": 21.2,
+      "within_hypothesis_range": true
+    }
+  ],
+  "feed_page_totals": {
+    "image_count": 5,
+    "total_original_bytes": 4964124,
+    "total_derivative_bytes": 1016701,
+    "total_reduction_pct": 79.5
+  },
+  "capability_url_window_determinism": {
+    "revocation_window_hours": 6.0,
+    "same_window_tokens_identical": true,
+    "cross_window_tokens_differ": true,
+    "note": "Byte-identical tokens within one window are the PRECONDITION for RN's Image cache (which keys on the url string) to hit; a token change is a structural, unavoidable miss at the window boundary, not one this pipeline could recover - see MEDIA_TOKEN_TTL's 2x-window margin for why that boundary is rare in practice (module docstring, signed-reads section)."
+  }
+}
