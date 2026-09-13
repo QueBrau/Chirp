@@ -333,10 +333,12 @@ class MonitoringApplyTests(unittest.TestCase):
             existing_name = fake.policies[target]["name"]
             fake.post_calls = fake.patch_calls = 0
             captured_urls = []
+            captured_bodies = []
             real_patch = fake.patch
 
             def spying_patch(url, body):
                 captured_urls.append(url)
+                captured_bodies.append(body)
                 return real_patch(url, body)
 
             args2 = _args(apply=True, channel=channel, policies_dir=str(tmp_dir))
@@ -357,7 +359,14 @@ class MonitoringApplyTests(unittest.TestCase):
         # it, because ownership is what lets a future removal clear the field
         # remotely, so the assertion is subset-plus-equality-with-what-is-present
         # rather than equality with the whole ownership list.
-        sent = json.loads(POLICIES_DIR.joinpath("redis-memory-pressure.json").read_text())
+        # The oracle is the body that was ACTUALLY PATCHed. It used to be read from
+        # redis-memory-pressure.json while the test mutated and sent a different file,
+        # and passed only because every policy happened to share one key set - found by
+        # chirps-36's review, and the same global-versus-local mistake as the rest of
+        # this card.
+        self.assertEqual(len(captured_bodies), 1)
+        sent = captured_bodies[0]
+        self.assertEqual(sent["displayName"], target)
         self.assertTrue(set(mask) <= set(m.UPDATE_MASK_FIELDS))
         self.assertEqual(set(mask), {f for f in m.UPDATE_MASK_FIELDS if f in sent} | {"notificationChannels"})
         for owned_field in m.SERVER_ASSIGNED_FIELDS:
@@ -605,6 +614,46 @@ class MonitoringApplyTests(unittest.TestCase):
                     "notificationRateLimit" in strategy and not log_based,
                     f"{path.name} carries a notification rate limit the API will reject",
                 )
+
+    def test_a_bool_only_reducer_after_a_numeric_aligner_is_refused(self):
+        """c407 cause 2 as a guard, not just a repaired file (chirps-36's review).
+
+        Constructed both ways so it discriminates: the pairing the API rejected live
+        is refused, and the type-preserving pairing the fixed policies use is not.
+        """
+        available = _inventory_available_metrics()
+
+        def policy(aligner):
+            return {
+                "displayName": "typed", "combiner": "OR",
+                "documentation": {"content": "See MONITORING-RUNBOOK.md."},
+                "conditions": [{"conditionThreshold": {
+                    "filter": 'metric.type="run.googleapis.com/request_count"',
+                    "aggregations": [{"alignmentPeriod": "60s", "perSeriesAligner": aligner,
+                                      "crossSeriesReducer": "REDUCE_COUNT_FALSE"}]}}],
+            }
+
+        bad = m.required_shape_errors(policy("ALIGN_FRACTION_TRUE"), available, [], [])
+        self.assertIn("reducer_cannot_consume_aligner_output:ALIGN_FRACTION_TRUE->REDUCE_COUNT_FALSE", bad)
+        good = m.required_shape_errors(policy("ALIGN_NEXT_OLDER"), available, [], [])
+        self.assertFalse([e for e in good if e.startswith("reducer_cannot_consume")])
+
+    def test_a_condition_absent_over_the_api_ceiling_is_refused(self):
+        """c407 cause 3 as a guard: the API caps conditionAbsent at 23h30m."""
+        available = _inventory_available_metrics()
+
+        def policy(duration):
+            return {
+                "displayName": "absent", "combiner": "OR",
+                "documentation": {"content": "See MONITORING-RUNBOOK.md."},
+                "conditions": [{"conditionAbsent": {
+                    "filter": 'metric.type="run.googleapis.com/request_count"', "duration": duration}}],
+            }
+
+        self.assertIn("condition_absent_duration_over_api_ceiling",
+                      m.required_shape_errors(policy("86400s"), available, [], []))
+        self.assertNotIn("condition_absent_duration_over_api_ceiling",
+                         m.required_shape_errors(policy("84600s"), available, [], []))
 
     # --- strict REST-shape round-trip: unknown keys fail ---
     def test_strict_rest_shape_rejects_unknown_keys(self):

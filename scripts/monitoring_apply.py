@@ -42,6 +42,27 @@ UPTIME_UPDATE_MASK_FIELDS = (
     "displayName", "period", "timeout", "contentMatchers", "checkerType",
     "selectedRegions", "monitoredResource", "httpCheck",
 )
+# c407: API rules the field-name validator cannot see, each observed live.
+BOOL_ONLY_REDUCERS = frozenset({"REDUCE_COUNT_TRUE", "REDUCE_COUNT_FALSE", "REDUCE_FRACTION_TRUE"})
+NUMERIC_OUTPUT_ALIGNERS = frozenset({
+    "ALIGN_FRACTION_TRUE", "ALIGN_COUNT_TRUE", "ALIGN_COUNT_FALSE", "ALIGN_COUNT",
+    "ALIGN_MEAN", "ALIGN_SUM", "ALIGN_MIN", "ALIGN_MAX", "ALIGN_STDDEV",
+    "ALIGN_RATE", "ALIGN_DELTA", "ALIGN_PERCENT_CHANGE",
+    "ALIGN_PERCENTILE_99", "ALIGN_PERCENTILE_95", "ALIGN_PERCENTILE_50", "ALIGN_PERCENTILE_05",
+})
+CONDITION_ABSENT_MAX_SECONDS = 23 * 3600 + 30 * 60
+
+
+def _duration_seconds(value):
+    """'86400s' -> 86400.0; anything unparseable -> None (the REST shape check owns format)."""
+    if not isinstance(value, str) or not value.endswith("s"):
+        return None
+    try:
+        return float(value[:-1])
+    except ValueError:
+        return None
+
+
 UPTIME_CHECK_PASSED_METRIC = "monitoring.googleapis.com/uptime_check/check_passed"
 LOG_METRIC_TYPE_PREFIX = "logging.googleapis.com/user/"
 HOSTNAME_RE = re.compile(
@@ -283,6 +304,38 @@ def required_shape_errors(policy: dict, available_metric_types: Iterable[str],
         )
         if not log_based:
             errors.append("notification_rate_limit_on_non_log_policy")
+
+    # c407 causes 2 and 3, found by chirps-36's review: the data files were repaired
+    # but nothing stopped the NEXT policy repeating either mistake, which is how all
+    # sixteen reached production in the first place.
+    #
+    # Cause 2, value types. A BOOL-only reducer (count or fraction of true/false
+    # series) cannot consume an aligner whose output is numeric. Observed live: the
+    # API rejected ALIGN_FRACTION_TRUE -> REDUCE_COUNT_FALSE with "The reducer cannot
+    # be applied to metrics with value type DOUBLE". The aligners listed produce
+    # DOUBLE or INT64 per the Cloud Monitoring Aligner enum, so each would fail the
+    # same way; ALIGN_NEXT_OLDER preserves the BOOL and is what the fixed policies use.
+    #
+    # Cause 3, a hard ceiling. conditionAbsent.duration above 23h30m is rejected
+    # ("Durations longer than 23h30m are not supported").
+    for condition in conditions if isinstance(conditions, list) else []:
+        if not isinstance(condition, dict):
+            continue
+        for kind in ("conditionThreshold", "conditionAbsent"):
+            spec = condition.get(kind)
+            if not isinstance(spec, dict):
+                continue
+            for aggregation in spec.get("aggregations") or []:
+                if not isinstance(aggregation, dict):
+                    continue
+                aligner = aggregation.get("perSeriesAligner")
+                reducer = aggregation.get("crossSeriesReducer")
+                if reducer in BOOL_ONLY_REDUCERS and aligner in NUMERIC_OUTPUT_ALIGNERS:
+                    errors.append(f"reducer_cannot_consume_aligner_output:{aligner}->{reducer}")
+            if kind == "conditionAbsent":
+                seconds = _duration_seconds(spec.get("duration"))
+                if seconds is not None and seconds > CONDITION_ABSENT_MAX_SECONDS:
+                    errors.append("condition_absent_duration_over_api_ceiling")
 
     available = set(available_metric_types)
     defined_log_metrics = set(defined_log_metric_types)
