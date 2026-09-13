@@ -10,7 +10,10 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from app import models
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+
 from app.config import get_settings
+from app.core.operational_signals import observe
 from app.db import get_session_factory
 from app.middleware.auth import get_user_by_uid
 from app.services.identity_verification import run_verification
@@ -197,9 +200,16 @@ async def websocket_gateway(websocket: WebSocket) -> None:
         async with asyncio.timeout(WS_AUTH_SECONDS):
             uid = await _resolve_uid(websocket)
     except TimeoutError:
+        # board c405 slice 1. Every branch here closes BEFORE accept(), and Starlette
+        # turns any pre-accept close into a bare HTTP 403 with the close code
+        # discarded -- so from outside, all five are the same event. These lines are
+        # the only way to tell them apart. They are the per-occurrence record;
+        # the throttled counters below are the rate. No behaviour changes here.
+        logger.warning("ws reject reason=auth_timeout pre_accept=true")
         await _bounded_close(websocket, WS_REALTIME_UNAVAILABLE)
         return
     if uid is None:
+        logger.warning("ws reject reason=no_credentials pre_accept=true")
         await _bounded_close(websocket, 4401)
         return
 
@@ -209,14 +219,32 @@ async def websocket_gateway(websocket: WebSocket) -> None:
                 user = await get_user_by_uid(session, uid)
                 user_id = user.id if user is not None else None
                 suspended_at = user.suspended_at if user is not None else None
-    except Exception:
+    except Exception as exc:
+        # exc_info because this handler used to discard the cause entirely, which is
+        # how a pool-checkout timeout became indistinguishable from an expired token:
+        # forced reproduction on c405 showed the client seeing HTTP 403 while the real
+        # cause was sqlalchemy QueuePool TimeoutError, logged nowhere.
+        logger.warning("ws reject reason=identity_lookup_failed pre_accept=true", exc_info=True)
+        if isinstance(exc, SQLAlchemyTimeoutError):
+            # The same condition main.py answers with 503 + Retry-After on the HTTP
+            # side; here it is a silent 403, so it needs its own countable signal.
+            observe("ws_connect_capacity_rejected")
         await _bounded_close(websocket, WS_REALTIME_UNAVAILABLE)
         return
     # Always release SQL before any transport write, including rejection.
     if user_id is None:
+        logger.warning("ws reject reason=user_not_found pre_accept=true")
         await _bounded_close(websocket, 4401)
         return
     if suspended_at is not None:
+        # Named as c405 journey (b) on purpose: this is the branch with a
+        # user-visible consequence. The 4403 below is discarded by the pre-accept
+        # close, so socket.ts never routes to revalidate(), and a suspended user is
+        # shown empty content with no explanation rather than the suspension state
+        # the client already implements. Whoever reads this line should land on c405
+        # without re-deriving that chain through socket.ts and api/client.ts.
+        logger.warning("ws reject reason=account_suspended pre_accept=true journey=c405_b")
+        observe("ws_connect_suspended_rejected")
         await _bounded_close(websocket, WS_ACCOUNT_SUSPENDED)
         return
 
