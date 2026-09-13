@@ -320,7 +320,12 @@ class MonitoringApplyTests(unittest.TestCase):
                 raw = path.read_text(encoding="utf-8")
                 if target is None:
                     body = json.loads(raw)
-                    body["alertStrategy"]["notificationRateLimit"]["period"] = "1234s"
+                    # c407: this used to nudge alertStrategy.notificationRateLimit,
+                    # which no policy carries any more because the API rejects it on
+                    # metric policies. documentation.content is an owned field in
+                    # UPDATE_MASK_FIELDS and equally arbitrary, so the diff this test
+                    # needs is unchanged in kind.
+                    body["documentation"]["content"] += " Edited for the update path. See MONITORING-RUNBOOK.md."
                     target = body["displayName"]
                     raw = json.dumps(body)
                 (tmp_dir / path.name).write_text(raw, encoding="utf-8")
@@ -346,7 +351,15 @@ class MonitoringApplyTests(unittest.TestCase):
         resource_url, _, query = captured_urls[0].partition("?")
         self.assertEqual(resource_url, "https://monitoring.googleapis.com/v3/" + existing_name)
         mask = urllib.parse.parse_qs(query)["updateMask"][0].split(",")
-        self.assertEqual(set(mask), set(m.UPDATE_MASK_FIELDS))
+        # c407: the mask names the owned fields PRESENT in the body being sent, and
+        # no policy carries alertStrategy any more (the API rejects the only thing we
+        # put in it on a metric policy). UPDATE_MASK_FIELDS deliberately still lists
+        # it, because ownership is what lets a future removal clear the field
+        # remotely, so the assertion is subset-plus-equality-with-what-is-present
+        # rather than equality with the whole ownership list.
+        sent = json.loads(POLICIES_DIR.joinpath("redis-memory-pressure.json").read_text())
+        self.assertTrue(set(mask) <= set(m.UPDATE_MASK_FIELDS))
+        self.assertEqual(set(mask), {f for f in m.UPDATE_MASK_FIELDS if f in sent} | {"notificationChannels"})
         for owned_field in m.SERVER_ASSIGNED_FIELDS:
             self.assertNotIn(owned_field, mask)
 
@@ -490,21 +503,57 @@ class MonitoringApplyTests(unittest.TestCase):
         self.assertEqual({e["file"] for e in errors}, {"bad_metric.json", "bad_uptime.json"})
 
     # --- test_purge_missed_schedule_duration_matches_committed_evidence ---
-    def test_purge_missed_schedule_duration_matches_committed_evidence(self):
+    def test_no_condition_absent_can_express_this_job_cadence(self):
+        """Why the missed-schedule half is absent, pinned so nobody re-adds it (c407).
+
+        The committed evidence says chirp-purge-daily fires once a day. Cloud
+        Monitoring answered INVALID_ARGUMENT to a 24h conditionAbsent duration with
+        "Durations longer than 23h30m are not supported" - a real API ceiling BELOW
+        this job's cadence. So every absence window the API would accept fires about
+        30 minutes before each scheduled run, i.e. a guaranteed daily false alarm.
+        There is no correct conditionAbsent for a 24h job, which is a property of the
+        cadence and the API, not an oversight in this file.
+
+        This test pins both halves of that: the schedule really is daily, and the
+        policy really carries no conditionAbsent. If someone shortens the job's
+        cadence below 23h30m, this test is where they will find out that the
+        missed-schedule condition becomes possible again.
+        """
         evidence_path = REPO_ROOT / "infra/monitoring/evidence/c398-scheduler-chirp-purge-daily-2026-09-10.json"
         evidence = json.loads(evidence_path.read_text())
         minute, hour, dom, month, dow = evidence["schedule"].split()
-        # Independently derived: a schedule with '*' in day-of-month, month and
-        # day-of-week and a single fixed hour:minute fires exactly once per day.
         self.assertEqual((dom, month, dow), ("*", "*", "*"))
         self.assertNotIn(",", hour)
         self.assertNotIn("/", hour)
         cadence_seconds = 24 * 60 * 60
+        self.assertGreater(cadence_seconds, 23 * 3600 + 30 * 60, "the API ceiling")
 
         policy = json.loads((POLICIES_DIR / "chirp-purge-job-failure.json").read_text())
-        absent_conditions = [c["conditionAbsent"] for c in policy["conditions"] if "conditionAbsent" in c]
-        self.assertEqual(len(absent_conditions), 1)
-        self.assertEqual(absent_conditions[0]["duration"], "%ds" % cadence_seconds)
+        self.assertEqual([c for c in policy["conditions"] if "conditionAbsent" in c], [])
+        self.assertTrue(
+            any("conditionThreshold" in c for c in policy["conditions"]),
+            "the failure-count half must still ship",
+        )
+        self.assertIn("23h30m", policy["documentation"]["content"])
+
+    def test_uptime_aggregation_reducer_matches_the_aligner_value_type(self):
+        """A type rule the field-name validator cannot see (board c407).
+
+        The API rejected REDUCE_COUNT_FALSE with "The reducer cannot be applied to
+        metrics with value type DOUBLE": ALIGN_FRACTION_TRUE turns the BOOL
+        check_passed series into a fraction, and a count-of-false reducer has nothing
+        to count. ALIGN_NEXT_OLDER keeps the BOOL, which is what makes the
+        "more than one checker reporting failure" threshold mean what it says.
+        """
+        for name in ("chirp-api-uptime-failure", "chirp-ws-uptime-failure"):
+            with self.subTest(policy=name):
+                policy = json.loads((POLICIES_DIR / f"{name}.json").read_text())
+                agg = policy["conditions"][0]["conditionThreshold"]["aggregations"][0]
+                if agg.get("crossSeriesReducer") == "REDUCE_COUNT_FALSE":
+                    self.assertNotEqual(
+                        agg.get("perSeriesAligner"), "ALIGN_FRACTION_TRUE",
+                        "ALIGN_FRACTION_TRUE produces DOUBLE; REDUCE_COUNT_FALSE needs BOOL",
+                    )
 
     # --- test_purge_aggregate_metric_and_policy_distinguish_healthy_from_unhealthy_status ---
     def test_purge_aggregate_metric_and_policy_distinguish_healthy_from_unhealthy_status(self):
@@ -517,6 +566,45 @@ class MonitoringApplyTests(unittest.TestCase):
         self.assertEqual(statuses, {"blocked", "incomplete", "timed_out", "failed"})
         self.assertNotIn("preview", statuses)
         self.assertNotIn("complete", statuses)
+
+    def test_a_notification_rate_limit_on_a_metric_policy_is_refused(self):
+        """The API's rule, not ours, learned the expensive way (board c407).
+
+        Cloud Monitoring answers INVALID_ARGUMENT with "only log-based alert
+        policies may specify a notification rate limit" for any policy carrying
+        alertStrategy.notificationRateLimit without a conditionMatchedLog
+        condition. All 16 shipped policies carried one, every test passed, and the
+        first real create failed - because validate_rest_shape only asks whether a
+        field NAME is known, which says nothing about when the field is allowed.
+
+        Constructed both ways so it discriminates: the same policy is refused with
+        a threshold condition and accepted with a matched-log one.
+        """
+        available = _inventory_available_metrics()
+        base = {
+            "displayName": "rate limited", "combiner": "OR",
+            "documentation": {"content": "See MONITORING-RUNBOOK.md."},
+            "alertStrategy": {"notificationRateLimit": {"period": "1800s"}},
+            "conditions": [{"conditionThreshold": {
+                "filter": 'metric.type="run.googleapis.com/request_count"'}}],
+        }
+        assert "notification_rate_limit_on_non_log_policy" in m.required_shape_errors(base, available, [], [])
+
+        log_based = json.loads(json.dumps(base))
+        log_based["conditions"] = [{"conditionMatchedLog": {"filter": 'resource.type="cloud_run_revision"'}}]
+        assert "notification_rate_limit_on_non_log_policy" not in m.required_shape_errors(log_based, available, [], [])
+
+    def test_no_shipped_policy_carries_a_notification_rate_limit(self):
+        """The 16 real files, not a fixture: this is what actually failed in prod."""
+        for path in sorted(POLICIES_DIR.glob("*.json")):
+            with self.subTest(file=path.name):
+                policy = json.loads(path.read_text())
+                strategy = policy.get("alertStrategy") or {}
+                log_based = any("conditionMatchedLog" in c for c in policy.get("conditions", []))
+                self.assertFalse(
+                    "notificationRateLimit" in strategy and not log_based,
+                    f"{path.name} carries a notification rate limit the API will reject",
+                )
 
     # --- strict REST-shape round-trip: unknown keys fail ---
     def test_strict_rest_shape_rejects_unknown_keys(self):

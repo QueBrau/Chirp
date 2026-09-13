@@ -2,13 +2,12 @@
   "displayName": "Cloud Run instance CPU/memory pressure",
   "combiner": "OR",
   "enabled": true,
-  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "notificationChannels": [
+    "{{NOTIFICATION_CHANNEL}}"
+  ],
   "documentation": {
     "content": "Runbook row: Instance pressure (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: on-call API responder. Sustained p95 CPU or memory utilization over 80% for 10 minutes, across chirp-api and chirp-ws, per the runbook's stated proposal. Grouped by service_name rather than pinned to one service; worst-resource crossSeriesReducer per the runbook's aggregation rules so an average does not hide a saturated resource.",
     "mimeType": "text/markdown"
-  },
-  "alertStrategy": {
-    "notificationRateLimit": {"period": "900s"}
   },
   "conditions": [
     {
@@ -18,13 +17,17 @@
         "comparison": "COMPARISON_GT",
         "thresholdValue": 0.8,
         "duration": "600s",
-        "trigger": {"count": 1},
+        "trigger": {
+          "count": 1
+        },
         "aggregations": [
           {
             "alignmentPeriod": "300s",
             "perSeriesAligner": "ALIGN_PERCENTILE_95",
             "crossSeriesReducer": "REDUCE_MAX",
-            "groupByFields": ["resource.labels.service_name"]
+            "groupByFields": [
+              "resource.labels.service_name"
+            ]
           }
         ]
       }
@@ -36,13 +39,17 @@
         "comparison": "COMPARISON_GT",
         "thresholdValue": 0.8,
         "duration": "600s",
-        "trigger": {"count": 1},
+        "trigger": {
+          "count": 1
+        },
         "aggregations": [
           {
             "alignmentPeriod": "300s",
             "perSeriesAligner": "ALIGN_PERCENTILE_95",
             "crossSeriesReducer": "REDUCE_MAX",
-            "groupByFields": ["resource.labels.service_name"]
+            "groupByFields": [
+              "resource.labels.service_name"
+            ]
           }
         ]
       }

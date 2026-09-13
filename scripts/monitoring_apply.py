@@ -264,6 +264,26 @@ def required_shape_errors(policy: dict, available_metric_types: Iterable[str],
         errors.append("missing_documentation")
     elif "MONITORING-RUNBOOK.md" not in content:
         errors.append("documentation_missing_runbook_reference")
+
+    # A SEMANTIC RULE THE FIELD-NAME VALIDATOR CANNOT SEE, and the API enforces it
+    # (board c407). Cloud Monitoring rejects alertStrategy.notificationRateLimit on
+    # anything but a LOG-BASED policy: "only log-based alert policies may specify a
+    # notification rate limit", INVALID_ARGUMENT, observed against the real API on
+    # Sep 13 when all 16 policies failed to create. Log-based here means a
+    # conditionMatchedLog condition, NOT a conditionThreshold over a
+    # logging.googleapis.com/user/<name> metric, which is an ordinary metric policy
+    # and is rejected too. validate_rest_shape only checks that field NAMES are
+    # known, so it accepted every one of them; a schema that says a field exists
+    # says nothing about when it is allowed.
+    strategy = policy.get("alertStrategy") if isinstance(policy, dict) else None
+    if isinstance(strategy, dict) and "notificationRateLimit" in strategy:
+        log_based = any(
+            isinstance(condition, dict) and "conditionMatchedLog" in condition
+            for condition in (conditions if isinstance(conditions, list) else [])
+        )
+        if not log_based:
+            errors.append("notification_rate_limit_on_non_log_policy")
+
     available = set(available_metric_types)
     defined_log_metrics = set(defined_log_metric_types)
     defined_hosts = set(defined_uptime_hosts)
