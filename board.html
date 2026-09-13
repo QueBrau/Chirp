@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1789325687114,
+  "updated": 1789325962456,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -416,6 +416,15 @@
     }
   ],
   "cards": [
+    {
+      "id": "c413",
+      "col": "backlog",
+      "owner": "J",
+      "tag": "",
+      "area": "",
+      "title": "c413 [P3 | tooling safety, found Sep 13 by chirps-17 while dry-running #302] scripts/monitoring-apply reads policies, metrics and uptime checks from directories resolved against the CURRENT WORKING DIRECTORY (--policies-dir defaults to 'infra/monitoring/policies', and metrics and uptime the same way), while its inventory file is resolved against the script's own location. So running one checkout's script from inside another checkout validates, and with --apply would WRITE, the other checkout's bodies, and the report does not say which directories it read. OBSERVED, read-only: #302's script run from the main checkout judged main's old bodies with #302's new guards and skipped 16 of 18 policies; the same run with explicit directories skipped none. Proposed fix: resolve the three defaults against the repository root the script lives in, and record the resolved directories in the report. Unclaimed",
+      "detail": ""
+    },
     {
       "id": "c412",
       "col": "backlog",
