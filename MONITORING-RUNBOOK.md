@@ -260,7 +260,7 @@ scripts/monitoring-apply --project YOUR_PROJECT --gcloud /path/to/gcloud \
 uptime file present without both host flags. Existing remote resources are
 matched to local files the way each kind's identity works (above); a match
 already identical to the local body (ignoring server-assigned fields and,
-when a channel is supplied, the channel itself) is a no-op, so re-running
+when no apply channel is supplied, the channel itself) is a no-op, so re-running
 `--apply` against unchanged files makes no write calls at all. The tool never
 deletes anything. Auth reuses `scripts/monitoring-check`'s `gcloud auth
 print-access-token` closure and verified-TLS, no-redirect opener, extended
@@ -270,6 +270,23 @@ report. Required write permissions, parallel to the read permissions listed
 above, are `monitoring.alertPolicies.create`/`update`,
 `monitoring.uptimeCheckConfigs.create`/`update` and
 `logging.logMetrics.create`/`update`.
+
+c408 comparison ignores only documented server-assigned fields and equivalent
+defaults. Explicit disabled state, changed filters or thresholds and unexpected
+configuration remain drift. Policy updates preserve the existing policy name
+and match condition resource names by condition display name. Duplicate managed
+display names or ambiguous condition identities stop the run before writes.
+Drift in fields outside the tool's existing write ownership is identified by
+`unsupported_fields` in the dry-run plan. An apply then stops before any write
+with `unsupported_configuration_drift`; reconcile those settings explicitly
+before retrying. The tool does not clear another operator's settings or claim
+convergence when its update masks cannot repair the difference.
+
+If a write fails, the report's `metrics`, `uptime` and `policies` retain the
+acknowledged outcomes. `failed_operation` identifies the request whose outcome
+is unconfirmed; `pending` lists work not attempted. Earlier writes are not rolled
+back. Re-inventory before retrying, and inspect an unconfirmed outcome rather
+than assuming nothing happened. There is no automatic retry or deletion.
 
 Field names for all three kinds (`conditionThreshold`, `conditionAbsent`,
 `comparison`, `thresholdValue`, `duration`, `trigger`, `aggregations` with
