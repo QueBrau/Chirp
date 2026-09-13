@@ -1,0 +1,32 @@
+{
+  "card": "c407",
+  "description": "Verbatim stderr from the Cloud Monitoring policy creates that c407 fixes, plus the reference text for the same fields. Each stderr line was copied programmatically from chirps-17's session transcript, not retyped. recorded_utc is when the tool result was recorded, seconds after the create returned.",
+  "command_shape": "gcloud monitoring policies create --policy-from-file=<rendered policy body> --project=<project>",
+  "captures": [
+    {
+      "recorded_utc": "2026-09-13T14:40:38.309Z",
+      "policy": "not named in the capture (one of the 16 rendered policies)",
+      "stderr": "ERROR: (gcloud.monitoring.policies.create) INVALID_ARGUMENT: Field alertStrategy.notificationRateLimit had an invalid value of \"period \t { seconds: 1800 }\": only log-based alert policies may specify a notification rate limit",
+      "addressed_by": "b25c99b removed notificationRateLimit from every policy and refuses it on a policy without conditionMatchedLog"
+    },
+    {
+      "recorded_utc": "2026-09-13T14:46:18.381Z",
+      "policy": "chirp-api-uptime-failure",
+      "stderr": "ERROR: (gcloud.monitoring.policies.create) INVALID_ARGUMENT: Field aggregation.crossSeriesReducer had an invalid value of \"REDUCE_COUNT_FALSE\": The reducer cannot be applied to metrics with value type DOUBLE.",
+      "addressed_by": "b25c99b moved both uptime policies to ALIGN_NEXT_OLDER; 59de604 refuses a BOOL-only reducer after a numeric-output aligner"
+    },
+    {
+      "recorded_utc": "2026-09-13T14:46:18.381Z",
+      "policy": "chirp-purge-job-failure",
+      "stderr": "ERROR: (gcloud.monitoring.policies.create) INVALID_ARGUMENT: Field alert_policy.conditions[1].condition_absent.duration had an invalid value of \"24h\": Durations longer than 23h30m are not supported.",
+      "note": "The committed duration was 86400s; the API echoes it as 24h.",
+      "addressed_by": "b25c99b removed the conditionAbsent; 59de604 refuses any conditionAbsent over 23h30m; 70d4499 made the duration format strict"
+    }
+  ],
+  "reference_text": {
+    "source": "https://monitoring.googleapis.com/$discovery/rest?version=v3 (revision 20260903), fetched 2026-09-13",
+    "MetricAbsence.duration": "Required. The amount of time that a time series must fail to report new data to be considered failing. The minimum value of this field is 120 seconds. Larger values that are a multiple of a minute--for example, 240 or 300 seconds--are supported. If an invalid value is given, an error will be returned.",
+    "AlertStrategy.notificationRateLimit": "Required for log-based alerting policies, i.e. policies with a LogMatch condition.This limit is not implemented for alerting policies that do not have a LogMatch condition.",
+    "Condition.conditionMatchedLog": "A condition that checks for log messages matching given constraints. If set, no other conditions can be present."
+  }
+}

@@ -43,6 +43,42 @@ UPTIME_UPDATE_MASK_FIELDS = (
     "displayName", "period", "timeout", "contentMatchers", "checkerType",
     "selectedRegions", "monitoredResource", "httpCheck",
 )
+# c407: API rules the field-name validator cannot see, each observed live.
+BOOL_ONLY_REDUCERS = frozenset({"REDUCE_COUNT_TRUE", "REDUCE_COUNT_FALSE", "REDUCE_FRACTION_TRUE"})
+NUMERIC_OUTPUT_ALIGNERS = frozenset({
+    "ALIGN_FRACTION_TRUE", "ALIGN_COUNT_TRUE", "ALIGN_COUNT_FALSE", "ALIGN_COUNT",
+    "ALIGN_MEAN", "ALIGN_SUM", "ALIGN_MIN", "ALIGN_MAX", "ALIGN_STDDEV",
+    "ALIGN_RATE", "ALIGN_DELTA", "ALIGN_PERCENT_CHANGE",
+    "ALIGN_PERCENTILE_99", "ALIGN_PERCENTILE_95", "ALIGN_PERCENTILE_50", "ALIGN_PERCENTILE_05",
+})
+CONDITION_ABSENT_MAX_SECONDS = 23 * 3600 + 30 * 60
+
+
+_DURATION_RE = re.compile(r"(?P<seconds>[0-9]+(?:\.[0-9]+)?)s")
+
+
+def _duration_seconds(value):
+    """'86400s' -> 86400.0; anything not decimal-seconds-with-an-s-suffix -> None.
+
+    THIS IS THE FORMAT CHECK, not a helper that defers one. Round two's docstring said
+    the REST shape check owned format, but that check only types duration as str, so
+    "24h", "1d", "1440m", "86400" and "-5s" all passed - found by chirps-36's
+    re-review. The API's JSON Duration is decimal seconds with an "s" suffix, so those
+    are bodies we accept and the API refuses. A None here is reported as an error by
+    the caller rather than skipped. Negatives cannot match the pattern.
+
+    Round four, from chirps-36's spot-check of round three: fullmatch rather than
+    match with ^ and $, because a Python $ also matches just before a trailing
+    newline, so "60s" followed by a newline parsed as 60.0. And an explicit ASCII
+    digit class, because the Unicode digit class also matches digits such as
+    Arabic-Indic ones, which float() accepts, so they are refused rather than sent.
+    """
+    if not isinstance(value, str):
+        return None
+    match = _DURATION_RE.fullmatch(value)
+    return float(match.group("seconds")) if match else None
+
+
 UPTIME_CHECK_PASSED_METRIC = "monitoring.googleapis.com/uptime_check/check_passed"
 LOG_METRIC_TYPE_PREFIX = "logging.googleapis.com/user/"
 HOSTNAME_RE = re.compile(
@@ -265,6 +301,66 @@ def required_shape_errors(policy: dict, available_metric_types: Iterable[str],
         errors.append("missing_documentation")
     elif "MONITORING-RUNBOOK.md" not in content:
         errors.append("documentation_missing_runbook_reference")
+
+    # A SEMANTIC RULE THE FIELD-NAME VALIDATOR CANNOT SEE, and the API enforces it
+    # (board c407). Cloud Monitoring rejects alertStrategy.notificationRateLimit on
+    # anything but a LOG-BASED policy: "only log-based alert policies may specify a
+    # notification rate limit", INVALID_ARGUMENT, observed against the real API on
+    # Sep 13 when all 16 policies failed to create. Log-based here means a
+    # conditionMatchedLog condition, NOT a conditionThreshold over a
+    # logging.googleapis.com/user/<name> metric, which is an ordinary metric policy
+    # and is rejected too. validate_rest_shape only checks that field NAMES are
+    # known, so it accepted every one of them; a schema that says a field exists
+    # says nothing about when it is allowed.
+    strategy = policy.get("alertStrategy") if isinstance(policy, dict) else None
+    if isinstance(strategy, dict) and "notificationRateLimit" in strategy:
+        log_based = any(
+            isinstance(condition, dict) and "conditionMatchedLog" in condition
+            for condition in (conditions if isinstance(conditions, list) else [])
+        )
+        if not log_based:
+            errors.append("notification_rate_limit_on_non_log_policy")
+
+    # c407 causes 2 and 3, found by chirps-36's review: the data files were repaired
+    # but nothing stopped the NEXT policy repeating either mistake, which is how all
+    # sixteen reached production in the first place.
+    #
+    # Cause 2, value types. A BOOL-only reducer (count or fraction of true/false
+    # series) cannot consume an aligner whose output is numeric. Observed live: the
+    # API rejected ALIGN_FRACTION_TRUE -> REDUCE_COUNT_FALSE with "The reducer cannot
+    # be applied to metrics with value type DOUBLE". The aligners listed produce
+    # DOUBLE or INT64 per the Cloud Monitoring Aligner enum, so each would fail the
+    # same way; ALIGN_NEXT_OLDER preserves the BOOL and is what the fixed policies use.
+    #
+    # Cause 3, a hard ceiling. conditionAbsent.duration above 23h30m is rejected
+    # ("Durations longer than 23h30m are not supported").
+    # All three c407 rejections are kept verbatim in
+    # infra/monitoring/evidence/c407-live-create-errors-2026-09-13.json.
+    for condition in conditions if isinstance(conditions, list) else []:
+        if not isinstance(condition, dict):
+            continue
+        for kind in ("conditionThreshold", "conditionAbsent"):
+            spec = condition.get(kind)
+            if not isinstance(spec, dict):
+                continue
+            for aggregation in spec.get("aggregations") or []:
+                if not isinstance(aggregation, dict):
+                    continue
+                aligner = aggregation.get("perSeriesAligner")
+                reducer = aggregation.get("crossSeriesReducer")
+                if reducer in BOOL_ONLY_REDUCERS and aligner in NUMERIC_OUTPUT_ALIGNERS:
+                    errors.append(f"reducer_cannot_consume_aligner_output:{aligner}->{reducer}")
+            # A threshold written "5m" fails the API exactly like an absence written
+            # "24h", so the format check covers both kinds. "0s" is valid and common for
+            # thresholds and must stay accepted. The ceiling applies to absence only.
+            # NOT encoded: a possible 120s floor on MetricAbsence, which is unverified.
+            if "duration" in spec:
+                seconds = _duration_seconds(spec.get("duration"))
+                if seconds is None:
+                    errors.append(f"duration_not_seconds_format:{kind}")
+                elif kind == "conditionAbsent" and seconds > CONDITION_ABSENT_MAX_SECONDS:
+                    errors.append("condition_absent_duration_over_api_ceiling")
+
     available = set(available_metric_types)
     defined_log_metrics = set(defined_log_metric_types)
     defined_hosts = set(defined_uptime_hosts)
