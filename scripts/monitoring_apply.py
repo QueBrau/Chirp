@@ -334,6 +334,8 @@ def required_shape_errors(policy: dict, available_metric_types: Iterable[str],
     #
     # Cause 3, a hard ceiling. conditionAbsent.duration above 23h30m is rejected
     # ("Durations longer than 23h30m are not supported").
+    # All three c407 rejections are kept verbatim in
+    # infra/monitoring/evidence/c407-live-create-errors-2026-09-13.json.
     for condition in conditions if isinstance(conditions, list) else []:
         if not isinstance(condition, dict):
             continue

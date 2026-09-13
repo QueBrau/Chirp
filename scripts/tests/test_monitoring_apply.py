@@ -530,7 +530,8 @@ class MonitoringApplyTests(unittest.TestCase):
         it reports zeros in between, it never fires at all. Which of those holds is
         unverified (c410 checks it); neither is a working alert.
         There is no correct conditionAbsent for a 24h job, which is a property of the
-        cadence and the API, not an oversight in this file.
+        cadence and the API, not an oversight in this file. The raw error is kept in
+        infra/monitoring/evidence/c407-live-create-errors-2026-09-13.json.
 
         This test pins both halves of that: the schedule really is daily, and the
         policy really carries no conditionAbsent. If someone shortens the job's
@@ -686,7 +687,8 @@ class MonitoringApplyTests(unittest.TestCase):
         for kind, duration in (("conditionAbsent", "24h"), ("conditionAbsent", "1d"),
                                ("conditionAbsent", "86400"), ("conditionAbsent", "-5s"),
                                ("conditionThreshold", "5m"), ("conditionThreshold", "1440m"),
-                               ("conditionAbsent", "60s\n"), ("conditionThreshold", "٦٠s")):
+                               ("conditionAbsent", "60s\n"), ("conditionThreshold", "٦٠s"),
+                               ("conditionAbsent", "1e3s"), ("conditionThreshold", " 60s")):
             with self.subTest(kind=kind, duration=duration):
                 self.assertIn(f"duration_not_seconds_format:{kind}",
                               m.required_shape_errors(policy(kind, duration), available, [], []))
@@ -696,6 +698,17 @@ class MonitoringApplyTests(unittest.TestCase):
             with self.subTest(kind=kind, duration=duration):
                 errors = m.required_shape_errors(policy(kind, duration), available, [], [])
                 self.assertFalse([e for e in errors if e.startswith("duration_not_seconds_format")], errors)
+
+    def test_the_absence_ceiling_constant_matches_the_captured_api_error(self):
+        """The 23h30m ceiling is known only from a live rejection, not from any reference
+        text, so the constant is pinned to the verbatim capture rather than to prose
+        (chirps-36's evidence ask on c407)."""
+        evidence = json.loads((REPO_ROOT / "infra/monitoring/evidence/c407-live-create-errors-2026-09-13.json").read_text())
+        lines = [c["stderr"] for c in evidence["captures"] if "condition_absent.duration" in c["stderr"]]
+        self.assertEqual(len(lines), 1)
+        match = re.search(r"Durations longer than (\d+)h(\d+)m are not supported", lines[0])
+        self.assertIsNotNone(match, lines[0])
+        self.assertEqual(m.CONDITION_ABSENT_MAX_SECONDS, int(match.group(1)) * 3600 + int(match.group(2)) * 60)
 
     # --- strict REST-shape round-trip: unknown keys fail ---
     def test_strict_rest_shape_rejects_unknown_keys(self):

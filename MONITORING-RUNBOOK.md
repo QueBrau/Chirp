@@ -361,12 +361,18 @@ runs: if the completion metric reports only when an execution completes, the
 condition would fire before every scheduled run. The condition is removed,
 `scripts/monitoring_apply.py` now refuses any `conditionAbsent` over 23h30m, and
 detecting a run that never starts is board card c410, one of c369's close
-conditions. The same note also stated a 120-second minimum and a
-must-be-a-multiple-of-60-seconds constraint. Those reached this file through a
-planner's summarised fetch rather than a verbatim quote of the reference, and
-the note was wrong about the maximum, so neither is encoded as a rule. Whoever
-builds a new absence condition fetches the reference and quotes the exact
-sentence first.
+conditions. The field's reference text, from the Cloud Monitoring discovery
+document (revision 20260903, `MetricAbsence.duration`), reads: "The minimum
+value of this field is 120 seconds. Larger values that are a multiple of a
+minute--for example, 240 or 300 seconds--are supported." It documents no
+maximum. The old note reported that correctly; its mistake was treating an
+undocumented maximum as no maximum. The 23h30m ceiling is known only from the
+live rejection. That error, c407's other two rejections and the reference text
+are kept verbatim in
+`infra/monitoring/evidence/c407-live-create-errors-2026-09-13.json`. The floor
+and the whole-minute text are documented but not exercised live, and nothing
+here ships a `conditionAbsent`, so neither is encoded; c410 encodes them if it
+builds an absence condition.
 
 Several thresholds not stated explicitly in the signal-plan table above (the
 SQL-up duration, the disk-warning/critical durations, the connections
