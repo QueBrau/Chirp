@@ -225,7 +225,7 @@
 </footer>
 
 <script id="board-data" type="application/json">{
-  "updated": 1789313044962,
+  "updated": 1789313237080,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -415,6 +415,15 @@
     }
   ],
   "cards": [
+    {
+      "id": "c409",
+      "col": "progress",
+      "owner": "J",
+      "tag": "test",
+      "area": "security",
+      "title": "c409 [P1 | privacy test gap on LIVE code, found Sep 13 by chirps-36's sweep for tests that cannot fail; CLAIMED by chirps-36, branch jose/c409-w36, chirps-17 reviews since c350 is its file] The c350 media-entitlement memo's PER-VIEWER scoping is untested. NOT A LIVE LEAK: media_entitlement.py:203 keys the positive memo (object_name, viewer_id), which is correct in production today. THE GAP, verified empirically by the manager in a scratch worktree at origin/main: baseline test_c350_media_revocation.py 12 passed; change the key to (object_name, object_name), one-line diff confirmed landed, still 12 passed. So nothing in the suite would notice if the key stopped including the viewer. CONSEQUENCE IF IT REGRESSED: the memo caches a POSITIVE decision for 60s, so the first viewer to open a photo would warm an 'allowed' entry that every OTHER viewer then hits, and a member just removed from the chapter would be granted the photo for up to 60s by riding a still-active member's cached decision - precisely the revoked-access leak c350 exists to close, reached through a different viewer instead of the token holder. Keying a cache by the resource alone is exactly the tidy-up a maintainer would plausibly write. WHY IT WAS MISSED: the suite's only two-viewer test (test_capability_urls_differ_per_viewer_and_each_verifies_to_its_own_viewer, ~line 447) exercises storage_service.media_capability_url and verify_media_token, never check_media_entitlement with two viewers - so capability-URL isolation is pinned and memo scoping is not. chirps-36 reviewed c350 and counted that test as covering per-viewer isolation, conflating two different properties. FIX: one additive test - remove member A, have still-active member B request the same object (legitimately warming the memo), then A requests inside the TTL and must be denied; falsified by exactly the one-line key change, which must turn it red.",
+      "detail": "Found by the vacuous-test sweep lane of chirps-36's Sep 13 wave, which reviewed the last two days of merges for tests that stay green under a plausible regression. Precedents the same day: c405 (a negative test that never exercised the TimeoutError class collision) and c403 (a control line that only held on an idle machine). In all three the code was correct and the test was what would have rotted. Scope is test-only; no change to app/ code."
+    },
     {
       "id": "c407",
       "col": "progress",
