@@ -9,6 +9,8 @@ The bearer token stays in a closure, never in argv, logs or the report.
 
 Apply order is always metrics -> uptime -> policies, so a policy can
 reference a log metric or uptime check this same run just created.
+Default input directories belong to this script's checkout; explicit relative
+directory arguments are resolved from the caller's working directory.
 """
 from __future__ import annotations
 
@@ -27,6 +29,8 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Iterable
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+RESOURCE_KINDS = ("metrics", "uptime", "policies")
 MAX_BODY_BYTES = 1024 * 1024
 MAX_PAGES = 10
 PAGE_SIZE = 100
@@ -197,7 +201,10 @@ class ApplyError(ValueError):
 
 class SafeParser(argparse.ArgumentParser):
     def error(self, message):
-        print(json.dumps({"status": "error", "reason": "invalid_arguments", "exit_code": 2}))
+        report = {"status": "error", "reason": "invalid_arguments", "exit_code": 2}
+        if hasattr(self, "input_directories"):
+            report["input_directories"] = self.input_directories
+        print(json.dumps(report))
         raise SystemExit(2)
 
 
@@ -205,6 +212,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # Never forward the Authorization header to a redirected origin.
         return None
+
+
+def _input_directories(args) -> dict[str, str]:
+    return {kind: str(Path(getattr(args, kind + "_dir")).resolve()) for kind in RESOURCE_KINDS}
 
 
 def parse_arguments(argv=None):
@@ -216,14 +227,20 @@ def parse_arguments(argv=None):
     parser.add_argument("--apply", action="store_true", help="Make write calls; default is dry-run")
     parser.add_argument("--channel", help="Notification channel resource name; required only with --apply")
     parser.add_argument("--report", help="Write the JSON report here instead of stdout")
-    parser.add_argument("--policies-dir", default="infra/monitoring/policies")
-    parser.add_argument("--metrics-dir", default="infra/monitoring/metrics")
-    parser.add_argument("--uptime-dir", default="infra/monitoring/uptime")
+    for kind in RESOURCE_KINDS:
+        parser.add_argument("--" + kind + "-dir", default=str(REPO_ROOT / "infra/monitoring" / kind),
+                            help="Defaults to this script's checkout; relative overrides use the working directory")
     parser.add_argument("--api-host", default=None,
                          help="Hostname for the chirp-api uptime check; required only when infra/monitoring/uptime has files")
     parser.add_argument("--ws-host", default=None,
                          help="Hostname for the chirp-ws uptime check; required only when infra/monitoring/uptime has files")
     args = parser.parse_args(argv)
+    try:
+        parser.input_directories = _input_directories(args)
+    except (OSError, RuntimeError, ValueError):
+        parser.error("invalid input directory")
+    for kind, directory in parser.input_directories.items():
+        setattr(args, kind + "_dir", directory)
     if (not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]|[0-9]{6,20}", args.project)
             or not math.isfinite(args.timeout_seconds) or not 1 <= args.timeout_seconds <= 30
             or not args.gcloud or "\x00" in args.gcloud
@@ -962,19 +979,20 @@ def _refuse_write(*_args, **_kwargs):
 
 def run(args, get: Callable, post: Callable | None = None, patch: Callable | None = None,
         put: Callable | None = None) -> dict:
+    input_directories = _input_directories(args)
     channel_for_load = args.channel if args.apply else None
     api_host, ws_host = getattr(args, "api_host", None), getattr(args, "ws_host", None)
 
-    local_metrics, metric_errors = load_local_metrics(args.metrics_dir, args.project)
+    local_metrics, metric_errors = load_local_metrics(input_directories["metrics"], args.project)
     local_by_name = _unique_by_key(local_metrics, "name")
     defined_log_metric_types = [LOG_METRIC_TYPE_PREFIX + name for name in local_by_name]
 
-    local_uptime, uptime_errors = load_local_uptime(args.uptime_dir, args.project, api_host, ws_host)
+    local_uptime, uptime_errors = load_local_uptime(input_directories["uptime"], args.project, api_host, ws_host)
     local_uptime_by_display = _unique_by_key(local_uptime, "displayName")
     defined_uptime_hosts = [config["monitoredResource"]["labels"]["host"] for config in local_uptime]
 
     local_policies, policy_errors = load_local_policies(
-        args.policies_dir, args.project, channel_for_load, _inventory_metric_types(),
+        input_directories["policies"], args.project, channel_for_load, _inventory_metric_types(),
         defined_log_metric_types, defined_uptime_hosts, api_host, ws_host,
     )
     local_policies_by_display = _unique_by_key(local_policies, "displayName")
@@ -1003,6 +1021,7 @@ def run(args, get: Callable, post: Callable | None = None, patch: Callable | Non
         "schema_version": 1,
         "project": args.project,
         "read_only": not args.apply,
+        "input_directories": input_directories,
         **{kind: [] if args.apply else plan for kind, plan in plans.items()},
         "skipped_files": metric_errors + uptime_errors + policy_errors,
     }
@@ -1037,7 +1056,7 @@ def run(args, get: Callable, post: Callable | None = None, patch: Callable | Non
     return report
 
 
-_INVENTORY_PATH = Path(__file__).resolve().parents[1] / "infra/monitoring/evidence/c370-inventory-2026-09-08.json"
+_INVENTORY_PATH = REPO_ROOT / "infra/monitoring/evidence/c370-inventory-2026-09-08.json"
 
 
 def _inventory_metric_types() -> list[str]:
@@ -1052,7 +1071,8 @@ def main(argv=None):
         get, post, patch, put = reader(args)
         report = run(args, get, post, patch, put)
     except ApplyError as error:
-        report = {"status": "error", "exit_code": 2, "read_only": not args.apply, "reason": str(error)}
+        report = {"status": "error", "exit_code": 2, "read_only": not args.apply,
+                  "reason": str(error), "input_directories": _input_directories(args)}
     output = json.dumps(report, indent=2, allow_nan=False)
     if args.report:
         Path(args.report).write_text(output + "\n", encoding="utf-8")
