@@ -152,9 +152,9 @@ class MonitoringApplyTests(unittest.TestCase):
         self.assertEqual(report["exit_code"], 0)
         self.assertTrue(report["read_only"])
         self.assertEqual(report["skipped_files"], [])
-        self.assertEqual(len(report["metrics"]), 3)
+        self.assertEqual(len(report["metrics"]), 5)
         self.assertEqual(len(report["uptime"]), 2)
-        self.assertEqual(len(report["policies"]), 16)
+        self.assertEqual(len(report["policies"]), 18)
         self.assertEqual({p["action"] for p in report["metrics"]}, {"create"})
         self.assertEqual({p["action"] for p in report["uptime"]}, {"create"})
         self.assertEqual({p["action"] for p in report["policies"]}, {"create"})
@@ -391,7 +391,9 @@ class MonitoringApplyTests(unittest.TestCase):
         available = _inventory_available_metrics()
         defined_log_metrics = {m.LOG_METRIC_TYPE_PREFIX + "sql_pool_capacity_503",
                                 m.LOG_METRIC_TYPE_PREFIX + "rate_limit_fallback",
-                                m.LOG_METRIC_TYPE_PREFIX + "chirp_purge_aggregate"}
+                                m.LOG_METRIC_TYPE_PREFIX + "chirp_purge_aggregate",
+                                m.LOG_METRIC_TYPE_PREFIX + "ws_connect_capacity_rejected",
+                                m.LOG_METRIC_TYPE_PREFIX + "ws_connect_suspended_rejected"}
         defined_hosts = {API_HOST, WS_HOST}
         for path in sorted(POLICIES_DIR.glob("*.json")):
             with self.subTest(file=path.name):
