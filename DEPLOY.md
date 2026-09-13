@@ -193,19 +193,18 @@ the eventual split values now would make the very next ordinary image release
 silently flip a live service's role as a side effect of what looks like a
 routine deploy.
 
-**Do not run the commands below until a follow-up card makes
-`scripts/deploy_verify.py`'s authenticated check role-aware.** Today that
-verifier unconditionally probes `/auth/me`, `/auth/campus-verification` and
-`/campuses/{id}/chirps` against BOTH the api and ws targets, because today both
-services genuinely answer all of that. The moment `SERVICE_ROLE=ws` is applied
-to the live chirp-ws service, those routes on chirp-ws start answering 404 (the
-domain routers are gone), and the next authenticated verification reports
-NOT_READY — loud and blocking, which is the safe failure mode, but it will look
-like an unrelated regression to whoever is running that deploy unless they know
-to expect it. The follow-up must update the verifier's per-target checks before
-these commands are safe to run for real.
+The c411 verifier now accepts explicit expected roles and checks authenticated
+identity through `/_deployment` on every role. A `ws` target must also return 404
+for the domain routes. See [DEPLOY-VERIFICATION.md](DEPLOY-VERIFICATION.md) for the
+contract. Deploy the updated endpoint before using this verifier, including for
+an ordinary `all`/`all` release: missing role or identity evidence fails closed.
 
-When that follow-up has landed, the flip commands are:
+**The c375 live role flip remains a separate rollout decision.** Keep both
+reviewed configuration roles at `all` for routine releases until that decision
+is made. Before a split rollout, update the reviewed roles and regenerate the
+plan so subsequent releases and verification preserve the intended split.
+The role changes below describe that future rollout; they do not replace the
+serialized staging, promotion and drain procedure in section 7.
 
 ```sh
 gcloud run services update chirp-api --update-env-vars SERVICE_ROLE=api

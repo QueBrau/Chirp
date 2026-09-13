@@ -39,7 +39,7 @@ FEED = [{"id": str(uuid.uuid4()), "campus_id": CAMPUS, "body": "fixture chirp",
 def peers(tmp_path):
     states, servers, threads = [], [], []
     for service in ("chirp-api", "chirp-ws"):
-        state = {"service": service, "revision": service + "-c361", "requests": [], "overrides": {}, "stop": threading.Event()}
+        state = {"service": service, "revision": service + "-c361", "role": "all", "requests": [], "overrides": {}, "stop": threading.Event()}
 
         def handler_for(state):
             class Handler(BaseHTTPRequestHandler):
@@ -50,13 +50,21 @@ def peers(tmp_path):
                     auth = self.headers.get("Authorization")
                     state["requests"].append((self.path, auth))
                     status, body, headers = 404, {}, {}
-                    if self.path == "/auth/campus-verification" or self.path.endswith("/chirps"):
+                    if self.path == "/_health":
+                        status, body = 200, {"status": "ok"}
+                    elif self.path == "/_deployment":
+                        if auth == "Bearer " + TOKEN:
+                            status, body = 200, {"service": state["service"], "revision": state["revision"],
+                                                 "service_role": state["role"], "user_id": USER, "campus_id": CAMPUS,
+                                                 "code_schema_heads": [HEAD], "database_schema_heads": [HEAD]}
+                        else:
+                            status = 401
+                    elif state["role"] == "ws":
+                        pass  # Domain HTTP routers are absent, regardless of bearer.
+                    elif self.path == "/auth/campus-verification" or self.path.endswith("/chirps"):
                         status = 401
                     elif self.path == "/auth/me":
                         status, body = (200, copy.deepcopy(ME)) if auth == "Bearer " + TOKEN else (401, {})
-                    elif self.path == "/_deployment":
-                        status, body = 200, {"service": state["service"], "revision": state["revision"],
-                                             "code_schema_heads": [HEAD], "database_schema_heads": [HEAD]}
                     elif self.path == f"/campuses/{CAMPUS}/chirps?limit=1":
                         status, body = (200, copy.deepcopy(FEED)) if auth == "Bearer " + TOKEN else (401, {})
                     override = state["overrides"].get(self.path)
@@ -166,13 +174,124 @@ def test_ready_checks_both_services_and_rechecks_actual_traffic(peers):
     result, body = run()
     assert result.returncode == 0, result.stdout
     assert body["verdict"] == "AUTHENTICATED_READY"
-    assert len(body["checks"]) == 16
+    assert len(body["checks"]) == 18
     assert len(body["services"]) == 2
     assert len(calls.read_text().splitlines()) == 8
     assert json.loads(report.read_text()) == body
     for state in states:
         assert ("/_deployment", "Bearer " + TOKEN) in state["requests"]
         assert (f"/campuses/{CAMPUS}/chirps?limit=1", "Bearer " + TOKEN) in state["requests"]
+    assert [target["expected_role"] for target in body["targets"]] == ["all", "all"]
+
+
+@pytest.mark.parametrize("api_role,ws_role", [("api", "ws"), ("all", "ws"), ("api", "all")])
+def test_explicit_roles_verify_expected_http_contracts(peers, api_role, ws_role):
+    states, _, run, report, calls = peers
+    states[0]["role"], states[1]["role"] = api_role, ws_role
+    result, body = run(extra=("--api-expected-role", api_role, "--ws-expected-role", ws_role))
+    assert result.returncode == 0, result.stdout
+    assert body["verdict"] == "AUTHENTICATED_READY"
+    assert [target["expected_role"] for target in body["targets"]] == [api_role, ws_role]
+    assert len(calls.read_text().splitlines()) == 8
+    assert json.loads(report.read_text()) == body
+    ws_checks = {check["check"] for check in body["checks"] if check["service"] == "chirp-ws"}
+    assert {"deployment_schema_revision", "deployment_role_identity", "invalid_bearer_rejected"} <= ws_checks
+    if ws_role == "ws":
+        assert ("/_deployment", "Bearer invalid-c361-deployment-probe") in states[1]["requests"]
+        assert ("/_deployment", "Bearer " + TOKEN) in states[1]["requests"]
+        assert ("/auth/me", "Bearer " + TOKEN) not in states[1]["requests"]
+        assert {"health", "auth_me_route_absent", "campus_verification_route_absent", "ws_campus_chirps_absent"} <= ws_checks
+        assert "authenticated_campus_chirps" not in ws_checks
+    else:
+        assert {"authenticated_fixture", "authenticated_campus_chirps"} <= ws_checks
+
+
+@pytest.mark.parametrize("option,value", [
+    ("--api-expected-role", "ws"), ("--ws-expected-role", "api"),
+    ("--api-expected-role", "worker"), ("--ws-expected-role", ""),
+])
+@pytest.mark.parametrize("authenticated", [True, False])
+def test_invalid_or_misassigned_roles_fail_before_any_request(peers, option, value, authenticated):
+    states, _, run, _, calls = peers
+    result, body = run(extra=(option, value), authenticated=authenticated, bearer=TOKEN if authenticated else None)
+    assert result.returncode == 1 and body["verdict"] == "NOT_READY"
+    assert not calls.exists()
+    assert not any(state["requests"] for state in states)
+
+
+@pytest.mark.parametrize("service_index,expected_role", [(0, "all"), (0, "api"), (1, "all"), (1, "ws")])
+@pytest.mark.parametrize("field,value", [
+    ("service_role", "wrong-role"), ("service_role", "valid-other-role"), ("service_role", None),
+    ("user_id", str(uuid.uuid4())), ("user_id", None),
+    ("campus_id", str(uuid.uuid4())), ("campus_id", None), ("campus_id", "null"),
+])
+def test_role_and_fixture_identity_evidence_is_required(peers, service_index, expected_role, field, value):
+    states, _, run, _, _ = peers
+    states[service_index]["role"] = expected_role
+    if value == "valid-other-role":
+        value = ("api" if service_index == 0 else "ws") if expected_role == "all" else "all"
+
+    def override(status, body, auth):
+        if auth == "Bearer " + TOKEN:
+            if value is None:
+                body.pop(field)
+            else:
+                body[field] = None if value == "null" else value
+        return status, body, {}
+
+    states[service_index]["overrides"]["/_deployment"] = override
+    option = "--api-expected-role" if service_index == 0 else "--ws-expected-role"
+    result, body = run(extra=(option, expected_role))
+    assert result.returncode == 1 and body["verdict"] == "NOT_READY"
+    assert body["checks"][-1]["check"] == "deployment_role_identity"
+
+
+@pytest.mark.parametrize("case", [
+    "invalid_bearer_accepted", "unauthenticated_accepted", "suspended", "expired", "redirect",
+    "health_bad_body", "health_unavailable", "auth_me_exposed", "campus_verification_exposed",
+    "chirps_exposed", "authenticated_chirps_exposed", "wrong_head",
+])
+def test_ws_role_checks_fail_closed(peers, case):
+    states, _, run, _, _ = peers
+    states[1]["role"] = "ws"
+    path = "/_deployment"
+
+    def override(status, body, auth):
+        if case == "invalid_bearer_accepted" and auth == "Bearer invalid-c361-deployment-probe":
+            return 200, {}, {}
+        if case == "unauthenticated_accepted" and auth is None:
+            return 200, {}, {}
+        if auth == "Bearer " + TOKEN:
+            if case in ("suspended", "expired"):
+                return (403 if case == "suspended" else 401), {}, {}
+            if case == "redirect":
+                return 302, {}, {"Location": states[0]["url"] + "/stolen-token"}
+            if case == "wrong_head":
+                body["database_schema_heads"] = ["old-head"]
+        return status, body, {}
+
+    if case.startswith("health_"):
+        path = "/_health"
+        override = lambda *args: (200 if case == "health_bad_body" else 503, {}, {})
+    elif case.endswith("_exposed"):
+        path = {"auth_me_exposed": "/auth/me", "campus_verification_exposed": "/auth/campus-verification",
+                "chirps_exposed": "/campuses/00000000-0000-0000-0000-000000000000/chirps",
+                "authenticated_chirps_exposed": f"/campuses/{CAMPUS}/chirps?limit=1"}[case]
+        override = lambda *args: (200, [], {})
+    states[1]["overrides"][path] = override
+    result, body = run(extra=("--ws-expected-role", "ws"))
+    assert result.returncode == 1 and body["verdict"] == "NOT_READY"
+    assert body["checks"][-1]["service"] == "chirp-ws" and not body["checks"][-1]["passed"]
+    assert not any(path == "/stolen-token" for state in states for path, _ in state["requests"])
+
+
+def test_ws_service_origin_is_validated_before_sending_credentials(peers):
+    states, metadata, run, _, _ = peers
+    states[1]["role"] = "ws"
+    metadata["chirp-ws"]["status"]["url"] = "https://unexpected-service.example.com"
+    result, body = run(extra=("--ws-expected-role", "ws"))
+    assert result.returncode == 1 and body["verdict"] == "NOT_READY"
+    assert states[0]["requests"] and not states[1]["requests"]
 
 
 def test_routing_only_is_never_readiness(peers):
@@ -322,7 +441,7 @@ def test_rollout_after_http_probes_is_caught_by_metadata_recheck(peers):
     result, body = run()
     assert result.returncode == 1 and body["verdict"] == "NOT_READY"
     assert all(item["passed"] for item in body["checks"])
-    assert len(body["checks"]) == 16
+    assert len(body["checks"]) == 18
 
 
 def test_empty_authorized_campus_is_valid_but_not_a_row_serialization_proof(peers):

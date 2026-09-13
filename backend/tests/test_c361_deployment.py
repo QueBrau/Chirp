@@ -5,10 +5,14 @@ from types import SimpleNamespace
 
 import firebase_admin
 from firebase_admin import auth as firebase_auth
+from httpx import ASGITransport, AsyncClient
+import pytest
 from sqlalchemy import text
 
 import app.middleware.auth as auth_module
+from app.config import get_settings
 from app.db import get_session, get_session_factory
+from app.main import create_app
 from app.routers.deployment import packaged_schema_heads
 from tests.conftest import verify_campus
 
@@ -40,7 +44,62 @@ async def test_deployment_auth_and_real_packaged_database_heads(client, make_use
     assert response.json() == {
         "service": "chirp-api", "revision": "chirp-api-c361",
         "code_schema_heads": db_heads, "database_schema_heads": db_heads,
+        "service_role": "all", "user_id": user.id, "campus_id": None,
     }
+
+
+@pytest.mark.parametrize("role", ["all", "api", "ws"])
+async def test_deployment_proves_mounted_role_and_authenticated_identity(
+    client, make_user, make_campus, monkeypatch, role,
+):
+    user = await make_user()
+    campus = await make_campus()
+    async with get_session_factory()() as session:
+        await session.execute(
+            text("UPDATE users SET campus_id = :campus WHERE id = :user"),
+            {"campus": campus, "user": user.id},
+        )
+        await session.commit()
+    settings = get_settings()
+    monkeypatch.setattr(settings, "service_role", role)
+    app = create_app()
+    # Falsifies evidence taken from current settings rather than the role that
+    # actually mounted this app's routes. The auth configuration is independent.
+    monkeypatch.setattr(settings, "service_role", "ws" if role == "all" else "all")
+    monkeypatch.setattr(auth_module, "get_settings", lambda: SimpleNamespace(auth_mode="firebase"))
+    monkeypatch.setattr(firebase_admin, "get_app", lambda: object())
+
+    def verify(token):
+        if token != "valid-role-fixture":
+            raise ValueError("invalid token")
+        return {"uid": user.firebase_uid}
+
+    monkeypatch.setattr(firebase_auth, "verify_id_token", verify)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as http:
+        for headers in ({}, {"Authorization": "Bearer invalid-role-fixture"}):
+            denied = await http.get("/_deployment", headers=headers)
+            assert denied.status_code == 401
+            assert "service_role" not in denied.json()
+            assert "user_id" not in denied.json()
+        headers = {"Authorization": "Bearer valid-role-fixture"}
+        response = await http.get("/_deployment", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["service_role"] == role
+        assert response.json()["user_id"] == user.id
+        assert response.json()["campus_id"] == campus
+        assert response.json()["code_schema_heads"] == list(packaged_schema_heads())
+        assert response.json()["database_schema_heads"] == list(packaged_schema_heads())
+        assert user.firebase_uid not in response.text
+        assert user.email not in response.text
+        assert "valid-role-fixture" not in response.text
+        me = await http.get("/auth/me", headers=headers)
+        assert me.status_code == (404 if role == "ws" else 200)
+        async with get_session_factory()() as session:
+            await session.execute(text("UPDATE users SET suspended_at = now() WHERE id = :user"), {"user": user.id})
+            await session.commit()
+        suspended = await http.get("/_deployment", headers=headers)
+        assert suspended.status_code == 403
+        assert suspended.json()["detail"] == "account_suspended"
 
 
 async def test_deployment_reports_actual_drift_and_rejects_suspended(client, make_user):

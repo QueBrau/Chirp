@@ -2,9 +2,11 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
+from uuid import UUID
 
 from alembic.script import ScriptDirectory
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +23,9 @@ class DeploymentOut(BaseModel):
     revision: str
     code_schema_heads: list[str]
     database_schema_heads: list[str]
+    service_role: Literal["all", "api", "ws"]
+    user_id: UUID
+    campus_id: UUID | None
 
 
 @lru_cache(maxsize=1)
@@ -32,6 +37,7 @@ def packaged_schema_heads() -> tuple[str, ...]:
 
 @router.get("/_deployment", response_model=DeploymentOut)
 async def deployment_evidence(
+    request: Request,
     _user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> DeploymentOut:
@@ -41,4 +47,7 @@ async def deployment_evidence(
         revision=os.environ.get("K_REVISION", "local"),
         code_schema_heads=list(packaged_schema_heads()),
         database_schema_heads=list(heads),
+        service_role=request.app.state.service_role,
+        user_id=_user.id,
+        campus_id=_user.campus_id,
     )
