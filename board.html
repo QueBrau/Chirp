@@ -225,7 +225,7 @@
 </footer>
 
 <script id="board-data" type="application/json">{
-  "updated": 1789222746845,
+  "updated": 1789273584598,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -415,6 +415,13 @@
     }
   ],
   "cards": [
+    {
+      "id": "c405",
+      "col": "backlog",
+      "owner": "",
+      "title": "c405 [P1 | realtime observability and client correctness] Every pre-accept WS rejection looks identical: HTTP 403, close code discarded, nothing logged",
+      "detail": "Opened Sep 13 2026 by chirps-17 while answering a c403 question about an HTTP 403 seen in a test. MEASURED, not read: a probe connected to /ws with an unknown uid against a real local server and the client saw 'InvalidStatus: server rejected WebSocket connection: HTTP 403' with ws close code = None. The gateway's deliberate 4401 was discarded. MECHANISM: backend/app/ws/gateway.py rejects at five points BEFORE websocket.accept() (line ~290): auth resolution timeout -> WS_REALTIME_UNAVAILABLE; uid None -> 4401; the reconcile block's bare 'except Exception' -> WS_REALTIME_UNAVAILABLE; user missing -> 4401; already-suspended -> 4403. Starlette turns any close-before-accept into an HTTP 403 handshake rejection, so all five collapse into one indistinguishable signal. TWO CONSEQUENCES. (1) OBSERVABILITY: none of the five paths logs anything (gateway.py's only logger.warning is at ~324, post-accept) and the bare except discards the cause, so a DB pool timeout, an expired token, an unknown user and a suspended account are indistinguishable from BOTH sides. That is how a capacity failure gets mistaken for an auth failure; it already cost a session an investigation on c403, where a 403 in the churn test could not be attributed. (2) CLIENT CORRECTNESS: app-mobile/src/realtime/socket.ts branches on close codes, 4401 and 4403 route to revalidate() and everything else to a backoff reconnect. Since pre-accept closes carry no code, a user who is suspended or whose token expired BEFORE connecting never reaches that path and instead reconnects in a loop; only the post-accept live-suspension close (gateway ~329) reaches it, which is why existing tests pass. The HTTP catchup path's own 401/403 check (durableWindow.ts ~70) may mask this in practice, which is worth confirming rather than assuming. SCOPE: (a) log every pre-accept rejection with its distinct reason, including exc_info on the reconcile path, and consider operational_signals.observe for the capacity case so it is countable; (b) DECISION for the owner: whether to accept-then-close so the client receives the real close code (costs one accepted socket per rejection, preserves the 4401/4403 semantics the client already implements), or to keep rejecting pre-accept and give the client a documented way to tell auth from capacity; do not change behaviour without deciding this explicitly. ACCEPTANCE: (1) a test asserts each of the five rejection reasons is distinguishable in logs; (2) if the accept-then-close option is taken, a test proves the client receives 4401 and 4403 for connect-time auth failure and suspension, falsified by reverting to pre-accept; (3) no change weakens c205's rule that a socket never pins its auth SQL connection."
+    },
     {
       "id": "c404",
       "col": "progress",
