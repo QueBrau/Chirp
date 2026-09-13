@@ -14,6 +14,11 @@ here; their activation requires c407's corrected policy shapes, c408 convergence
 and a backend deployment containing the c405 emitter (7b50982). Window #16
 predates that emitter. Verify its deployed revision and both time series before
 activating the new policies, then verify notification delivery separately.
+Create the metrics first by running the apply with `--policies-dir` pointing to
+an empty directory. Once both series are observed, use the normal policies
+directory to activate the alerts. An empty override does not delete existing
+policies; the default all-resource apply provides no observation pause between
+metric creation and policy activation.
 No live inventory or recipient information belongs in
 this public repository.
 
