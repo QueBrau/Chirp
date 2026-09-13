@@ -528,6 +528,105 @@ async def test_positive_entitlement_decision_is_memoized_then_denies_after_its_t
     assert after_ttl is False, "memo entry must have expired by 61s and hit the real (denied) DB state"
 
 
+async def test_positive_memo_is_scoped_per_viewer_so_a_removed_member_cannot_ride_another_viewers_decision(
+    make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Board c409. The positive memo must be keyed by VIEWER as well as object.
+
+    The memo caches an 'allowed' decision for media_entitlement_memo_seconds. If its
+    key were the object alone, the first viewer to open a photo would warm an entry
+    that every OTHER viewer then hits, and a member just removed from the chapter
+    would be granted that photo for up to the full TTL by riding a still-active
+    member's cached decision -- the revoked-access leak c350 exists to close, reached
+    through somebody else's request rather than the token holder's own.
+
+    Keying a cache by the resource alone is exactly the tidy-up a maintainer would
+    plausibly write, and before this test nothing noticed: changing the key from
+    (object_name, viewer_id) to (object_name, object_name) left every other test in
+    this file green (verified Sep 13). The only two-viewer test here,
+    test_capability_urls_differ_per_viewer_and_each_verifies_to_its_own_viewer, pins
+    that each viewer gets a different CAPABILITY URL -- a neighbouring property. It
+    never calls check_media_entitlement with two viewers, and it was counted as
+    covering per-viewer isolation when c350 was reviewed.
+
+    The assertion that carries the test is the last one. The warm-memo assertion
+    before it guards a PRECONDITION: without a genuinely warm entry, the removed
+    viewer would miss cold, be refused by the database, and this test would pass
+    whatever the key is (chirps-17's condition on c409).
+    """
+    from app.db import get_session_factory
+
+    # Reset at the START rather than relying on isolation from a previous test, so the
+    # only warm entry in the memo is the one this test builds.
+    media_entitlement._reset_memo_for_tests()
+
+    decide_calls = {"count": 0}
+    real_decide = media_entitlement._decide
+
+    async def _counting_decide(*args, **kwargs):
+        decide_calls["count"] += 1
+        return await real_decide(*args, **kwargs)
+
+    monkeypatch.setattr(media_entitlement, "_decide", _counting_decide)
+
+    setup = await make_chapter_with(role="member")
+    permanent = f"https://storage.googleapis.com/{BUCKET}/{OBJECT}"
+    await _insert_post_with_media(setup.chapter_id, setup.member.id, permanent)
+    t0 = datetime(2026, 9, 11, 6, 0, 0, tzinfo=timezone.utc)
+    removed_viewer = str(setup.member.id)
+    active_viewer = str(setup.president.id)
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text(
+                "UPDATE memberships SET status = 'removed' "
+                "WHERE chapter_id = :chapter AND user_id = :user"
+            ),
+            {"chapter": setup.chapter_id, "user": setup.member.id},
+        )
+        await session.commit()
+
+    # Precondition: the removal really took effect. Denials are never memoized, so
+    # this fresh check warms nothing.
+    async with get_session_factory()() as session:
+        before = await media_entitlement.check_media_entitlement(
+            session, OBJECT, removed_viewer, now=t0
+        )
+    assert before is False, "the removed member must be denied on a fresh decision"
+
+    # The active member legitimately warms the positive memo for this same object.
+    async with get_session_factory()() as session:
+        warmed = await media_entitlement.check_media_entitlement(
+            session, OBJECT, active_viewer, now=t0
+        )
+    assert warmed is True, "the active member must be genuinely entitled"
+
+    # PRECONDITION, proven rather than assumed: the memo is actually warm. The same
+    # viewer asks again and must be answered WITHOUT reaching the database. This is
+    # key-agnostic on purpose - it holds whether the key is correct or broken - so it
+    # can only fail because warming did not happen, never because of the key itself.
+    calls_after_warming = decide_calls["count"]
+    async with get_session_factory()() as session:
+        again = await media_entitlement.check_media_entitlement(
+            session, OBJECT, active_viewer, now=t0 + timedelta(seconds=1)
+        )
+    assert again is True and decide_calls["count"] == calls_after_warming, (
+        "the active member's decision was not served from the memo, so the memo is not "
+        "warm and the assertion below would pass whatever the key is"
+    )
+
+    # THE ASSERTION THAT CARRIES THE TEST: the removed member asks for the SAME
+    # object, well inside the memo TTL, and must not ride the active member's entry.
+    async with get_session_factory()() as session:
+        riding = await media_entitlement.check_media_entitlement(
+            session, OBJECT, removed_viewer, now=t0 + timedelta(seconds=30)
+        )
+    assert riding is False, (
+        "a removed member was granted a photo by riding another viewer's cached "
+        "decision; the entitlement memo must be keyed per viewer (board c409)"
+    )
+
+
 async def test_denial_is_never_memoized_so_a_regrant_is_immediate(
     client: AsyncClient, make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
 ) -> None:
