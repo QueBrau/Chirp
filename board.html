@@ -225,7 +225,7 @@
 </footer>
 
 <script id="board-data" type="application/json">{
-  "updated": 1789308327398,
+  "updated": 1789308405208,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -415,6 +415,13 @@
     }
   ],
   "cards": [
+    {
+      "id": "c406",
+      "col": "backlog",
+      "owner": "",
+      "title": "c406 [P2 | monitoring, follow-on of c405 slice 1 and c398] Nothing watches the two new WebSocket rejection signals yet",
+      "detail": "Opened Sep 13 2026 by chirps-17, who owns c398's monitoring surface, when c405 slice 1 (PR #301) added two countable signals with no metric or policy behind them. WHAT EXISTS AFTER #301: backend/app/ws/gateway.py emits ws_connect_capacity_rejected (a pool checkout timeout refusing a WebSocket connect, the same condition main.py answers with 503 + Retry-After on the HTTP side) and ws_connect_suspended_rejected (c405 journey b, a suspended user refused before accept, the case a real person feels), both on app.operational, both throttled at 60s. chirps-36 deliberately did NOT add infra/monitoring JSON for them because that is c398's surface and its activation is Jose's step; that was the right call for the PR and it leaves this gap. WHY IT MATTERS NOW RATHER THAN LATER: Jose has not yet run c398's apply, so adding these two metrics and their policies BEFORE he applies means one activation covers everything; adding them after means a second apply. SCOPE: one log-based metric per event under infra/monitoring/metrics following the sql-pool-capacity-503 shape (the filter keys on jsonPayload.event, see that file), plus a policy each under infra/monitoring/policies, with documentation naming its runbook row and the 'initial, review after 7 days' threshold convention c370 established. DO NOT reuse the sql_pool_capacity_503 metric name: its description and MONITORING-RUNBOOK.md line 73 both tie it specifically to main.py's SQLAlchemyTimeoutError handler returning 503, and observe() throttles per event name per process, so an HTTP burst would mask the WebSocket case inside the same minute (ruling by chirps-17, Sep 13). ACCEPTANCE: the existing scripts/tests/test_monitoring_apply.py fixtures accept both new files unchanged (they validate every policy in the directory), a dry run still plans creates with zero writes, and the runbook rows added by #301 are referenced by the new policies' documentation."
+    },
     {
       "id": "c405",
       "col": "progress",
