@@ -27,6 +27,28 @@ _INTERVALS = {
     # 20+ media GETs per viewer, so a burst of revocations must not become a log
     # flood.
     "media_access_revoked": 60.0,
+    # board c405 slice 1. The WS gateway rejects BEFORE accept() at five points and
+    # Starlette collapses every one into an identical HTTP 403 with the close code
+    # discarded, so a capacity failure and an expired token were indistinguishable
+    # from outside and neither was recorded anywhere. These two count the RATE of the
+    # two branches worth watching; the per-occurrence record is the logger.warning at
+    # each branch, which is unthrottled and names the case. Do not try to make the
+    # counter do both jobs -- observe() takes no payload by design.
+    #
+    # NOT folded into sql_pool_capacity_503, deliberately: that event has a live
+    # log-based metric and alert policy (infra/monitoring/{metrics,policies}/
+    # sql-pool-capacity-503.json) whose text states it counts the main.py
+    # SQLAlchemyTimeoutError handler returning 503 with Retry-After, and the runbook
+    # row says auth rejections do not emit it. Reusing the name would falsify both,
+    # and the shared 60s per-process throttle would let an HTTP burst mask the WS
+    # case entirely.
+    "ws_connect_capacity_rejected": 60.0,
+    # Sixteen connects can fail in the same second, and one suspended client drives
+    # its branch about six times a minute under socket.ts's retry budget
+    # (MAX_RECONNECT_ATTEMPTS 6, backoff 1s to 30s, then pause), with the budget
+    # restarting on each foregrounding. Both are bursts, so both are throttled at the
+    # same 60s as the signals above rather than always-emit (manager ruling, c405).
+    "ws_connect_suspended_rejected": 60.0,
 }
 _last_emitted: dict[str, float] = {}
 _lock = threading.Lock()
