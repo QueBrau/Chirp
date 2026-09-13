@@ -148,6 +148,42 @@ async def test_capacity_failure_is_named_and_counted_not_swallowed(client, make_
     )
 
 
+async def test_a_real_async_deadline_is_not_counted_as_capacity(client, make_user, caplog, monkeypatch):
+    """The class-name collision, pinned with a REAL timeout rather than a stand-in.
+
+    Found by an independent verifier: the negative case below injects a plain
+    RuntimeError, which does not exercise the one confusion this code is most likely
+    to suffer. `sqlalchemy.exc.TimeoutError` and the builtin `TimeoutError` share a
+    name and are unrelated classes (checked: issubclass is False), and since Python
+    3.11 `asyncio.TimeoutError` IS the builtin, which is exactly what the reconcile
+    branch's own `asyncio.timeout(WS_RECONCILE_SECONDS)` raises. So an isinstance
+    check broadened to `(SQLAlchemyTimeoutError, TimeoutError)` would silently count
+    every slow lookup as a capacity failure, and every other test in this file would
+    still pass. This one makes the branch's real deadline fire and requires the
+    capacity counter to stay untouched.
+    """
+    user = await make_user()
+
+    class _NeverOpens:
+        async def __aenter__(self):
+            await asyncio.sleep(3600)
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(gateway, "get_session_factory", lambda: _NeverOpens)
+    monkeypatch.setattr(gateway, "WS_RECONCILE_SECONDS", .05)
+    caplog.set_level("WARNING")
+    async with local_server(create_app()) as (base, _server):
+        await _rejected(base, subprotocols=[user.firebase_uid])
+
+    assert _reasons(caplog) == ["ws reject reason=identity_lookup_failed pre_accept=true"]
+    assert "ws_connect_capacity_rejected" not in operational_signals._last_emitted, (
+        "an async deadline is not a pool timeout; counting it would make the capacity "
+        "metric mean 'slow or saturated' rather than 'saturated'"
+    )
+
+
 async def test_a_non_capacity_lookup_failure_is_not_counted_as_capacity(client, make_user, caplog, monkeypatch):
     """The capacity counter must mean capacity. An ordinary lookup failure takes the
     same branch and must log there WITHOUT incrementing the capacity signal, or the
