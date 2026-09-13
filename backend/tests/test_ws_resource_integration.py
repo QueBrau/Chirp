@@ -406,13 +406,18 @@ async def test_actual_slow_reader_is_released_without_starving_peer(client, make
                     totals = await redis_totals(broker)
                     max_output = max(max_output, totals["redis_pubsub_output_bytes"])
                     max_transport = max(max_transport, protocol.transport.get_write_buffer_size())
-                    if totals["redis_pubsub_clients"] == 1:
+                    # board c403: scoped to this test's own channel. Both sockets
+                    # here are the same user, so this counts exactly them and the
+                    # meaning is unchanged ("the slow one is gone, the fast one
+                    # remains"). The server-wide count it replaced could never
+                    # reach 1 while any other suite held a pubsub client.
+                    if await own_channel_subscribers(broker, user.id) == 1:
                         break
                     await asyncio.sleep(.01)
                 else:
                     # Publisher stops after its fixed byte budget. Give the
                     # existing5s send/age limit and1s close attempt time to act.
-                    while (await redis_totals(broker))["redis_pubsub_clients"] != 1:
+                    while await own_channel_subscribers(broker, user.id) != 1:
                         await asyncio.sleep(.02)
             # Identify the survivor with a fresh event AFTER the count dropped;
             # a count of one alone cannot distinguish the healthy peer.

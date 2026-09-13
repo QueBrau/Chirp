@@ -52,6 +52,36 @@ async def test_foreign_pubsub_client_times_out_server_wide_wait_not_scoped(broke
     """A client subscribed to an unrelated channel, held past the 3s ceiling,
     times out the old server-wide wait but leaves the new scoped wait untouched.
     """
+    # This test is the one place in the suite that genuinely needs an EXCLUSIVE
+    # Redis, because its control (the last line) asserts that with the foreign
+    # client released the server-wide wait succeeds -- which is only true if
+    # nothing else on the server holds a pubsub client. Another session's suite
+    # running right now would make that control time out and turn this red on
+    # correct code, i.e. exactly the flake class c403 removes. So it checks the
+    # precondition and skips saying why, rather than becoming the next flake.
+    # Deliberately NOT loosened instead: a control that tolerates foreign clients
+    # would no longer attribute the timeout above to the foreign client, which is
+    # the only thing it is for.
+    #
+    # AND DELIBERATELY NOT PRE-DECLARED TO c402's SKIP GUARD. If this skip ever
+    # fires in CI, the run goes RED as an undeclared skip (conftest's
+    # CHIRP_MAX_SKIPS / CHIRP_ALLOWED_SKIP_PREFIXES check), because ci.yml names
+    # only the c364 and c400 harnesses and budgets 12 skips, 6 each, so the WS
+    # files contribute none there today. That red is the correct outcome and the
+    # reason this guard is worth having: it would mean something else is holding a
+    # pubsub client on CI's Redis, which CI is supposed to keep exclusive, and that
+    # is a real environmental fact worth shouting about. The WRONG response is to
+    # add this file to CHIRP_ALLOWED_SKIP_PREFIXES, which would convert one loud,
+    # specific alarm into permanent silence - the exact trade c402 exists to
+    # refuse. The right response is to find out what is subscribed in CI and why.
+    # (Ruled by c402's author, arithmetic verified against ci.yml, board c403.)
+    already = len([row for row in await broker.client_list() if "P" in row["flags"]])
+    if already:
+        pytest.skip(
+            f"another pubsub client is already connected ({already}); this test's "
+            "control needs an exclusive Redis and cannot be established here"
+        )
+
     user_id = f"c403-{uuid.uuid4().hex}"
     foreign = Redis.from_url(_redis_url(), decode_responses=True, socket_connect_timeout=1)
     foreign_pubsub = foreign.pubsub()
