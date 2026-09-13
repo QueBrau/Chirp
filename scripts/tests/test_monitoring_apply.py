@@ -1,9 +1,12 @@
 """Fake-API/fixture tests only; no network, no credentials, no gcloud."""
 import importlib.util
+from contextlib import chdir, redirect_stdout
 from copy import deepcopy
+import io
 import json
 import re
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 import urllib.parse
@@ -860,7 +863,9 @@ class MonitoringApplyTests(unittest.TestCase):
         _collect(suite)
         for expected in ("test_apply_order_is_metrics_then_uptime_then_policies",
                           "test_metric_update_uses_put_without_updatemask",
-                          "test_log_metric_identity_is_name_not_display_name"):
+                          "test_log_metric_identity_is_name_not_display_name",
+                          "test_cross_checkout_defaults_and_explicit_overrides_read_and_write_expected_bodies",
+                          "test_empty_directories_do_not_fall_back_to_another_checkout"):
             self.assertTrue(any(expected in test_id for test_id in test_ids),
                              msg="%s missing from backend CI registration; test_ids=%s" % (expected, test_ids))
 
@@ -901,6 +906,178 @@ class MonitoringApplyTests(unittest.TestCase):
             self.assertEqual(call["auth"], "Bearer tok")
             self.assertEqual(call["content_type"], "application/json")
             self.assertEqual(call["body"], {"displayName": "d"})
+
+
+    # c413: execute checkout A's real module from B, patching only the API reader.
+    # Keep these in the class exported by the existing backend CI collector.
+
+    def make_checkout(self, parent, label, empty=False):
+        root = Path(parent) / ("checkout-" + label)
+        (root / "scripts").mkdir(parents=True)
+        shutil.copyfile(PATH, root / "scripts/monitoring_apply.py")
+        evidence = root / "infra/monitoring/evidence"
+        evidence.mkdir(parents=True)
+        shutil.copyfile(INVENTORY_PATH, evidence / INVENTORY_PATH.name)
+        for kind in ("metrics", "uptime", "policies"):
+            (root / "infra/monitoring" / kind).mkdir()
+        if not empty:
+            metric = json.loads((METRICS_DIR / "sql-pool-capacity-503.json").read_text())
+            metric["name"] = "checkout_" + label + "_capacity"
+            uptime = json.loads((UPTIME_DIR / "chirp-api-health.json").read_text())
+            uptime["displayName"] = "Checkout " + label + " uptime"
+            policy = json.loads((POLICIES_DIR / "sql-pool-capacity-503.json").read_text())
+            policy["displayName"] = "Checkout " + label + " policy"
+            threshold = policy["conditions"][0]["conditionThreshold"]
+            threshold["filter"] = threshold["filter"].replace("user/sql_pool_capacity_503", "user/" + metric["name"])
+            for kind, body in (("metrics", metric), ("uptime", uptime), ("policies", policy)):
+                (root / "infra/monitoring" / kind / "fixture.json").write_text(json.dumps(body))
+        return root
+
+    def load_checkout(self, root):
+        spec = importlib.util.spec_from_file_location("monitoring_apply_checkout", root / "scripts/monitoring_apply.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def api_calls(self, module, fake):
+        def get(url, params):
+            try:
+                return fake.get(url, params)
+            except m.ApplyError as error:
+                # Each independently loaded script has its own exception class.
+                raise module.ApplyError(str(error)) from None
+        return get, fake.post, fake.patch, fake.put
+
+    def directories(self, root):
+        return {kind: str((root / "infra/monitoring" / kind).resolve())
+                for kind in ("metrics", "uptime", "policies")}
+
+    def arguments(self, apply=False):
+        args = ["--project", PROJECT, "--api-host", API_HOST, "--ws-host", WS_HOST]
+        if apply:
+            args.extend(["--apply", "--channel", "projects/%s/notificationChannels/1" % PROJECT])
+        return args
+
+    def test_cross_checkout_defaults_and_explicit_overrides_read_and_write_expected_bodies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout_a = self.make_checkout(temporary, "a")
+            checkout_b = self.make_checkout(temporary, "b")
+            module = self.load_checkout(checkout_a)
+            for apply in (False, True):
+                for override in (None, "relative", "absolute"):
+                    with self.subTest(apply=apply, override=override):
+                        fake = FakeMonitoringAPI()
+                        args = self.arguments(apply)
+                        expected = checkout_a if override is None else checkout_b
+                        label = "a" if override is None else "b"
+                        if override:
+                            for kind, absolute in self.directories(checkout_b).items():
+                                directory = "infra/monitoring/" + kind if override == "relative" else absolute
+                                args.extend(["--" + kind + "-dir", directory])
+                        # Cover both report destinations. A relative report path
+                        # retains the usual caller-directory semantics as well.
+                        if apply:
+                            args.extend(["--report", "report.json"])
+                        output = io.StringIO()
+                        with chdir(checkout_b), redirect_stdout(output), \
+                                patch.object(module, "reader", return_value=self.api_calls(module, fake)):
+                            exit_code = module.main(args)
+                        report = json.loads((checkout_b / "report.json").read_text() if apply else output.getvalue())
+                        self.assertEqual(exit_code, 0)
+                        self.assertEqual(report["skipped_files"], [])
+                        self.assertEqual(report["input_directories"], self.directories(expected))
+                        self.assertEqual([row["name"] for row in report["metrics"]], ["checkout_" + label + "_capacity"])
+                        self.assertEqual([row["displayName"] for row in report["uptime"]], ["Checkout " + label + " uptime"])
+                        self.assertEqual([row["displayName"] for row in report["policies"]], ["Checkout " + label + " policy"])
+                        self.assertEqual(fake.post_calls, 3 if apply else 0)
+                        self.assertEqual(fake.patch_calls + fake.put_calls, 0)
+                        if apply:
+                            self.assertEqual(set(fake.metrics), {"checkout_" + label + "_capacity"})
+                            self.assertEqual(set(fake.uptime), {"Checkout " + label + " uptime"})
+                            self.assertEqual(set(fake.policies), {"Checkout " + label + " policy"})
+                            self.assertFalse((checkout_a / "report.json").exists())
+
+    def test_input_directories_survive_auth_inventory_and_partial_apply_failures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout_a = self.make_checkout(temporary, "a")
+            checkout_b = self.make_checkout(temporary, "b")
+            module = self.load_checkout(checkout_a)
+            for failure in ("authentication", "inventory", "uptime_write"):
+                with self.subTest(failure=failure):
+                    fake = FakeMonitoringAPI()
+                    get, post, patch_fn, put = self.api_calls(module, fake)
+
+                    def failing_get(url, params):
+                        raise module.ApplyError("http_403")
+
+                    def failing_post(url, body):
+                        if url.endswith("uptimeCheckConfigs"):
+                            raise module.ApplyError("http_400")
+                        return post(url, body)
+
+                    options = {"side_effect": module.ApplyError("authentication_unavailable")} if failure == "authentication" else {
+                        "return_value": (failing_get if failure == "inventory" else get,
+                                         failing_post if failure == "uptime_write" else post, patch_fn, put)}
+                    args = self.arguments(apply=True) + ["--report", "failure.json"]
+                    with chdir(checkout_b), patch.object(module, "reader", **options):
+                        exit_code = module.main(args)
+                    report = json.loads((checkout_b / "failure.json").read_text())
+                    self.assertEqual(exit_code, 2)
+                    self.assertEqual(report["input_directories"], self.directories(checkout_a))
+                    if failure == "uptime_write":
+                        self.assertEqual([row["name"] for row in report["metrics"]], ["checkout_a_capacity"])
+                        self.assertEqual(report["failed_operation"]["kind"], "uptime")
+                        self.assertEqual(fake.post_calls, 1)
+                    else:
+                        self.assertEqual(fake.post_calls + fake.patch_calls + fake.put_calls, 0)
+
+    def test_post_parse_validation_reports_the_checkout_it_checked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout_a = self.make_checkout(temporary, "a")
+            checkout_b = self.make_checkout(temporary, "b", empty=True)
+            module = self.load_checkout(checkout_a)
+            for args in (["--project", PROJECT], self.arguments() + ["--apply"]):
+                with self.subTest(args=args):
+                    output = io.StringIO()
+                    with chdir(checkout_b), redirect_stdout(output), patch.object(module, "reader") as reader:
+                        with self.assertRaises(SystemExit) as caught:
+                            module.main(args)
+                    self.assertEqual(caught.exception.code, 2)
+                    reader.assert_not_called()
+                    report = json.loads(output.getvalue())
+                    self.assertEqual(report["reason"], "invalid_arguments")
+                    self.assertEqual(report["input_directories"], self.directories(checkout_a))
+
+    def test_empty_directories_do_not_fall_back_to_another_checkout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout_a = self.make_checkout(temporary, "a", empty=True)
+            checkout_b = self.make_checkout(temporary, "b")
+            module = self.load_checkout(checkout_a)
+            empty_overrides = checkout_b / "empty"
+            empty_overrides.mkdir()
+            for apply in (False, True):
+                for explicit_empty in (False, True):
+                    with self.subTest(apply=apply, explicit_empty=explicit_empty):
+                        fake = FakeMonitoringAPI()
+                        args = ["--project", PROJECT]
+                        if apply:
+                            args.extend(["--apply", "--channel", "projects/%s/notificationChannels/1" % PROJECT])
+                        expected = self.directories(checkout_a)
+                        if explicit_empty:
+                            for kind in expected:
+                                args.extend(["--" + kind + "-dir", "empty"])
+                            expected = dict.fromkeys(expected, str(empty_overrides.resolve()))
+                        output = io.StringIO()
+                        with chdir(checkout_b), redirect_stdout(output), \
+                                patch.object(module, "reader", return_value=self.api_calls(module, fake)):
+                            exit_code = module.main(args)
+                        report = json.loads(output.getvalue())
+                        self.assertEqual(exit_code, 0)
+                        self.assertEqual(report["input_directories"], expected)
+                        self.assertEqual(report["skipped_files"], [])
+                        for kind in expected:
+                            self.assertEqual(report[kind], [])
+                        self.assertEqual(fake.post_calls + fake.patch_calls + fake.put_calls, 0)
 
 
 if __name__ == "__main__":
