@@ -13,6 +13,7 @@ reference a log metric or uptime check this same run just created.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import math
 import os
@@ -534,11 +535,147 @@ def load_local_uptime(uptime_dir, project: str, api_host: str | None,
     return configs, errors
 
 
-def _normalize_for_compare(body: dict, ignore_channels: bool) -> dict:
-    result = {k: v for k, v in body.items() if k not in SERVER_ASSIGNED_FIELDS}
+def _omit_defaults(body: dict, defaults: dict) -> None:
+    """Remove only listed REST/protobuf defaults, retaining unknown configuration."""
+    for key, default in defaults.items():
+        if key in body and type(body[key]) is type(default) and body[key] == default:
+            body.pop(key)
+
+
+def _normalize_policy(body: dict, ignore_channels: bool, *, observed: bool = False) -> dict:
+    """Compare policy intent without server identities or omitted protobuf defaults.
+
+    AlertPolicy's REST reference defaults enabled to true on WRITE only; a GET
+    without enabled is unknown, never evidence that a policy is enabled. Unknown
+    fields and nonempty validity remain visible as drift rather than being dropped
+    by projecting the response onto the keys present in our desired JSON.
+    """
+    result = deepcopy(body)
+    for key in SERVER_ASSIGNED_FIELDS:
+        result.pop(key, None)
+    if not observed:
+        result.setdefault("enabled", True)
     if ignore_channels:
         result.pop("notificationChannels", None)
+    _omit_defaults(result, {"notificationChannels": [], "userLabels": {},
+                            "severity": "SEVERITY_UNSPECIFIED", "alertStrategy": {}})
+    for condition in result.get("conditions", []):
+        condition.pop("name", None)
+        for kind in ("conditionThreshold", "conditionAbsent"):
+            spec = condition.get(kind)
+            if not isinstance(spec, dict):
+                continue
+            # Protobuf omits zero numeric fields and empty repeated fields on
+            # read. In particular, several shipped thresholds are exactly zero.
+            if kind == "conditionThreshold":
+                spec.setdefault("thresholdValue", 0)
+            _omit_defaults(spec, {"denominatorFilter": "", "aggregations": [],
+                                  "denominatorAggregations": []})
+            for key in ("aggregations", "denominatorAggregations"):
+                for aggregation in spec.get(key, []):
+                    _omit_defaults(aggregation, {"groupByFields": [],
+                                                 "perSeriesAligner": "ALIGN_NONE",
+                                                 "crossSeriesReducer": "REDUCE_NONE"})
     return result
+
+
+def _normalize_metric(body: dict) -> dict:
+    """LogMetric's name is client-owned; descriptor identities/timestamps are not."""
+    result = deepcopy(body)
+    # Output-only per projects.metrics and MetricDescriptor REST references.
+    for key in ("resourceName", "createTime", "updateTime"):
+        result.pop(key, None)
+    _omit_defaults(result, {"disabled": False, "labelExtractors": {},
+                            "bucketName": "", "version": "V2"})
+    descriptor = result.get("metricDescriptor")
+    if isinstance(descriptor, dict):
+        for key in ("name", "type", "description", "monitoredResourceTypes"):
+            descriptor.pop(key, None)
+        _omit_defaults(descriptor, {"labels": []})
+        for label in descriptor.get("labels", []):
+            _omit_defaults(label, {"valueType": "STRING", "description": ""})
+    return result
+
+
+def _normalize_uptime(body: dict) -> dict:
+    """Normalize documented UptimeCheckConfig/HttpCheck defaults, not arbitrary keys."""
+    result = deepcopy(body)
+    result.pop("name", None)
+    _omit_defaults(result, {"disabled": False, "logCheckFailures": False,
+                            "isInternal": False, "internalCheckers": [],
+                            "userLabels": {}, "contentMatchers": [], "selectedRegions": []})
+    result.setdefault("period", "60s")
+    if result.get("checkerType", "CHECKER_TYPE_UNSPECIFIED") == "CHECKER_TYPE_UNSPECIFIED":
+        result["checkerType"] = "STATIC_IP_CHECKERS"
+    http = result.get("httpCheck")
+    if isinstance(http, dict):
+        _omit_defaults(http, {"maskHeaders": False, "headers": {}, "authInfo": {},
+                              "contentType": "TYPE_UNSPECIFIED", "customContentType": "",
+                              "body": "", "useSsl": False, "validateSsl": False,
+                              "acceptedResponseStatusCodes": []})
+        if http.get("requestMethod", "METHOD_UNSPECIFIED") == "METHOD_UNSPECIFIED":
+            http["requestMethod"] = "GET"
+        http.setdefault("path", "/")
+        http.setdefault("port", 443 if http.get("useSsl") else 80)
+        # An empty accepted status list means precisely the 2xx range.
+        if http.get("acceptedResponseStatusCodes") == [{"statusClass": "STATUS_CLASS_2XX"}]:
+            http.pop("acceptedResponseStatusCodes")
+    return result
+
+
+def _unique_by_key(bodies: list[dict], key: str) -> dict[str, dict]:
+    result = {}
+    if not isinstance(bodies, list) or any(not isinstance(body, dict) for body in bodies):
+        raise ApplyError("invalid_schema")
+    for body in bodies:
+        identity = body.get(key)
+        if not isinstance(identity, str) or not identity:
+            raise ApplyError("missing_resource_identity")
+        if identity in result:
+            raise ApplyError("ambiguous_resource_identity")
+        result[identity] = body
+    return result
+
+
+def _policy_write_body(desired: dict, existing: dict | None = None) -> dict:
+    """Keep condition identities by displayName; a new condition has no name yet."""
+    body = deepcopy(desired)
+    body.setdefault("enabled", True)
+    conditions = body.get("conditions", [])
+    _unique_by_key(conditions, "displayName")
+    if existing is not None:
+        body["name"] = existing["name"]
+        previous = _unique_by_key(existing.get("conditions"), "displayName")
+        seen_names = set()
+        for condition in previous.values():
+            name = condition.get("name")
+            if not isinstance(name, str) or not name.startswith(body["name"] + "/conditions/"):
+                raise ApplyError("invalid_condition_identity")
+            if name in seen_names:
+                raise ApplyError("ambiguous_resource_identity")
+            seen_names.add(name)
+        for condition in conditions:
+            match = previous.get(condition["displayName"])
+            if match is not None:
+                condition["name"] = match["name"]
+    return body
+
+
+def _write_resource_name(response: dict) -> str:
+    """A successful HTTP response without identity is still an unknown outcome."""
+    name = response.get("name") if isinstance(response, dict) else None
+    if not isinstance(name, str) or not name:
+        raise ApplyError("invalid_write_response")
+    return name
+
+
+def _unsupported_fields(desired: dict, existing: dict, owned: Iterable[str]) -> list[str]:
+    """Identify top-level drift our write mask cannot reconcile, without its values."""
+    changed = {
+        key for key in desired.keys() | existing.keys()
+        if key not in desired or key not in existing or desired[key] != existing[key]
+    }
+    return sorted(changed - set(owned))
 
 
 def _list_all(get: Callable, url: str, params: dict, key: str) -> list[dict]:
@@ -581,8 +718,11 @@ def _existing_by_display_name(get: Callable, base_url: str, list_key: str,
         if not isinstance(name, str) or not isinstance(display, str):
             raise ApplyError("invalid_schema")
         if display in wanted:
+            if display in result:
+                raise ApplyError("ambiguous_resource_identity")
             full = get("https://monitoring.googleapis.com/v3/" + name, {})
-            if not isinstance(full, dict) or full.get("name") != name:
+            if (not isinstance(full, dict) or full.get("name") != name
+                    or full.get("displayName") != display):
                 raise ApplyError("invalid_schema")
             result[display] = full
     return result
@@ -626,13 +766,17 @@ def plan_policies(local: list[dict], existing: dict[str, dict], channel: str | N
         if match is None:
             plan.append({"displayName": display, "action": "create", "existing_name": None})
             continue
-        same = (_normalize_for_compare(match, ignore_channels)
-                == _normalize_for_compare(policy, ignore_channels))
+        observed = _normalize_policy(match, ignore_channels, observed=True)
+        desired = _normalize_policy(policy, ignore_channels)
+        same = observed == desired
         plan.append({
             "displayName": display,
             "action": "noop" if same else "update",
             "existing_name": match["name"],
         })
+        unsupported = _unsupported_fields(desired, observed, UPDATE_MASK_FIELDS)
+        if unsupported:
+            plan[-1]["unsupported_fields"] = unsupported
     return plan
 
 
@@ -644,13 +788,16 @@ def plan_uptime(local: list[dict], existing: dict[str, dict]) -> list[dict]:
         if match is None:
             plan.append({"displayName": display, "action": "create", "existing_name": None})
             continue
-        same = (_normalize_for_compare(match, ignore_channels=False)
-                == _normalize_for_compare(config, ignore_channels=False))
+        observed, desired = _normalize_uptime(match), _normalize_uptime(config)
+        same = observed == desired
         plan.append({
             "displayName": display,
             "action": "noop" if same else "update",
             "existing_name": match["name"],
         })
+        unsupported = _unsupported_fields(desired, observed, UPTIME_UPDATE_MASK_FIELDS)
+        if unsupported:
+            plan[-1]["unsupported_fields"] = unsupported
     return plan
 
 
@@ -662,73 +809,89 @@ def plan_metrics(local: list[dict], existing: dict[str, dict]) -> list[dict]:
         if match is None:
             plan.append({"name": name, "action": "create", "existing_name": None})
             continue
-        same = (_normalize_for_compare(match, ignore_channels=False)
-                == _normalize_for_compare(metric, ignore_channels=False))
+        observed, desired = _normalize_metric(match), _normalize_metric(metric)
+        same = observed == desired
         plan.append({
             "name": name,
             "action": "noop" if same else "update",
             "existing_name": match.get("name"),
         })
+        unsupported = _unsupported_fields(desired, observed, LOG_METRIC_SCHEMA)
+        if unsupported:
+            plan[-1]["unsupported_fields"] = unsupported
     return plan
 
 
 def apply_policies(plan: list[dict], local_by_display: dict[str, dict], project: str,
-                    post: Callable, patch: Callable) -> list[dict]:
+                    post: Callable, patch: Callable, *, existing: dict[str, dict] | None = None,
+                    results: list[dict] | None = None) -> list[dict]:
     base = "https://monitoring.googleapis.com/v3/projects/" + project + "/alertPolicies"
-    results = []
+    if results is None:
+        results = []
     for entry in plan:
         display = entry["displayName"]
         body = local_by_display[display]
         if entry["action"] == "create":
             response = post(base, body)
-            results.append({"displayName": display, "action": "create", "resource_name": response.get("name")})
+            results.append({"displayName": display, "action": "create", "resource_name": _write_resource_name(response)})
         elif entry["action"] == "update":
-            mask = ",".join(field for field in UPDATE_MASK_FIELDS if field in body)
+            previous = (existing or {}).get(display, {})
+            mask = ",".join(field for field in UPDATE_MASK_FIELDS if field in body or field in previous)
             url = "https://monitoring.googleapis.com/v3/" + entry["existing_name"] + "?updateMask=" + urllib.parse.quote(mask, safe=",")
             response = patch(url, body)
-            results.append({"displayName": display, "action": "update", "resource_name": response.get("name")})
+            results.append({"displayName": display, "action": "update", "resource_name": _write_resource_name(response)})
         else:
             results.append({"displayName": display, "action": "noop", "resource_name": entry["existing_name"]})
     return results
 
 
 def apply_uptime(plan: list[dict], local_by_display: dict[str, dict], project: str,
-                  post: Callable, patch: Callable) -> list[dict]:
+                  post: Callable, patch: Callable, *, existing: dict[str, dict] | None = None,
+                  results: list[dict] | None = None) -> list[dict]:
     base = "https://monitoring.googleapis.com/v3/projects/" + project + "/uptimeCheckConfigs"
-    results = []
+    if results is None:
+        results = []
     for entry in plan:
         display = entry["displayName"]
-        body = local_by_display[display]
+        body = deepcopy(local_by_display[display])
         if entry["action"] == "create":
             response = post(base, body)
-            results.append({"displayName": display, "action": "create", "resource_name": response.get("name")})
+            results.append({"displayName": display, "action": "create", "resource_name": _write_resource_name(response)})
         elif entry["action"] == "update":
-            mask = ",".join(field for field in UPTIME_UPDATE_MASK_FIELDS if field in body)
+            previous = (existing or {}).get(display, {})
+            body["name"] = entry["existing_name"]
+            # The server materializes the public-checker default on create. If
+            # it later drifts, explicitly restore it rather than relying on an
+            # update clearing the enum to repeat create-time defaulting.
+            if "checkerType" in previous and "checkerType" not in body:
+                body["checkerType"] = "STATIC_IP_CHECKERS"
+            mask = ",".join(field for field in UPTIME_UPDATE_MASK_FIELDS if field in body or field in previous)
             url = "https://monitoring.googleapis.com/v3/" + entry["existing_name"] + "?updateMask=" + urllib.parse.quote(mask, safe=",")
             response = patch(url, body)
-            results.append({"displayName": display, "action": "update", "resource_name": response.get("name")})
+            results.append({"displayName": display, "action": "update", "resource_name": _write_resource_name(response)})
         else:
             results.append({"displayName": display, "action": "noop", "resource_name": entry["existing_name"]})
     return results
 
 
 def apply_metrics(plan: list[dict], local_by_name: dict[str, dict], project: str,
-                   post: Callable, put: Callable) -> list[dict]:
+                   post: Callable, put: Callable, *, results: list[dict] | None = None) -> list[dict]:
     """LogMetric.update is PUT, full-replace, with no updateMask parameter --
     a structurally different write mechanic from AlertPolicy/UptimeCheckConfig's
     PATCH+explicit-mask, verified against the projects.metrics.update reference."""
     base = "https://logging.googleapis.com/v2/projects/" + project + "/metrics"
-    results = []
+    if results is None:
+        results = []
     for entry in plan:
         name = entry["name"]
         body = local_by_name[name]
         if entry["action"] == "create":
             response = post(base, body)
-            results.append({"name": name, "action": "create", "resource_name": response.get("name")})
+            results.append({"name": name, "action": "create", "resource_name": _write_resource_name(response)})
         elif entry["action"] == "update":
             url = base + "/" + urllib.parse.quote(name, safe="")
             response = put(url, body)
-            results.append({"name": name, "action": "update", "resource_name": response.get("name")})
+            results.append({"name": name, "action": "update", "resource_name": _write_resource_name(response)})
         else:
             results.append({"name": name, "action": "noop", "resource_name": entry["existing_name"]})
     return results
@@ -801,18 +964,18 @@ def run(args, get: Callable, post: Callable | None = None, patch: Callable | Non
     api_host, ws_host = getattr(args, "api_host", None), getattr(args, "ws_host", None)
 
     local_metrics, metric_errors = load_local_metrics(args.metrics_dir, args.project)
-    local_by_name = {metric["name"]: metric for metric in local_metrics}
+    local_by_name = _unique_by_key(local_metrics, "name")
     defined_log_metric_types = [LOG_METRIC_TYPE_PREFIX + name for name in local_by_name]
 
     local_uptime, uptime_errors = load_local_uptime(args.uptime_dir, args.project, api_host, ws_host)
-    local_uptime_by_display = {config["displayName"]: config for config in local_uptime}
+    local_uptime_by_display = _unique_by_key(local_uptime, "displayName")
     defined_uptime_hosts = [config["monitoredResource"]["labels"]["host"] for config in local_uptime]
 
     local_policies, policy_errors = load_local_policies(
         args.policies_dir, args.project, channel_for_load, _inventory_metric_types(),
         defined_log_metric_types, defined_uptime_hosts, api_host, ws_host,
     )
-    local_policies_by_display = {policy["displayName"]: policy for policy in local_policies}
+    local_policies_by_display = _unique_by_key(local_policies, "displayName")
 
     existing_metric_bodies = existing_metrics(get, args.project, local_by_name.keys())
     metric_plan = plan_metrics(local_metrics, existing_metric_bodies)
@@ -821,30 +984,54 @@ def run(args, get: Callable, post: Callable | None = None, patch: Callable | Non
     uptime_plan = plan_uptime(local_uptime, existing_uptime_bodies)
 
     existing_policy_bodies = existing_policies(get, args.project, local_policies_by_display.keys())
+    # Validate every condition match BEFORE the first metric write, including
+    # noops, so ambiguous identity never causes a partially applied inventory.
+    policy_write_bodies = {
+        display: _policy_write_body(policy, existing_policy_bodies.get(display))
+        for display, policy in local_policies_by_display.items()
+    }
     policy_plan = plan_policies(local_policies, existing_policy_bodies, channel_for_load)
-
-    applied_metrics = applied_uptime = applied_policies = None
-    if args.apply:
-        # Order fixed: metrics -> uptime -> policies, so a policy referencing
-        # a log metric or uptime check this same run just created is applied
-        # against a resource that now exists.
-        applied_metrics = apply_metrics(metric_plan, local_by_name, args.project,
-                                         post or _refuse_write, put or _refuse_write)
-        applied_uptime = apply_uptime(uptime_plan, local_uptime_by_display, args.project,
-                                       post or _refuse_write, patch or _refuse_write)
-        applied_policies = apply_policies(policy_plan, local_policies_by_display, args.project,
-                                           post or _refuse_write, patch or _refuse_write)
-
+    plans = {"metrics": metric_plan, "uptime": uptime_plan, "policies": policy_plan}
+    if args.apply and any(entry.get("unsupported_fields") for plan in plans.values() for entry in plan):
+        # Do not claim success after a PATCH that cannot possibly clear this
+        # drift, or expand ownership to settings another operator may manage.
+        # A dry run identifies the affected resources and field names.
+        raise ApplyError("unsupported_configuration_drift")
     report = {
         "schema_version": 1,
         "project": args.project,
         "read_only": not args.apply,
-        "metrics": applied_metrics if applied_metrics is not None else metric_plan,
-        "uptime": applied_uptime if applied_uptime is not None else uptime_plan,
-        "policies": applied_policies if applied_policies is not None else policy_plan,
+        **{kind: [] if args.apply else plan for kind, plan in plans.items()},
         "skipped_files": metric_errors + uptime_errors + policy_errors,
     }
     report["exit_code"] = 1 if report["skipped_files"] else 0
+    if args.apply:
+        # Each helper appends directly to the report after an acknowledged
+        # write. Returning a list only at phase end lost successes on exceptions.
+        operations = (
+            ("metrics", apply_metrics, local_by_name, put or _refuse_write, {}),
+            ("uptime", apply_uptime, local_uptime_by_display, patch or _refuse_write,
+             {"existing": existing_uptime_bodies}),
+            ("policies", apply_policies, policy_write_bodies, patch or _refuse_write,
+             {"existing": existing_policy_bodies}),
+        )
+        for kind, apply, local, update, options in operations:
+            try:
+                apply(plans[kind], local, args.project, post or _refuse_write, update,
+                      results=report[kind], **options)
+            except ApplyError as error:
+                failed_index = len(report[kind])
+                report.update(status="error", exit_code=2, reason=str(error))
+                report["failed_operation"] = {
+                    "kind": kind, **plans[kind][failed_index], "outcome": "unconfirmed",
+                }
+                report["pending"] = {
+                    group: plan[len(report[group]) + (1 if group == kind else 0):]
+                    for group, plan in plans.items()
+                }
+                # A failed request may have reached the provider. Do not retry
+                # automatically or claim that it rolled back; re-inventory first.
+                break
     return report
 
 
