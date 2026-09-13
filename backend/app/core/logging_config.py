@@ -21,9 +21,10 @@ on either stream. See `tests/test_app_logging.py` for the falsifying test.
 
 FIX SCOPE, deliberately narrow: this configures exactly one logger, "app" — the
 common ancestor of every `app.*` module logger by Python's dotted-name convention —
-with one handler, INFO and above. Most app records use uvicorn's formatter;
-c373 preserves analytics INFO records as bare JSON for the structured-log sink;
-c370 preserves the fixed-schema operational logger in the same way.
+with one handler, INFO and above. c412 emits ordinary WARNING and above as JSON
+with severity so Cloud Logging can classify them. Ordinary INFO retains uvicorn's
+formatter; c373 analytics INFO and c370 operational records keep their existing
+bare JSON contracts.
 `propagate` is left at its default (True) on purpose: pytest's `caplog` fixture
 captures by attaching its own handler to the ROOT logger, and records only reach it
 by propagating there. Setting `propagate=False` here would make this fix invisible
@@ -35,6 +36,8 @@ credential-scrubbing filter on uvicorn.access, which is out of scope here.
 """
 from __future__ import annotations
 
+from copy import copy
+import json
 import logging.config
 from uvicorn.logging import DefaultFormatter
 
@@ -42,10 +45,24 @@ from uvicorn.logging import DefaultFormatter
 class AppFormatter(DefaultFormatter):
     """Keep analytics and operational observations as JSON at the stream boundary."""
 
+    _message_formatter = logging.Formatter("%(message)s")
+
     def format(self, record: logging.LogRecord) -> str:
         if ((record.name == "app.analytics" and record.levelno == logging.INFO)
                 or record.name == "app.operational"):
             return record.getMessage()
+        if record.levelno >= logging.WARNING:
+            # Only wrap already-logged content. Never serialize LogRecord extras,
+            # promote JSON-looking messages, or consult uvicorn's color_message.
+            # Copy before stdlib formatting caches message/exception text so other
+            # handlers (including caplog) still receive the original record.
+            severity = ("CRITICAL" if record.levelno >= logging.CRITICAL else
+                        "ERROR" if record.levelno >= logging.ERROR else "WARNING")
+            return json.dumps({
+                "severity": severity,
+                "logger": record.name,
+                "message": self._message_formatter.format(copy(record)),
+            }, separators=(",", ":"))
         return super().format(record)
 
 

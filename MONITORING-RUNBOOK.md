@@ -72,6 +72,20 @@ and [metrics-scope API](https://docs.cloud.google.com/monitoring/api/ref_v3/rest
 
 ## Runtime observations
 
+Ordinary application warnings and errors use a single JSON stdout line with
+`severity`, `logger`, and `message` (c412). Cloud Run promotes `severity` to the
+log entry's severity, so `severity>=ERROR` can select deployed app errors;
+message text is available as `jsonPayload.message`. Tracebacks and multiline
+messages stay inside that string. Ordinary INFO output remains plain text.
+The formatter does not add record extras or request fields, interpret JSON inside
+a message, or scrub arbitrary application content. Call sites retain their
+existing responsibility to exclude credentials and private payloads. The
+`uvicorn.access` credential scrub remains separate. See Cloud Run's
+[structured log field handling](https://docs.cloud.google.com/run/docs/logging#special-fields).
+This format requires a backend release; local stdout tests do not prove that
+existing deployed revisions carry classified severity. No alert is installed by
+this formatter change.
+
 The exact logger is `app.operational`; its stdout records are bare JSON so Cloud
 Logging can select `jsonPayload`. c373 analytics formatting remains separate.
 Each record has only `schema_version=1`, `signal_family="chirp_operational"`,
