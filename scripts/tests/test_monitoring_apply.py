@@ -1,5 +1,6 @@
 """Fake-API/fixture tests only; no network, no credentials, no gcloud."""
 import importlib.util
+from copy import deepcopy
 import json
 import re
 from pathlib import Path
@@ -74,7 +75,7 @@ class FakeMonitoringAPI:
         if url.startswith("https://logging.googleapis.com/") and "/metrics/" in url:
             name = urllib.parse.unquote(url.rsplit("/metrics/", 1)[1])
             if name in self.metrics:
-                return dict(self.metrics[name])
+                return deepcopy(self.metrics[name])
             raise m.ApplyError("http_404")
         if url.endswith("uptimeCheckConfigs"):
             return {"uptimeCheckConfigs": [
@@ -89,37 +90,40 @@ class FakeMonitoringAPI:
         resource_name = url.rsplit("/v3/", 1)[1]
         for body in list(self.uptime.values()) + list(self.policies.values()):
             if body["name"] == resource_name:
-                return dict(body)
+                return deepcopy(body)
         raise AssertionError("no such resource " + resource_name)
 
     def post(self, url, body):
         self.post_calls += 1
         if url.startswith("https://logging.googleapis.com/"):
-            stored = dict(body)
+            stored = deepcopy(body)
             self.metrics[body["name"]] = stored
-            return dict(stored)
+            return deepcopy(stored)
         if url.endswith("uptimeCheckConfigs"):
             name = "projects/%s/uptimeCheckConfigs/%d" % (PROJECT, self._next_uptime_id)
             self._next_uptime_id += 1
-            stored = dict(body)
+            stored = deepcopy(body)
             stored["name"] = name
             self.uptime[body["displayName"]] = stored
-            return dict(stored)
+            return deepcopy(stored)
         name = "projects/%s/alertPolicies/%d" % (PROJECT, self._next_policy_id)
         self._next_policy_id += 1
-        stored = dict(body)
+        stored = deepcopy(body)
         stored["name"] = name
+        stored.setdefault("enabled", True)
+        for index, condition in enumerate(stored.get("conditions", []), 1):
+            condition["name"] = name + "/conditions/" + str(index)
         self.policies[body["displayName"]] = stored
-        return dict(stored)
+        return deepcopy(stored)
 
     def put(self, url, body):
         self.put_calls += 1
         name = urllib.parse.unquote(url.rsplit("/metrics/", 1)[1])
         if name not in self.metrics:
             raise AssertionError("put target not found " + name)
-        stored = dict(body)
+        stored = deepcopy(body)
         self.metrics[name] = stored
-        return dict(stored)
+        return deepcopy(stored)
 
     def patch(self, url, body):
         self.patch_calls += 1
@@ -127,10 +131,10 @@ class FakeMonitoringAPI:
         for store in (self.uptime, self.policies):
             for display, stored in store.items():
                 if stored["name"] == resource_name:
-                    updated = dict(body)
+                    updated = deepcopy(body)
                     updated["name"] = resource_name
                     store[display] = updated
-                    return dict(updated)
+                    return deepcopy(updated)
         raise AssertionError("patch target not found " + resource_name)
 
 
