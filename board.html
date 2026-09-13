@@ -225,7 +225,7 @@
 </footer>
 
 <script id="board-data" type="application/json">{
-  "updated": 1789311134423,
+  "updated": 1789311157010,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -415,6 +415,13 @@
     }
   ],
   "cards": [
+    {
+      "id": "c407",
+      "col": "progress",
+      "owner": "J",
+      "title": "c407 [Sep 13 chirps-17, PR #302 draft] Three alert-policy bodies the real Cloud Monitoring API rejects, found by applying them during c398's activation rather than by reading. FIXED AND VERIFIED AGAINST THE LIVE API: (1) all 16 carried alertStrategy.notificationRateLimit, which the API allows only on log-based policies, and a conditionThreshold over a logging.googleapis.com/user metric does NOT count as log-based; removed, and required_shape_errors now refuses it. (2) both uptime policies paired ALIGN_FRACTION_TRUE with REDUCE_COUNT_FALSE, and the API says a count-of-false reducer cannot consume the DOUBLE that aligner produces; ALIGN_NEXT_OLDER keeps the BOOL. (3) the purge policy asked for a 24h conditionAbsent and the API caps that at 23h30m, which is SHORTER than the job's own cadence, so every window it accepts fires daily about 30 minutes before the next run; the half is removed with the reason in the policy's documentation and in a test",
+      "detail": "THE LESSON, which is why this is a card and not just a commit: our strict validator checks whether field NAMES are known and is structurally unable to see when a field is ALLOWED, what type a reducer can consume, or what ceiling a duration has. Every one of the 16 policies passed every test we had and every single one was rejected by the API on first contact. Each rule learned is now pinned by a test, two of them reading the real shipped files rather than fixtures, but the general gap remains: there is no validate-only mode for AlertPolicy, so the only true check is a real create against a real project. Treat a green monitoring test suite as evidence that the JSON is well-formed, not that the API will accept it. Related: c408 (the tool creates but cannot converge), c406 (nothing watches the two new WS signals yet)."
+    },
     {
       "id": "c408",
       "col": "backlog",
