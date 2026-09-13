@@ -53,14 +53,23 @@ NUMERIC_OUTPUT_ALIGNERS = frozenset({
 CONDITION_ABSENT_MAX_SECONDS = 23 * 3600 + 30 * 60
 
 
+_DURATION_RE = re.compile(r"^(?P<seconds>\d+(?:\.\d+)?)s$")
+
+
 def _duration_seconds(value):
-    """'86400s' -> 86400.0; anything unparseable -> None (the REST shape check owns format)."""
-    if not isinstance(value, str) or not value.endswith("s"):
+    """'86400s' -> 86400.0; anything not decimal-seconds-with-an-s-suffix -> None.
+
+    THIS IS THE FORMAT CHECK, not a helper that defers one. Round two's docstring said
+    the REST shape check owned format, but that check only types duration as str, so
+    "24h", "1d", "1440m", "86400" and "-5s" all passed - found by chirps-36's
+    re-review. The API's JSON Duration is decimal seconds with an "s" suffix, so those
+    are bodies we accept and the API refuses. A None here is reported as an error by
+    the caller rather than skipped. Negatives cannot match the pattern.
+    """
+    if not isinstance(value, str):
         return None
-    try:
-        return float(value[:-1])
-    except ValueError:
-        return None
+    match = _DURATION_RE.match(value)
+    return float(match.group("seconds")) if match else None
 
 
 UPTIME_CHECK_PASSED_METRIC = "monitoring.googleapis.com/uptime_check/check_passed"
@@ -332,9 +341,15 @@ def required_shape_errors(policy: dict, available_metric_types: Iterable[str],
                 reducer = aggregation.get("crossSeriesReducer")
                 if reducer in BOOL_ONLY_REDUCERS and aligner in NUMERIC_OUTPUT_ALIGNERS:
                     errors.append(f"reducer_cannot_consume_aligner_output:{aligner}->{reducer}")
-            if kind == "conditionAbsent":
+            # A threshold written "5m" fails the API exactly like an absence written
+            # "24h", so the format check covers both kinds. "0s" is valid and common for
+            # thresholds and must stay accepted. The ceiling applies to absence only.
+            # NOT encoded: a possible 120s floor on MetricAbsence, which is unverified.
+            if "duration" in spec:
                 seconds = _duration_seconds(spec.get("duration"))
-                if seconds is not None and seconds > CONDITION_ABSENT_MAX_SECONDS:
+                if seconds is None:
+                    errors.append(f"duration_not_seconds_format:{kind}")
+                elif kind == "conditionAbsent" and seconds > CONDITION_ABSENT_MAX_SECONDS:
                     errors.append("condition_absent_duration_over_api_ceiling")
 
     available = set(available_metric_types)

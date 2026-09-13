@@ -655,6 +655,36 @@ class MonitoringApplyTests(unittest.TestCase):
         self.assertNotIn("condition_absent_duration_over_api_ceiling",
                          m.required_shape_errors(policy("84600s"), available, [], []))
 
+    def test_durations_must_be_decimal_seconds_on_both_condition_kinds(self):
+        """c407 round 3, from chirps-36's re-review of 59de604.
+
+        The round-two parser returned None for anything it could not read and the
+        caller skipped None, so "24h" - how a person writes a day - passed while the
+        API would refuse it. Constructed in both directions and on both kinds.
+        """
+        available = _inventory_available_metrics()
+
+        def policy(kind, duration):
+            spec = {"filter": 'metric.type="run.googleapis.com/request_count"', "duration": duration}
+            return {
+                "displayName": "durations", "combiner": "OR",
+                "documentation": {"content": "See MONITORING-RUNBOOK.md."},
+                "conditions": [{kind: spec}],
+            }
+
+        for kind, duration in (("conditionAbsent", "24h"), ("conditionAbsent", "1d"),
+                               ("conditionAbsent", "86400"), ("conditionAbsent", "-5s"),
+                               ("conditionThreshold", "5m"), ("conditionThreshold", "1440m")):
+            with self.subTest(kind=kind, duration=duration):
+                self.assertIn(f"duration_not_seconds_format:{kind}",
+                              m.required_shape_errors(policy(kind, duration), available, [], []))
+
+        for kind, duration in (("conditionAbsent", "84600s"), ("conditionThreshold", "0s"),
+                               ("conditionThreshold", "300s"), ("conditionAbsent", "120.5s")):
+            with self.subTest(kind=kind, duration=duration):
+                errors = m.required_shape_errors(policy(kind, duration), available, [], [])
+                self.assertFalse([e for e in errors if e.startswith("duration_not_seconds_format")], errors)
+
     # --- strict REST-shape round-trip: unknown keys fail ---
     def test_strict_rest_shape_rejects_unknown_keys(self):
         good = json.loads((POLICIES_DIR / "redis-memory-pressure.json").read_text()
