@@ -511,7 +511,7 @@ class MonitoringApplyTests(unittest.TestCase):
         self.assertEqual([p["displayName"] for p in loaded], ["good-cross-ref"])
         self.assertEqual({e["file"] for e in errors}, {"bad_metric.json", "bad_uptime.json"})
 
-    # --- test_purge_missed_schedule_duration_matches_committed_evidence ---
+    # --- purge: no missed-schedule conditionAbsent can exist (c407) ---
     def test_no_condition_absent_can_express_this_job_cadence(self):
         """Why the missed-schedule half is absent, pinned so nobody re-adds it (c407).
 
@@ -661,6 +661,8 @@ class MonitoringApplyTests(unittest.TestCase):
         The round-two parser returned None for anything it could not read and the
         caller skipped None, so "24h" - how a person writes a day - passed while the
         API would refuse it. Constructed in both directions and on both kinds.
+        Round four adds a trailing newline and non-ASCII digits, both of which the
+        round-three pattern let through (chirps-36's spot-check).
         """
         available = _inventory_available_metrics()
 
@@ -674,7 +676,8 @@ class MonitoringApplyTests(unittest.TestCase):
 
         for kind, duration in (("conditionAbsent", "24h"), ("conditionAbsent", "1d"),
                                ("conditionAbsent", "86400"), ("conditionAbsent", "-5s"),
-                               ("conditionThreshold", "5m"), ("conditionThreshold", "1440m")):
+                               ("conditionThreshold", "5m"), ("conditionThreshold", "1440m"),
+                               ("conditionAbsent", "60s\n"), ("conditionThreshold", "٦٠s")):
             with self.subTest(kind=kind, duration=duration):
                 self.assertIn(f"duration_not_seconds_format:{kind}",
                               m.required_shape_errors(policy(kind, duration), available, [], []))

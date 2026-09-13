@@ -53,7 +53,7 @@ NUMERIC_OUTPUT_ALIGNERS = frozenset({
 CONDITION_ABSENT_MAX_SECONDS = 23 * 3600 + 30 * 60
 
 
-_DURATION_RE = re.compile(r"^(?P<seconds>\d+(?:\.\d+)?)s$")
+_DURATION_RE = re.compile(r"(?P<seconds>[0-9]+(?:\.[0-9]+)?)s")
 
 
 def _duration_seconds(value):
@@ -65,10 +65,16 @@ def _duration_seconds(value):
     re-review. The API's JSON Duration is decimal seconds with an "s" suffix, so those
     are bodies we accept and the API refuses. A None here is reported as an error by
     the caller rather than skipped. Negatives cannot match the pattern.
+
+    Round four, from chirps-36's spot-check of round three: fullmatch rather than
+    match with ^ and $, because a Python $ also matches just before a trailing
+    newline, so "60s" followed by a newline parsed as 60.0. And an explicit ASCII
+    digit class, because the Unicode digit class also matches digits such as
+    Arabic-Indic ones, which float() accepts, so they are refused rather than sent.
     """
     if not isinstance(value, str):
         return None
-    match = _DURATION_RE.match(value)
+    match = _DURATION_RE.fullmatch(value)
     return float(match.group("seconds")) if match else None
 
 
