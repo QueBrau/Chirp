@@ -20,6 +20,11 @@ recovery-check), not just this one (c392).
 Use the expected schema revision and immutable image digests from the reviewed
 release/build record, and the API/WS revision names from that deployment. Do not
 replace an expected value with whatever is currently serving merely to pass.
+Set expected service roles from the reviewed deployment configuration as well:
+`--api-expected-role` accepts `all` or `api`; `--ws-expected-role` accepts `all`
+or `ws`. Both default to `all` for the current deployment. Invalid or reversed
+roles fail before any HTTP or metadata request. The verifier never infers an
+expected role from a responding endpoint or live environment metadata.
 Both services must have converged to their expected revision. Split traffic,
 unaccounted tagged revisions, missing metadata and in-progress readiness fail.
 
@@ -33,8 +38,10 @@ Setting the bearer also selects authenticated mode automatically; incomplete
 release inputs then fail instead of silently falling back to routing checks.
 
 The fixture user must exist, be unsuspended, and have access to the specified
-real campus. The `/auth/me` response must match both UUIDs. Nil UUIDs and arbitrary
-path fragments are rejected. The fixture need not be a platform administrator.
+real campus. Authenticated `/_deployment` must match both UUIDs on every service;
+`/auth/me` and a campus query also verify the fixture on roles `all` and `api`.
+Role `ws` intentionally has neither domain route. Nil UUIDs and arbitrary path
+fragments are rejected. The fixture need not be a platform administrator.
 
 With those non-secret shell variables set and the bearer already exported:
 
@@ -46,6 +53,7 @@ scripts/deploy-verify --authenticated \
   --expected-schema "$RELEASE_SCHEMA_HEAD" \
   --api-revision "$API_REVISION" --ws-revision "$WS_REVISION" \
   --api-image-digest "$API_IMAGE_DIGEST" --ws-image-digest "$WS_IMAGE_DIGEST" \
+  --api-expected-role "$API_EXPECTED_ROLE" --ws-expected-role "$WS_EXPECTED_ROLE" \
   --report /tmp/chirp-deployment-verification.json
 unset DEPLOY_VERIFY_BEARER
 ```
@@ -75,16 +83,25 @@ For **each** service the verifier:
    `status.traffic`, and the revision's service label and resolved image digest.
    All traffic must be accounted for by the expected revision and total 100%.
    Zero-percent tagged entries for another revision also fail.
-2. Runs the four legacy unauthenticated routing checks and requires an invalid
-   bearer to fail `/auth/me` with 401.
-3. Requires the real bearer to return a valid `/auth/me` account/membership shape,
-   with the expected user/campus identity and no suspension.
+2. For roles `all` and `api`, runs all four legacy unauthenticated routing checks
+   and requires an invalid bearer to fail `/auth/me` with 401. For role `ws`,
+   requires healthy `/_health`, unauthenticated and invalid-bearer `/_deployment`
+   rejection with 401, and 404s for missing/retired routes, `/auth/me`,
+   `/auth/campus-verification`, and campus Chirps routes.
+3. For roles `all` and `api`, requires the real bearer to return a valid
+   `/auth/me` account/membership shape, with the expected user/campus identity and
+   no suspension. Role `ws` uses authenticated `/_deployment` for this identity
+   evidence and retains the same registered, unsuspended-user guard.
 4. Reads authenticated `/_deployment`, requiring the service and revision names
    to match and **both** code/database head lists to equal the single expected
-   migration revision. Missing, empty, multiple, older or newer heads fail.
-5. Requires a successful authorized campus Chirps query (`limit=1`) and validates
-   returned rows against the current anonymous feed contract. An empty campus
-   is allowed; this proves an authorized query, not populated-row serialization.
+   migration revision. Missing, empty, multiple, older or newer heads fail. The
+   endpoint must also report the exact expected service role and fixture
+   `user_id`/`campus_id`; missing or mismatched identity or role evidence fails.
+5. For roles `all` and `api`, requires a successful authorized campus Chirps query
+   (`limit=1`) and validates returned rows against the current anonymous feed
+   contract. An empty campus is allowed; this proves an authorized query, not
+   populated-row serialization. For role `ws`, the same authenticated query must
+   return 404, demonstrating that the domain route remains absent.
 
 After probing both services it reads the Cloud Run metadata again. An observed
 change or incomplete evidence prevents readiness. Failures return exit 1 with
@@ -93,11 +110,18 @@ change or incomplete evidence prevents readiness. Failures return exit 1 with
 `ROUTING_ONLY`. Automation must require the authenticated verdict, not merely
 exit 0 from an invocation lacking the authenticated inputs.
 
-The endpoint returns only non-secret service/revision names and migration heads.
-It uses the ordinary registered-user authentication guard. Packaged heads come
+The endpoint returns non-secret service/revision names, the role pinned when
+the application's routers were mounted, migration heads, and the authenticated
+viewer's own user/campus IDs. It uses the ordinary registered-user authentication
+guard; missing/invalid credentials return 401 and suspended users return 403.
+The report records reviewed expected roles and check results, without copying
+response bodies or viewer IDs. Packaged heads come
 from the image's Alembic files, and database heads are read from `alembic_version`
 on each call. `/_health` remains DB-free liveness. Deploy the endpoint to both
-services before expecting the new authenticated verifier to pass.
+services before expecting the new authenticated verifier to pass, including
+deployments that retain the default `all` roles. This tooling change does not
+change live roles, runtime IAM or the deployment command workflow; those remain
+separate c375 acceptance gates.
 
 ## Scope of the result
 

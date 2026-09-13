@@ -113,9 +113,11 @@ def validate(config: dict) -> None:
         for key, value in config["database"].items():
             if key not in ("instance", "tier"):
                 positive(value, 0 if "reserved" in key else 1)
-        for service in config["services"].values():
+        for role, service in config["services"].items():
             if not identifier(service["name"]) or not public_origin(service["client_origin"]):
                 raise ConfigError("invalid_service")
+            if not isinstance(service["env"], dict) or service["env"].get("SERVICE_ROLE") not in ("all", role):
+                raise ConfigError("invalid_service_role")
             for key in ("concurrency", "revision_min_instances", "revision_max_instances", "service_max_instances", "workers"):
                 positive(service[key], 0 if key == "revision_min_instances" else 1)
             if service["revision_min_instances"] > service["revision_max_instances"]:
@@ -510,6 +512,7 @@ def compare(config: dict, snapshot: dict, release: dict | None, now: datetime, r
 
 
 def plan(config: dict, release: dict, gcloud: str) -> dict:
+    validate(config)
     validate_release(release, config)
     pool = pool_envelope(config, defaults())
     if not pool["steady_fits"] or not pool["policy_rollout_fits"]:
@@ -523,6 +526,8 @@ def plan(config: dict, release: dict, gcloud: str) -> dict:
         promote = [gcloud, "run", "services", "update-traffic", name, "--project", config["project"], "--region", config["region"], "--to-revisions", revision+"=100"]
         steps.append({"service": role, "stage_command": shlex.join(argv), "promote_after_review_command": shlex.join(promote), "before_next_service": "Confirm old revision drained with zero instances; jobs remain quiescent. Traffic=0 alone is insufficient."})
     verify = ["scripts/deploy-verify", "--authenticated", "--project", config["project"], "--region", config["region"], "--api-service", config["services"]["api"]["name"], "--ws-service", config["services"]["ws"]["name"], "--expected-schema", release["schema_head"], "--api-revision", release["revisions"]["api"], "--ws-revision", release["revisions"]["ws"], "--api-image-digest", release["image"].split("@")[1], "--ws-image-digest", release["image"].split("@")[1], "--gcloud", gcloud]
+    for role in ("api", "ws"):
+        verify.extend(["--" + role + "-expected-role", config["services"][role]["env"]["SERVICE_ROLE"]])
     verification = shlex.join(verify) + ' --base-url "$API_CANONICAL_ORIGIN" --ws-base-url "$WS_CANONICAL_ORIGIN" --user-id "$QA_USER_ID" --campus-id "$QA_CAMPUS_ID"'
     return {"mode": "PRINT_ONLY_NOT_EXECUTED", "pool_envelope": pool, "steps": steps, "verification_command": verification, "verification_inputs": "Use canonical origins from a fresh inspection, known QA fixture IDs, and DEPLOY_VERIFY_BEARER environment only. Follow DEPLOY-VERIFICATION.md."}
 

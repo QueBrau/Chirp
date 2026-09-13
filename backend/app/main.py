@@ -287,6 +287,9 @@ def create_app() -> FastAPI:
         http_routers, mount_ws = WS_ROLE_HTTP_ROUTERS, True
     else:
         raise RuntimeError(f"unhandled service_role={settings.service_role!r}")
+    # Deployment evidence must describe this app's mounted routes, even if the
+    # settings cache changes later or another app is constructed in the process.
+    app.state.service_role = settings.service_role
     for module in http_routers:
         app.include_router(module.router)
     if mount_ws:

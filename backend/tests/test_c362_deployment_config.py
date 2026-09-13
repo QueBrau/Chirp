@@ -240,8 +240,12 @@ def test_new_job_and_db_flag_not_ignored(config, snap, release):
     assert finding(report, "unmodelled_or_missing_job") and finding(report, "configured_connection_flag")
 
 
-def test_print_only_plan_derives_both_services_and_verification(config, release):
+@pytest.mark.parametrize("api_role,ws_role", [("all", "all"), ("api", "ws"), ("all", "ws"), ("api", "all")])
+def test_print_only_plan_derives_both_services_and_verification(config, release, api_role, ws_role):
+    config["services"]["api"]["env"]["SERVICE_ROLE"] = api_role
+    config["services"]["ws"]["env"]["SERVICE_ROLE"] = ws_role
     plan = C.plan(config, release, "gcloud")
+    verification = shlex.split(plan["verification_command"])
     for role, row in zip(("api", "ws"), plan["steps"], strict=True):
         cmd = shlex.split(row["stage_command"])
         assert cmd[cmd.index("--image")+1] == release["image"]
@@ -251,8 +255,28 @@ def test_print_only_plan_derives_both_services_and_verification(config, release)
         assert "--set-env-vars" not in cmd and "--set-secrets" not in cmd and "--allow-unauthenticated" not in cmd
         assert release["revisions"][role] + "=100" in shlex.split(row["promote_after_review_command"])
         assert config["shared"]["service_account"] in cmd
+        expected_role = config["services"][role]["env"]["SERVICE_ROLE"]
+        assert "SERVICE_ROLE=" + expected_role in cmd[cmd.index("--update-env-vars")+1].split(",")
+        assert verification[verification.index("--" + role + "-expected-role")+1] == expected_role
     assert release["schema_head"] in plan["verification_command"] and "--bearer" not in plan["verification_command"]
     assert plan["mode"] == "PRINT_ONLY_NOT_EXECUTED"
+
+
+@pytest.mark.parametrize("role,value", [("api", "ws"), ("ws", "api"), ("ws", "worker"), ("api", None)])
+def test_plan_requires_explicit_compatible_reviewed_service_roles(config, release, role, value):
+    if value is None:
+        config["services"][role]["env"].pop("SERVICE_ROLE")
+    else:
+        config["services"][role]["env"]["SERVICE_ROLE"] = value
+    with pytest.raises(C.ConfigError, match="invalid_service_role"):
+        C.plan(config, release, "gcloud")
+
+
+@pytest.mark.parametrize("env", [None, [], "SERVICE_ROLE=all"])
+def test_plan_rejects_malformed_service_environment(config, release, env):
+    config["services"]["api"]["env"] = env
+    with pytest.raises(C.ConfigError, match="invalid_service_role"):
+        C.plan(config, release, "gcloud")
 
 
 def test_plan_rejects_mutable_image_and_unsafe_scale(config, release):

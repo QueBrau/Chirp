@@ -202,7 +202,11 @@ scripts/deployment-config plan --release /tmp/chirp-release.json --gcloud "$HOME
    `QA_USER_ID`/`QA_CAMPUS_ID`. Load the short-lived bearer into
    `DEPLOY_VERIFY_BEARER` using the approved credential source. Execute the printed
    verifier command; its digests, revisions, service names, project and schema are
-   derived from this release. Follow [DEPLOY-VERIFICATION.md](DEPLOY-VERIFICATION.md),
+   derived from this release, and its expected roles come from each service's
+   reviewed `env.SERVICE_ROLE` in `infra/deployment.json`. Both remain `all` in the
+   current intended configuration. The plan rejects missing or incompatible
+   roles and never substitutes roles observed from production. Follow
+   [DEPLOY-VERIFICATION.md](DEPLOY-VERIFICATION.md),
    then unset the bearer. Require authenticated readiness on **both** services.
 7. Record the final configuration report, authenticated report, compiled client
    endpoint evidence and separate socket/device evidence. Jobs retain their own

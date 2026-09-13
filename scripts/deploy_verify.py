@@ -216,13 +216,23 @@ def check(report: dict, service: str, label: str, passed: bool, status: int | No
         raise VerificationError("A deployment probe failed; see the named check and HTTP status.")
 
 
-def routing(report: dict, label: str, base: str):
-    for name, path, expected in (
-        ("auth_gate", "/auth/campus-verification", (401,)),
+def routing(report: dict, label: str, base: str, expected_role: str = "all"):
+    ws_only = expected_role == "ws"
+    probes = [
+        ("auth_gate", "/_deployment" if ws_only else "/auth/campus-verification", (401,)),
         ("missing_route", "/__deploy_verify_bogus_route_c186", (404,)),
         ("retired_yaks_route", f"/campuses/{NIL}/yaks", (404,)),
-        ("chirps_route", f"/campuses/{NIL}/chirps", (200, 401)),
-    ):
+        ("chirps_route", f"/campuses/{NIL}/chirps", (404,) if ws_only else (200, 401)),
+    ]
+    if ws_only:
+        status, health = request(base, "/_health")
+        check(report, label, "health", status == 200 and isinstance(health, dict)
+              and health.get("status") == "ok", status)
+        probes.extend([
+            ("auth_me_route_absent", "/auth/me", (404,)),
+            ("campus_verification_route_absent", "/auth/campus-verification", (404,)),
+        ])
+    for name, path, expected in probes:
         status, _ = request(base, path)
         check(report, label, name, status in expected, status)
 
@@ -239,6 +249,7 @@ def parser():
         ("api-revision", None), ("ws-revision", None),
         ("api-image-digest", None), ("ws-image-digest", None),
         ("api-service", "chirp-api"), ("ws-service", "chirp-ws"),
+        ("api-expected-role", "all"), ("ws-expected-role", "all"),
         ("project", os.environ.get("DEPLOY_VERIFY_PROJECT")),
         ("region", "us-central1"), ("gcloud", "gcloud"), ("report", None),
     ):
@@ -247,11 +258,13 @@ def parser():
 
 
 def verify(args, report: dict):
+    if args.api_expected_role not in ("all", "api") or args.ws_expected_role not in ("all", "ws"):
+        raise VerificationError("Expected API role must be all/api and expected WebSocket role must be all/ws.")
     base = origin(args.base_url)
-    report["targets"] = [{"service": "api", "origin": base}]
+    report["targets"] = [{"service": "api", "origin": base, "expected_role": args.api_expected_role}]
     bearer = os.environ.get("DEPLOY_VERIFY_BEARER", "")
     if not args.authenticated and not bearer:
-        routing(report, "api", base)
+        routing(report, "api", base, args.api_expected_role)
         report["verdict"] = "ROUTING_ONLY"
         return
     if not bearer or len(bearer) > 8192 or any(ord(c) < 33 or ord(c) > 126 for c in bearer):
@@ -269,27 +282,34 @@ def verify(args, report: dict):
     ws_base = origin(args.ws_base_url)
     if base == ws_base or args.api_service == args.ws_service:
         raise VerificationError("API and WebSocket services must be verified independently.")
-    targets = ((args.api_service, args.api_revision, args.api_image_digest, base),
-               (args.ws_service, args.ws_revision, args.ws_image_digest, ws_base))
-    report["targets"] = [{"service": service, "origin": url} for service, _, _, url in targets]
-    for service, revision, digest, url in targets:
+    targets = ((args.api_service, args.api_revision, args.api_image_digest, base, args.api_expected_role),
+               (args.ws_service, args.ws_revision, args.ws_image_digest, ws_base, args.ws_expected_role))
+    report["targets"] = [{"service": service, "origin": url, "expected_role": role}
+                         for service, _, _, url, role in targets]
+    for service, revision, digest, url, expected_role in targets:
         # Validate the origin against control-plane metadata before sending a token.
         report["services"].append(cloud_metadata(args, service, revision, digest, url))
-        routing(report, service, url)
-        status, _ = request(url, "/auth/me", "invalid-c361-deployment-probe")
+        routing(report, service, url, expected_role)
+        status, _ = request(url, "/_deployment" if expected_role == "ws" else "/auth/me", "invalid-c361-deployment-probe")
         check(report, service, "invalid_bearer_rejected", status == 401, status)
-        status, me = request(url, "/auth/me", bearer)
-        check(report, service, "authenticated_fixture", status == 200 and valid_me(me, args.user_id, args.campus_id), status)
+        if expected_role != "ws":
+            status, me = request(url, "/auth/me", bearer)
+            check(report, service, "authenticated_fixture", status == 200 and valid_me(me, args.user_id, args.campus_id), status)
         status, deployment = request(url, "/_deployment", bearer)
         check(report, service, "deployment_schema_revision", status == 200 and isinstance(deployment, dict)
               and deployment.get("service") == service and deployment.get("revision") == revision
               and deployment.get("code_schema_heads") == [args.expected_schema]
               and deployment.get("database_schema_heads") == [args.expected_schema], status)
+        check(report, service, "deployment_role_identity", deployment.get("service_role") == expected_role
+              and deployment.get("user_id") == args.user_id and deployment.get("campus_id") == args.campus_id, status)
         status, feed = request(url, f"/campuses/{args.campus_id}/chirps?limit=1", bearer)
-        check(report, service, "authenticated_campus_chirps", status == 200 and valid_feed(feed, args.campus_id), status)
+        if expected_role == "ws":
+            check(report, service, "ws_campus_chirps_absent", status == 404, status)
+        else:
+            check(report, service, "authenticated_campus_chirps", status == 200 and valid_feed(feed, args.campus_id), status)
     # Reject an observed rollout during the probe window, including new split traffic.
     for target, before in zip(targets, report["services"]):
-        if cloud_metadata(args, *target) != before:
+        if cloud_metadata(args, *target[:4]) != before:
             raise VerificationError("Cloud Run deployment changed during verification; rerun against a stable release.")
     report["schema_head"] = args.expected_schema
     report["verdict"] = "AUTHENTICATED_READY"
