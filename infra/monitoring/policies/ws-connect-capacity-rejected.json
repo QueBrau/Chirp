@@ -1,0 +1,30 @@
+{
+  "displayName": "chirp ws_connect_capacity_rejected occurring",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: ws_connect_capacity_rejected (MONITORING-RUNBOOK.md, Runtime observations). Responder: on-call API responder. Log-based metric ws_connect_capacity_rejected (infra/monitoring/metrics/ws-connect-capacity-rejected.json) crossing zero occurrences in a 5-minute window. The app.operational emitter throttles to at most one record per 60 seconds per process; this is sampled evidence, not an exact count. Investigate SQL pool saturation and the gateway's pre-accept capacity rejection logs; this path returns HTTP 403, independently of the HTTP handler's sql_pool_capacity_503 signal. Initial, review after 7 days. Deployment of the c405 emitter and time-series verification are prerequisites for activation; silence does not prove health.",
+    "mimeType": "text/markdown"
+  },
+  "conditions": [
+    {
+      "displayName": "ws_connect_capacity_rejected log occurrences over 0",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/ws_connect_capacity_rejected\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "0s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": []
+          }
+        ]
+      }
+    }
+  ]
+}

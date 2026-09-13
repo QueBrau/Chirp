@@ -1,0 +1,12 @@
+{
+  "name": "ws_connect_suspended_rejected",
+  "description": "Runbook row: ws_connect_suspended_rejected (MONITORING-RUNBOOK.md, Runtime observations). Counts app.operational warnings when a suspended account is refused before WebSocket accept() (c405 journey b), already throttled to at most one record per 60 seconds per process. These are sampled observations, not unique accounts or exact retry counts. Deploy the c405 emitter and validate this time series exists before activating the referencing alert policy.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.signal_family=\"chirp_operational\" AND jsonPayload.schema_version=1 AND jsonPayload.event=\"ws_connect_suspended_rejected\"",
+  "disabled": false,
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "chirp ws_connect_suspended_rejected occurrences"
+  }
+}

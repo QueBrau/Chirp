@@ -1,15 +1,25 @@
 # Launch monitoring: preparation, not operational acceptance
 
-c370 remains **OPEN**. This slice supplies a read-only inventory checker, two
-runtime failure signals and a post-fallback observation, sixteen alert policy
-definitions under `infra/monitoring/policies`, three log-based metric
+Live acceptance and ownership are recorded on `board.html`. This tooling supplies
+a read-only inventory checker, bounded runtime observations, eighteen alert policy
+definitions under `infra/monitoring/policies`, five log-based metric
 definitions under `infra/monitoring/metrics`, two uptime check definitions
 under `infra/monitoring/uptime`, and `scripts/monitoring-apply`, which is
 dry-run by default and installs all three kinds only under `--apply --channel`
 (plus `--api-host`/`--ws-host` whenever `infra/monitoring/uptime` has files).
 It does not install notification channels or schedulers, and it does not
 verify alert delivery. A deployment is required before the new runtime signals
-can exist in production. No live inventory or recipient information belongs in
+can exist in production. The two c406 WebSocket metric/policy pairs are prepared
+here; their activation requires c407's corrected policy shapes, c408 convergence,
+and a backend deployment containing the c405 emitter (7b50982). Window #16
+predates that emitter. Verify its deployed revision and both time series before
+activating the new policies, then verify notification delivery separately.
+Create the metrics first by running the apply with `--policies-dir` pointing to
+an empty directory. Once both series are observed, use the normal policies
+directory to activate the alerts. An empty override does not delete existing
+policies; the default all-resource apply provides no observation pause between
+metric creation and policy activation.
+No live inventory or recipient information belongs in
 this public repository.
 
 ## Collect configuration evidence privately
@@ -84,10 +94,11 @@ repeated transitions. Persistent failures produce another warning only when a
 failing request arrives after the interval; no traffic means no new observation.
 Silence is not health, and these records are not exact failure counters.
 
-There are three fixed throttle slots, no per-user monitoring state and no new
-background task. In a stable process the new logger permits at most 60 capacity,
-6 fallback and 6 post-fallback records per hour. Restarts reset that budget.
-Existing logs and cloud request logs are additional volume. The new operational
+The five observations in this table use fixed throttle slots, no per-user
+monitoring state and no background task. In a stable process they permit at most
+60 HTTP capacity, 60 WebSocket capacity, 60 WebSocket suspension, 6 fallback and
+6 post-fallback records per hour. Restarts reset those budgets. Other operational
+events, per-occurrence gateway logs and cloud request logs add volume. The operational
 emitter and the existing c292 limiter warning isolate logging failures from the
 response/local budget and suppress failing-sink diagnostics. This does not change
 unrelated application loggers. Missing log delivery remains an independent
@@ -205,17 +216,31 @@ preparation, even when CI passes.
 
 This slice applies three kinds of resource, always in the order metrics ->
 uptime -> policies so a policy can reference a log metric or uptime check the
-same run just created: the three log-based metrics under
+same run just created: the five log-based metrics under
 `infra/monitoring/metrics/` (`sql_pool_capacity_503`, `rate_limit_fallback`,
-and the purge job's stdout aggregate); the two `/_health` uptime checks under
-`infra/monitoring/uptime/` (`chirp-api`, `chirp-ws`); and sixteen alert
+`ws_connect_capacity_rejected`, `ws_connect_suspended_rejected`, and the purge
+job's stdout aggregate); the two `/_health` uptime checks under
+`infra/monitoring/uptime/` (`chirp-api`, `chirp-ws`); and eighteen alert
 policies under `infra/monitoring/policies/`, covering API request failures,
 API latency, Cloud Run instance CPU/memory pressure, SQL availability, SQL
 disk warning/critical, SQL connections approaching the reserved ceiling,
-Redis memory pressure, Redis unexpected eviction, failed-execution and
-missed-schedule alerts for `chirp-purge`, a failed-execution alert for
-`chirp-media-reconcile`, the two uptime-check-failure policies, and the two
-policies built on the new log-based metrics plus the purge backlog policy.
+Redis memory pressure, Redis unexpected eviction, a failed-execution alert for
+`chirp-purge`, a failed-execution alert for `chirp-media-reconcile`, the two
+uptime-check-failure policies, the two
+HTTP capacity/fallback policies, the two WebSocket rejection policies, and the
+purge backlog policy. The WebSocket policies each alert above zero sampled
+occurrences in a five-minute window, with initial thresholds reviewed after
+seven days. Each has its own metric and throttle; an HTTP capacity burst cannot
+hide WebSocket rejection evidence. Their documentation names the corresponding
+`Runtime observations` row above. Following c407, these metric-threshold policies
+omit `alertStrategy.notificationRateLimit`, which applies only to direct
+log-match policies, even when a threshold references a log-based metric. See
+the [AlertStrategy reference](https://docs.cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.alertPolicies#AlertStrategy).
+
+The purge missed-schedule condition is deliberately absent: c407 found the
+API's accepted absence window shorter than the daily job cadence. The existing
+execution-failure alert cannot prove that a scheduled run happened.
+
 `{{PROJECT}}`, `{{NOTIFICATION_CHANNEL}}`, `{{API_HOST}}` and `{{WS_HOST}}`
 are the only templating points in any body under `infra/monitoring/`;
 `scripts/monitoring_apply.py` substitutes `{{PROJECT}}`, `{{API_HOST}}` and
