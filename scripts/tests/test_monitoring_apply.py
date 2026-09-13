@@ -518,8 +518,11 @@ class MonitoringApplyTests(unittest.TestCase):
         The committed evidence says chirp-purge-daily fires once a day. Cloud
         Monitoring answered INVALID_ARGUMENT to a 24h conditionAbsent duration with
         "Durations longer than 23h30m are not supported" - a real API ceiling BELOW
-        this job's cadence. So every absence window the API would accept fires about
-        30 minutes before each scheduled run, i.e. a guaranteed daily false alarm.
+        this job's cadence. So no absence window the API would accept spans the gap
+        between two healthy runs: if the completion metric reports only when an
+        execution completes, the condition fires before every scheduled run, and if
+        it reports zeros in between, it never fires at all. Which of those holds is
+        unverified (c410 checks it); neither is a working alert.
         There is no correct conditionAbsent for a 24h job, which is a property of the
         cadence and the API, not an oversight in this file.
 
