@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1789315412661,
+  "updated": 1789315806791,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -416,6 +416,15 @@
     }
   ],
   "cards": [
+    {
+      "id": "c411",
+      "col": "progress",
+      "owner": "J",
+      "tag": "P2 infra",
+      "area": "infra",
+      "title": "c411 [Sep 13 Codex CLAIMED, c375 code prerequisite] Make authenticated deployment verification aware of API/WS service roles; isolated feature branch and PR, no live role flip or IAM changes",
+      "detail": "Split from c375's explicitly identified unowned code follow-up: its title says make scripts/deploy_verify.py role-aware and that this could be carded on its own. c375's canonical deploy-path decision, live SERVICE_ROLE flip and separate runtime identities retain their existing owner. PROBLEM: the current verifier probes auth and campus domain routes on both services; those intentionally return404 under role=ws, so the planned split cannot pass authenticated deployment verification. SCOPE: explicit expected roles supplied from reviewed deployment configuration, role-appropriate HTTP probes, and authenticated deployment evidence that proves the running role and known QA identity without copying observed settings into expected inputs. Preserve existing image/revision/schema/origin/auth checks and all/all behavior. A role-only service must not pass by skipping authentication or accepting any404. Update focused endpoint/CLI/config-plan tests and relevant deployment docs. Expected touched files: backend/app/main.py, backend/app/routers/deployment.py, scripts/deploy_verify.py, scripts/deployment_config.py, their focused tests and deployment docs. No policy JSON, monitoring_apply.py, migrations, cloud settings, scheduler or IAM changes. ACCEPTANCE: real endpoint tests prove all/api/ws evidence and authentication; CLI fixtures accept intended all/all and api/ws pairs, reject wrong roles/identity/schema, missing evidence, invalid bearer and retained domain routes on ws; generated commands carry reviewed expected roles; independent review and CI pass. This closes the verifier code leaf only; c375 remains open for its deployment-path decision, release, role flip and IAM acceptance."
+    },
     {
       "id": "c410",
       "col": "progress",
@@ -4206,7 +4215,8 @@
     "Sep 13 Jose requested Codex work in parallel with Claude Code across the board. Codex refreshed origin/main and open PRs, takes unowned c408 first, and reviews unowned reopened cards against current primary acceptance evidence. Existing Claude/Q owners, device gates and explicitly parked decisions remain in place. Claims and progress are published on main from an isolated board worktree; feature changes use isolated branches and reviewed PRs.",
     "Sep 13 Codex closes c70/c140 only as historical pointers to their completed server primary cards; c400 retains native acceptance and c409 retains its newly identified test gap. c69 stays open: the c369 dry-run/identity repair record does not prove the scheduled production apply, repeat safety, least-privilege and monitoring gates in RECOVERY-RETENTION.md. Codex also claims unowned c406 code preparation alongside c408; production activation remains gated on the corrected shapes, convergence and a deployed emitter.",
     "Sep 13 Codex parallel closeout: c70/c140 closed under their completed primary server evidence, c408 merged and closed after independent review and CI4/4, and c406 code merged but remains open for deployment/activation evidence. The scan found no other unowned repository-only closeout among the existing backlog; device/EAS evidence, staging/load runs, retention canary/scheduled-run proof and explicitly parked product decisions remain with their existing owners. Claude separately merged c409 and reopened c369, now tracked with new c410.",
-    "Sep 13 c410 read-only feasibility finding, no claim or implementation: a separate PromQL condition using the purge aggregate metric and a25h lookback is a candidate for the overdue-completion gap. Repository metric JSON includes complete events; the existing backlog POLICY alone filters them out. A native successful-execution count also counts successful previews and cannot prove real purge completion. Before choosing the candidate, verify the deployed metric, compare raw DELTA points with PromQL behavior for complete/zero/missing windows, validate a disabled AlertPolicy against the actual API, and decide whether a one-hour grace is acceptable. No such live validation or alert activation has been performed. References: https://docs.cloud.google.com/monitoring/alerts/using-promql and https://docs.cloud.google.com/monitoring/promql#promql_compatibility . c410 remains unowned, and Claude's c407 runbook corrections retain their current ownership."
+    "Sep 13 c410 read-only feasibility finding, no claim or implementation: a separate PromQL condition using the purge aggregate metric and a25h lookback is a candidate for the overdue-completion gap. Repository metric JSON includes complete events; the existing backlog POLICY alone filters them out. A native successful-execution count also counts successful previews and cannot prove real purge completion. Before choosing the candidate, verify the deployed metric, compare raw DELTA points with PromQL behavior for complete/zero/missing windows, validate a disabled AlertPolicy against the actual API, and decide whether a one-hour grace is acceptable. No such live validation or alert activation has been performed. References: https://docs.cloud.google.com/monitoring/alerts/using-promql and https://docs.cloud.google.com/monitoring/promql#promql_compatibility . c410 remains unowned, and Claude's c407 runbook corrections retain their current ownership.",
+    "Sep 13 Jose asked Codex to pick up and close more work, including open items. Fresh origin/main confirms c410 is now owned by chirps-fb; Codex leaves it untouched and claims new c411 as the separate role-aware-verifier code leaf that c375 explicitly invited. c375's live decisions and settings remain with its current owner. Codex also rechecks the existing c406 activation path against current release evidence and c407 status, rather than treating older chat or 'human step' labels as current authorization state."
   ]
 }
 </script>
