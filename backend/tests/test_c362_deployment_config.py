@@ -157,6 +157,145 @@ def test_missing_pool_env_inferred_not_proven(config, snap, release):
     assert finding(report, "pool_inferred_from_checkout_not_image") and report["verdict"] == "NOT_PROVEN"
 
 
+JOB = "chirp-media-reconcile"
+
+
+def job_container(snap, name=JOB):
+    return snap["jobs"][name]["spec"]["template"]["spec"]["template"]["spec"]["containers"][0]
+
+
+def add_job_pool_observation(config, snap, release, *, size=5, overflow=10):
+    container = job_container(snap)
+    row = {"version": 1, "observed_at": NOW.isoformat(), "project": config["project"],
+           "region": config["region"], "image": container["image"],
+           "command": copy.deepcopy(container["command"]), "args": copy.deepcopy(container["args"]),
+           "pool_env": {key: next((v["value"] for v in container["env"] if v["name"] == key), None)
+                        for key in ("DB_POOL_SIZE", "DB_MAX_OVERFLOW")},
+           "pool": {"size": size, "max_overflow": overflow}, "evidence_sha256": "c" * 64,
+           "evidence_scope": "operator_inspected_immutable_image_pool"}
+    release["job_pool_observations"] = {JOB: row}
+    return row
+
+
+def test_older_job_effective_engine_pool_changes_observed_envelope_only(config, snap, release):
+    # An older engine can hardcode 5+10 despite the checkout's current 3+2.
+    job_container(snap)["env"] = []
+    job_container(snap, "chirp-purge")["env"] = [
+        {"name": "DB_POOL_SIZE", "value": "1"}, {"name": "DB_MAX_OVERFLOW", "value": "0"}]
+    before = run_compare(config, snap, release)
+    planned = C.plan(config, release, "gcloud")
+    assert before["verdict"] == "NOT_PROVEN"
+    assert before["pool_envelope"]["steady_with_jobs"] == 64
+    add_job_pool_observation(config, snap, release)
+    report = run_compare(config, snap, release)
+    assert report["verdict"] == "CONFIG_MATCH"
+    assert report["jobs"][JOB]["pool_capacity_per_process"] == 15
+    assert report["pool_envelope"]["steady_with_jobs"] == 74
+    assert report["pool_envelope"]["serialized_rollout_jobs_quiescent"] == 98
+    assert report["pool_envelope"]["simultaneous_rollout_with_jobs"] == 118
+    assert report["pool_envelope"]["listed_revisions_plus_jobs_and_reserves"] == 74
+    assert C.plan(config, release, "gcloud") == planned
+    job = report["jobs"][JOB]
+    assert job["inferred_from_checkout_not_image"] == ["DB_POOL_TIMEOUT", "WEB_CONCURRENCY"]
+    assert set(job["pool_input_sources"].values()) == {"operator_supplied_image_pool_observation"}
+    assert job["pool_observation"]["evidence_sha256"] == "c" * 64
+    assert job["pool_observation"]["image_inspected_by_checker"] is False
+    assert report["authenticated_ready"] is False
+
+
+def test_job_observation_fills_only_missing_pool_input(config, snap, release):
+    job_container(snap)["env"] = [{"name": "DB_POOL_SIZE", "value": "3"}]
+    add_job_pool_observation(config, snap, release, size=3)
+    report = run_compare(config, snap, release)
+    job = report["jobs"][JOB]
+    assert report["verdict"] == "CONFIG_MATCH"
+    assert job["pool_capacity_per_process"] == 13
+    assert job["pool_input_sources"] == {"DB_POOL_SIZE": "live_literal_environment",
+                                         "DB_MAX_OVERFLOW": "operator_supplied_image_pool_observation"}
+    assert job["pool_observation"]["filled_environment_inputs"] == ["DB_MAX_OVERFLOW"]
+    assert job_container(snap)["env"] == [{"name": "DB_POOL_SIZE", "value": "3"}]
+
+
+@pytest.mark.parametrize("change", ["image", "command", "args", "environment", "explicit_conflict", "secret", "duplicate", "literal_and_secret", "stale", "future"])
+def test_job_observation_binding_failures_never_replace_live_inputs(config, snap, release, change):
+    row = add_job_pool_observation(config, snap, release, size=3, overflow=2)
+    container = job_container(snap)
+    if change == "image": row["image"] = config["image_repository"] + "@sha256:" + "d" * 64
+    if change == "command": row["command"] = ["python3"]
+    if change == "args": row["args"] += ["--limit=1"]
+    if change == "environment": row["pool_env"]["DB_POOL_SIZE"] = None
+    if change == "explicit_conflict": row["pool"]["size"] = 1
+    if change == "secret": container["env"][0] = {"name": "DB_POOL_SIZE", "valueFrom": {"secretKeyRef": {"name": SECRET, "key": "latest"}}}
+    if change == "duplicate": container["env"].append(copy.deepcopy(container["env"][0]))
+    if change == "literal_and_secret": container["env"][0]["valueFrom"] = {"secretKeyRef": {"name": SECRET, "key": "latest"}}
+    if change == "stale": row["observed_at"] = (NOW-timedelta(hours=24, microseconds=1)).isoformat()
+    if change == "future": row["observed_at"] = (NOW+timedelta(microseconds=1)).isoformat()
+    unchanged = copy.deepcopy(container)
+    report = run_compare(config, snap, release)
+    assert report["verdict"] == "NOT_PROVEN"
+    assert finding(report, "job_pool_observation_stale_or_mismatched")
+    assert job_container(snap) == unchanged
+    assert "pool_observation" not in report["jobs"].get(JOB, {})
+    if change not in ("secret", "duplicate"):
+        assert report["jobs"][JOB]["pool_capacity_per_process"] == 5
+
+
+@pytest.mark.parametrize("change", ["extra_job", "wrong_project", "wrong_region", "unknown_key", "missing_key", "version_bool", "version_future", "size_bool", "size_string", "size_zero", "overflow_negative", "overflow_bool", "oversized", "env_string", "env_missing_key", "pool_extra_key", "no_timezone", "non_utc", "bad_date", "bad_sha", "bad_scope", "command_string", "args_empty", "null_observations"])
+def test_malformed_job_pool_evidence_has_fixed_diagnostic(config, snap, release, change):
+    job_container(snap)["env"] = []
+    row = add_job_pool_observation(config, snap, release)
+    if change == "extra_job": release["job_pool_observations"][SECRET] = copy.deepcopy(row)
+    if change == "wrong_project": row["project"] = SECRET
+    if change == "wrong_region": row["region"] = SECRET
+    if change == "unknown_key": row[SECRET] = SECRET
+    if change == "missing_key": row.pop("pool_env")
+    if change == "version_bool": row["version"] = True
+    if change == "version_future": row["version"] = 2
+    if change == "size_bool": row["pool"]["size"] = True
+    if change == "size_string": row["pool"]["size"] = "5"
+    if change == "size_zero": row["pool"]["size"] = 0
+    if change == "overflow_negative": row["pool"]["max_overflow"] = -1
+    if change == "overflow_bool": row["pool"]["max_overflow"] = False
+    if change == "oversized": row["pool"]["size"] = 100001
+    if change == "env_string": row["pool_env"]["DB_POOL_SIZE"] = SECRET
+    if change == "env_missing_key": row["pool_env"].pop("DB_POOL_SIZE")
+    if change == "pool_extra_key": row["pool"]["timeout"] = 10
+    if change == "no_timezone": row["observed_at"] = "2026-09-14T00:00:00"
+    if change == "non_utc": row["observed_at"] = "2026-09-14T01:00:00+01:00"
+    if change == "bad_date": row["observed_at"] = "2026-99-14T00:00:00Z"
+    if change == "bad_sha": row["evidence_sha256"] = SECRET
+    if change == "bad_scope": row["evidence_scope"] = SECRET
+    if change == "command_string": row["command"] = SECRET
+    if change == "args_empty": row["args"] = []
+    if change == "null_observations": release["job_pool_observations"] = None
+    with pytest.raises(C.ConfigError) as exc:
+        run_compare(config, snap, release)
+    assert str(exc.value) == "invalid_job_pool_observation"
+    assert SECRET not in str(exc.value)
+
+
+@pytest.mark.parametrize("other_gap", ["worker", "parallelism", "entrypoint", "service_pool", "client", "sql", "capacity"])
+def test_job_pool_observation_preserves_other_gates(config, snap, release, other_gap):
+    container = job_container(snap)
+    container["env"] = []
+    if other_gap == "worker": container["env"].append({"name": "WEB_CONCURRENCY", "value": "2"})
+    if other_gap == "parallelism": snap["jobs"][JOB]["spec"]["template"]["spec"].update(taskCount=2, parallelism=2)
+    if other_gap == "entrypoint": container["command"] = ["wrapper"]
+    if other_gap == "service_pool":
+        revision = snap["revisions"][release["revisions"]["api"]]
+        revision["spec"]["containers"][0]["env"] = [v for v in revision["spec"]["containers"][0]["env"] if v["name"] != "DB_POOL_SIZE"]
+    if other_gap == "client": release.pop("client_build")
+    if other_gap == "sql": release.pop("database_observation")
+    add_job_pool_observation(config, snap, release, size=100 if other_gap == "capacity" else 5)
+    report = run_compare(config, snap, release)
+    expected = {"worker": "job_entrypoint_or_worker_model", "parallelism": "job_parallelism",
+                "entrypoint": "job_entrypoint_or_worker_model", "service_pool": "pool_inferred_from_checkout_not_image",
+                "client": "compiled_build_evidence_missing_or_mismatched", "sql": "current_sql_settings_evidence_missing_or_mismatched",
+                "capacity": "intended_pool_envelope_exceeded"}
+    assert report["verdict"] != "CONFIG_MATCH"
+    assert finding(report, expected[other_gap])
+
+
 @pytest.mark.parametrize("key,value", [("DB_POOL_SIZE", "0"), ("DB_MAX_OVERFLOW", "-1"), ("WEB_CONCURRENCY", "8"), ("DB_POOL_SIZE", SECRET)])
 def test_unbounded_or_changed_capacity_rejected(config, snap, release, key, value):
     env = snap["revisions"][release["revisions"]["api"]]["spec"]["containers"][0]["env"]
