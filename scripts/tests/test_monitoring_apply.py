@@ -415,6 +415,75 @@ class MonitoringApplyTests(unittest.TestCase):
         mask = urllib.parse.parse_qs(query)["updateMask"][0].split(",")
         self.assertEqual(set(mask), set(m.UPTIME_UPDATE_MASK_FIELDS) - {"checkerType"})
 
+    def test_uptime_patch_explicitly_restores_materialized_public_checker_default(self):
+        local = json.loads((UPTIME_DIR / "chirp-api-health.json").read_text())
+        self.assertNotIn("checkerType", local)
+        for remote_checker in ("STATIC_IP_CHECKERS", "VPC_CHECKERS"):
+            with self.subTest(remote_checker=remote_checker):
+                fake = FakeMonitoringAPI()
+                args = _args(apply=True, channel="projects/%s/notificationChannels/1" % PROJECT)
+                self.assertEqual(m.run(args, fake.get, fake.post, fake.patch, fake.put)["exit_code"], 0)
+                remote = fake.uptime[local["displayName"]]
+                identity = remote["name"]
+                # The provider materializes this field, unlike the basic fake.
+                # A normal period repair must retain it; a changed checker must
+                # explicitly restore the default rather than clear an enum.
+                remote["checkerType"] = remote_checker
+                remote["period"] = "300s"
+                captured = []
+
+                def patch_uptime(url, body):
+                    captured.append((url, deepcopy(body)))
+                    return fake.patch(url, body)
+
+                fake.post_calls = fake.patch_calls = fake.put_calls = 0
+                report = m.run(args, fake.get, fake.post, patch_uptime, fake.put)
+                self.assertEqual(report["exit_code"], 0)
+                self.assertEqual((fake.post_calls, fake.patch_calls, fake.put_calls), (0, 1, 0))
+                url, body = captured[0]
+                resource, _, query = url.partition("?")
+                self.assertEqual(resource, "https://monitoring.googleapis.com/v3/" + identity)
+                self.assertEqual(body["name"], identity)
+                self.assertIn("checkerType", urllib.parse.parse_qs(query)["updateMask"][0].split(","))
+                self.assertEqual(body.get("checkerType"), "STATIC_IP_CHECKERS")
+                self.assertEqual(body["period"], local["period"])
+                self.assertEqual(fake.uptime[local["displayName"]]["checkerType"], "STATIC_IP_CHECKERS")
+                again = m.run(args, fake.get, _refusing, _refusing, _refusing)
+                self.assertEqual(again["exit_code"], 0)
+                self.assertEqual({row["action"] for row in again["uptime"]}, {"noop"})
+
+    def test_remote_rename_between_list_and_full_get_fails_before_any_write(self):
+        for kind in ("uptime", "policies"):
+            with self.subTest(kind=kind):
+                fake = FakeMonitoringAPI()
+                args = _args(apply=True, channel="projects/%s/notificationChannels/1" % PROJECT)
+                self.assertEqual(m.run(args, fake.get, fake.post, fake.patch, fake.put)["exit_code"], 0)
+                remote = next(iter(getattr(fake, kind).values()))
+                name, display = remote["name"], remote["displayName"]
+                collection = "uptimeCheckConfigs" if kind == "uptime" else "alertPolicies"
+                calls = []
+
+                def renamed_get(url, params):
+                    body = fake.get(url, params)
+                    if url.endswith("/" + collection):
+                        self.assertIn({"name": name, "displayName": display}, body[collection])
+                        calls.append("list")
+                    elif url == "https://monitoring.googleapis.com/v3/" + name:
+                        self.assertEqual(calls, ["list"])
+                        self.assertEqual(body["name"], name)
+                        body["displayName"] = display + " renamed after listing"
+                        calls.append("full_get")
+                    return body
+
+                # Earlier phases have pending creates; failed identity preflight
+                # must prevent those writes as well as the renamed PATCH.
+                fake.metrics.clear()
+                fake.post_calls = fake.patch_calls = fake.put_calls = 0
+                with self.assertRaisesRegex(m.ApplyError, "^invalid_schema$"):
+                    m.run(args, renamed_get, fake.post, fake.patch, fake.put)
+                self.assertEqual(calls, ["list", "full_get"])
+                self.assertEqual((fake.post_calls, fake.patch_calls, fake.put_calls), (0, 0, 0))
+
     # --- test_every_policy_json_validates_required_shape_and_inventory_membership ---
     def test_every_policy_json_validates_required_shape_and_inventory_membership(self):
         available = _inventory_available_metrics()
@@ -996,6 +1065,39 @@ class MonitoringApplyTests(unittest.TestCase):
                             self.assertEqual(set(fake.uptime), {"Checkout " + label + " uptime"})
                             self.assertEqual(set(fake.policies), {"Checkout " + label + " policy"})
                             self.assertFalse((checkout_a / "report.json").exists())
+
+    def test_native_inventory_comes_from_script_checkout_with_conflicting_cwd_inventory(self):
+        metric_type = "run.googleapis.com/request_latencies"
+        policy = json.loads((POLICIES_DIR / "api-latency-p95.json").read_text())
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout_a = self.make_checkout(temporary, "a", empty=True)
+            checkout_b = self.make_checkout(temporary, "b", empty=True)
+            for root, status in ((checkout_a, "available"), (checkout_b, "unavailable")):
+                inventory = root / "infra/monitoring/evidence" / INVENTORY_PATH.name
+                inventory.write_text(json.dumps({"native_metric_descriptors": {metric_type: status}}))
+                (root / "infra/monitoring/policies/fixture.json").write_text(json.dumps(policy))
+            for script_root, caller_root, available in (
+                    (checkout_a, checkout_b, True), (checkout_b, checkout_a, False)):
+                with self.subTest(script_checkout=script_root.name):
+                    fake, output = FakeMonitoringAPI(), io.StringIO()
+                    # Import after changing directory too: the inventory path
+                    # is bound at module initialization, not when main() runs.
+                    with chdir(caller_root), redirect_stdout(output):
+                        module = self.load_checkout(script_root)
+                        with patch.object(module, "reader", return_value=self.api_calls(module, fake)):
+                            exit_code = module.main(self.arguments())
+                    report = json.loads(output.getvalue())
+                    self.assertEqual(report["input_directories"], self.directories(script_root))
+                    self.assertEqual(exit_code, 0 if available else 1)
+                    if available:
+                        self.assertEqual(report["skipped_files"], [])
+                        self.assertEqual([row["displayName"] for row in report["policies"]], [policy["displayName"]])
+                        self.assertEqual(report["policies"][0]["action"], "create")
+                    else:
+                        self.assertEqual(report["policies"], [])
+                        self.assertEqual(len(report["skipped_files"]), 1)
+                        self.assertIn("metric_not_in_inventory:" + metric_type, json.dumps(report["skipped_files"]))
+                    self.assertEqual((fake.post_calls, fake.patch_calls, fake.put_calls), (0, 0, 0))
 
     def test_input_directories_survive_auth_inventory_and_partial_apply_failures(self):
         with tempfile.TemporaryDirectory() as temporary:
