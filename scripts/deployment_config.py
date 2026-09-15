@@ -20,6 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "infra/deployment.json"
 MAX_BYTES = 1024 * 1024
 ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE")
+POOL_NAMES = {"DB_POOL_SIZE": "size", "DB_MAX_OVERFLOW": "max_overflow"}
+JOB_POOL_EVIDENCE_SCOPE = "operator_inspected_immutable_image_pool"
+JOB_POOL_EVIDENCE_MAX_AGE_HOURS = 24
 ANN = ("autoscaling.knative.dev/minScale", "autoscaling.knative.dev/maxScale", "run.googleapis.com/cloudsql-instances", "run.googleapis.com/vpc-access-connector", "run.googleapis.com/vpc-access-egress", "run.googleapis.com/cpu-throttling", "run.googleapis.com/startup-cpu-boost")
 SERVICE_ANN = ("run.googleapis.com/scalingMode", "run.googleapis.com/manualInstanceCount", "run.googleapis.com/minScale", "run.googleapis.com/maxScale", "run.googleapis.com/ingress", "run.googleapis.com/urls")
 
@@ -169,6 +172,71 @@ def image_ok(value: Any, config: dict) -> bool:
     return isinstance(value, str) and re.fullmatch(re.escape(config["image_repository"]) + r"@sha256:[0-9a-f]{64}", value) is not None
 
 
+def pool_literal(value: Any, name: str) -> bool:
+    """Only bounded, canonical literal integers can bind pool environment evidence."""
+    return (isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]{0,5}", value) is not None
+            and (1 if name == "DB_POOL_SIZE" else 0) <= int(value) <= 100000)
+
+
+def validate_job_pool_observations(release: dict, config: dict) -> None:
+    """Validate supplied attestations, not the image artifacts they reference."""
+    if "job_pool_observations" not in release:
+        return
+    try:
+        observations = release["job_pool_observations"]
+        if not isinstance(observations, dict) or set(observations) - set(config["jobs"]):
+            raise ValueError
+        fields = {"version", "observed_at", "project", "region", "image", "command", "args",
+                  "pool_env", "pool", "evidence_sha256", "evidence_scope"}
+        for row in observations.values():
+            if not isinstance(row, dict) or set(row) != fields or type(row["version"]) is not int or row["version"] != 1:
+                raise ValueError
+            observed = row["observed_at"]
+            if (not isinstance(observed, str)
+                    or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|\+00:00)", observed) is None
+                    or timestamp(observed).utcoffset() != timedelta(0)):
+                raise ValueError
+            if row["project"] != config["project"] or row["region"] != config["region"] or not image_ok(row["image"], config):
+                raise ValueError
+            for key in ("command", "args"):
+                if (not isinstance(row[key], list) or not 1 <= len(row[key]) <= 32
+                        or any(not isinstance(v, str) or not 1 <= len(v) <= 128 for v in row[key])):
+                    raise ValueError
+            if not isinstance(row["pool_env"], dict) or set(row["pool_env"]) != set(POOL_NAMES):
+                raise ValueError
+            if any(v is not None and not pool_literal(v, k) for k, v in row["pool_env"].items()):
+                raise ValueError
+            if not isinstance(row["pool"], dict) or set(row["pool"]) != set(POOL_NAMES.values()):
+                raise ValueError
+            positive(row["pool"]["size"])
+            positive(row["pool"]["max_overflow"], 0)
+            if (row["evidence_scope"] != JOB_POOL_EVIDENCE_SCOPE
+                    or not isinstance(row["evidence_sha256"], str)
+                    or re.fullmatch(r"[0-9a-f]{64}", row["evidence_sha256"]) is None):
+                raise ValueError
+    except (KeyError, TypeError, ValueError):
+        raise ConfigError("invalid_job_pool_observation") from None
+
+
+def bound_job_pool_observation(row: dict, container: dict, now: datetime) -> bool:
+    """Bind effective engine kwargs to this snapshot without replacing live env."""
+    if (not fresh(row["observed_at"], now, JOB_POOL_EVIDENCE_MAX_AGE_HOURS)
+            or any(row[key] != container.get(key) for key in ("image", "command", "args"))):
+        return False
+    for name, pool_key in POOL_NAMES.items():
+        entries = [entry for entry in container.get("env", []) if entry.get("name") == name]
+        if not entries:
+            actual = None
+        elif (len(entries) == 1 and set(entries[0]) == {"name", "value"}
+              and pool_literal(entries[0]["value"], name)):
+            actual = entries[0]["value"]
+        else:
+            return False
+        if actual != row["pool_env"][name] or (actual is not None and int(actual) != row["pool"][pool_key]):
+            return False
+    return True
+
+
 def validate_release(release: dict, config: dict) -> None:
     try:
         if not image_ok(release["image"], config) or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", release["schema_head"]):
@@ -180,6 +248,7 @@ def validate_release(release: dict, config: dict) -> None:
         for role, row in release.get("rollout", {}).get("previous", {}).items():
             if role not in config["services"] or not identifier(row["revision"]) or not row["revision"].startswith(config["services"][role]["name"] + "-") or not image_ok(row["image"], config):
                 raise ConfigError("invalid_previous_release")
+        validate_job_pool_observations(release, config)
     except (KeyError, TypeError):
         raise ConfigError("invalid_release") from None
 
@@ -463,6 +532,19 @@ def compare(config: dict, snapshot: dict, release: dict | None, now: datetime, r
             note(report, name, "unknown", "job_container_inventory"); continue
         container = containers[0]
         values, inferred = env_values(container, runtime)
+        observation = (release or {}).get("job_pool_observations", {}).get(name)
+        filled = []
+        accepted_observation = False
+        if observation is not None:
+            accepted_observation = bound_job_pool_observation(observation, container, now)
+            if accepted_observation:
+                for key, pool_key in POOL_NAMES.items():
+                    if key in inferred:
+                        values[key] = str(observation["pool"][pool_key])
+                        inferred.remove(key)
+                        filled.append(key)
+            else:
+                note(report, name, "unknown", "job_pool_observation_stale_or_mismatched")
         arguments = container.get("args")
         entrypoint_matches = container.get("command") == ["python"] and isinstance(arguments, list) and arguments[:2] == ["-m", policy["module"]] and all(isinstance(v, str) and re.fullmatch(r"--[a-z-]+(?:=[a-z0-9]+)?|[0-9]+", v) for v in arguments[2:])
         if not entrypoint_matches or values.get("WEB_CONCURRENCY") != str(policy["workers"]):
@@ -480,7 +562,16 @@ def compare(config: dict, snapshot: dict, release: dict | None, now: datetime, r
         if any(key in inferred for key in ("DB_POOL_SIZE", "DB_MAX_OVERFLOW")):
             note(report, name, "unknown", "pool_inferred_from_checkout_not_image")
         report["jobs"][name] = {"entrypoint_model_matches": entrypoint_matches, "pool_capacity_per_process": job_pools[name], "inferred_from_checkout_not_image": inferred, "parallelism": parallel if type(parallel) is int else None,
-                                "overlapping_executions": "operator_policy_not_enforced", "image": containers[0].get("image") if image_ok(containers[0].get("image"), config) else None}
+                                "overlapping_executions": "operator_policy_not_enforced", "image": containers[0].get("image") if image_ok(containers[0].get("image"), config) else None,
+                                "pool_input_sources": {key: "operator_supplied_image_pool_observation" if key in filled else "checkout_inference" if key in inferred else "live_literal_environment" for key in POOL_NAMES}}
+        if accepted_observation:
+            report["jobs"][name]["pool_observation"] = {
+                "scope": "operator_supplied_image_pool_observation",
+                "observed_at": timestamp(observation["observed_at"]).isoformat(),
+                "evidence_sha256": observation["evidence_sha256"],
+                "filled_environment_inputs": filled,
+                "image_inspected_by_checker": False,
+            }
     report["pool_envelope"] = pool_envelope(config, runtime, job_pools)
     report["pool_envelope"]["listed_revisions_configured_capacity"] = observed_capacity if observed_capacity_known else None
     observed_total = observed_capacity + report["pool_envelope"]["job_connections"] + report["pool_envelope"]["reserved_operator_and_contingency"]

@@ -104,6 +104,71 @@ values and rejects missing, stale, future or mismatched observations. It does no
 independently open the database or download/inspect a build. Keep observation
 provenance with the release record. Default evidence freshness is in the source.
 
+### Optional job pool observations
+
+An older job image can construct its database engine with different pool arguments
+from today's checkout. To replace an inferred job pool estimate, an operator may
+add `job_pool_observations` to the release record. Each key must name a configured
+job. This is a **shape example, not approved live evidence**:
+
+```json
+{
+  "job_pool_observations": {
+    "chirp-media-reconcile": {
+      "version": 1,
+      "observed_at": "2026-09-14T00:00:00Z",
+      "project": "chirps-prod",
+      "region": "us-central1",
+      "image": "us-central1-docker.pkg.dev/chirps-prod/cloud-run-source-deploy/chirp-api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "command": ["python"],
+      "args": ["-m", "app.jobs.media_reconcile"],
+      "pool_env": {"DB_POOL_SIZE": null, "DB_MAX_OVERFLOW": null},
+      "pool": {"size": 5, "max_overflow": 10},
+      "evidence_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "evidence_scope": "operator_inspected_immutable_image_pool"
+    }
+  }
+}
+```
+
+`pool` records the effective engine's `pool_size` and `max_overflow` arguments.
+It does **not** assert that the image recognizes `DB_POOL_SIZE` or
+`DB_MAX_OVERFLOW`: an old engine may hardcode those arguments. Inspect the exact
+immutable image's manifest/config/layer digest chain, engine construction, image
+environment, `.env` resolution and job entrypoint before supplying this record.
+Use this schema only when the reviewed pool arguments are fixed by the image and
+the two bound environment inputs. Other mutable pool controls are outside its scope.
+Keep that reviewed evidence outside the repository with the release artifacts;
+`evidence_sha256` references its exact bytes. The hash is a provenance reference,
+not independent verification of the document or image by this checker.
+
+All shown row fields are required, and unknown keys or job names are rejected.
+Project, region and immutable repository/digest must match. Command and arguments
+must match the live job exactly and still satisfy the existing single-process
+entrypoint model. `pool_env` must contain exactly both keys: `null` means no live
+environment row exists; otherwise use its exact canonical decimal string. Secret
+references, duplicate rows and mixed literal/secret rows cannot provide this
+evidence. Effective size must be an integer from 1 through 100000 and overflow
+from 0 through 100000; booleans, strings, unbounded pools and extra pool fields
+are rejected. Observation timestamps must be UTC and no more than 24 hours old;
+future observations cannot pass.
+
+Only absent pool inputs are filled. Explicit live values are never replaced, and
+any conflict with the effective observation prevents acceptance. Accepted values
+feed the observed job and connection-envelope arithmetic. The report identifies
+each input's source and labels the evidence
+`operator_supplied_image_pool_observation`, retaining its timestamp/hash and
+`image_inspected_by_checker: false`. The checker neither downloads an image nor
+reads the referenced evidence document. Timeout, worker, parallelism, service,
+SQL and client checks are unchanged; this observation cannot clear their findings.
+Without accepted evidence, missing pool inputs remain checkout estimates and
+prevent `CONFIG_MATCH`. Invalid supplied records produce fixed diagnostics without
+echoing their contents.
+
+The print-only `plan` command validates the record's structure but does not apply
+job observations: it has no live snapshot against which to bind them. Its intended
+policy envelope remains separate from `check`'s observed job arithmetic.
+
 ```sh
 scripts/deployment-config check --release /tmp/chirp-release.json --gcloud "$HOME/google-cloud-sdk/bin/gcloud" --report /tmp/chirp-config-release.json
 ```
@@ -132,8 +197,9 @@ headroom, not a bound on Cloud Run overshoot.
 
 Missing pool environment settings are calculated from the actual checked-out
 `backend/app/config.py` defaults and explicitly labelled **inferred from checkout,
-not image**. They prevent `CONFIG_MATCH`; old job images may have different
-compiled defaults. The observed revision envelope includes tagged/staged revisions
+not image** unless a job has an accepted pool observation as described above.
+Unproven pool inputs prevent `CONFIG_MATCH`; old job images may have different
+engine arguments. The observed revision envelope includes tagged/staged revisions
 visible in the collected metadata and never discounts a zero-percent tag.
 Unlisted draining/warm revisions and future job executions are not enumerated.
 Unknown jobs, missing definitions or configuration drift prevent acceptance.
