@@ -250,11 +250,25 @@ def test_role_and_fixture_identity_evidence_is_required(peers, service_index, ex
     "invalid_bearer_accepted", "unauthenticated_accepted", "suspended", "expired", "redirect",
     "health_bad_body", "health_unavailable", "auth_me_exposed", "campus_verification_exposed",
     "chirps_exposed", "authenticated_chirps_exposed", "wrong_head",
+    "auth_me_gated", "campus_verification_gated", "chirps_route_gated",
 ])
 def test_ws_role_checks_fail_closed(peers, case):
+    """A ws-only deployment whose domain HTTP routers never mounted must answer
+    404, not 401, on /auth/me, /auth/campus-verification and the campus Chirps
+    route. DEPLOY-VERIFICATION.md's evidence contract (step 2, and step 5 for
+    Chirps) and DEPLOY.md both promise 404 for these routes under role ws -
+    that status is what proves the router is absent rather than merely
+    auth-gated. c415: the "_gated" cases below have the route answer 401
+    instead (as an "all"-role deployment's own auth-gated routes correctly
+    would), which must still fail closed and name the specific probe that
+    would otherwise have been fooled into treating auth-gated as absent.
+    """
     states, _, run, _, _ = peers
     states[1]["role"] = "ws"
     path = "/_deployment"
+    gated = {"auth_me_gated": ("/auth/me", "auth_me_route_absent"),
+             "campus_verification_gated": ("/auth/campus-verification", "campus_verification_route_absent"),
+             "chirps_route_gated": ("/campuses/00000000-0000-0000-0000-000000000000/chirps", "chirps_route")}
 
     def override(status, body, auth):
         if case == "invalid_bearer_accepted" and auth == "Bearer invalid-c361-deployment-probe":
@@ -278,10 +292,15 @@ def test_ws_role_checks_fail_closed(peers, case):
                 "chirps_exposed": "/campuses/00000000-0000-0000-0000-000000000000/chirps",
                 "authenticated_chirps_exposed": f"/campuses/{CAMPUS}/chirps?limit=1"}[case]
         override = lambda *args: (200, [], {})
+    elif case in gated:
+        path, _ = gated[case]
+        override = lambda *args: (401, {}, {})
     states[1]["overrides"][path] = override
     result, body = run(extra=("--ws-expected-role", "ws"))
     assert result.returncode == 1 and body["verdict"] == "NOT_READY"
     assert body["checks"][-1]["service"] == "chirp-ws" and not body["checks"][-1]["passed"]
+    if case in gated:
+        assert body["checks"][-1]["check"] == gated[case][1]
     assert not any(path == "/stolen-token" for state in states for path, _ in state["requests"])
 
 
