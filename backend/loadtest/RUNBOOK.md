@@ -263,7 +263,13 @@ semantics; they were not rewritten or upgraded into new evidence.
   wall-clock or memory guarantee. Intended WS elapsed time includes paced ramp,
   upgrade, readiness, full hold and cleanup, and can exceed HTTP duration.
 
-**Receipt delivery is NOT_PROVEN.** This slice drains post-ready frames but has
+The separate opt-in [local message workload](MESSAGE-RECEIPTS.md) correlates real
+HTTP-created messages with a selected ready WebSocket cohort under HTTP traffic.
+It requires a disposable local fixture and cannot run against remote targets.
+Its observations do not change this command's report or establish production
+capacity, durable recovery, decryption, or device acceptance.
+
+**Receipt delivery is NOT_PROVEN for the default command.** This slice drains post-ready frames but has
 no publisher, message identity, sent/received reconciliation, or durable receipt
 contract. Manually publishing a frame would not turn its output into delivery
 percentiles. Use the separate c354 gateway proofs for their stated local scope;
