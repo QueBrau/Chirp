@@ -9,16 +9,27 @@ dry-run by default and installs all three kinds only under `--apply --channel`
 (plus `--api-host`/`--ws-host` whenever `infra/monitoring/uptime` has files).
 It does not install notification channels or schedulers, and it does not
 verify alert delivery. A deployment is required before the new runtime signals
-can exist in production. The two c406 WebSocket metric/policy pairs are prepared
-here; their activation requires c407's corrected policy shapes, c408 convergence,
-and a backend deployment containing the c405 emitter (7b50982). Window #16
-predates that emitter. Verify its deployed revision and both time series before
-activating the new policies, then verify notification delivery separately.
-Create the metrics first by running the apply with `--policies-dir` pointing to
-an empty directory. Once both series are observed, use the normal policies
-directory to activate the alerts. An empty override does not delete existing
-policies; the default all-resource apply provides no observation pause between
-metric creation and policy activation.
+can exist in production. The two c406 WebSocket metric/policy pairs require
+c407's corrected policy shapes, c408 convergence, and a backend deployment
+containing the c405 emitter (7b50982). Before activation, verify the deployed
+revision, matching enabled metric definitions and DELTA/INT64/unit-1 descriptors,
+the existing responder channel, and successful read-only queries using each
+policy's exact filter and aggregation. For these two sparse rejection counters,
+a valid empty query does **not** block activation. Google supports
+[metric-threshold policies before data exists](https://docs.cloud.google.com/monitoring/alerts/using-alerting-ui#metric_not_listed_in_menu_of_available_metrics);
+[new metric propagation](https://docs.cloud.google.com/monitoring/alerts/troubleshooting-alerts#alerting_policy_creation_fails_in_the_api_due_to_missing_metric)
+can still prevent API acceptance and must not be treated as a successful create.
+
+Create or reconcile the metrics first with `--policies-dir` pointing to an empty
+directory, then activate only these two policies using scoped input directories.
+Review the exact plan and read back enabled definitions and channel references.
+An empty override does not delete existing policies; the default all-resource
+apply provides no observation pause between metric reconciliation and activation.
+Keep **configuration readiness** separate from **coverage acceptance**: record
+empty series as unverified, then require real rejection signals and responder
+delivery/acknowledgement evidence before closing c406. Enabling a policy arms
+automatic notifications; it proves neither delivery nor service health. Synthetic
+notification tests still require the separate authorization described below.
 No live inventory or recipient information belongs in
 this public repository.
 

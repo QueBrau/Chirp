@@ -1,6 +1,6 @@
 {
   "name": "ws_connect_capacity_rejected",
-  "description": "Runbook row: ws_connect_capacity_rejected (MONITORING-RUNBOOK.md, Runtime observations). Counts app.operational warnings when a WebSocket identity lookup hits a SQLAlchemy checkout timeout before accept(), already throttled to at most one record per 60 seconds per process. This is independent of the HTTP sql_pool_capacity_503 signal. Deploy the c405 emitter and validate this time series exists before activating the referencing alert policy.",
+  "description": "Runbook row: ws_connect_capacity_rejected (MONITORING-RUNBOOK.md, Runtime observations). Counts app.operational warnings when a WebSocket identity lookup hits a SQLAlchemy checkout timeout before accept(), already throttled to at most one record per 60 seconds per process. This is independent of the HTTP sql_pool_capacity_503 signal. Deploy the c405 emitter and validate the metric definition and referencing policy query before activation. An empty series does not block activation; real signal and delivery evidence remain unverified.",
   "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.signal_family=\"chirp_operational\" AND jsonPayload.schema_version=1 AND jsonPayload.event=\"ws_connect_capacity_rejected\"",
   "disabled": false,
   "metricDescriptor": {

@@ -4,7 +4,7 @@
   "enabled": true,
   "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
   "documentation": {
-    "content": "Runbook row: ws_connect_capacity_rejected (MONITORING-RUNBOOK.md, Runtime observations). Responder: on-call API responder. Log-based metric ws_connect_capacity_rejected (infra/monitoring/metrics/ws-connect-capacity-rejected.json) crossing zero occurrences in a 5-minute window. The app.operational emitter throttles to at most one record per 60 seconds per process; this is sampled evidence, not an exact count. Investigate SQL pool saturation and the gateway's pre-accept capacity rejection logs; this path returns HTTP 403, independently of the HTTP handler's sql_pool_capacity_503 signal. Initial, review after 7 days. Deployment of the c405 emitter and time-series verification are prerequisites for activation; silence does not prove health.",
+    "content": "Runbook row: ws_connect_capacity_rejected (MONITORING-RUNBOOK.md, Runtime observations). Responder: on-call API responder. Log-based metric ws_connect_capacity_rejected (infra/monitoring/metrics/ws-connect-capacity-rejected.json) crossing zero occurrences in a 5-minute window. The app.operational emitter throttles to at most one record per 60 seconds per process; this is sampled evidence, not an exact count. Investigate SQL pool saturation and the gateway's pre-accept capacity rejection logs; this path returns HTTP 403, independently of the HTTP handler's sql_pool_capacity_503 signal. Initial, review after 7 days. Deployment of the c405 emitter and metric definition/query validation are prerequisites for activation. Real signal and responder delivery evidence remain required for coverage; silence does not prove health.",
     "mimeType": "text/markdown"
   },
   "conditions": [
