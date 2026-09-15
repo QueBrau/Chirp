@@ -1,0 +1,30 @@
+# Disposable loopback example for python -m loadtest.message_receipts.
+# Use dedicated local API/WS and Redis processes. This command refuses remote targets.
+base_url: "http://127.0.0.1:8010"
+ws_url: "ws://127.0.0.1:8010/ws"
+auth_mode: "emulated"
+duration_seconds: 20
+ramp_in_seconds: 1
+think_seconds: 0.5
+mix_weights:
+  me: 1
+caps:
+  max_rps: 10
+  max_concurrent_requests: 5
+  per_user_writes_per_minute:
+    post_create: 3.0
+    comment_create: 3.0
+    chirp_create: 1.5
+abort:
+  max_error_rate_pct: 2.0
+  max_429_rate_pct: 1.0
+  read_p95_ceiling_ms: 1500
+  write_p95_ceiling_ms: 2500
+  max_ws_failure_pct: 5.0
+  window_seconds: 10
+  min_samples: 5
+  grace_seconds: 2
+ws:
+  max_sockets: 2
+  connects_per_second: 2
+  hold_seconds: 20
