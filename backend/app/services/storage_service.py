@@ -59,15 +59,17 @@ object path loudly (greppable), and accept that this one rare failure mode produ
 benign unreferenced object rather than trade away posts/ immutability to avoid it. Do
 not add posts/ delete permission back to "fix" this.
 
-UNREFERENCED posts/ OBJECTS ARE RECLAIMED OUT OF BAND (board c153), which is what keeps
-the paragraph above a bounded trade rather than a permanent leak. PATCH clearing or
-replacing a photo detaches the old permanent object for exactly the same reason — this
-identity cannot delete it — so app.jobs.media_reconcile diffs posts/ against every url
-the posts table actually references and removes what nothing points at, running as a
-SEPARATE service account whose delete grant is IAM-conditioned to posts/. The runtime
-identity's tmp/-only condition is deliberately left alone (manager decision on c153):
-the ability to delete a published photo belongs to a scheduled job, never to the account
-serving requests.
+UNREFERENCED posts/ OBJECTS BECOME ELIGIBLE OUT OF BAND (board c153), which is what
+keeps the paragraph above a bounded trade rather than a permanent leak. PATCH clearing
+or replacing a photo detaches the old permanent object for exactly the same reason —
+this identity cannot delete it — so app.jobs.media_reconcile diffs posts/ against every
+url the posts table actually references and flags what nothing points at, running as a
+SEPARATE service account whose delete grant is IAM-conditioned to posts/. Flagged is not
+deleted: as of board c414, that job runs on a schedule only as a dry run, and every
+actual deletion is still a manual, manager-approved one-off (DEPLOY.md section 8). The
+runtime identity's tmp/-only condition is deliberately left alone (manager decision on
+c153): the ability to even attempt deleting a published photo belongs to that separate
+job's identity, never to the account serving requests.
 
 THE DESTINATION WRITE IS CONDITIONAL, NOT UNCONDITIONAL, for the same reason a plain
 copy would have needed it: GCS requires storage.objects.delete on the DESTINATION for an
@@ -611,7 +613,9 @@ def finalize_media_object(
     deleting it; the caller must log the orphaned path loudly instead. Do not add
     posts/ delete permission back to "fix" that rare case - see the module docstring.
     The same constraint is why PATCH cannot delete the photo it replaces; both orphans
-    are collected later by app.jobs.media_reconcile (c153), under a different account.
+    are later flagged eligible by app.jobs.media_reconcile's dry run (c153), under a
+    different account, and only actually removed after a manager approves a manual
+    one-off deletion (board c414) - neither is reclaimed automatically.
     """
     expected_prefix = f"{TMP_PREFIX}/{user_id}/"
     if not tmp_object_name.startswith(expected_prefix):

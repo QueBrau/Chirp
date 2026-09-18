@@ -60,11 +60,31 @@ jobs compose in that order without either knowing about the other.
 
 DRY RUN IS THE DEFAULT. Nothing is deleted unless the caller passes delete=True
 (`--delete` on the CLI). A plain run reports what it would remove.
+
+NO OBJECT NAME OR STORED VALUE IN LOGS BY DEFAULT (board c414). This job is meant to
+run on a daily schedule (dry run only — see DEPLOY.md section 8), and every posts/
+object name embeds the user id who owns it. Writing that to Cloud Run logs once a
+day forever is not a cost worth paying for routine output, so every line that names
+an object or prints a raw stored media_urls value is gated behind list_eligible=True
+(`--list-eligible` on the CLI). The counts (how many, not which ones) always print,
+and the machine-readable aggregate line below is always emitted and never carries a
+name — a manager who needs the actual names re-runs with --list-eligible and follows
+DEPLOY.md section 8's approval-gated manual review.
+
+STRUCTURED AGGREGATE LINE (board c414). Exactly one JSON line is printed to stdout at
+the end of every run, success or abort — Cloud Run Jobs promotes a single-line stdout
+JSON object into `jsonPayload` the same way Cloud Run Services does (the same
+assumption `app.jobs.purge` makes; unverified until a real execution, per
+infra/monitoring/metrics/purge-job-aggregate.json). It carries only counts, never a
+name, url or stored value, so it is safe to leave unconditional: infra/monitoring's
+media_reconcile_eligible_runs and media_reconcile_unresolved_runs log metrics parse
+it.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -243,18 +263,19 @@ def resolve_object_names(value: str, bucket_name: str) -> ResolvedValue:
 
 
 async def collect_referenced_object_names(
-    session: AsyncSession, bucket_name: str
+    session: AsyncSession, bucket_name: str, *, list_eligible: bool = False
 ) -> MediaReferences:
     """Everything the posts table still points at, resolved conservatively.
 
     No deleted_at filter, on purpose — see the module docstring.
 
-    A value that cannot be resolved is COUNTED and LOGGED, never silently dropped, and
-    it never weakens protection: it is still kept in raw_values, where the substring
-    backstop can protect an object this parser failed to recognize. An unresolved
-    count that is not zero means either legacy rows exist (expected, harmless) or a
-    url form this parser should learn (a bug worth seeing), and the log line is what
-    tells those apart.
+    A value that cannot be resolved is COUNTED, never silently dropped, and it never
+    weakens protection: it is still kept in raw_values, where the substring backstop
+    can protect an object this parser failed to recognize. An unresolved count that is
+    not zero means either legacy rows exist (expected, harmless) or a url form this
+    parser should learn (a bug worth seeing). The stored value itself is only LOGGED
+    when list_eligible is True (board c414): it is arbitrary client data that can embed
+    a user id, and a scheduled daily run must not write it to logs by default.
     """
     rows = (
         await session.execute(select(Post.media_urls).where(Post.media_urls.is_not(None)))
@@ -270,11 +291,12 @@ async def collect_referenced_object_names(
             names |= resolved.names
             if not resolved.understood:
                 unparsed_values.append(url)
-                logger.warning(
-                    "media_reconcile: stored media url is not a recognized GCS "
-                    "reference, so it protects only by raw match: %.256s",
-                    url,
-                )
+                if list_eligible:
+                    logger.warning(
+                        "media_reconcile: stored media url is not a recognized GCS "
+                        "reference, so it protects only by raw match: %.256s",
+                        url,
+                    )
 
     return MediaReferences(
         object_names=frozenset(names),
@@ -314,12 +336,62 @@ def _is_old_enough(blob, cutoff: datetime) -> bool:
     return created is not None and created < cutoff
 
 
+AGGREGATE_SCHEMA_VERSION = 1
+AGGREGATE_SIGNAL_FAMILY = "chirp_job"
+AGGREGATE_EVENT = "media_reconcile_aggregate"
+# The exact key set D1 (board c414) promises: schema_version/signal_family/event are
+# identifying, mode/outcome are enums, the rest are integer counts. Exposed so tests
+# can assert on the documented shape without hand-duplicating the key list.
+AGGREGATE_KEYS = (
+    "schema_version", "signal_family", "event", "mode", "outcome",
+    "scanned", "referenced", "too_young", "eligible", "unresolved",
+    "protected_by_raw_match", "deleted",
+)
+
+
+def _print_aggregate(
+    *,
+    mode: str,
+    outcome: str,
+    scanned: int,
+    referenced: int,
+    too_young: int,
+    eligible: int,
+    unresolved: int,
+    protected_by_raw_match: int,
+    deleted: int,
+) -> None:
+    """D1 (board c414): exactly one JSON stdout line, every run, success or abort.
+
+    Cloud Run Jobs promotes a single-line stdout JSON object into `jsonPayload` the
+    same way Cloud Run Services does (the same assumption app.jobs.purge makes;
+    unverified until a real execution). Counts only, never a name, url, user id or
+    stored value — infra/monitoring/metrics/media-reconcile-*-runs.json alert on this
+    exact shape, so a field added or removed here is a monitoring-facing change too.
+    """
+    print(json.dumps({
+        "schema_version": AGGREGATE_SCHEMA_VERSION,
+        "signal_family": AGGREGATE_SIGNAL_FAMILY,
+        "event": AGGREGATE_EVENT,
+        "mode": mode,
+        "outcome": outcome,
+        "scanned": scanned,
+        "referenced": referenced,
+        "too_young": too_young,
+        "eligible": eligible,
+        "unresolved": unresolved,
+        "protected_by_raw_match": protected_by_raw_match,
+        "deleted": deleted,
+    }))
+
+
 async def reconcile_orphaned_media(
     session: AsyncSession,
     *,
     delete: bool = False,
     min_age_hours: int = DEFAULT_MIN_AGE_HOURS,
     now: datetime | None = None,
+    list_eligible: bool = False,
 ) -> ReconcileResult:
     """Diff posts/ against posts.media_urls; report, and delete only if asked.
 
@@ -331,12 +403,20 @@ async def reconcile_orphaned_media(
     the generation it was listed with (it forwards generation=self.generation to
     bucket.delete_blob, read off blob.py), so an object replaced between the listing
     and the delete 404s rather than having its replacement removed.
+
+    list_eligible (board c414) gates every per-object or per-value log line — see the
+    module docstring. It never changes what is scanned, protected, aged out or
+    deleted, only what is written to logs about it. The D1 aggregate line printed at
+    the end is unaffected by this flag: it never carries a name either way.
     """
+    mode = "delete" if delete else "dry_run"
     bucket_name = _bucket_name()
     resolved_now = now if now is not None else datetime.now(timezone.utc)
     cutoff = resolved_now - timedelta(hours=min_age_hours)
 
-    references = await collect_referenced_object_names(session, bucket_name)
+    references = await collect_referenced_object_names(
+        session, bucket_name, list_eligible=list_eligible
+    )
     if references.total_urls and not references.object_names:
         message = (
             f"media_reconcile ABORTED (board c153): posts.media_urls holds "
@@ -348,6 +428,14 @@ async def reconcile_orphaned_media(
             "runbook to tell those two apart before re-running."
         )
         logger.error(message)
+        # D1: emitted here, before the abort propagates, so the aggregate is never lost
+        # on the one path that matters most for catching a misconfiguration on a
+        # schedule. Nothing was scanned, protected or deleted on this path.
+        _print_aggregate(
+            mode=mode, outcome="aborted", scanned=0, referenced=0, too_young=0,
+            eligible=0, unresolved=references.unresolved, protected_by_raw_match=0,
+            deleted=0,
+        )
         raise ReconcileAborted(message)
 
     blobs = list_permanent_blobs(bucket_name)
@@ -364,11 +452,13 @@ async def reconcile_orphaned_media(
             # column names this object in a shape the parser should learn. Protect it
             # now, count it so the run reports it, and let a human teach the parser.
             protected_by_raw_match += 1
-            logger.warning(
-                "media_reconcile: object=%s is referenced only by an unparsed stored "
-                "value - protected, but resolve_object_names() should learn this form",
-                blob.name,
-            )
+            if list_eligible:
+                logger.warning(
+                    "media_reconcile: object=%s is referenced only by an unparsed "
+                    "stored value - protected, but resolve_object_names() should "
+                    "learn this form",
+                    blob.name,
+                )
         elif not _is_old_enough(blob, cutoff):
             too_young += 1
         else:
@@ -376,8 +466,17 @@ async def reconcile_orphaned_media(
 
     eligible = tuple(blob.name for blob in candidates)
     if not delete:
-        for name in eligible:
-            logger.info("media_reconcile dry-run: would delete unreferenced object=%s", name)
+        if list_eligible:
+            for name in eligible:
+                logger.info(
+                    "media_reconcile dry-run: would delete unreferenced object=%s", name
+                )
+        _print_aggregate(
+            mode=mode, outcome="completed", scanned=len(blobs), referenced=referenced,
+            too_young=too_young, eligible=len(eligible),
+            unresolved=references.unresolved,
+            protected_by_raw_match=protected_by_raw_match, deleted=0,
+        )
         return ReconcileResult(
             scanned=len(blobs),
             referenced=referenced,
@@ -396,11 +495,20 @@ async def reconcile_orphaned_media(
             blob.delete()
         except NotFound:
             already_gone.append(blob.name)
-            logger.info("media_reconcile: object=%s was already gone", blob.name)
+            if list_eligible:
+                logger.info("media_reconcile: object=%s was already gone", blob.name)
         else:
             deleted.append(blob.name)
-            logger.info("media_reconcile: deleted unreferenced object=%s", blob.name)
+            if list_eligible:
+                logger.info(
+                    "media_reconcile: deleted unreferenced object=%s", blob.name
+                )
 
+    _print_aggregate(
+        mode=mode, outcome="completed", scanned=len(blobs), referenced=referenced,
+        too_young=too_young, eligible=len(eligible), unresolved=references.unresolved,
+        protected_by_raw_match=protected_by_raw_match, deleted=len(deleted),
+    )
     return ReconcileResult(
         scanned=len(blobs),
         referenced=referenced,
@@ -413,7 +521,9 @@ async def reconcile_orphaned_media(
     )
 
 
-async def _run_and_report(*, delete: bool, min_age_hours: int) -> ReconcileResult:
+async def _run_and_report(
+    *, delete: bool, min_age_hours: int, list_eligible: bool
+) -> ReconcileResult:
     """Open one read-only session against the configured DB and reconcile.
 
     No commit: this job only ever SELECTs from the database. Everything it changes
@@ -423,12 +533,47 @@ async def _run_and_report(*, delete: bool, min_age_hours: int) -> ReconcileResul
 
     async with get_session_factory()() as session:
         return await reconcile_orphaned_media(
-            session, delete=delete, min_age_hours=min_age_hours
+            session, delete=delete, min_age_hours=min_age_hours, list_eligible=list_eligible
         )
 
 
-def main() -> None:
-    """CLI entry point: `python -m app.jobs.media_reconcile [--delete]`."""
+def format_cli_output(result: ReconcileResult, *, delete: bool, list_eligible: bool) -> str:
+    """The human summary printed by `main()`, as a pure function so it is testable
+    without a database or GCS (board c414).
+
+    The first line (the human summary — scanned/referenced/too_young/eligible=len,
+    counts only) always prints. Every line naming a specific object — the would-delete
+    and DELETED lines — prints only when list_eligible is True: see the module
+    docstring for why a scheduled run must not write a posts/ object name (it embeds a
+    user id) to output by default.
+    """
+    mode = "DELETED" if delete else "DRY RUN, would delete"
+    lines = [
+        f"media_reconcile: scanned={result.scanned} referenced={result.referenced} "
+        f"too_young={result.too_young} eligible={len(result.eligible)}"
+    ]
+    if result.unresolved_values or result.protected_by_raw_match:
+        lines.append(
+            f"  unparsed stored values={result.unresolved_values} "
+            f"objects protected only by raw match={result.protected_by_raw_match} "
+            "(see warnings: a url form the resolver does not recognize)"
+        )
+    if list_eligible:
+        for name in result.eligible:
+            lines.append(f"  {mode}: {name}")
+    if result.already_gone:
+        lines.append(f"  already gone (counted as success): {len(result.already_gone)}")
+    if not delete and result.eligible:
+        lines.append("  nothing was deleted; re-run with --delete to act on the list above")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """CLI entry point: `python -m app.jobs.media_reconcile [--delete] [--list-eligible]`.
+
+    argv is accepted (defaulting to sys.argv via argparse) so tests can drive this
+    function directly instead of shelling out.
+    """
     parser = argparse.ArgumentParser(
         description=(
             "Delete posts/ objects no post row references any more. Reports without "
@@ -441,6 +586,15 @@ def main() -> None:
         help="actually delete the eligible objects (default: report only)",
     )
     parser.add_argument(
+        "--list-eligible",
+        action="store_true",
+        help=(
+            "also print each eligible/deleted object name and each unresolved or "
+            "raw-match-protected stored value (default: counts only — posts/ names "
+            "embed user ids, and this job is meant to run on a schedule; board c414)"
+        ),
+    )
+    parser.add_argument(
         "--min-age-hours",
         type=_positive_hours,
         default=DEFAULT_MIN_AGE_HOURS,
@@ -449,29 +603,17 @@ def main() -> None:
             f"(default: {DEFAULT_MIN_AGE_HOURS})"
         ),
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     result = asyncio.run(
-        _run_and_report(delete=args.delete, min_age_hours=args.min_age_hours)
+        _run_and_report(
+            delete=args.delete,
+            min_age_hours=args.min_age_hours,
+            list_eligible=args.list_eligible,
+        )
     )
 
-    mode = "DELETED" if args.delete else "DRY RUN, would delete"
-    print(
-        f"media_reconcile: scanned={result.scanned} referenced={result.referenced} "
-        f"too_young={result.too_young} eligible={len(result.eligible)}"
-    )
-    if result.unresolved_values or result.protected_by_raw_match:
-        print(
-            f"  unparsed stored values={result.unresolved_values} "
-            f"objects protected only by raw match={result.protected_by_raw_match} "
-            "(see warnings: a url form the resolver does not recognize)"
-        )
-    for name in result.eligible:
-        print(f"  {mode}: {name}")
-    if result.already_gone:
-        print(f"  already gone (counted as success): {len(result.already_gone)}")
-    if not args.delete and result.eligible:
-        print("  nothing was deleted; re-run with --delete to act on the list above")
+    print(format_cli_output(result, delete=args.delete, list_eligible=args.list_eligible))
 
 
 if __name__ == "__main__":

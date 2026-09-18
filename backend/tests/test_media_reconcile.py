@@ -17,6 +17,7 @@ a green fake-backed suite.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -517,7 +518,12 @@ async def test_a_malformed_stored_value_is_logged_and_skipped_without_crashing(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Pre-c139 means literally anything, including strings that are not urls."""
+    """Pre-c139 means literally anything, including strings that are not urls.
+
+    list_eligible=True (board c414): the stored value only reaches the log when a
+    human asked for it - see test_default_run_omits_object_names_and_stored_values_
+    from_logs below for the default (scheduled) case, where it must NOT appear.
+    """
     setup = await make_chapter_with("member")
     live = f"posts/{setup.member.id}/live.jpg"
     await _insert_post(setup.chapter_id, setup.member.id, media_urls=[_url(live)])
@@ -527,7 +533,7 @@ async def test_a_malformed_stored_value_is_logged_and_skipped_without_crashing(
     _install_fake_gcs(monkeypatch, [_blobs(captured, (live, NOW - timedelta(days=30)))], captured)
 
     with caplog.at_level(logging.WARNING, logger=media_reconcile.logger.name):
-        result = await _reconcile(delete=True)
+        result = await _reconcile(delete=True, list_eligible=True)
 
     assert result.unresolved_values == 1
     assert result.deleted == ()
@@ -544,7 +550,13 @@ async def test_an_unparsed_value_still_protects_an_object_by_raw_match(
     """The last backstop, for a url form nobody enumerated. The object name appears
     verbatim inside the stored value, so it is protected even though the resolver
     returned nothing for that value - and the run says so, because the backstop firing
-    means the resolver has a gap worth closing."""
+    means the resolver has a gap worth closing.
+
+    list_eligible=True (board c414): the protection itself (protected_by_raw_match,
+    deleted==()) does not depend on this flag - only whether the object name reaches
+    the log does. See test_default_run_omits_object_names_and_stored_values_from_logs
+    below for the default case.
+    """
     setup = await make_chapter_with("member")
     name = f"posts/{setup.member.id}/unknown-form.jpg"
     await _insert_post(
@@ -562,7 +574,7 @@ async def test_an_unparsed_value_still_protects_an_object_by_raw_match(
     _install_fake_gcs(monkeypatch, [_blobs(captured, (name, NOW - timedelta(days=30)))], captured)
 
     with caplog.at_level(logging.WARNING, logger=media_reconcile.logger.name):
-        result = await _reconcile(delete=True)
+        result = await _reconcile(delete=True, list_eligible=True)
 
     assert result.protected_by_raw_match == 1
     assert result.deleted == ()
@@ -570,3 +582,219 @@ async def test_an_unparsed_value_still_protects_an_object_by_raw_match(
     assert "resolve_object_names() should learn this form" in "\n".join(
         r.getMessage() for r in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# D1 (board c414): exactly one structured aggregate JSON line to stdout, every run,
+# success or abort, counts only. Cloud Run Jobs parses this into jsonPayload; the two
+# infra/monitoring/metrics/media-reconcile-*-runs.json log metrics filter on it.
+# ---------------------------------------------------------------------------
+
+
+def _aggregate_lines(capsys: pytest.CaptureFixture[str]) -> list[dict]:
+    """Every stdout line this run printed that parses as a JSON object.
+
+    Deliberately re-parses raw stdout rather than calling a helper the production
+    code exposes - a regression that stops calling json.dumps (e.g. prints a plain
+    f-string instead) must be caught here, not laundered through a shared formatter.
+    """
+    out = capsys.readouterr().out
+    lines = []
+    for raw in out.splitlines():
+        try:
+            lines.append(json.loads(raw))
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return lines
+
+
+async def test_aggregate_line_is_emitted_once_with_documented_keys_on_a_dry_run(
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    setup = await make_chapter_with("member")
+    orphan = f"posts/{setup.member.id}/orphaned.jpg"
+    captured: dict = {}
+    _install_fake_gcs(
+        monkeypatch, [_blobs(captured, (orphan, NOW - timedelta(days=30)))], captured
+    )
+
+    await _reconcile()
+
+    lines = _aggregate_lines(capsys)
+    assert len(lines) == 1
+    line = lines[0]
+    assert set(line) == set(media_reconcile.AGGREGATE_KEYS)
+    assert line["schema_version"] == 1
+    assert line["signal_family"] == "chirp_job"
+    assert line["event"] == "media_reconcile_aggregate"
+    assert line["mode"] == "dry_run"
+    assert line["outcome"] == "completed"
+    assert line["eligible"] == 1
+    assert line["deleted"] == 0
+    int_keys = set(media_reconcile.AGGREGATE_KEYS) - {
+        "schema_version", "signal_family", "event", "mode", "outcome",
+    }
+    for key in int_keys:
+        assert isinstance(line[key], int) and not isinstance(line[key], bool)
+    # No object name or user id leaked into the machine-readable line.
+    assert orphan not in json.dumps(line)
+    assert str(setup.member.id) not in json.dumps(line)
+
+
+async def test_aggregate_line_is_emitted_once_on_a_delete_run(
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    setup = await make_chapter_with("member")
+    orphan = f"posts/{setup.member.id}/orphaned.jpg"
+    captured: dict = {}
+    _install_fake_gcs(
+        monkeypatch, [_blobs(captured, (orphan, NOW - timedelta(days=30)))], captured
+    )
+
+    await _reconcile(delete=True)
+
+    lines = _aggregate_lines(capsys)
+    assert len(lines) == 1
+    line = lines[0]
+    assert set(line) == set(media_reconcile.AGGREGATE_KEYS)
+    assert line["mode"] == "delete"
+    assert line["outcome"] == "completed"
+    assert line["eligible"] == 1
+    assert line["deleted"] == 1
+    assert orphan not in json.dumps(line)
+
+
+async def test_aggregate_line_is_emitted_on_the_abort_path_before_it_propagates(
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """T1 regression this guards against: emitting the aggregate only on success would
+    lose it on exactly the path an operator most needs it - a misconfiguration."""
+    setup = await make_chapter_with("member")
+    await _insert_post(
+        setup.chapter_id,
+        setup.member.id,
+        media_urls=[_url("posts/u/elsewhere.jpg", bucket=OTHER_BUCKET)],
+    )
+    captured: dict = {}
+    _install_fake_gcs(
+        monkeypatch,
+        [_blobs(captured, ("posts/u/looks-orphaned.jpg", NOW - timedelta(days=30)))],
+        captured,
+    )
+
+    with pytest.raises(ReconcileAborted):
+        await _reconcile(delete=True)
+
+    lines = _aggregate_lines(capsys)
+    assert len(lines) == 1
+    line = lines[0]
+    assert set(line) == set(media_reconcile.AGGREGATE_KEYS)
+    assert line["outcome"] == "aborted"
+    assert line["mode"] == "delete"
+    assert line["unresolved"] == 0
+    assert line["scanned"] == 0
+
+
+# ---------------------------------------------------------------------------
+# D2 (board c414): no object name or stored value anywhere in output by default - a
+# scheduled run must not write a user id to logs every day. --list-eligible restores
+# them. format_cli_output is a pure function (no DB/GCS) for the CLI half; the log
+# lines inside reconcile_orphaned_media are covered directly below that.
+# ---------------------------------------------------------------------------
+
+
+def _result(**overrides) -> media_reconcile.ReconcileResult:
+    defaults: dict = dict(
+        scanned=1, referenced=0, protected_by_raw_match=0, too_young=0,
+        eligible=("posts/u1/orphan.jpg",), deleted=(), already_gone=(),
+        unresolved_values=0,
+    )
+    defaults.update(overrides)
+    return media_reconcile.ReconcileResult(**defaults)
+
+
+def test_default_cli_output_has_no_object_name() -> None:
+    output = media_reconcile.format_cli_output(_result(), delete=False, list_eligible=False)
+    assert "posts/u1/orphan.jpg" not in output
+    assert "eligible=1" in output
+
+
+def test_list_eligible_cli_output_includes_the_object_name() -> None:
+    output = media_reconcile.format_cli_output(_result(), delete=False, list_eligible=True)
+    assert "posts/u1/orphan.jpg" in output
+    assert "DRY RUN, would delete: posts/u1/orphan.jpg" in output
+
+
+def test_list_eligible_cli_output_on_a_delete_run_says_deleted() -> None:
+    output = media_reconcile.format_cli_output(
+        _result(deleted=("posts/u1/orphan.jpg",)), delete=True, list_eligible=True
+    )
+    assert "DELETED: posts/u1/orphan.jpg" in output
+
+
+async def test_default_run_omits_object_names_and_stored_values_from_logs(
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """T2 regression this guards against: logging a name or stored value
+    unconditionally, ignoring list_eligible."""
+    setup = await make_chapter_with("member")
+    orphan = f"posts/{setup.member.id}/orphan.jpg"
+    unresolved_raw = "not a url at all"
+    # A canonical, resolving row alongside the unparseable one so the all-rows abort
+    # guard does not fire first - this test is about default log verbosity, not the
+    # guard (which has its own tests above).
+    live = f"posts/{setup.member.id}/live.jpg"
+    await _insert_post(setup.chapter_id, setup.member.id, media_urls=[_url(live)])
+    await _insert_post(setup.chapter_id, setup.member.id, media_urls=[unresolved_raw])
+
+    captured: dict = {}
+    _install_fake_gcs(
+        monkeypatch,
+        [_blobs(captured, (live, NOW - timedelta(days=30)), (orphan, NOW - timedelta(days=30)))],
+        captured,
+    )
+
+    with caplog.at_level(logging.INFO, logger=media_reconcile.logger.name):
+        result = await _reconcile(delete=True)
+
+    assert result.deleted == (orphan,)
+    assert result.unresolved_values == 1
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert orphan not in logged
+    assert unresolved_raw not in logged
+
+
+async def test_list_eligible_restores_object_names_and_stored_values_in_logs(
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    setup = await make_chapter_with("member")
+    orphan = f"posts/{setup.member.id}/orphan.jpg"
+    unresolved_raw = "not a url at all"
+    live = f"posts/{setup.member.id}/live.jpg"
+    await _insert_post(setup.chapter_id, setup.member.id, media_urls=[_url(live)])
+    await _insert_post(setup.chapter_id, setup.member.id, media_urls=[unresolved_raw])
+
+    captured: dict = {}
+    _install_fake_gcs(
+        monkeypatch,
+        [_blobs(captured, (live, NOW - timedelta(days=30)), (orphan, NOW - timedelta(days=30)))],
+        captured,
+    )
+
+    with caplog.at_level(logging.INFO, logger=media_reconcile.logger.name):
+        result = await _reconcile(delete=True, list_eligible=True)
+
+    assert result.deleted == (orphan,)
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert orphan in logged
+    assert unresolved_raw in logged

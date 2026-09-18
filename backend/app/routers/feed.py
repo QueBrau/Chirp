@@ -172,10 +172,12 @@ async def _commit_or_log_orphaned_media(session: AsyncSession, media_urls: list[
     to auto-clean a rare failure.
 
     c153 changed what happens to it AFTERWARDS, not what happens here: an unreferenced
-    posts/ object is now reclaimed by app.jobs.media_reconcile once it is past that
-    job's age floor, so this no longer strands an object forever waiting on a human.
-    The loud log stays anyway - it is the only signal that a commit failed at all, and
-    it names the object immediately instead of on the reconciler's next run.
+    posts/ object becomes eligible on app.jobs.media_reconcile's next dry run once it
+    is past that job's age floor, but reclaiming it still waits on a human (board
+    c414: a manager reviews a --list-eligible dry run and approves a manual, one-off
+    --delete per DEPLOY.md section 8; nothing is deleted automatically). The loud log
+    stays regardless - it is the only signal that a commit failed at all, and it names
+    the object immediately instead of waiting on the reconciler's next scheduled run.
     """
     try:
         await session.commit()
@@ -184,8 +186,9 @@ async def _commit_or_log_orphaned_media(session: AsyncSession, media_urls: list[
             logger.error(
                 "post commit failed after media was already moved to permanent "
                 "storage url=%s - now an orphan; this route cannot delete it "
-                "(posts/ is immutable to this identity by design), "
-                "app.jobs.media_reconcile reclaims it on a later run",
+                "(posts/ is immutable to this identity by design); "
+                "app.jobs.media_reconcile can flag it as eligible on a later dry "
+                "run, but only a manager-approved manual deletion reclaims it",
                 url,
             )
         raise
@@ -875,8 +878,11 @@ async def delete_own_post(
     not have to carry the fix as well, and there is no window where the bug is live.
 
     It also matters more than an ordinary gap because the promise is already in writing:
-    /privacy is live and commits to deleting your content, and c69's purge job is built
-    against the same promise. A delete the user cannot reach makes both untrue.
+    /privacy (c367's copy) says a removed post becomes eligible for deletion from the
+    active database after 30 days, and c69's purge job is built against that same
+    promise - the page does not cover photo files, which are a separate, human-approved
+    process (board c414). A delete the user cannot reach still makes the database half
+    of that promise untrue.
 
     AUTHORIZATION: the author always. A president may also delete, but only for a post
     that HAS a chapter — no chapter means no president, and inventing one would be the
