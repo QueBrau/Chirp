@@ -176,3 +176,56 @@ def test_protected_emitter_stream_failures_still_suppress_private_diagnostics():
     ''')
     assert result.stdout.strip() == "operation-finished"
     assert result.stderr == ""
+
+
+def test_unprotected_app_stream_failures_still_surface_on_stderr():
+    # c416: the isolated-emitter exception must not silence every app logger.
+    result = run_logging('''
+        import logging
+        from app.core.logging_config import configure_app_logging
+        class Broken:
+            def write(self, message): raise RuntimeError("c416 fixture stream failure")
+            def flush(self): pass
+        logging.raiseExceptions = True
+        configure_app_logging()
+        logging.getLogger("app").handlers[0].setStream(Broken())
+        logging.getLogger("app.tests.c416").warning("c416 ordinary logger event")
+        print("operation-finished")
+    ''')
+    assert result.stdout.strip() == "operation-finished"
+    assert "--- Logging error ---" in result.stderr
+    assert "RuntimeError: c416 fixture stream failure" in result.stderr
+    assert "Message: 'c416 ordinary logger event'" in result.stderr
+
+
+def test_real_analytics_drop_diagnostic_reaches_stdout_with_warning_severity():
+    # c416: caplog sees this record before the formatter can strip its severity.
+    result = run_logging('''
+        from app.core.logging_config import configure_app_logging
+        from app.core.analytics import emit
+        configure_app_logging()
+        emit("c416-private-unknown-event", private_key="c416-private-property")
+    ''')
+    assert json.loads(result.stdout) == {
+        "severity": "WARNING",
+        "logger": "app.analytics_diagnostics",
+        "message": "analytics emit failed: event dropped",
+    }
+    assert "c416-private-" not in result.stdout + result.stderr
+    assert result.stderr == ""
+
+
+def test_analytics_warning_does_not_use_the_info_json_bypass():
+    # c416: a JSON message's claimed severity cannot override the record's level.
+    result = run_logging('''
+        import logging
+        from app.core.logging_config import configure_app_logging
+        configure_app_logging()
+        logging.getLogger("app.analytics").warning('{"severity":"INFO","event":"c416-fixture"}')
+    ''')
+    assert json.loads(result.stdout) == {
+        "severity": "WARNING",
+        "logger": "app.analytics",
+        "message": '{"severity":"INFO","event":"c416-fixture"}',
+    }
+    assert result.stderr == ""
