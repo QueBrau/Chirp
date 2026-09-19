@@ -738,6 +738,31 @@ def test_list_eligible_cli_output_on_a_delete_run_says_deleted() -> None:
     assert "DELETED: posts/u1/orphan.jpg" in output
 
 
+def test_cli_defaults_list_eligible_to_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T2 regression (b): the tests above prove logs stay silent when
+    reconcile_orphaned_media itself is called with list_eligible=False, but that is a
+    different place from the CLI's own default. Flipping --list-eligible's
+    action="store_true" default to True would make every scheduled invocation (which
+    passes no flags at all) start listing object names and user ids again without any
+    of those tests going red - this one exercises main()'s own argument parsing and
+    wiring instead of the underlying function's default.
+    """
+    captured: dict = {}
+
+    async def _fake_run_and_report(*, delete, min_age_hours, list_eligible):
+        captured["delete"] = delete
+        captured["min_age_hours"] = min_age_hours
+        captured["list_eligible"] = list_eligible
+        return _result(eligible=())
+
+    monkeypatch.setattr(media_reconcile, "_run_and_report", _fake_run_and_report)
+
+    media_reconcile.main([])
+
+    assert captured["list_eligible"] is False
+    assert captured["delete"] is False
+
+
 async def test_default_run_omits_object_names_and_stored_values_from_logs(
     make_chapter_with: MakeChapterWith,
     monkeypatch: pytest.MonkeyPatch,
