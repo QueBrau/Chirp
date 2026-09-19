@@ -442,8 +442,11 @@ gcloud secrets add-iam-policy-binding MEDIA_RECONCILE_DATABASE_URL --project=$PR
 ```
 
 Pin the job to the exact image currently serving the API, rather than a mutable tag.
-The stored job definition remains dry-run-only: it has neither `--delete` nor a
-scheduler, uses one task, and does not retry automatically.
+The stored job definition remains dry-run-only: it has neither `--delete` nor
+`--list-eligible`, uses one task, and does not retry automatically. A Cloud Scheduler
+cadence may target this job's run endpoint (board c414, Jose, Sep 15 — see below) as
+long as the stored args stay exactly this dry-run form; the schedule itself must never
+add `--delete`.
 
 ```bash
 export RECONCILE_IMAGE=$(gcloud run services describe chirp-api --region=$REGION --project=$PROJECT --format='value(spec.template.spec.containers[0].image)')
@@ -468,25 +471,32 @@ FROM posts
 CROSS JOIN LATERAL unnest(coalesce(media_urls, ARRAY[]::text[])) AS media_url;
 ```
 
-The manager's first pass is dry-run only. Execute it, wait for success, and read the
-complete logs. Record `scanned`, `referenced`, `too_young`, `eligible`, unresolved
-values, raw-match protections, and every proposed object name. Independently compare
-that list with the database query and `posts/` inventory. Also verify the runner can
-list the bucket but cannot create or replace a `posts/` object, cannot access `tmp/`,
-and that `chirp-api-run` still cannot delete from `posts/`.
+The manager's first pass is dry-run only, with `--list-eligible` so the run records
+proposed object names. Execute it, wait for success, and read the complete logs.
+Record `scanned`, `referenced`, `too_young`, `eligible`, unresolved values, raw-match
+protections, and every proposed object name. Independently compare that list with the
+database query and `posts/` inventory. Also verify the runner can list the bucket but
+cannot create or replace a `posts/` object, cannot access `tmp/`, and that
+`chirp-api-run` still cannot delete from `posts/`.
 
 ```bash
-gcloud run jobs execute chirp-media-reconcile --project=$PROJECT --region=$REGION --wait
+gcloud run jobs execute chirp-media-reconcile --project=$PROJECT --region=$REGION --args=-m,app.jobs.media_reconcile,--list-eligible --wait
 ```
 
-Do not add a schedule or change the stored job to destructive mode. An actual cleanup
-requires explicit manager approval of that exact dry-run output. After approval, use
-a one-off execution override so the persistent job remains safe by default, then
-inspect the execution logs and rerun the normal dry run to prove the approved objects
-are gone and no additional candidates appeared.
+A scheduled DRY RUN is allowed (board c414, Jose, Sep 15): the stored job's args stay
+`python -m app.jobs.media_reconcile` with neither `--delete` nor `--list-eligible`, so
+a daily Cloud Scheduler trigger produces only the counts-only summary and the
+machine-readable aggregate line — never an object name or stored value — on the
+routine schedule (see `MONITORING-RUNBOOK.md` for the two alerts that watch that
+aggregate line, and the evidence-gate proposal for moving past this). `--delete` is
+never scheduled, under any circumstances; destructive runs stay a manual, one-off
+execution override that requires explicit manager approval of that exact dry-run
+output. After approval, use the override below so the persistent job remains safe by
+default, then inspect the execution logs and rerun the normal dry run to prove the
+approved objects are gone and no additional candidates appeared.
 
 ```bash
-gcloud run jobs execute chirp-media-reconcile --project=$PROJECT --region=$REGION --args=-m,app.jobs.media_reconcile,--delete --wait
+gcloud run jobs execute chirp-media-reconcile --project=$PROJECT --region=$REGION --args=-m,app.jobs.media_reconcile,--delete,--list-eligible --wait
 ```
 
 ## Fast path for go-live testing (before full GCP)
