@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1789785833339,
+  "updated": 1789786944239,
   "alpha": {
     "goal": "ALPHA LIVE \u2014 real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -418,11 +418,11 @@
   "cards": [
     {
       "id": "c420",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "",
       "area": "",
-      "title": "c420 [PR #318 OPEN; 29 LOCAL TESTS GREEN; INDEPENDENT REVIEW ACCEPTED Sep 19; J/Codex] Regression 42a73ca pins final-live send refusal after real partial history: exact guard error, only 2 accepted POSTs, fixed history 2 expected/1 recovered/1 missing, bounded cleanup. Guard deletion makes the new test fail and permits a third POST while the final report correctly remains NOT_PROVEN. Focused baseline 1 passed; full recovery file 29 passed in 104.96s; independent source/diff review accepted. Runtime code unchanged. Remaining: all 4 CI jobs on final synchronized head, fresh board/ownership check, PR merge and Done evidence. c363 separate workload/operational gates remain open.",
+      "title": "DONE Sep 19, merged 9d50819 via PR #318 after chirps-17's independent review, which is the review that filed this card. Baseline 29 tests passed; disabling the history-reconciliation requirement turned exactly test_final_live_send_refuses_partial_history_before_http_dispatch red, and the tree restored clean afterwards. The test pins the surrounding state rather than only the error: reconnected_ready true, history_reconciled false, final_live never entered, history_recovery expected 2 unique 1 missing 1, every connection closed and every task done. The guard this card was filed against is now pinned | was: c420 [PR #318 OPEN; 29 LOCAL TESTS GREEN; INDEPENDENT REVIEW ACCEPTED Sep 19; J/Codex] Regression 42a73ca pins final-live send refusal after real partial history: exact guard error, only 2 accepted POSTs, fixed history 2 expected/1 recovered/1 missing, bounded cleanup. Guard deletion makes the new test fail and permits a third POST while the final report correctly remains NOT_PROVEN. Focused baseline 1 passed; full recovery file 29 passed in 104.96s; independent source/diff review accepted. Runtime code unchanged. Remaining: all 4 CI jobs on final synchronized head, fresh board/ownership check, PR merge and Done evidence. c363 separate workload/operational gates remain open.",
       "detail": "c420 [P3 | test gap, found Sep 19 by chirps-17 reviewing PR #316 after it merged] loadtest/message_recovery.py's final-send guard is unpinned. The tool refuses a final live send when the history phase has not reconciled (ReceiptError history_not_reconciled_before_final_send), but disabling that guard leaves all 28 unit tests green. The state is reachable rather than defensive-only: the tool sets phases['history_reconciled'] from real state (len(history_seen) == len(ready)), so a partial history leaves it false while the run continues to the final send. Without the guard the instrument could report a passing recovery whose history never reconciled for every recipient, which is the one thing it exists to prove. FIX: a test that drives the final-live send with history_reconciled false and asserts the ReceiptError, shown red with the guard removed. The neighbouring checks do not cover it: offline_cohort_not_proven and http_mix_ended_before_send fire on other conditions, and message_phase_invalid only rejects phases outside initial_live and final_live. EVIDENCE: independent review posted on PR #316; baseline 28 unit tests plus the integration test passing against a real local Redis; the other two sabotages (forgiving an unexpected close, reusing stale ready frames after reconnect) turned 3 and 6 tests red. Unowned; c363's owner may fold it into the next slice"
     },
     {
