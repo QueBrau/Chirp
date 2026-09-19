@@ -223,6 +223,87 @@ def test_public_invoker_expected_but_public_bucket_flagged(cfg, policy):
     assert any(r["scope"] == "iam/bucket" for r in result["findings"])
 
 
+def split_identity_provider(cfg):
+    """Provider evidence is authored independently of the identity resolver."""
+    accounts = {role: f"reviewed-{role}-runtime@chirps-prod.iam.gserviceaccount.com" for role in ("api", "ws")}
+    for role, account in accounts.items():
+        cfg["services"][role]["service_account"] = account
+    base = fake_provider(cfg)
+
+    def request(args, command, fields):
+        body = base(args, command, fields)
+        if command[:2] == ["run", "services"] and command[2] == "describe":
+            role = "api" if command[3] == cfg["services"]["api"]["name"] else "ws"
+            body["spec"]["template"]["spec"]["serviceAccountName"] = accounts[role]
+        if command[:2] == ["run", "revisions"]:
+            role = "api" if command[3] == cfg["services"]["api"]["name"] + "-0001-test" else "ws"
+            body["spec"]["serviceAccountName"] = accounts[role]
+        return body
+    return accounts, request
+
+
+def test_split_identity_inventory_matches_both_templates_and_revisions(monkeypatch, cfg, policy):
+    accounts, request = split_identity_provider(cfg)
+    result = collect(monkeypatch, cfg, policy, request)
+    assert result["metadata_complete_for_requested_scopes"]
+    for scope, row in result["observations"].items():
+        if scope.startswith(("service/", "revision/")):
+            assert row["runtime_identity_matches_source"] is True
+            assert row["shared_runtime_identity"] is False
+    assert not any(r["issue"] == "runtime_identity_differs_from_source" for r in result["findings"])
+    assert result["verdict"] == "NOT_PROVEN" and not result["effective_iam_verified"]
+    assert all(account not in json.dumps(result) for account in accounts.values())
+
+
+@pytest.mark.parametrize("role", ["api", "ws"])
+@pytest.mark.parametrize("kind", ["services", "revisions"])
+def test_split_identity_rejects_other_services_identity(monkeypatch, cfg, policy, role, kind):
+    accounts, base = split_identity_provider(cfg)
+    name = cfg["services"][role]["name"] + ("-0001-test" if kind == "revisions" else "")
+
+    def wrong_identity(args, command, fields):
+        body = base(args, command, fields)
+        if command[:4] == ["run", kind, "describe", name]:
+            spec = body["spec"] if kind == "revisions" else body["spec"]["template"]["spec"]
+            spec["serviceAccountName"] = accounts["ws" if role == "api" else "api"]
+        return body
+
+    result = collect(monkeypatch, cfg, policy, wrong_identity)
+    scope = "revision/" + name if kind == "revisions" else "service/" + role
+    assert {"scope": scope, "issue": "runtime_identity_differs_from_source"} in result["findings"]
+
+
+@pytest.mark.parametrize("override_roles", [(), ("ws",), ("api", "ws")])
+def test_iam_membership_and_broad_grants_cover_effective_service_identities(cfg, policy, override_roles):
+    accounts = {role: cfg["shared"]["service_account"] for role in ("api", "ws")}
+    for role in override_roles:
+        accounts[role] = f"reviewed-{role}-runtime@chirps-prod.iam.gserviceaccount.com"
+        cfg["services"][role]["service_account"] = accounts[role]
+    bindings = [{"role": "roles/editor", "members": ["serviceAccount:" + account],
+                 "condition": {"expression": PRIVATE}} for account in sorted(set(accounts.values()))]
+    iam = N.iam_summary({"bindings": bindings}, cfg)
+    expected_groups = sorted(sorted(role for role in accounts if accounts[role] == account) for account in set(accounts.values()))
+    assert sorted(row["runtime_services"] for row in iam["direct_bindings"]) == expected_groups
+    assert all(row["condition_present"] for row in iam["direct_bindings"])
+    assert not iam["effective_access_verified"]
+    result = {"observations": {"iam/project": iam}, "findings": []}
+    N.assess(result, cfg, policy)
+    assert sum(row["issue"] == "broad_runtime_grant_requires_review" for row in result["findings"]) == len(bindings)
+    assert PRIVATE not in json.dumps(result)
+    assert all(account not in json.dumps(result) for account in accounts.values())
+
+
+def test_vm_identity_counts_distinguish_override_and_shared_fallback(cfg, policy):
+    override = "reviewed-ws-runtime@chirps-prod.iam.gserviceaccount.com"
+    cfg["services"]["ws"]["service_account"] = override
+    body = [{"serviceAccounts": [{"email": account}]} for account in
+            (override, cfg["shared"]["service_account"], PRIVATE)]
+    result = N.summarize("vms", body, cfg, policy)
+    assert result["shared_runtime_identity_count"] == 1
+    assert result["runtime_identity_counts"] == {"api": 1, "ws": 1}
+    assert PRIVATE not in json.dumps(result) and override not in json.dumps(result)
+
+
 def test_real_cli_redacts_provider_failure_and_has_explicit_read_only_commands(tmp_path):
     fake = tmp_path / "gcloud"
     calls = tmp_path / "calls.jsonl"

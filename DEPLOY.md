@@ -206,17 +206,21 @@ plan so subsequent releases and verification preserve the intended split.
 The role changes below describe that future rollout; they do not replace the
 serialized staging, promotion and drain procedure in section 7.
 
-```sh
-gcloud run services update chirp-api --update-env-vars SERVICE_ROLE=api
-gcloud run services update chirp-ws --update-env-vars SERVICE_ROLE=ws
-```
+For an approved split, set each reviewed `services.<api|ws>.env.SERVICE_ROLE`
+to its intended role and, when approved, set its optional `service_account`.
+Omitting `service_account` inherits `shared.service_account`; an empty value does
+not. Regenerate and review the pinned-image plan in section 7. Both comparison and
+deployment command generation use the same intended identity, including checks
+against each serving revision. This prepares configuration support; it creates
+no accounts or IAM grants and leaves the current configuration unchanged.
+Plans with either specialized role stage and promote WS before API, with the
+first predecessor drained before the second service starts. Ordinary `all`/`all`
+image releases keep their API-before-WS sequence.
 
-Rollback (either service): remove the override or set it back to `all`:
-
-```sh
-gcloud run services update <service> --remove-env-vars SERVICE_ROLE
-# or: gcloud run services update <service> --update-env-vars SERVICE_ROLE=all
-```
+Rollback also requires reviewed intent: restore the approved role and identity in
+the source and follow the compatible-image, serialized rollback procedure in
+[DEPLOY-CONFIGURATION.md](DEPLOY-CONFIGURATION.md). A direct service update without
+the corresponding source change would be overwritten by a later release.
 
 ## 7. Redeploying the pair
 
@@ -234,6 +238,12 @@ image, explicit sizing/pools and merge-only environment/secret updates. The API 
 WS rollout is serialized with jobs quiescent and old revision drain confirmed
 between services. `--set-env-vars` replaces the entire environment block and must
 not be substituted for the generated `--update-env-vars`.
+
+This build-once, pinned-image plan is the canonical service deployment path.
+Update reviewed identity/role intent before an approved change; do not maintain a
+second routine `--source` deployment path with independently chosen settings.
+The live c375 split, least-privilege verification and rollout remain open until
+their actual operational evidence is recorded.
 
 After convergence, require the generated authenticated verification command to
 pass for both services. A configuration match or unauthenticated health response
