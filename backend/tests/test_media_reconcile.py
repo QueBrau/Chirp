@@ -825,6 +825,96 @@ async def test_default_run_omits_object_names_and_stored_values_from_logs(
     assert unresolved_raw not in logged
 
 
+async def test_default_dry_run_omits_eligible_object_names_from_logs(
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The DRY-RUN loop's own gate, which is the path a scheduled run actually takes.
+
+    Found by chirps-17 reviewing PR #317: the sibling test above only reached the
+    delete-path name line, so removing the gate around the dry-run "would delete"
+    loop left the whole suite green. That is the costliest of the five gates to lose,
+    because option (b) schedules exactly this run daily and every posts/ name embeds
+    the owner's user id (board c414).
+    """
+    setup = await make_chapter_with("member")
+    orphan = f"posts/{setup.member.id}/dry-run-orphan.jpg"
+    live = f"posts/{setup.member.id}/live.jpg"
+    await _insert_post(setup.chapter_id, setup.member.id, media_urls=[_url(live)])
+
+    captured: dict = {}
+    old = NOW - timedelta(days=30)
+    _install_fake_gcs(monkeypatch, [_blobs(captured, (live, old), (orphan, old))], captured)
+
+    with caplog.at_level(logging.INFO, logger=media_reconcile.logger.name):
+        result = await _reconcile()
+
+    assert result.eligible == (orphan,)
+    assert captured.get("delete_attempts") is None
+    assert orphan not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+async def test_default_run_omits_the_raw_match_protected_object_name_from_logs(
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The raw-match backstop's gate (board c414, found by chirps-17 on PR #317).
+
+    The backstop fires on a url form the resolver does not recognise, and its warning
+    names both the object and the stored value. Protection itself does not depend on
+    list_eligible - only whether those strings reach the log does.
+    """
+    setup = await make_chapter_with("member")
+    name = f"posts/{setup.member.id}/unknown-form.jpg"
+    stored = f"https://cdn.example.net/proxy?target={TEST_BUCKET}/{name}"
+    await _insert_post(setup.chapter_id, setup.member.id, media_urls=[stored])
+    await _insert_post(
+        setup.chapter_id, setup.member.id, media_urls=[_url(f"posts/{setup.member.id}/other.jpg")]
+    )
+
+    captured: dict = {}
+    _install_fake_gcs(monkeypatch, [_blobs(captured, (name, NOW - timedelta(days=30)))], captured)
+
+    with caplog.at_level(logging.INFO, logger=media_reconcile.logger.name):
+        result = await _reconcile(delete=True)
+
+    assert result.protected_by_raw_match == 1
+    assert result.deleted == ()
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert name not in logged
+    assert stored not in logged
+
+
+async def test_default_run_omits_an_already_gone_object_name_from_logs(
+    make_chapter_with: MakeChapterWith,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The already-gone branch's gate (board c414, found by chirps-17 on PR #317).
+
+    A racing delete is a normal outcome, not an error, so this line runs on ordinary
+    days; it must not be the one that writes a user id into a scheduled run's logs.
+    """
+    await make_chapter_with("member")
+    gone = "posts/u/raced-away.jpg"
+    still_there = "posts/u/really-here.jpg"
+
+    old = NOW - timedelta(days=30)
+    captured: dict = {"delete_404_names": {gone}}
+    _install_fake_gcs(monkeypatch, [_blobs(captured, (gone, old), (still_there, old))], captured)
+
+    with caplog.at_level(logging.INFO, logger=media_reconcile.logger.name):
+        result = await _reconcile(delete=True)
+
+    assert result.already_gone == (gone,)
+    assert result.deleted == (still_there,)
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert gone not in logged
+    assert still_there not in logged
+
+
 async def test_list_eligible_restores_object_names_and_stored_values_in_logs(
     make_chapter_with: MakeChapterWith,
     monkeypatch: pytest.MonkeyPatch,
