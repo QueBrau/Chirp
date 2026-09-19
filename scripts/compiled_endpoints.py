@@ -1,18 +1,16 @@
-"""Read the API and WebSocket origins actually COMPILED into an iOS build, and
-emit the `client_build` record scripts/deployment_config.py expects.
+"""Inspect exact API and WebSocket URL literals in an iOS build artifact.
 
-Board card c418, unblocking c362's last acceptance item. c362 needs evidence of
-what the shipped binary talks to, which is a different question from what the
-repository config says - deployment_config.compare() asks both separately
-(`client_repository` for the checked-in values, `client_build` for these) and the
-whole point is that they can disagree. A build cut from a stale branch, or with
-the wrong EAS profile, is exactly the case where they do.
+Board card c418 supports c362's artifact review. String-table membership does
+not identify the launch bundle's effective API/WS assignments: expected literals
+can coexist with unused code or alternative endpoints. Therefore this tool
+always reports NOT_PROVEN and never emits a deployable client_build record.
+The operator must separately review the effective assignments and fallback
+branches, retain that evidence, and provide the artifact-bound observation
+documented in DEPLOY-CONFIGURATION.md. This tool does not perform that review.
 
-WHY A SCRIPT AND NOT A NOTE ON THE CARD. The first observation for build
-90e93270 was read by hand. That answer was right and it is worthless one build
-later, because the next build needs the same work again and a pasted URL cannot
-be re-checked. Every sibling verify-* here extracts from the real artifact at run
-time for the same reason.
+Every build needs its own artifact inspection; a pasted URL cannot establish
+what that artifact uses. The archive and bundle hashes bind this limited
+inventory to the bytes read, not to a claimed effective endpoint.
 
 WHY IT PARSES THE HERMES STRING TABLE INSTEAD OF SCANNING FOR TEXT, which is the
 whole engineering content of this script. A Hermes bundle stores string literals
@@ -39,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import struct
@@ -94,8 +93,8 @@ def expected_endpoints(config: dict) -> tuple[str, str]:
     return api, ws
 
 
-def read_archive(app_archive: Path) -> tuple[bytes, str, int]:
-    """Return (bundle bytes, sha256 of the archive, archive size).
+def read_archive(app_archive: Path) -> tuple[bytes, str, int, str]:
+    """Return (bundle bytes, archive sha256, archive size, member name).
 
     The .ipa is read as a zip; nothing is extracted to disk and nothing is
     executed. This inspects an artifact, it does not install one.
@@ -105,13 +104,13 @@ def read_archive(app_archive: Path) -> tuple[bytes, str, int]:
     except OSError:
         raise EndpointError("artifact_unreadable") from None
     try:
-        with zipfile.ZipFile(app_archive) as archive:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             names = [n for n in archive.namelist() if n.endswith(".app/main.jsbundle")]
             if len(names) != 1:
                 # Zero: not an Expo/RN archive, or the bundle moved. More than one:
                 # two apps in one payload, so there is no single answer to give.
                 raise EndpointError("expected_exactly_one_main_jsbundle")
-            return archive.read(names[0]), hashlib.sha256(raw).hexdigest(), len(raw)
+            return archive.read(names[0]), hashlib.sha256(raw).hexdigest(), len(raw), names[0]
     except zipfile.BadZipFile:
         raise EndpointError("artifact_not_a_zip") from None
 
@@ -127,6 +126,8 @@ def hermes_strings(bundle: bytes) -> list[str]:
     """
     if bundle[:8] != HERMES_MAGIC:
         raise EndpointError("bundle_not_hermes_bytecode")
+    if len(bundle) < 32 + len(HEADER_FIELDS) * 4:
+        raise EndpointError("hermes_header_truncated")
     version, = struct.unpack_from("<I", bundle, 8)
     if version not in SUPPORTED_VERSIONS:
         raise EndpointError("unsupported_hermes_version")
@@ -164,12 +165,14 @@ def hermes_strings(bundle: bytes) -> list[str]:
         offset = (entry >> 1) & 0x7FFFFF
         length = (entry >> 24) & 0xFF
         if length == OVERFLOW_MARKER:
+            if offset >= header["overflowStringCount"]:
+                raise EndpointError("hermes_overflow_entry_out_of_range")
             offset, length = struct.unpack_from("<II", bundle, overflow_table + offset * 8)
         if is_utf16:
             # URLs in this codebase are ASCII; a UTF-16 entry is never one of them,
             # and decoding it would only add ways to be wrong.
             continue
-        if storage + offset + length > len(bundle):
+        if offset + length > header["stringStorageSize"]:
             raise EndpointError("hermes_string_entry_out_of_range")
         literals.append(bundle[storage + offset:storage + offset + length].decode("utf-8", "replace"))
     return literals
@@ -179,13 +182,13 @@ def observe(app_archive: Path, build_id: str, config: dict, now: datetime) -> di
     if not BUILD_ID.fullmatch(build_id):
         raise EndpointError("invalid_build_id")
     api_expected, ws_expected = expected_endpoints(config)
-    bundle, digest, size = read_archive(app_archive)
+    bundle, digest, size, member = read_archive(app_archive)
     literals = set(hermes_strings(bundle))
 
     findings: list[dict] = []
 
     def note(field: str, detail: str) -> None:
-        findings.append({"field": field, "kind": "drift", "detail": detail})
+        findings.append({"field": field, "kind": "literal_observation", "detail": detail})
 
     # Exact literal equality, which the string table makes available and a text
     # scan does not. "Contains" would be wrong in the direction that matters:
@@ -197,14 +200,11 @@ def observe(app_archive: Path, build_id: str, config: dict, now: datetime) -> di
     if not ws_ok:
         note("ws_url", "configured_ws_url_is_not_a_literal_in_the_bundle")
 
-    # c246, the failure this card family exists for: the socket resolving to the
-    # API service because EXPO_PUBLIC_WS_URL was never set for the build profile.
-    # Both services run the SAME image, so chirp-api would likely answer /ws and
-    # messaging would look fine while chirp-ws stayed dark - the bug is invisible
-    # from the app and only the artifact settles it.
+    # Flag an API-service socket literal for the assignment reviewer (c246).
+    # Its presence alone does not establish whether any socket uses it.
     api_socket = api_expected.replace("https:", "wss:")
     if any(literal.startswith(api_socket) for literal in literals):
-        note("ws_url", "socket_url_points_at_the_api_service_c246")
+        note("ws_url", "api_service_socket_literal_present_c246")
 
     # A local dev endpoint compiled into a distributable build is the mirror of
     # the same mistake. Scoped to our own scheme+host shapes so third-party SDK
@@ -215,20 +215,26 @@ def observe(app_archive: Path, build_id: str, config: dict, now: datetime) -> di
             if literal.rstrip("/") in {api_expected.rstrip("/"), ws_expected.rstrip("/")}:
                 note("client_build", "local_endpoint_compiled_into_a_distributable_build")
 
-    record = {
+    literal_status = "EXPECTED_LITERALS_PRESENT" if not findings else "LITERAL_FINDINGS"
+    findings.append({"field": "client_build", "kind": "unknown",
+                     "detail": "effective_endpoint_bindings_not_observed"})
+    observation = {
         "build_id": build_id,
-        "api_url": api_expected if api_ok else None,
-        "ws_url": ws_expected if ws_ok else None,
+        "api_origin_literal_present": api_ok,
+        "ws_url_literal_present": ws_ok,
         "observed_at": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     }
     return {
-        "verdict": "DRIFT" if findings else "CLIENT_MATCH",
-        "client_build": record,
+        "verdict": "NOT_PROVEN",
+        "literal_status": literal_status,
+        "literal_observation": observation,
+        "effective_bindings_proven": False,
         "expected": {"api_url": api_expected, "ws_url": ws_expected},
         "artifact": {"name": app_archive.name, "sha256": digest, "bytes": size},
-        "bundle": {"format": "hermes", "version": SUPPORTED_VERSIONS[0], "utf8_literals": len(literals)},
+        "bundle": {"format": "hermes", "version": SUPPORTED_VERSIONS[0], "utf8_literals": len(literals),
+                   "archive_member": member, "sha256": hashlib.sha256(bundle).hexdigest()},
         "findings": findings,
-        "evidence_scope": "compiled_artifact_string_table_observation_not_a_device_test",
+        "evidence_scope": "compiled_artifact_string_table_only_not_effective_bindings_or_device_test",
     }
 
 
@@ -245,7 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.report:
             args.report.write_text(output)
         print(output, end="")
-        return 0 if report["verdict"] == "CLIENT_MATCH" else 1
+        # A successful inventory is not effective-binding or release acceptance.
+        return 1
     except EndpointError as exc:
         print(json.dumps({"verdict": "NOT_PROVEN", "error": str(exc)}, indent=2))
         return 1

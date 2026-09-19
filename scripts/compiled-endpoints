@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# c418: read the endpoints compiled into an iOS build artifact. c392's interpreter
-# pick is not needed here (no TLS), but the wrapper shape matches its siblings.
+# c418: inspect exact endpoint literals; effective bindings need separate review.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-exec python3 "$here/compiled_endpoints.py" "$@"
+source "$here/lib/pick-python.sh"
+python=$(chirp_pick_python compiled-endpoints) || exit $?
+exec "$python" "$here/compiled_endpoints.py" "$@"

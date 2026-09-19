@@ -23,6 +23,8 @@ ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_
 POOL_NAMES = {"DB_POOL_SIZE": "size", "DB_MAX_OVERFLOW": "max_overflow"}
 JOB_POOL_EVIDENCE_SCOPE = "operator_inspected_immutable_image_pool"
 JOB_POOL_EVIDENCE_MAX_AGE_HOURS = 24
+CLIENT_BINDING_EVIDENCE_SCOPE = "operator_reviewed_effective_compiled_endpoints"
+CLIENT_BINDING_METHOD = "launch_bundle_assignment_review"
 ANN = ("autoscaling.knative.dev/minScale", "autoscaling.knative.dev/maxScale", "run.googleapis.com/cloudsql-instances", "run.googleapis.com/vpc-access-connector", "run.googleapis.com/vpc-access-egress", "run.googleapis.com/cpu-throttling", "run.googleapis.com/startup-cpu-boost")
 SERVICE_ANN = ("run.googleapis.com/scalingMode", "run.googleapis.com/manualInstanceCount", "run.googleapis.com/minScale", "run.googleapis.com/maxScale", "run.googleapis.com/ingress", "run.googleapis.com/urls")
 
@@ -104,6 +106,11 @@ def defaults(root: Path = ROOT) -> dict[str, int]:
     return values
 
 
+def service_account(config: dict, role: str) -> str:
+    """Resolve only reviewed intent; an explicit override never falls back on truthiness."""
+    return config["services"][role].get("service_account", config["shared"]["service_account"])
+
+
 def validate(config: dict) -> None:
     try:
         if config["version"] != 1 or set(config["services"]) != {"api", "ws"}:
@@ -119,6 +126,9 @@ def validate(config: dict) -> None:
         for role, service in config["services"].items():
             if not identifier(service["name"]) or not public_origin(service["client_origin"]):
                 raise ConfigError("invalid_service")
+            account = service_account(config, role)
+            if not isinstance(account, str) or not re.fullmatch(r"[A-Za-z0-9_@.:-]+", account):
+                raise ConfigError("invalid_service_account")
             if not isinstance(service["env"], dict) or service["env"].get("SERVICE_ROLE") not in ("all", role):
                 raise ConfigError("invalid_service_role")
             for key in ("concurrency", "revision_min_instances", "revision_max_instances", "service_max_instances", "workers"):
@@ -253,6 +263,35 @@ def validate_release(release: dict, config: dict) -> None:
         raise ConfigError("invalid_release") from None
 
 
+def client_binding_observation_valid(build: Any, config: dict, now: datetime) -> bool:
+    """Validate an operator attestation, not independently inspect the artifact.
+
+    The old four-field record was also emitted from string-table membership.
+    Require explicit provenance so copying that legacy record cannot establish
+    effective assignments. Hashes identify the operator's retained evidence;
+    this read-only cloud comparison does not open or authenticate that evidence.
+    """
+    if not isinstance(build, dict):
+        return False
+    if (build.get("evidence_scope") != CLIENT_BINDING_EVIDENCE_SCOPE
+            or build.get("binding_method") != CLIENT_BINDING_METHOD):
+        return False
+    for key in ("artifact_sha256", "bundle_sha256", "binding_evidence_sha256"):
+        if not isinstance(build.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", build[key]):
+            return False
+    member = build.get("launch_bundle_path")
+    if (not isinstance(member, str) or len(member) > 256
+            or not re.fullmatch(r"Payload/[A-Za-z0-9_-][A-Za-z0-9._ -]*\.app/main\.jsbundle", member)):
+        return False
+    return (
+        fresh(build.get("observed_at"), now, config["client"]["build_evidence_max_age_hours"])
+        and isinstance(build.get("build_id"), str)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}", build["build_id"]) is not None
+        and build.get("api_url") == config["services"]["api"]["client_origin"]
+        and build.get("ws_url") == config["services"]["ws"]["client_origin"].replace("https:", "wss:") + config["client"]["ws_path"]
+    )
+
+
 def pool_envelope(config: dict, runtime: dict[str, int], job_pools: dict[str, int] | None = None) -> dict:
     """Conservative configured pool capacity; not measured demand or a hard GCP cap."""
     base = {}
@@ -357,7 +396,7 @@ def env_values(container: dict, runtime: dict) -> tuple[dict, list[str]]:
 
 def check_spec(report: dict, scope: str, spec: dict, ann: dict, config: dict, role: str, runtime: dict) -> dict:
     service, shared = config["services"][role], config["shared"]
-    expected = {"containerConcurrency": service["concurrency"], "timeoutSeconds": shared["timeout_seconds"], "serviceAccountName": shared["service_account"]}
+    expected = {"containerConcurrency": service["concurrency"], "timeoutSeconds": shared["timeout_seconds"], "serviceAccountName": service_account(config, role)}
     for key, value in expected.items():
         if spec.get(key) != value:
             note(report, scope, "drift", key)
@@ -592,9 +631,19 @@ def compare(config: dict, snapshot: dict, release: dict | None, now: datetime, r
     if not client_repository(config, root):
         note(report, "client", "drift", "checked_in_endpoints")
     build = (release or {}).get("client_build", {})
-    if not fresh(build.get("observed_at"), now, config["client"]["build_evidence_max_age_hours"]) or not isinstance(build.get("build_id"), str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}", build["build_id"]) or build.get("api_url") != config["services"]["api"]["client_origin"] or build.get("ws_url") != config["services"]["ws"]["client_origin"].replace("https:", "wss:") + config["client"]["ws_path"]:
+    client_evidence_ok = client_binding_observation_valid(build, config, now)
+    if not client_evidence_ok:
         note(report, "client", "unknown", "compiled_build_evidence_missing_or_mismatched")
-    report["client_evidence_scope"] = "repository_config_plus_operator_supplied_artifact_observation_not_device_test"
+    report["client_evidence_scope"] = "repository_config_plus_operator_effective_binding_attestation_not_device_test"
+    report["client_binding_evidence"] = {
+        "accepted_operator_observation": client_evidence_ok,
+        "artifact_inspected_by_checker": False,
+    }
+    if client_evidence_ok:
+        report["client_binding_evidence"].update({key: build[key] for key in (
+            "build_id", "observed_at", "evidence_scope", "binding_method",
+            "artifact_sha256", "bundle_sha256", "launch_bundle_path", "binding_evidence_sha256",
+        )})
     if transitioned and (release or {}).get("rollout", {}).get("jobs_quiescent") is not True:
         note(report, "rollout", "unknown", "quiescent_jobs_not_confirmed")
     kinds = {row["kind"] for row in report["findings"]}
@@ -610,10 +659,14 @@ def plan(config: dict, release: dict, gcloud: str) -> dict:
         raise ConfigError("unsafe_intended_pool_envelope")
     steps = []
     shared = config["shared"]
-    for role, service in config["services"].items():
+    # Establish the dedicated WS route before restricting the API's routes.
+    # Ordinary all/all image releases retain their existing API-first sequence.
+    role_split = any(service["env"]["SERVICE_ROLE"] != "all" for service in config["services"].values())
+    for role in (("ws", "api") if role_split else ("api", "ws")):
+        service = config["services"][role]
         name, revision = service["name"], release["revisions"][role]
         env = shared["env"] | service["env"] | {"WEB_CONCURRENCY": str(service["workers"])}
-        argv = [gcloud, "run", "deploy", name, "--project", config["project"], "--region", config["region"], "--image", release["image"], "--revision-suffix", revision[len(name)+1:], "--no-traffic", "--scaling", "auto", "--cpu", service["cpu"], "--memory", service["memory"], "--concurrency", str(service["concurrency"]), "--min-instances", str(service["revision_min_instances"]), "--max-instances", str(service["revision_max_instances"]), "--max", str(service["service_max_instances"]), "--timeout", str(shared["timeout_seconds"]), "--service-account", shared["service_account"], "--add-cloudsql-instances", shared["cloud_sql"], "--vpc-connector", shared["vpc_connector"], "--vpc-egress", shared["vpc_egress"], "--ingress", shared["ingress"], "--cpu-throttling" if shared["cpu_throttling"] else "--no-cpu-throttling", "--cpu-boost" if shared["startup_cpu_boost"] else "--no-cpu-boost", "--update-env-vars", ",".join(k+"="+v for k, v in sorted(env.items())), "--update-secrets", ",".join(k+"="+v for k, v in sorted((shared["secrets"] | service.get("secrets", {})).items()))]
+        argv = [gcloud, "run", "deploy", name, "--project", config["project"], "--region", config["region"], "--image", release["image"], "--revision-suffix", revision[len(name)+1:], "--no-traffic", "--scaling", "auto", "--cpu", service["cpu"], "--memory", service["memory"], "--concurrency", str(service["concurrency"]), "--min-instances", str(service["revision_min_instances"]), "--max-instances", str(service["revision_max_instances"]), "--max", str(service["service_max_instances"]), "--timeout", str(shared["timeout_seconds"]), "--service-account", service_account(config, role), "--add-cloudsql-instances", shared["cloud_sql"], "--vpc-connector", shared["vpc_connector"], "--vpc-egress", shared["vpc_egress"], "--ingress", shared["ingress"], "--cpu-throttling" if shared["cpu_throttling"] else "--no-cpu-throttling", "--cpu-boost" if shared["startup_cpu_boost"] else "--no-cpu-boost", "--update-env-vars", ",".join(k+"="+v for k, v in sorted(env.items())), "--update-secrets", ",".join(k+"="+v for k, v in sorted((shared["secrets"] | service.get("secrets", {})).items()))]
         promote = [gcloud, "run", "services", "update-traffic", name, "--project", config["project"], "--region", config["region"], "--to-revisions", revision+"=100"]
         steps.append({"service": role, "stage_command": shlex.join(argv), "promote_after_review_command": shlex.join(promote), "before_next_service": "Confirm old revision drained with zero instances; jobs remain quiescent. Traffic=0 alone is insufficient."})
     verify = ["scripts/deploy-verify", "--authenticated", "--project", config["project"], "--region", config["region"], "--api-service", config["services"]["api"]["name"], "--ws-service", config["services"]["ws"]["name"], "--expected-schema", release["schema_head"], "--api-revision", release["revisions"]["api"], "--ws-revision", release["revisions"]["ws"], "--api-image-digest", release["image"].split("@")[1], "--ws-image-digest", release["image"].split("@")[1], "--gcloud", gcloud]
