@@ -24,6 +24,14 @@ from tests.test_c226_load_harness import _config_dict, _write
 from tests.test_c363_message_receipts import config_for, manifest_data
 
 
+# Three real dispatches require at least eight seconds before reconnect/history
+# work and shared-token scheduling. The former 10-second HTTP window could end
+# before a final-phase fault was reached. This is functional-test headroom, not
+# a relaxed runtime deadline or receipt threshold. Leave cleanup outer headroom.
+PEER_HTTP_SECONDS = 16
+PEER_RUN_TIMEOUT_SECONDS = 22
+
+
 class RecoveryPeer:
     def __init__(self, raw, mode):
         self.raw, self.mode = raw, mode
@@ -193,7 +201,7 @@ async def recovery_peers(raw, mode="normal"):
 
 
 def recovery_config(tmp_path, peer):
-    return replace(config_for(tmp_path, peer.http_port, peer.ws_port), duration_seconds=10)
+    return replace(config_for(tmp_path, peer.http_port, peer.ws_port), duration_seconds=PEER_HTTP_SECONDS)
 
 
 async def run_peer(tmp_path, mode="normal"):
@@ -202,7 +210,7 @@ async def run_peer(tmp_path, mode="normal"):
         observation = recovery.RecoveryObservation(recovery_config(tmp_path, peer),
                                                    parse_manifest(json.dumps(raw)), 4, .2)
         peer.observation = observation
-        result = await asyncio.wait_for(observation.run(), 16)
+        result = await asyncio.wait_for(observation.run(), PEER_RUN_TIMEOUT_SECONDS)
     assert all(connection.state is State.CLOSED for connection in peer.connections)
     assert all(task.done() for task in observation.tasks)
     assert result["http_and_ws"]["ws"]["active_ready"] == 0
@@ -231,8 +239,8 @@ async def test_live_offline_history_live_sequence_spacing_caps_and_private_resul
             return await original_slot()
         observation.runner.pacer.global_bucket.acquire = acquire
         observation.runner.pacer.semaphore.acquire = slot
-        result = await asyncio.wait_for(observation.run(), 16)
-    assert result["status"] == recovery.SUCCESS
+        result = await asyncio.wait_for(observation.run(), PEER_RUN_TIMEOUT_SECONDS)
+    assert result["status"] == recovery.SUCCESS, result["errors"]
     assert result["errors"] == [] and all(result["phases"].values())
     assert result["messages"] == {"requested": 3, "attempted": 3, "accepted": 3, "rejected": 0, "unconfirmed": 0}
     for key, expected in (("live_receipts", 4), ("history_recovery", 2)):
@@ -301,8 +309,8 @@ async def test_final_live_send_refuses_partial_history_before_http_dispatch(tmp_
             assert observation.phases["history_reconciled"] is False
 
         monkeypatch.setattr(observation, "history", return_after_partial_history)
-        result = await asyncio.wait_for(observation.run(), 16)
-    assert "history_not_reconciled_before_final_send" in result["errors"]
+        result = await asyncio.wait_for(observation.run(), PEER_RUN_TIMEOUT_SECONDS)
+    assert "history_not_reconciled_before_final_send" in result["errors"], result["errors"]
     assert result["status"] == "NOT_PROVEN"
     assert result["phases"]["reconnected_ready"] is True
     assert result["phases"]["history_reconciled"] is False
@@ -322,14 +330,67 @@ async def test_final_live_send_refuses_partial_history_before_http_dispatch(tmp_
 async def test_missing_live_recipient_keeps_fixed_denominator_and_stops_sequence(tmp_path, mode, attempted, unique):
     result, peer, _ = await run_peer(tmp_path, mode)
     assert result["status"] == "NOT_PROVEN"
-    assert result["messages"]["attempted"] == len(peer.posts) == attempted
+    assert result["messages"]["attempted"] == len(peer.posts) == attempted, result["errors"]
     assert result["live_receipts"]["expected"] == 4
-    assert result["live_receipts"]["unique"] == unique
+    assert result["live_receipts"]["unique"] == unique, result["errors"]
     assert result["live_receipts"]["missing"] == 4 - unique
     assert result["phases"]["final_live"] is False
     if mode == "initial_receipt_missing":
         assert result["phases"]["recipients_offline"] is False
         assert peer.history_readers == []
+
+
+@pytest.mark.asyncio
+async def test_final_receipt_fault_survives_finite_producer_scheduling_delay(tmp_path, monkeypatch):
+    raw = manifest_data(2)
+    async with recovery_peers(raw, "final_receipt_missing") as peer:
+        observation = recovery.RecoveryObservation(recovery_config(tmp_path, peer),
+                                                   parse_manifest(json.dumps(raw)), 4, .2)
+        mix_started = resumed_at = None
+        delayed = False
+        original_active = observation.recorder.set_http_mix_active
+        original_acquire = observation.runner.pacer.global_bucket.acquire
+
+        def observe_mix_start(active):
+            nonlocal mix_started
+            original_active(active)
+            if active:
+                mix_started = time.monotonic()
+
+        async def delayed_acquire():
+            nonlocal delayed, resumed_at
+            if (asyncio.current_task().get_name() == "receipt-producer"
+                    and observation.phase == "final_live" and not delayed):
+                delayed = True
+                assert mix_started is not None
+                # Resume beyond the previous fixture's actual HTTP deadline.
+                # This finite scheduler pause leaves the real bucket, semaphore,
+                # dispatch spacing, history fence and receipt deadlines intact.
+                await asyncio.sleep(max(0, mix_started + 10.5 - time.monotonic()))
+                resumed_at = time.monotonic()
+            await original_acquire()
+
+        monkeypatch.setattr(observation.recorder, "set_http_mix_active", observe_mix_start)
+        monkeypatch.setattr(observation.runner.pacer.global_bucket, "acquire", delayed_acquire)
+        result = await asyncio.wait_for(observation.run(), PEER_RUN_TIMEOUT_SECONDS)
+    assert result["messages"]["attempted"] == result["messages"]["accepted"] == len(peer.posts) == 3, result["errors"]
+    assert delayed and resumed_at >= mix_started + 10.5
+    assert result["status"] == "NOT_PROVEN"
+    assert "live_phase_receipts_missing" in result["errors"], result["errors"]
+    assert "http_mix_ended_before_workload_complete" not in result["errors"], result["errors"]
+    assert {key: result["live_receipts"][key] for key in ("expected", "unique", "missing")} == {
+        "expected": 4, "unique": 3, "missing": 1,
+    }
+    assert {key: result["history_recovery"][key] for key in ("expected", "unique", "missing")} == {
+        "expected": 2, "unique": 2, "missing": 0,
+    }
+    assert result["phases"] == {"initial_live": True, "recipients_offline": True,
+                                "reconnected_ready": True, "history_reconciled": True, "final_live": False}
+    assert all(interval >= 4 for interval in result["actual_dispatch_intervals_seconds"])
+    assert len(result["actual_dispatch_intervals_seconds"]) == 2
+    assert all(connection.state is State.CLOSED for connection in peer.connections)
+    assert all(task.done() for task in observation.tasks)
+    assert result["http_and_ws"]["ws"]["active_ready"] == result["http_and_ws"]["ws"]["pending"] == 0
 
 
 @pytest.mark.asyncio
