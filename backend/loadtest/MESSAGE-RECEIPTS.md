@@ -5,6 +5,9 @@ an explicitly selected recipient WebSocket cohort while the existing HTTP mix
 runs. It is an opt-in, loopback-only instrument. The ordinary `python -m loadtest`
 command and its historical reports keep their existing semantics.
 
+For a separate deliberate-disconnect and authenticated-history recovery case,
+use [MESSAGE-RECOVERY.md](MESSAGE-RECOVERY.md).
+
 Each recipient must receive the gateway's exact ready frame before HTTP warmup
 starts. The producer then waits for an actual response from the active HTTP mix,
 posts opaque synthetic bytes through `/conversations/{id}/messages`, and binds a

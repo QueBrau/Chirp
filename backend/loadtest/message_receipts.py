@@ -143,6 +143,16 @@ class Observation:
                 and all(event.is_set() for event in self.ready)
                 and all(connection.state is State.OPEN for connection in self.connections.values()))
 
+    def expected_receiver_close(self, index: int, connection) -> bool:
+        """An opt-in coordinator may identify one deliberately ended hold."""
+        return False
+
+    def validate_send_context(self) -> None:
+        if self.runner.stop.is_set() or not self.cohort_open():
+            raise ReceiptError("cohort_unavailable_before_send")
+        if not self.recorder.active:
+            raise ReceiptError("http_mix_ended_before_send")
+
     def receive(self, recipient: int, frame: str | bytes) -> None:
         arrived_at = time.monotonic()
         self.counts["frames"] += 1
@@ -250,8 +260,11 @@ class Observation:
                 await asyncio.sleep(0)
             outcome = "completed_hold" if self.finishing and not self.errors else "stopped"
         except ConnectionClosed:
-            outcome = "closed_before_ready" if ready_key is None else "closed_during_hold"
-            self.fail("ws_closed_before_finish")
+            if ready_key is not None and self.expected_receiver_close(index, connection):
+                outcome = "completed_hold"
+            else:
+                outcome = "closed_before_ready" if ready_key is None else "closed_during_hold"
+                self.fail("ws_closed_before_finish")
         except asyncio.CancelledError:
             if not self.finishing:
                 self.fail("receiver_cancelled")
@@ -333,10 +346,7 @@ class Observation:
         async with self.runner.pacer.semaphore:
             if previous_start is not None:
                 await asyncio.sleep(max(0, previous_start + self.interval - time.monotonic()))
-            if self.runner.stop.is_set() or not self.cohort_open():
-                raise ReceiptError("cohort_unavailable_before_send")
-            if not self.recorder.active:
-                raise ReceiptError("http_mix_ended_before_send")
+            self.validate_send_context()
             encoded = base64.b64encode(os.urandom(48)).decode("ascii")
             digest = payload_hash(encoded)
             if any(attempt.payload_hash == digest for attempt in self.attempts):

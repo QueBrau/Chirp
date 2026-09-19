@@ -269,6 +269,11 @@ It requires a disposable local fixture and cannot run against remote targets.
 Its observations do not change this command's report or establish production
 capacity, durable recovery, decryption, or device acceptance.
 
+The separate [local reconnect recovery case](MESSAGE-RECOVERY.md) also checks
+authenticated history for a message accepted while selected clients are offline,
+then proves live delivery after new ready frames. It tests deliberate client
+disconnects only; dependency/process failures and staging acceptance remain open.
+
 **Receipt delivery is NOT_PROVEN for the default command.** This slice drains post-ready frames but has
 no publisher, message identity, sent/received reconciliation, or durable receipt
 contract. Manually publishing a frame would not turn its output into delivery
