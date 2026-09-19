@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# c418: read the endpoints compiled into an iOS build artifact. c392's interpreter
+# pick is not needed here (no TLS), but the wrapper shape matches its siblings.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+exec python3 "$here/compiled_endpoints.py" "$@"
