@@ -559,6 +559,61 @@ def test_compiled_artifact_requires_nonblank_build_identity(config, snap, releas
     assert finding(report, "compiled_build_evidence_missing_or_mismatched")
 
 
+@pytest.mark.parametrize("overrides", [("api",), ("ws",), ("api", "ws")])
+def test_service_identity_overrides_bind_plan_template_and_serving_revision(config, snap, release, overrides):
+    expected = {role: config["shared"]["service_account"] for role in ("api", "ws")}
+    for role in overrides:
+        account = f"reviewed-{role}-runtime@chirps-prod.iam.gserviceaccount.com"
+        config["services"][role]["service_account"] = account
+        expected[role] = account
+        # Change observed evidence independently of the production resolver.
+        snap["services"][role]["spec"]["template"]["spec"]["serviceAccountName"] = account
+        snap["revisions"][release["revisions"][role]]["spec"]["serviceAccountName"] = account
+    C.validate(config)
+    report = run_compare(config, snap, release)
+    assert report["verdict"] == "CONFIG_MATCH" and report["findings"] == []
+    plan = C.plan(config, release, "gcloud")
+    assert plan["mode"] == "PRINT_ONLY_NOT_EXECUTED"
+    for step in plan["steps"]:
+        command = shlex.split(step["stage_command"])
+        assert command[command.index("--service-account") + 1] == expected[step["service"]]
+        assert command[command.index("--image") + 1] == release["image"]
+        assert "--source" not in command and "--no-traffic" in command
+
+
+@pytest.mark.parametrize("role", ["api", "ws"])
+@pytest.mark.parametrize("observed_scope", ["template", "revision"])
+def test_override_does_not_excuse_shared_identity_on_either_observed_scope(config, snap, release, role, observed_scope):
+    account = f"reviewed-{role}-runtime@chirps-prod.iam.gserviceaccount.com"
+    config["services"][role]["service_account"] = account
+    template = snap["services"][role]["spec"]["template"]["spec"]
+    revision = snap["revisions"][release["revisions"][role]]["spec"]
+    template["serviceAccountName"] = revision["serviceAccountName"] = account
+    (template if observed_scope == "template" else revision)["serviceAccountName"] = config["shared"]["service_account"]
+    report = run_compare(config, snap, release)
+    scope = role + ":template" if observed_scope == "template" else release["revisions"][role]
+    assert report["verdict"] == "DRIFT"
+    assert {"scope": scope, "kind": "drift", "field": "serviceAccountName"} in report["findings"]
+
+
+@pytest.mark.parametrize("account", [None, "", " ", 123, True, [], {}, "account\n--flag", "account,other", "$(private)"])
+def test_explicit_invalid_service_account_never_falls_back_or_renders(config, release, account):
+    config["services"]["ws"]["service_account"] = account
+    with pytest.raises(C.ConfigError, match="^invalid_service_account$"):
+        C.plan(config, release, "gcloud")
+
+
+def test_current_identity_defaults_and_all_roles_preserved(config, snap, release):
+    assert all("service_account" not in row for row in config["services"].values())
+    assert all(row["env"]["SERVICE_ROLE"] == "all" for row in config["services"].values())
+    before = C.plan(config, release, "gcloud")
+    assert run_compare(config, snap, release)["verdict"] == "CONFIG_MATCH"
+    for service in config["services"].values():
+        service["service_account"] = config["shared"]["service_account"]
+    assert C.plan(config, release, "gcloud") == before
+    assert run_compare(config, snap, release)["verdict"] == "CONFIG_MATCH"
+
+
 @pytest.mark.parametrize("ann", [{"run.googleapis.com/scalingMode": "manual", "run.googleapis.com/manualInstanceCount": "40"}, {"run.googleapis.com/manualInstanceCount": "40"}, {"run.googleapis.com/scalingMode": "unrecognized"}])
 def test_manual_scaling_cannot_borrow_autoscaling_capacity(config, snap, release, ann):
     snap["services"]["api"]["metadata"]["annotations"].update(ann)

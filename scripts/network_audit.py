@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import sys
 
-from deployment_config import ConfigError, SafeParser, cloud, identifier, load, validate
+from deployment_config import ConfigError, SafeParser, cloud, identifier, load, service_account, validate
 
 ROOT = Path(__file__).resolve().parents[1]
 IAM_FIELDS = "bindings[].role,bindings[].members,bindings[].condition,version,etag"
@@ -100,6 +100,7 @@ def iam_summary(body, config):
         raise ConfigError("invalid_metadata_shape")
     result = {"direct_bindings": [], "unknown_role_bindings": 0, "effective_access_verified": False}
     principal = "serviceAccount:" + config["shared"]["service_account"]
+    runtime_principals = {role: "serviceAccount:" + service_account(config, role) for role in config["services"]}
     for row in rows(body.get("bindings", [])):
         if not isinstance(row.get("role"), str) or "members" not in row:
             raise ConfigError("invalid_metadata_shape")
@@ -112,6 +113,7 @@ def iam_summary(body, config):
             "role": role if known else "OTHER_ROLE",
             "member_count": len(members),
             "shared_runtime_member": principal in members,
+            "runtime_services": sorted(role for role, account in runtime_principals.items() if account in members),
             "all_users_member": "allUsers" in members,
             "all_authenticated_users_member": "allAuthenticatedUsers" in members,
             "condition_present": "condition" in row,
@@ -120,7 +122,7 @@ def iam_summary(body, config):
     return result
 
 
-def attachment(spec, annotations, config):
+def attachment(spec, annotations, config, service_role=None):
     spec, annotations = mapping(spec), mapping(annotations)
     connector = annotations.get(NETWORK_ANN[0])
     expected = config["shared"]["vpc_connector"]
@@ -129,6 +131,7 @@ def attachment(spec, annotations, config):
     return {
         "runtime_identity_observed": identity_present,
         "shared_runtime_identity": spec["serviceAccountName"] == config["shared"]["service_account"] if identity_present else None,
+        "runtime_identity_matches_source": spec["serviceAccountName"] == service_account(config, service_role) if identity_present and service_role is not None else None,
         "connector_matches_source": connector in (expected, expected_long),
         "egress": enum(annotations.get(NETWORK_ANN[1]), ("private-ranges-only", "all-traffic")),
         "cloud_sql_matches_source": annotations.get(NETWORK_ANN[2]) == config["shared"]["cloud_sql"],
@@ -167,7 +170,7 @@ def firewall_summary(body, config, target, effective=False):
     return summary
 
 
-def summarize(scope, body, config, policy):
+def summarize(scope, body, config, policy, *, service_role=None):
     target = policy["targets"]["network"]
     if scope.startswith("iam/"):
         return iam_summary(body, config)
@@ -180,6 +183,7 @@ def summarize(scope, body, config, policy):
         return {"project_vm_count": len(items), "on_review_network": sum(any(network_matches(n.get("network"), config, target) for n in rows(r.get("networkInterfaces", []))) for r in items),
                 "with_external_address_config": sum(any(n.get("accessConfigs") for n in rows(r.get("networkInterfaces", []))) for r in items),
                 "shared_runtime_identity_count": sum(any(s.get("email") == config["shared"]["service_account"] for s in rows(r.get("serviceAccounts", []))) for r in items),
+                "runtime_identity_counts": {role: sum(any(s.get("email") == service_account(config, role) for s in rows(r.get("serviceAccounts", []))) for r in items) for role in config["services"]},
                 "managed_connector_vms_included": False}
     body = mapping(body)
     if scope == "redis":
@@ -209,10 +213,15 @@ def summarize(scope, body, config, policy):
         return {"public_access_prevention": enum(body.get("public_access_prevention"), ("enforced", "inherited")),
                 "uniform_bucket_level_access": boolean(body.get("uniform_bucket_level_access"))}
     if scope.startswith("revision/"):
-        return attachment(body.get("spec", {}), mapping(body.get("metadata", {})).get("annotations", {}), config)
+        # The collector carries the service from the traffic inventory; do not
+        # guess it from an observed principal or a potentially overlapping name.
+        if service_role not in config["services"]:
+            raise ConfigError("unresolved_serving_identity")
+        return attachment(body.get("spec", {}), mapping(body.get("metadata", {})).get("annotations", {}), config, service_role)
     if scope.startswith("service/"):
         template = mapping(mapping(body.get("spec", {})).get("template", {}))
-        result = attachment(template.get("spec", {}), mapping(template.get("metadata", {})).get("annotations", {}), config)
+        service_role = scope.split("/")[1]
+        result = attachment(template.get("spec", {}), mapping(template.get("metadata", {})).get("annotations", {}), config, service_role)
         traffic = rows(mapping(body.get("status", {})).get("traffic", []))
         service_name = config["services"][scope.split("/")[1]]["name"]
         if not traffic or len(traffic) > 8 or any(not identifier(r.get("revisionName")) or not r["revisionName"].startswith(service_name + "-") for r in traffic):
@@ -236,9 +245,9 @@ def collect(args):
               "observations": {}, "unavailable": [], "findings": [],
               "limitations": ["metadata_is_not_a_packet_or_permission_test", "producer_and_regional_firewall_scope_incomplete", "iam_inheritance_deny_pab_and_conditions_not_evaluated", "project_vm_list_excludes_managed_connector_vms", "non_atomic_metadata_snapshot", "no_secret_payload_or_live_redis_command_read"]}
 
-    def observe(scope, command, fields):
+    def observe(scope, command, fields, *, service_role=None):
         try:
-            value = summarize(scope, cloud(args, command, fields), config, policy)
+            value = summarize(scope, cloud(args, command, fields), config, policy, service_role=service_role)
             report["observations"][scope] = value
             return value
         except (ConfigError, KeyError, TypeError, ValueError):
@@ -268,7 +277,7 @@ def collect(args):
         observe("iam/service/" + role, ["run", "services", "get-iam-policy", name, "--region", region], IAM_FIELDS)
         if value:
             for rev in sorted({row["revision"] for row in value["traffic"]}):
-                observe("revision/" + rev, ["run", "revisions", "describe", rev, "--region", region], ",".join(["spec.serviceAccountName"] + ['metadata.annotations."' + k + '"' for k in NETWORK_ANN]))
+                observe("revision/" + rev, ["run", "revisions", "describe", rev, "--region", region], ",".join(["spec.serviceAccountName"] + ['metadata.annotations."' + k + '"' for k in NETWORK_ANN]), service_role=role)
     # Jobs may have a narrower identity or no broker attachment; report accurately,
     # without declaring service defaults necessary for every job.
     try:
@@ -320,13 +329,13 @@ def assess(report, config, policy):
         if scope.startswith(("service/", "revision/")):
             if not row["connector_matches_source"] or row["egress"] != config["shared"]["vpc_egress"]:
                 note(scope, "network_attachment_differs_from_source")
-            if not row["shared_runtime_identity"]:
+            if row["runtime_identity_matches_source"] is not True:
                 note(scope, "runtime_identity_differs_from_source")
             if not row["cloud_sql_matches_source"]:
                 note(scope, "sql_attachment_differs_from_source")
         if scope.startswith("iam/"):
             for grant in row["direct_bindings"]:
-                if grant["shared_runtime_member"] and grant["role"] in ("roles/owner", "roles/editor", "roles/secretmanager.admin", "roles/storage.admin", "roles/cloudsql.admin"):
+                if (grant["shared_runtime_member"] or grant["runtime_services"]) and grant["role"] in ("roles/owner", "roles/editor", "roles/secretmanager.admin", "roles/storage.admin", "roles/cloudsql.admin"):
                     note(scope, "broad_runtime_grant_requires_review")
                 if (grant["all_users_member"] or grant["all_authenticated_users_member"]) and not (scope.startswith("iam/service/") and grant["role"] == "roles/run.invoker"):
                     note(scope, "public_principal_grant_requires_review")

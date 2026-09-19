@@ -29,6 +29,22 @@ additional containers produce incomplete evidence instead of trusting this model
 Jobs must match their declared `python -m app.jobs...` entrypoint and have a pinned
 image reference. Unknown wrappers, worker overrides or image identity fail proof.
 
+Each service may declare `services.api.service_account` or
+`services.ws.service_account`. An omitted key inherits `shared.service_account`;
+an explicit empty, null or malformed value is refused, never treated as omission.
+The same resolution is used for the service template, every inspected revision,
+and the generated `--service-account` argument. Validation checks the declared
+argument's syntax; it does not establish that the account exists or has suitable
+IAM permissions. The checked-in configuration has no overrides and retains the
+current shared identity and `all`/`all` roles.
+
+Before c375's identity or role rollout, review required secret, SQL, storage and
+broker access per service and record the approved identities and roles in this
+source. Use the generated pinned-image plan for the rollout and subsequent image
+releases so a hand-applied setting cannot be silently replaced by stale intent.
+Creating accounts, granting IAM, validating positive/negative access in staging,
+and applying or rolling back a deployment remain separate operational steps.
+
 The intended mode is automatic scaling. The checker projects and validates both
 `scalingMode` and `manualInstanceCount`, and commands include `--scaling auto`.
 Manual scaling bypasses revision min/max limits and invalidates this capacity
@@ -276,6 +292,12 @@ Production mutations remain operator/manager steps. This implementation executed
 none. The following sequence applies to the existing pair; it does not provision
 a new project, add IAM grants or replace jobs.
 
+The canonical repository path is: build once, record the immutable image, then
+render both services from the reviewed deployment source with
+`scripts/deployment-config plan`. The plan is print-only. Independent
+`gcloud run deploy --source` commands or hand-maintained role/identity overrides
+must not become a second source for routine service deployment settings.
+
 1. Select the reviewed backend commit and build **once** using the existing build
    workflow/Artifact Registry repository named in the intended source. Record its
    immutable digest and the image's Alembic head. Use that same `repository@sha256`
@@ -297,6 +319,8 @@ scripts/deployment-config plan --release /tmp/chirp-release.json --gcloud "$HOME
    deploys the pinned image with `--no-traffic`, the chosen revision name and all
    owned sizing/network settings. It uses `--update-env-vars` and
    `--update-secrets`, preserving unrelated settings. It does not change IAM.
+   The runtime identity is the service's reviewed override, or the shared fallback
+   when no override is declared; naming it does not grant it access.
    Inspect revision readiness and the intended diff, then execute the API promote
    command to route 100% to that explicit revision. Do not proceed on a failed or
    unexpected stage. Traffic can change while old requests remain in flight.

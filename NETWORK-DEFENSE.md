@@ -28,6 +28,18 @@ retain counts, known runtime membership, approved roles and condition presence.
 Errors use fixed labels. Each provider subprocess has a 30-second timeout; this
 multi-resource inventory can take several minutes when reads time out.
 
+For c375, service and serving-revision identity checks resolve the reviewed
+per-service `service_account`, falling back to `shared.service_account` only when
+the override is absent. `runtime_identity_matches_source` reports that comparison.
+IAM rows' `runtime_services` list the matching `api`/`ws` consumers without
+serializing account names, and broad grants to either identity require review.
+The existing `shared_runtime_identity`/`shared_runtime_member` fields still mean
+the configured shared fallback, even when overrides are present. VM
+`runtime_identity_counts` are per consumer: the same VM may count for both when
+the services share an account. Job identities remain separately observed, with
+no assumed service-identity requirement. These are metadata observations, not
+proof of least privilege or effective permission.
+
 Exit **2 / `NOT_PROVEN` is intentional**, even when all requested metadata reads
 succeed. `metadata_complete_for_requested_scopes` means those projections were
 collected, not that every setting is known or permissions are effective. Omitted

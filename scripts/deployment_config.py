@@ -106,6 +106,11 @@ def defaults(root: Path = ROOT) -> dict[str, int]:
     return values
 
 
+def service_account(config: dict, role: str) -> str:
+    """Resolve only reviewed intent; an explicit override never falls back on truthiness."""
+    return config["services"][role].get("service_account", config["shared"]["service_account"])
+
+
 def validate(config: dict) -> None:
     try:
         if config["version"] != 1 or set(config["services"]) != {"api", "ws"}:
@@ -121,6 +126,9 @@ def validate(config: dict) -> None:
         for role, service in config["services"].items():
             if not identifier(service["name"]) or not public_origin(service["client_origin"]):
                 raise ConfigError("invalid_service")
+            account = service_account(config, role)
+            if not isinstance(account, str) or not re.fullmatch(r"[A-Za-z0-9_@.:-]+", account):
+                raise ConfigError("invalid_service_account")
             if not isinstance(service["env"], dict) or service["env"].get("SERVICE_ROLE") not in ("all", role):
                 raise ConfigError("invalid_service_role")
             for key in ("concurrency", "revision_min_instances", "revision_max_instances", "service_max_instances", "workers"):
@@ -388,7 +396,7 @@ def env_values(container: dict, runtime: dict) -> tuple[dict, list[str]]:
 
 def check_spec(report: dict, scope: str, spec: dict, ann: dict, config: dict, role: str, runtime: dict) -> dict:
     service, shared = config["services"][role], config["shared"]
-    expected = {"containerConcurrency": service["concurrency"], "timeoutSeconds": shared["timeout_seconds"], "serviceAccountName": shared["service_account"]}
+    expected = {"containerConcurrency": service["concurrency"], "timeoutSeconds": shared["timeout_seconds"], "serviceAccountName": service_account(config, role)}
     for key, value in expected.items():
         if spec.get(key) != value:
             note(report, scope, "drift", key)
@@ -654,7 +662,7 @@ def plan(config: dict, release: dict, gcloud: str) -> dict:
     for role, service in config["services"].items():
         name, revision = service["name"], release["revisions"][role]
         env = shared["env"] | service["env"] | {"WEB_CONCURRENCY": str(service["workers"])}
-        argv = [gcloud, "run", "deploy", name, "--project", config["project"], "--region", config["region"], "--image", release["image"], "--revision-suffix", revision[len(name)+1:], "--no-traffic", "--scaling", "auto", "--cpu", service["cpu"], "--memory", service["memory"], "--concurrency", str(service["concurrency"]), "--min-instances", str(service["revision_min_instances"]), "--max-instances", str(service["revision_max_instances"]), "--max", str(service["service_max_instances"]), "--timeout", str(shared["timeout_seconds"]), "--service-account", shared["service_account"], "--add-cloudsql-instances", shared["cloud_sql"], "--vpc-connector", shared["vpc_connector"], "--vpc-egress", shared["vpc_egress"], "--ingress", shared["ingress"], "--cpu-throttling" if shared["cpu_throttling"] else "--no-cpu-throttling", "--cpu-boost" if shared["startup_cpu_boost"] else "--no-cpu-boost", "--update-env-vars", ",".join(k+"="+v for k, v in sorted(env.items())), "--update-secrets", ",".join(k+"="+v for k, v in sorted((shared["secrets"] | service.get("secrets", {})).items()))]
+        argv = [gcloud, "run", "deploy", name, "--project", config["project"], "--region", config["region"], "--image", release["image"], "--revision-suffix", revision[len(name)+1:], "--no-traffic", "--scaling", "auto", "--cpu", service["cpu"], "--memory", service["memory"], "--concurrency", str(service["concurrency"]), "--min-instances", str(service["revision_min_instances"]), "--max-instances", str(service["revision_max_instances"]), "--max", str(service["service_max_instances"]), "--timeout", str(shared["timeout_seconds"]), "--service-account", service_account(config, role), "--add-cloudsql-instances", shared["cloud_sql"], "--vpc-connector", shared["vpc_connector"], "--vpc-egress", shared["vpc_egress"], "--ingress", shared["ingress"], "--cpu-throttling" if shared["cpu_throttling"] else "--no-cpu-throttling", "--cpu-boost" if shared["startup_cpu_boost"] else "--no-cpu-boost", "--update-env-vars", ",".join(k+"="+v for k, v in sorted(env.items())), "--update-secrets", ",".join(k+"="+v for k, v in sorted((shared["secrets"] | service.get("secrets", {})).items()))]
         promote = [gcloud, "run", "services", "update-traffic", name, "--project", config["project"], "--region", config["region"], "--to-revisions", revision+"=100"]
         steps.append({"service": role, "stage_command": shlex.join(argv), "promote_after_review_command": shlex.join(promote), "before_next_service": "Confirm old revision drained with zero instances; jobs remain quiescent. Traffic=0 alone is insufficient."})
     verify = ["scripts/deploy-verify", "--authenticated", "--project", config["project"], "--region", config["region"], "--api-service", config["services"]["api"]["name"], "--ws-service", config["services"]["ws"]["name"], "--expected-schema", release["schema_head"], "--api-revision", release["revisions"]["api"], "--ws-revision", release["revisions"]["ws"], "--api-image-digest", release["image"].split("@")[1], "--ws-image-digest", release["image"].split("@")[1], "--gcloud", gcloud]
