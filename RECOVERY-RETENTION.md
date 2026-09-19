@@ -96,10 +96,44 @@ The failure identifies a permission problem, not permission to grant the default
 
 Prepare and review these changes together:
 
-- A dedicated database login with CONNECT and schema USAGE, SELECT/DELETE on posts, post_comments, post_likes, chirps and chirp_votes, plus UPDATE(id) on posts, post_comments and chirps for row locks, and UPDATE(score) on chirps for the vote-deletion score trigger from migration 0025. These UPDATE grants are real column-write privileges, so verify the role can change no other columns and use it only in the dedicated job. No ledger, payment, user, key, DDL, role-management or unrelated secret privileges.
+- A dedicated database login with CONNECT and schema USAGE, SELECT/DELETE on posts, post_comments, post_likes, chirps and chirp_votes, plus UPDATE(id) on posts, post_comments and chirps for row locks, and UPDATE(score) on chirps for the vote-deletion score trigger from migration 0025.
+- The same job also runs c347's public-prekey retirement phase. It needs SELECT/DELETE and UPDATE(id) on one_time_prekeys, kyber_prekeys and signed_prekeys, plus SELECT(id, revoked_at) on devices. It must not delete or update devices. These permissions cover expired consumed prekeys, superseded signed prekeys, and prekeys belonging to devices revoked beyond the grace period; they do not authorize message/ciphertext access or access to client private keys. This phase uses its own grace cutoff and reports `key_retirement_counts` separately from content counts.
+- Every UPDATE grant above is a real column-write capability, even when granted to permit row locks. Verify the role can update only those columns, cannot insert rows, and has no unrelated user, message, ledger, payment, report, DDL, role-management or secret privileges. Check inherited and PUBLIC grants too: PUBLIC schema CREATE and database TEMPORARY permissions permit DDL even without explicit grants to this role. Removing PUBLIC privileges affects other logins, so review their required explicit grants before changing a live database. Use this role only in the dedicated job.
 - A dedicated Secret Manager secret containing that login's Cloud SQL socket URL. Generate the password without putting it in a command argument or logs; provision using the private operator procedure. Grant access on that secret, not at project scope.
 - A dedicated Cloud Run service account, an explicit Cloud SQL attachment, one task and one connection pool slot with no overflow, a reviewed image digest, zero automatic retries during rollout, and a task timeout longer than the CLI budget.
 - An inventory of the existing scheduler target and invocation identity. Pause or otherwise coordinate it before replacing the job configuration so an old destructive invocation cannot race the preview. Verify its permissions allow invocation without granting runtime access to other secrets.
+
+The committed local rehearsal is `backend/tests/test_c369_purge_privileges.py`.
+It runs the real `run_purge_job` against the migrated, per-run pytest database with
+a unique non-login, non-superuser role selected at connection startup. Each job
+transaction verifies its effective identity. Seeded content exercises all six
+deletion reasons and the vote-score trigger; public-prekey fixtures exercise all
+four retirement reasons, retained devices, grace boundaries and the newest signed
+prekey. The tests cover preview, apply, repeat safety, per-batch score changes,
+denied unrelated reads/writes and every ungranted UPDATE column. Revoking
+UPDATE(score) or any prekey UPDATE(id) grant leaves preview successful but makes
+the actual apply fail; restoring it permits recovery without repeating committed
+content deletions.
+
+Run this focused rehearsal through `scripts/with-suite-lock`, with the backend
+virtual environment active and `TEST_DATABASE_URL` pointing to a **disposable
+loopback PostgreSQL server whose test administrator is a superuser**, as in CI:
+use a `postgresql+asyncpg` URL with no query options that could override its target.
+
+~~~bash
+cd backend
+../scripts/with-suite-lock python -m pytest -q tests/test_c369_purge_privileges.py
+~~~
+
+For a local application login that lacks role-management privileges, use an owned
+disposable PostgreSQL cluster; do not elevate that login. The rehearsal fails
+clearly on insufficient administrator privileges. It changes grants only inside
+the marked pytest database, restores any PUBLIC schema CREATE and database
+TEMPORARY grants it temporarily removes, returns restricted connections, and drops
+only its unique test role.
+Effective-role SQL proof does not prove production authentication, IAM/secret
+access, deployed grants, a live canary, scheduled application or alert delivery.
+Those remain separate c369 acceptance checks below.
 
 Use a reviewed image built from the merged implementation. Updating the API alone does not update a Cloud Run job's image. Set the four variables to the prepared identity, secret version, connection and image digest; no secret value belongs in this command:
 
