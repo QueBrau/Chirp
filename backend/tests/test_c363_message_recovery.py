@@ -285,6 +285,37 @@ async def test_each_recipient_must_recover_exact_accepted_message_from_bounded_h
 
 
 @pytest.mark.asyncio
+async def test_final_live_send_refuses_partial_history_before_http_dispatch(tmp_path, monkeypatch):
+    raw = manifest_data(2)
+    async with recovery_peers(raw, "history_missing") as peer:
+        observation = recovery.RecoveryObservation(recovery_config(tmp_path, peer),
+                                                   parse_manifest(json.dumps(raw)), 4, .2)
+        original_history = observation.history
+
+        async def return_after_partial_history(client):
+            # Normal history failure already stops the producer. Deliberately
+            # swallow it here to exercise the independent final-send barrier.
+            with pytest.raises(ReceiptError, match="^history_accepted_message_missing$"):
+                await original_history(client)
+            assert observation.history_seen == {0}
+            assert observation.phases["history_reconciled"] is False
+
+        monkeypatch.setattr(observation, "history", return_after_partial_history)
+        result = await asyncio.wait_for(observation.run(), 16)
+    assert "history_not_reconciled_before_final_send" in result["errors"]
+    assert result["status"] == "NOT_PROVEN"
+    assert result["phases"]["reconnected_ready"] is True
+    assert result["phases"]["history_reconciled"] is False
+    assert result["phases"]["final_live"] is False
+    assert result["history_recovery"]["expected"] == 2
+    assert result["history_recovery"]["unique"] == 1
+    assert result["history_recovery"]["missing"] == 1
+    assert result["messages"]["attempted"] == result["messages"]["accepted"] == len(peer.posts) == 2
+    assert all(connection.state is State.CLOSED for connection in peer.connections)
+    assert all(task.done() for task in observation.tasks)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode,attempted,unique", [
     ("initial_receipt_missing", 1, 1), ("final_receipt_missing", 3, 3),
 ])
