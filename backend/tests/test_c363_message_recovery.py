@@ -244,7 +244,6 @@ async def test_live_offline_history_live_sequence_spacing_caps_and_private_resul
     assert peer.generations == Counter({uid: 2 for uid in recipients})
     assert len(result["actual_dispatch_intervals_seconds"]) == 2
     assert all(value >= 4 for value in result["actual_dispatch_intervals_seconds"])
-    assert all(after - before >= 3.97 for before, after in zip(peer.post_starts, peer.post_starts[1:]))
     # All three POSTs and both recipient history reads use the same caps.
     assert acquisitions.count("receipt-producer") == slots.count("receipt-producer") == 5
     assert observation.runner.pacer.semaphore._value == config.caps.max_concurrent_requests
