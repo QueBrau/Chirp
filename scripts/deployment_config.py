@@ -659,7 +659,11 @@ def plan(config: dict, release: dict, gcloud: str) -> dict:
         raise ConfigError("unsafe_intended_pool_envelope")
     steps = []
     shared = config["shared"]
-    for role, service in config["services"].items():
+    # Establish the dedicated WS route before restricting the API's routes.
+    # Ordinary all/all image releases retain their existing API-first sequence.
+    role_split = any(service["env"]["SERVICE_ROLE"] != "all" for service in config["services"].values())
+    for role in (("ws", "api") if role_split else ("api", "ws")):
+        service = config["services"][role]
         name, revision = service["name"], release["revisions"][role]
         env = shared["env"] | service["env"] | {"WEB_CONCURRENCY": str(service["workers"])}
         argv = [gcloud, "run", "deploy", name, "--project", config["project"], "--region", config["region"], "--image", release["image"], "--revision-suffix", revision[len(name)+1:], "--no-traffic", "--scaling", "auto", "--cpu", service["cpu"], "--memory", service["memory"], "--concurrency", str(service["concurrency"]), "--min-instances", str(service["revision_min_instances"]), "--max-instances", str(service["revision_max_instances"]), "--max", str(service["service_max_instances"]), "--timeout", str(shared["timeout_seconds"]), "--service-account", service_account(config, role), "--add-cloudsql-instances", shared["cloud_sql"], "--vpc-connector", shared["vpc_connector"], "--vpc-egress", shared["vpc_egress"], "--ingress", shared["ingress"], "--cpu-throttling" if shared["cpu_throttling"] else "--no-cpu-throttling", "--cpu-boost" if shared["startup_cpu_boost"] else "--no-cpu-boost", "--update-env-vars", ",".join(k+"="+v for k, v in sorted(env.items())), "--update-secrets", ",".join(k+"="+v for k, v in sorted((shared["secrets"] | service.get("secrets", {})).items()))]

@@ -315,19 +315,22 @@ must not become a second source for routine service deployment settings.
 scripts/deployment-config plan --release /tmp/chirp-release.json --gcloud "$HOME/google-cloud-sdk/bin/gcloud" --report /tmp/chirp-paired-plan.json
 ```
 
-4. With jobs quiescent, execute the API stage command after operator review. It
+4. With jobs quiescent, execute the **first service in the printed plan** after
+   operator review. Current `all`/`all` releases stage API first. If either reviewed
+   role is specialized (`api` or `ws`), the plan stages **WS first**, preserving
+   c375's WS-before-API role-split sequence regardless of JSON key order. Each stage
    deploys the pinned image with `--no-traffic`, the chosen revision name and all
    owned sizing/network settings. It uses `--update-env-vars` and
    `--update-secrets`, preserving unrelated settings. It does not change IAM.
    The runtime identity is the service's reviewed override, or the shared fallback
    when no override is declared; naming it does not grant it access.
-   Inspect revision readiness and the intended diff, then execute the API promote
+   Inspect revision readiness and the intended diff, then execute that service's promote
    command to route 100% to that explicit revision. Do not proceed on a failed or
    unexpected stage. Traffic can change while old requests remain in flight.
-5. Confirm the API predecessor has drained to zero instances and connection
-   headroom remains safe. Then execute the **WS** stage and promote commands with
+5. Confirm the first service's predecessor has drained to zero instances and
+   connection headroom remains safe. Then execute the **second service's** stage and promote commands with
    the same image. Keep the full configured request timeout; clients reconnect as
-   sockets age out. Confirm the WS predecessor drains before releasing job controls.
+   sockets age out. Confirm its predecessor drains before releasing job controls.
    Tags/old revisions that preserve capacity need explicit accounting. The tool
    will not silently remove tags or change rollback policy.
 6. Reinspect after convergence. Set `API_CANONICAL_ORIGIN` and

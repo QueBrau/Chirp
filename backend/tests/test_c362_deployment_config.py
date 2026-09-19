@@ -390,7 +390,9 @@ def test_print_only_plan_derives_both_services_and_verification(config, release,
     config["services"]["ws"]["env"]["SERVICE_ROLE"] = ws_role
     plan = C.plan(config, release, "gcloud")
     verification = shlex.split(plan["verification_command"])
-    for role, row in zip(("api", "ws"), plan["steps"], strict=True):
+    assert {row["service"] for row in plan["steps"]} == {"api", "ws"}
+    for row in plan["steps"]:
+        role = row["service"]
         cmd = shlex.split(row["stage_command"])
         assert cmd[cmd.index("--image")+1] == release["image"]
         assert cmd[cmd.index("--max-instances")+1] == str(config["services"][role]["revision_max_instances"])
@@ -612,6 +614,27 @@ def test_current_identity_defaults_and_all_roles_preserved(config, snap, release
         service["service_account"] = config["shared"]["service_account"]
     assert C.plan(config, release, "gcloud") == before
     assert run_compare(config, snap, release)["verdict"] == "CONFIG_MATCH"
+
+
+@pytest.mark.parametrize("api_role,ws_role,order", [
+    ("all", "all", ["api", "ws"]),
+    ("api", "ws", ["ws", "api"]),
+    ("all", "ws", ["ws", "api"]),
+    ("api", "all", ["ws", "api"]),
+])
+def test_role_split_plans_stage_ws_first_without_changing_all_all_order(config, release, api_role, ws_role, order):
+    config["services"]["api"]["env"]["SERVICE_ROLE"] = api_role
+    config["services"]["ws"]["env"]["SERVICE_ROLE"] = ws_role
+    # JSON object insertion order must not decide the safety sequence.
+    config["services"] = dict(reversed(list(config["services"].items())))
+    steps = C.plan(config, release, "gcloud")["steps"]
+    assert [step["service"] for step in steps] == order
+    for step in steps:
+        role = step["service"]
+        stage = shlex.split(step["stage_command"])
+        assert stage[3] == config["services"][role]["name"]
+        assert release["revisions"][role] + "=100" in shlex.split(step["promote_after_review_command"])
+        assert "drained with zero instances" in step["before_next_service"]
 
 
 @pytest.mark.parametrize("ann", [{"run.googleapis.com/scalingMode": "manual", "run.googleapis.com/manualInstanceCount": "40"}, {"run.googleapis.com/manualInstanceCount": "40"}, {"run.googleapis.com/scalingMode": "unrecognized"}])

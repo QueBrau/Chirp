@@ -213,6 +213,9 @@ not. Regenerate and review the pinned-image plan in section 7. Both comparison a
 deployment command generation use the same intended identity, including checks
 against each serving revision. This prepares configuration support; it creates
 no accounts or IAM grants and leaves the current configuration unchanged.
+Plans with either specialized role stage and promote WS before API, with the
+first predecessor drained before the second service starts. Ordinary `all`/`all`
+image releases keep their API-before-WS sequence.
 
 Rollback also requires reviewed intent: restore the approved role and identity in
 the source and follow the compatible-image, serialized rollback procedure in
