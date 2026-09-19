@@ -701,6 +701,34 @@ async def test_aggregate_line_is_emitted_on_the_abort_path_before_it_propagates(
     assert line["scanned"] == 0
 
 
+async def test_aggregate_line_is_emitted_on_the_unconfigured_bucket_abort_path(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The OTHER abort site (_bucket_name() itself, board c414 fix-up): a scheduled
+    dry run that hits this must not go silent on stdout just because no counts exist
+    yet to report - see test_aggregate_line_is_emitted_on_the_abort_path_before_it_
+    propagates above for the sibling abort site this mirrors."""
+    monkeypatch.setattr(storage_service.get_settings(), "media_bucket_name", None)
+
+    with pytest.raises(ReconcileAborted):
+        await _reconcile(delete=True)
+
+    lines = _aggregate_lines(capsys)
+    assert len(lines) == 1
+    line = lines[0]
+    assert set(line) == set(media_reconcile.AGGREGATE_KEYS)
+    assert line["outcome"] == "aborted"
+    assert line["mode"] == "delete"
+    assert line["scanned"] == 0
+    assert line["referenced"] == 0
+    assert line["too_young"] == 0
+    assert line["eligible"] == 0
+    assert line["unresolved"] == 0
+    assert line["protected_by_raw_match"] == 0
+    assert line["deleted"] == 0
+
+
 # ---------------------------------------------------------------------------
 # D2 (board c414): no object name or stored value anywhere in output by default - a
 # scheduled run must not write a user id to logs every day. --list-eligible restores

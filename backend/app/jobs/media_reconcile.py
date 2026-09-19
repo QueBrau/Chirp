@@ -410,7 +410,20 @@ async def reconcile_orphaned_media(
     the end is unaffected by this flag: it never carries a name either way.
     """
     mode = "delete" if delete else "dry_run"
-    bucket_name = _bucket_name()
+    try:
+        bucket_name = _bucket_name()
+    except ReconcileAborted:
+        # D1 (board c414): this is the OTHER abort site, and unlike the
+        # total_urls-but-no-object_names guard below it has nothing to report -
+        # _bucket_name() raises before scanned/referenced/etc exist, so every count
+        # here is genuinely zero, not just unknown. Still exactly one aggregate line,
+        # same as every other path (Check 6): a scheduled dry run that hits this
+        # would otherwise vanish from the log-based metrics with no signal at all.
+        _print_aggregate(
+            mode=mode, outcome="aborted", scanned=0, referenced=0, too_young=0,
+            eligible=0, unresolved=0, protected_by_raw_match=0, deleted=0,
+        )
+        raise
     resolved_now = now if now is not None else datetime.now(timezone.utc)
     cutoff = resolved_now - timedelta(hours=min_age_hours)
 
