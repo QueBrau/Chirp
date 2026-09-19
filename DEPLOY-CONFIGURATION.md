@@ -29,6 +29,22 @@ additional containers produce incomplete evidence instead of trusting this model
 Jobs must match their declared `python -m app.jobs...` entrypoint and have a pinned
 image reference. Unknown wrappers, worker overrides or image identity fail proof.
 
+Each service may declare `services.api.service_account` or
+`services.ws.service_account`. An omitted key inherits `shared.service_account`;
+an explicit empty, null or malformed value is refused, never treated as omission.
+The same resolution is used for the service template, every inspected revision,
+and the generated `--service-account` argument. Validation checks the declared
+argument's syntax; it does not establish that the account exists or has suitable
+IAM permissions. The checked-in configuration has no overrides and retains the
+current shared identity and `all`/`all` roles.
+
+Before c375's identity or role rollout, review required secret, SQL, storage and
+broker access per service and record the approved identities and roles in this
+source. Use the generated pinned-image plan for the rollout and subsequent image
+releases so a hand-applied setting cannot be silently replaced by stale intent.
+Creating accounts, granting IAM, validating positive/negative access in staging,
+and applying or rolling back a deployment remain separate operational steps.
+
 The intended mode is automatic scaling. The checker projects and validates both
 `scalingMode` and `manualInstanceCount`, and commands include `--scaling auto`.
 Manual scaling bypasses revision min/max limits and invalidates this capacity
@@ -90,7 +106,13 @@ shape example, **not an approved image, revision, build or SQL observation**:
     "build_id": "actual-build-artifact-id",
     "observed_at": "2026-09-07T12:00:00Z",
     "api_url": "https://chirp-api-593616178468.us-central1.run.app",
-    "ws_url": "wss://chirp-ws-593616178468.us-central1.run.app/ws"
+    "ws_url": "wss://chirp-ws-593616178468.us-central1.run.app/ws",
+    "evidence_scope": "operator_reviewed_effective_compiled_endpoints",
+    "binding_method": "launch_bundle_assignment_review",
+    "artifact_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "bundle_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "launch_bundle_path": "Payload/chirp.app/main.jsbundle",
+    "binding_evidence_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   }
 }
 ```
@@ -103,6 +125,43 @@ The tool compares these **operator-supplied observations** with the intended
 values and rejects missing, stale, future or mismatched observations. It does not
 independently open the database or download/inspect a build. Keep observation
 provenance with the release record. Default evidence freshness is in the source.
+
+### Compiled endpoint inventory and binding evidence
+
+`scripts/compiled-endpoints <existing.ipa> --build-id <id> --report <inventory.json>`
+reads exact Hermes v96 string boundaries and retains hashes of the archive and
+the bundle bytes read from that same archive snapshot. It does not execute the
+bundle or identify which assignments use those strings. Expected API/WS literals
+can coexist with alternative or unused endpoints, so **even a matching inventory
+returns `NOT_PROVEN`, exit 1, and no `client_build`**. Its `literal_status` and
+`literal_observation` describe only literal presence; a reported archive member
+is not proof that the app launches that member. Do not treat the nonzero exit as
+a reason to replace the observation with checked-in expected URLs.
+
+Before constructing `client_build`, an operator must retain the actual build
+metadata and IPA, establish which bundle the app launches, inspect the effective
+`API_BASE_URL` and WebSocket URL assignments and fallback branches in that bundle,
+and independently review the result. Record the actual observed values, the full
+archive and bundle SHA256s, the selected launch member, and the SHA256 of the
+retained binding-review evidence. That evidence must contain the inspection
+method, artifact/build association, relevant assignment/disassembly references,
+and review conclusion; a list of matching strings is insufficient. The
+`binding_method` value names this operator process, not an analysis performed by
+the configuration checker. Check any Expo update selection separately; embedded
+artifact evidence alone does not establish what an updated phone currently runs.
+
+The comparison requires the explicit scope/method and all three 64-character
+lowercase hashes above, plus a fresh observation, valid build ID, launch member
+and matching endpoints. **Old four-field records and string-only observations
+are refused.** Do not upgrade an old observation by merely attaching these field
+names: do the binding review first. This is the same operator-observation trust
+boundary as SQL and job-pool evidence: hashes preserve references to retained
+evidence; the checker does not reopen or authenticate those files. Its report
+keeps `artifact_inspected_by_checker: false` even for `CONFIG_MATCH`.
+
+This contract makes c418's inventory safe to hand off. It does not close c362's
+actual artifact/binding and fresh live-comparison acceptance, and it is not a
+native device or authenticated-readiness check.
 
 ### Optional job pool observations
 
@@ -233,6 +292,12 @@ Production mutations remain operator/manager steps. This implementation executed
 none. The following sequence applies to the existing pair; it does not provision
 a new project, add IAM grants or replace jobs.
 
+The canonical repository path is: build once, record the immutable image, then
+render both services from the reviewed deployment source with
+`scripts/deployment-config plan`. The plan is print-only. Independent
+`gcloud run deploy --source` commands or hand-maintained role/identity overrides
+must not become a second source for routine service deployment settings.
+
 1. Select the reviewed backend commit and build **once** using the existing build
    workflow/Artifact Registry repository named in the intended source. Record its
    immutable digest and the image's Alembic head. Use that same `repository@sha256`
@@ -250,17 +315,22 @@ a new project, add IAM grants or replace jobs.
 scripts/deployment-config plan --release /tmp/chirp-release.json --gcloud "$HOME/google-cloud-sdk/bin/gcloud" --report /tmp/chirp-paired-plan.json
 ```
 
-4. With jobs quiescent, execute the API stage command after operator review. It
+4. With jobs quiescent, execute the **first service in the printed plan** after
+   operator review. Current `all`/`all` releases stage API first. If either reviewed
+   role is specialized (`api` or `ws`), the plan stages **WS first**, preserving
+   c375's WS-before-API role-split sequence regardless of JSON key order. Each stage
    deploys the pinned image with `--no-traffic`, the chosen revision name and all
    owned sizing/network settings. It uses `--update-env-vars` and
    `--update-secrets`, preserving unrelated settings. It does not change IAM.
-   Inspect revision readiness and the intended diff, then execute the API promote
+   The runtime identity is the service's reviewed override, or the shared fallback
+   when no override is declared; naming it does not grant it access.
+   Inspect revision readiness and the intended diff, then execute that service's promote
    command to route 100% to that explicit revision. Do not proceed on a failed or
    unexpected stage. Traffic can change while old requests remain in flight.
-5. Confirm the API predecessor has drained to zero instances and connection
-   headroom remains safe. Then execute the **WS** stage and promote commands with
+5. Confirm the first service's predecessor has drained to zero instances and
+   connection headroom remains safe. Then execute the **second service's** stage and promote commands with
    the same image. Keep the full configured request timeout; clients reconnect as
-   sockets age out. Confirm the WS predecessor drains before releasing job controls.
+   sockets age out. Confirm its predecessor drains before releasing job controls.
    Tags/old revisions that preserve capacity need explicit accounting. The tool
    will not silently remove tags or change rollback policy.
 6. Reinspect after convergence. Set `API_CANONICAL_ORIGIN` and

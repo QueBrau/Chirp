@@ -3,9 +3,9 @@
 Every bundle here is SYNTHESISED rather than taken from a real .ipa, for two
 reasons: an 18MB artifact does not belong in the repo, and a synthetic bundle is
 the only way to construct the cases that must FAIL. The builder below emits a
-real Hermes v96 container, so it also serves as an independent statement of the
-layout the parser walks - if the two disagree, these tests break rather than the
-next release quietly citing a wrong URL.
+Hermes v96 string-table fixture with no executable functions. It checks literal
+boundaries, not effective assignments; even matching strings must never become
+a deployment-ready client_build record.
 
 The case this file exists for is test_substring_path_is_not_a_match. The first
 implementation of this checker scanned the bundle for text, could not see where a
@@ -15,6 +15,9 @@ next literal starts with legal path characters. That is why the parser reads the
 length table, and why "contains" is never enough here.
 """
 import importlib.util
+import hashlib
+from contextlib import redirect_stdout
+from unittest.mock import patch
 import io
 import json
 import struct
@@ -44,7 +47,7 @@ CONFIG = {
 
 
 def hermes_bundle(strings, *, version=96, corrupt_length=False, force_overflow=False):
-    """A minimal but REAL Hermes v96 container carrying `strings`.
+    """A minimal Hermes v96 string-table fixture carrying `strings`.
 
     Sections are emitted in the order the parser expects with the same alignment
     rules. Storage is packed with no separators, which is the whole point: it is
@@ -105,19 +108,59 @@ class CompiledEndpointTests(unittest.TestCase):
 
     # --- the happy path, and that it really is reading the artifact ---
 
-    def test_matching_bundle_reports_client_match(self):
+    def test_matching_literals_still_leave_effective_bindings_unproven(self):
         report = self.observe(hermes_bundle(["unrelated", API, WS, "also-unrelated"]))
-        self.assertEqual(report["verdict"], "CLIENT_MATCH")
-        self.assertEqual(report["findings"], [])
-        self.assertEqual(report["client_build"]["api_url"], API)
-        self.assertEqual(report["client_build"]["ws_url"], WS)
-        self.assertEqual(report["client_build"]["build_id"], BUILD)
-        self.assertEqual(report["client_build"]["observed_at"], "2026-09-16T12:00:00Z")
+        self.assertEqual(report["verdict"], "NOT_PROVEN")
+        self.assertEqual(report["literal_status"], "EXPECTED_LITERALS_PRESENT")
+        self.assertFalse(report["effective_bindings_proven"])
+        self.assertNotIn("client_build", report)
+        self.assertEqual(report["literal_observation"], {
+            "build_id": BUILD, "observed_at": "2026-09-16T12:00:00Z",
+            "api_origin_literal_present": True, "ws_url_literal_present": True})
+        self.assertIn("effective_endpoint_bindings_not_observed",
+                      [f["detail"] for f in report["findings"]])
 
-    def test_record_shape_is_what_deployment_config_consumes(self):
-        """deployment_config.compare() reads exactly these four keys off client_build."""
-        report = self.observe(hermes_bundle([API, WS]))
-        self.assertEqual(set(report["client_build"]), {"build_id", "api_url", "ws_url", "observed_at"})
+    def test_inventory_cannot_be_copied_as_a_client_build_record(self):
+        report = self.observe(hermes_bundle([API, WS, "https://alternative.invalid"]))
+        self.assertEqual(report["verdict"], "NOT_PROVEN")
+        self.assertNotIn("client_build", report)
+        self.assertNotIn("api_url", report["literal_observation"])
+        self.assertNotIn("ws_url", report["literal_observation"])
+        self.assertFalse(report["effective_bindings_proven"])
+
+    def test_inventory_identifies_the_same_archive_bytes_and_bundle_even_if_file_changes(self):
+        original_bundle = hermes_bundle([API, WS])
+        original_archive = ipa(original_bundle)
+        replacement_archive = ipa(hermes_bundle(["https://different.invalid"]))
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "chirp.ipa"
+            path.write_bytes(original_archive)
+            real_read = Path.read_bytes
+            def read_then_replace(target):
+                result = real_read(target)
+                if target == path:
+                    target.write_bytes(replacement_archive)
+                return result
+            with patch.object(Path, "read_bytes", read_then_replace):
+                report = ce.observe(path, BUILD, CONFIG, NOW)
+        self.assertEqual(report["literal_status"], "EXPECTED_LITERALS_PRESENT")
+        self.assertEqual(report["artifact"]["sha256"], hashlib.sha256(original_archive).hexdigest())
+        self.assertEqual(report["bundle"]["sha256"], hashlib.sha256(original_bundle).hexdigest())
+        self.assertEqual(report["bundle"]["archive_member"], "Payload/chirp.app/main.jsbundle")
+
+    def test_cli_matching_inventory_exits_nonzero_and_emits_no_client_build(self):
+        with TemporaryDirectory() as tmp:
+            path, config, output = (Path(tmp) / name for name in ("chirp.ipa", "config.json", "report.json"))
+            path.write_bytes(ipa(hermes_bundle([API, WS])))
+            config.write_text(json.dumps(CONFIG))
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = ce.main([str(path), "--build-id", BUILD, "--config", str(config), "--report", str(output)])
+            report = json.loads(stdout.getvalue())
+            self.assertEqual(json.loads(output.read_text()), report)
+        self.assertEqual(code, 1)
+        self.assertEqual(report["verdict"], "NOT_PROVEN")
+        self.assertNotIn("client_build", report)
 
     # --- THE case: exact boundaries, not substrings ---
 
@@ -129,31 +172,35 @@ class CompiledEndpointTests(unittest.TestCase):
         """
         bundle = hermes_bundle([API, WS + "ocial-medium", "ultiply_matrices"])
         report = self.observe(bundle)
-        self.assertEqual(report["verdict"], "DRIFT")
+        self.assertEqual(report["verdict"], "NOT_PROVEN")
+        self.assertEqual(report["literal_status"], "LITERAL_FINDINGS")
         self.assertIn("configured_ws_url_is_not_a_literal_in_the_bundle",
                       [f["detail"] for f in report["findings"]])
-        self.assertIsNone(report["client_build"]["ws_url"])
+        self.assertFalse(report["literal_observation"]["ws_url_literal_present"])
 
     def test_adjacent_literals_do_not_bleed_into_each_other(self):
         """The positive twin of the above: correct URL, junk literal right after it."""
         report = self.observe(hermes_bundle([API, WS, "ocial-medium", "endAllChildrenToContainer"]))
-        self.assertEqual(report["verdict"], "CLIENT_MATCH")
+        self.assertEqual(report["verdict"], "NOT_PROVEN")
+        self.assertEqual(report["literal_status"], "EXPECTED_LITERALS_PRESENT")
 
     # --- c246, the failure this card family exists for ---
 
-    def test_socket_pointing_at_the_api_service_is_drift(self):
+    def test_api_service_socket_literal_is_flagged_without_claiming_routing(self):
         bad = API.replace("https:", "wss:") + "/ws"
         report = self.observe(hermes_bundle([API, WS, bad]))
-        self.assertEqual(report["verdict"], "DRIFT")
-        self.assertIn("socket_url_points_at_the_api_service_c246",
+        self.assertEqual(report["verdict"], "NOT_PROVEN")
+        self.assertEqual(report["literal_status"], "LITERAL_FINDINGS")
+        self.assertIn("api_service_socket_literal_present_c246",
                       [f["detail"] for f in report["findings"]])
 
     def test_missing_api_origin_is_drift(self):
         report = self.observe(hermes_bundle([WS, "nothing-else"]))
-        self.assertEqual(report["verdict"], "DRIFT")
+        self.assertEqual(report["verdict"], "NOT_PROVEN")
+        self.assertEqual(report["literal_status"], "LITERAL_FINDINGS")
         self.assertIn("configured_api_origin_is_not_a_literal_in_the_bundle",
                       [f["detail"] for f in report["findings"]])
-        self.assertIsNone(report["client_build"]["api_url"])
+        self.assertFalse(report["literal_observation"]["api_origin_literal_present"])
 
     # --- third-party strings must not be reported as ours ---
 
@@ -167,7 +214,8 @@ class CompiledEndpointTests(unittest.TestCase):
             API, WS, "http://localhost:8081/intentConfiguration",
             "http://localhost:3000", "https://careers.northgate.example/summer-analyst",
         ]))
-        self.assertEqual(report["verdict"], "CLIENT_MATCH")
+        self.assertEqual(report["verdict"], "NOT_PROVEN")
+        self.assertEqual(report["literal_status"], "EXPECTED_LITERALS_PRESENT")
 
     # --- refusals: never guess ---
 
@@ -182,6 +230,34 @@ class CompiledEndpointTests(unittest.TestCase):
         with self.assertRaises(ce.EndpointError) as caught:
             self.observe(hermes_bundle([API, WS], version=255))
         self.assertEqual(str(caught.exception), "unsupported_hermes_version")
+
+    def test_truncated_hermes_header_has_a_structured_cli_refusal(self):
+        with TemporaryDirectory() as tmp:
+            path, config = Path(tmp) / "chirp.ipa", Path(tmp) / "config.json"
+            path.write_bytes(ipa(ce.HERMES_MAGIC))
+            config.write_text(json.dumps(CONFIG))
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = ce.main([str(path), "--build-id", BUILD, "--config", str(config)])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(stdout.getvalue()), {
+            "verdict": "NOT_PROVEN", "error": "hermes_header_truncated"})
+
+    def test_overflow_index_must_stay_inside_the_declared_table(self):
+        bundle = bytearray(hermes_bundle([API], force_overflow=True))
+        # The first overflow index is changed from 0 to the first absent entry.
+        struct.pack_into("<I", bundle, 128, (0xFF << 24) | (1 << 1))
+        with self.assertRaisesRegex(ce.EndpointError, "^hermes_overflow_entry_out_of_range$"):
+            self.observe(bytes(bundle))
+
+    def test_string_cannot_borrow_matching_bytes_from_after_string_storage(self):
+        bundle = bytearray(hermes_bundle([API]))
+        # Move the table's offset into trailing bytes that aren't string storage.
+        struct.pack_into("<I", bundle, 128, (len(API) << 24) | (len(API) << 1))
+        bundle.extend(API.encode())
+        struct.pack_into("<I", bundle, 32, len(bundle))
+        with self.assertRaisesRegex(ce.EndpointError, "^hermes_string_entry_out_of_range$"):
+            self.observe(bytes(bundle))
 
     def test_header_length_mismatch_is_refused(self):
         """The cheapest proof the layout in hand is the layout assumed."""
@@ -215,7 +291,8 @@ class CompiledEndpointTests(unittest.TestCase):
     def test_overflow_string_entries_are_read(self):
         """Literals >= 255 bytes live in the overflow table; a URL can share it."""
         report = self.observe(hermes_bundle([API, WS, "x" * 600], force_overflow=True))
-        self.assertEqual(report["verdict"], "CLIENT_MATCH")
+        self.assertEqual(report["verdict"], "NOT_PROVEN")
+        self.assertEqual(report["literal_status"], "EXPECTED_LITERALS_PRESENT")
 
     def test_expected_endpoints_derive_the_ws_url_the_same_way_the_checker_does(self):
         api, ws = ce.expected_endpoints(CONFIG)
