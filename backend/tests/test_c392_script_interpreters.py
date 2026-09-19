@@ -35,6 +35,7 @@ CA_COUNT = "import ssl; print(ssl.create_default_context().cert_store_stats()['x
 WRAPPERS = [
     ("deploy-verify", "deploy_verify.py"),
     ("deployment-config", "deployment_config.py"),
+    ("compiled-endpoints", "compiled_endpoints.py"),
     ("monitoring-check", "monitoring_check.py"),
     ("monitoring-apply", "monitoring_apply.py"),
     ("network-audit", "network_audit.py"),

@@ -33,7 +33,12 @@ def release(config):
     return {"image": config["image_repository"] + "@sha256:" + "a" * 64,
             "schema_head": "test_schema_head", "revisions": {role: row["name"] + "-release" for role, row in config["services"].items()},
             "database_observation": {"observed_at": NOW.isoformat(), "max_connections": 100, "superuser_reserved_connections": 3, "reserved_connections": 0},
-            "client_build": {"build_id": "reviewed-build", "observed_at": NOW.isoformat(), "api_url": config["services"]["api"]["client_origin"], "ws_url": config["services"]["ws"]["client_origin"].replace("https:", "wss:") + "/ws"}}
+            "client_build": {"build_id": "reviewed-build", "observed_at": NOW.isoformat(), "api_url": config["services"]["api"]["client_origin"], "ws_url": config["services"]["ws"]["client_origin"].replace("https:", "wss:") + "/ws",
+                             "evidence_scope": "operator_reviewed_effective_compiled_endpoints",
+                             "binding_method": "launch_bundle_assignment_review",
+                             "artifact_sha256": "d" * 64, "bundle_sha256": "e" * 64,
+                             "launch_bundle_path": "Payload/chirp.app/main.jsbundle",
+                             "binding_evidence_sha256": "f" * 64}}
 
 
 def fixture(config, release):

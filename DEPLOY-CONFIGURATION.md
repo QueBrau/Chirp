@@ -90,7 +90,13 @@ shape example, **not an approved image, revision, build or SQL observation**:
     "build_id": "actual-build-artifact-id",
     "observed_at": "2026-09-07T12:00:00Z",
     "api_url": "https://chirp-api-593616178468.us-central1.run.app",
-    "ws_url": "wss://chirp-ws-593616178468.us-central1.run.app/ws"
+    "ws_url": "wss://chirp-ws-593616178468.us-central1.run.app/ws",
+    "evidence_scope": "operator_reviewed_effective_compiled_endpoints",
+    "binding_method": "launch_bundle_assignment_review",
+    "artifact_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "bundle_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "launch_bundle_path": "Payload/chirp.app/main.jsbundle",
+    "binding_evidence_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   }
 }
 ```
@@ -103,6 +109,43 @@ The tool compares these **operator-supplied observations** with the intended
 values and rejects missing, stale, future or mismatched observations. It does not
 independently open the database or download/inspect a build. Keep observation
 provenance with the release record. Default evidence freshness is in the source.
+
+### Compiled endpoint inventory and binding evidence
+
+`scripts/compiled-endpoints <existing.ipa> --build-id <id> --report <inventory.json>`
+reads exact Hermes v96 string boundaries and retains hashes of the archive and
+the bundle bytes read from that same archive snapshot. It does not execute the
+bundle or identify which assignments use those strings. Expected API/WS literals
+can coexist with alternative or unused endpoints, so **even a matching inventory
+returns `NOT_PROVEN`, exit 1, and no `client_build`**. Its `literal_status` and
+`literal_observation` describe only literal presence; a reported archive member
+is not proof that the app launches that member. Do not treat the nonzero exit as
+a reason to replace the observation with checked-in expected URLs.
+
+Before constructing `client_build`, an operator must retain the actual build
+metadata and IPA, establish which bundle the app launches, inspect the effective
+`API_BASE_URL` and WebSocket URL assignments and fallback branches in that bundle,
+and independently review the result. Record the actual observed values, the full
+archive and bundle SHA256s, the selected launch member, and the SHA256 of the
+retained binding-review evidence. That evidence must contain the inspection
+method, artifact/build association, relevant assignment/disassembly references,
+and review conclusion; a list of matching strings is insufficient. The
+`binding_method` value names this operator process, not an analysis performed by
+the configuration checker. Check any Expo update selection separately; embedded
+artifact evidence alone does not establish what an updated phone currently runs.
+
+The comparison requires the explicit scope/method and all three 64-character
+lowercase hashes above, plus a fresh observation, valid build ID, launch member
+and matching endpoints. **Old four-field records and string-only observations
+are refused.** Do not upgrade an old observation by merely attaching these field
+names: do the binding review first. This is the same operator-observation trust
+boundary as SQL and job-pool evidence: hashes preserve references to retained
+evidence; the checker does not reopen or authenticate those files. Its report
+keeps `artifact_inspected_by_checker: false` even for `CONFIG_MATCH`.
+
+This contract makes c418's inventory safe to hand off. It does not close c362's
+actual artifact/binding and fresh live-comparison acceptance, and it is not a
+native device or authenticated-readiness check.
 
 ### Optional job pool observations
 

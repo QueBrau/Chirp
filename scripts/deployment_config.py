@@ -23,6 +23,8 @@ ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_
 POOL_NAMES = {"DB_POOL_SIZE": "size", "DB_MAX_OVERFLOW": "max_overflow"}
 JOB_POOL_EVIDENCE_SCOPE = "operator_inspected_immutable_image_pool"
 JOB_POOL_EVIDENCE_MAX_AGE_HOURS = 24
+CLIENT_BINDING_EVIDENCE_SCOPE = "operator_reviewed_effective_compiled_endpoints"
+CLIENT_BINDING_METHOD = "launch_bundle_assignment_review"
 ANN = ("autoscaling.knative.dev/minScale", "autoscaling.knative.dev/maxScale", "run.googleapis.com/cloudsql-instances", "run.googleapis.com/vpc-access-connector", "run.googleapis.com/vpc-access-egress", "run.googleapis.com/cpu-throttling", "run.googleapis.com/startup-cpu-boost")
 SERVICE_ANN = ("run.googleapis.com/scalingMode", "run.googleapis.com/manualInstanceCount", "run.googleapis.com/minScale", "run.googleapis.com/maxScale", "run.googleapis.com/ingress", "run.googleapis.com/urls")
 
@@ -251,6 +253,35 @@ def validate_release(release: dict, config: dict) -> None:
         validate_job_pool_observations(release, config)
     except (KeyError, TypeError):
         raise ConfigError("invalid_release") from None
+
+
+def client_binding_observation_valid(build: Any, config: dict, now: datetime) -> bool:
+    """Validate an operator attestation, not independently inspect the artifact.
+
+    The old four-field record was also emitted from string-table membership.
+    Require explicit provenance so copying that legacy record cannot establish
+    effective assignments. Hashes identify the operator's retained evidence;
+    this read-only cloud comparison does not open or authenticate that evidence.
+    """
+    if not isinstance(build, dict):
+        return False
+    if (build.get("evidence_scope") != CLIENT_BINDING_EVIDENCE_SCOPE
+            or build.get("binding_method") != CLIENT_BINDING_METHOD):
+        return False
+    for key in ("artifact_sha256", "bundle_sha256", "binding_evidence_sha256"):
+        if not isinstance(build.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", build[key]):
+            return False
+    member = build.get("launch_bundle_path")
+    if (not isinstance(member, str) or len(member) > 256
+            or not re.fullmatch(r"Payload/[A-Za-z0-9_-][A-Za-z0-9._ -]*\.app/main\.jsbundle", member)):
+        return False
+    return (
+        fresh(build.get("observed_at"), now, config["client"]["build_evidence_max_age_hours"])
+        and isinstance(build.get("build_id"), str)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}", build["build_id"]) is not None
+        and build.get("api_url") == config["services"]["api"]["client_origin"]
+        and build.get("ws_url") == config["services"]["ws"]["client_origin"].replace("https:", "wss:") + config["client"]["ws_path"]
+    )
 
 
 def pool_envelope(config: dict, runtime: dict[str, int], job_pools: dict[str, int] | None = None) -> dict:
@@ -592,9 +623,19 @@ def compare(config: dict, snapshot: dict, release: dict | None, now: datetime, r
     if not client_repository(config, root):
         note(report, "client", "drift", "checked_in_endpoints")
     build = (release or {}).get("client_build", {})
-    if not fresh(build.get("observed_at"), now, config["client"]["build_evidence_max_age_hours"]) or not isinstance(build.get("build_id"), str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}", build["build_id"]) or build.get("api_url") != config["services"]["api"]["client_origin"] or build.get("ws_url") != config["services"]["ws"]["client_origin"].replace("https:", "wss:") + config["client"]["ws_path"]:
+    client_evidence_ok = client_binding_observation_valid(build, config, now)
+    if not client_evidence_ok:
         note(report, "client", "unknown", "compiled_build_evidence_missing_or_mismatched")
-    report["client_evidence_scope"] = "repository_config_plus_operator_supplied_artifact_observation_not_device_test"
+    report["client_evidence_scope"] = "repository_config_plus_operator_effective_binding_attestation_not_device_test"
+    report["client_binding_evidence"] = {
+        "accepted_operator_observation": client_evidence_ok,
+        "artifact_inspected_by_checker": False,
+    }
+    if client_evidence_ok:
+        report["client_binding_evidence"].update({key: build[key] for key in (
+            "build_id", "observed_at", "evidence_scope", "binding_method",
+            "artifact_sha256", "bundle_sha256", "launch_bundle_path", "binding_evidence_sha256",
+        )})
     if transitioned and (release or {}).get("rollout", {}).get("jobs_quiescent") is not True:
         note(report, "rollout", "unknown", "quiescent_jobs_not_confirmed")
     kinds = {row["kind"] for row in report["findings"]}
