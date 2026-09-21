@@ -168,7 +168,7 @@ job metrics are documented in [Cloud Run monitoring](https://docs.cloud.google.c
 | Instance pressure | Run `container/instance_count`, `container/cpu/utilizations`, `container/memory/utilizations`. Review sustained p95 memory/CPU >80% for 10 minutes and proximity to the reviewed instance ceiling. | Compare deployment/pool envelope before increasing instances. See [DEPLOY.md](DEPLOY.md). Autoscaling blindly can exhaust SQL connections. |
 | SQL availability and capacity | Cloud SQL `database/up`, `database/postgresql/num_backends`, `database/cpu/utilization`, `database/disk/utilization`, `database/disk/bytes_used`; plus the new pool-503 signal. Proposed SQL-up failure page, disk >80% sustained warning and >90% escalation, connections approaching the deployment's reserved ceiling. | Inspect connections, active transactions and storage growth. Apply the connection reserve policy, not a guessed universal count. Pool wait-time distribution remains uninstrumented. |
 | Redis pressure and fallback | Memorystore `clients/connected`, `server/uptime`, `stats/memory/usage_ratio`, `stats/evicted_keys`; new limiter warning and existing startup/WS broker errors. Proposed memory >80% for 10 minutes and unexpected eviction warning. | Check connectivity/configuration before resizing. Uptime and memory do not prove pub/sub delivery; direct reachability and reconnect signals still need operational verification. |
-| Job failure and missed schedule | Run `job/completed_execution_count` by configured job/result, and Scheduler execution start/end logs. Record each actual schedule, timezone, allowed duration and retries. Notify on a failed final execution or no expected successful completion by that schedule plus its reviewed grace period. The missed-schedule half is not built: a `conditionAbsent` cannot exceed 23h30m, which is shorter than a daily cadence (c407), and its replacement is board card c410. | Check invocation identity, secret access, exit status and domain report. Scheduler accepting a Run execution is not completion of that execution. |
+| Job failure and missed schedule | Keep the daily `chirp-purge` schedule at `0 9 * * *` UTC. `cloud-run-job-failure.json` matches ERROR-or-higher `/Jobs.RunJob` system-event audit logs across jobs and extracts `job_name` to separate incident timelines. Keep the existing completed-execution failure metric policies as complementary signals. `chirp-purge-overdue-success.json` sums successful executions over 24h45m, compares below one for five minutes, and treats missing data as violating. | Check invocation identity, secret access, task exit status and domain report. Scheduler accepting an execution does not prove completion. A manual success can clear overdue status without proving Scheduler health. |
 | Purge backlog and blocked work | Existing purge aggregate JSON: `mode`, `status`, `remaining`, `capped_counts`, `batches_committed`, `commit_outcome_unknown`. Successful dry-run/preview is not successful deletion. | Follow the purge section of [RECOVERY-RETENTION.md](RECOVERY-RETENTION.md). Investigate failed, timed-out or blocked apply; do not rerun unbounded deletes or infer remaining=0 from unknown. |
 | Media reconciliation dry-run findings | `app.jobs.media_reconcile`'s single stdout `media_reconcile_aggregate` JSON line (board c414), emitted on completion or an explicit `ReconcileAborted` path. Other database/storage failures may emit no aggregate and require the separate c410 failure coverage. `media_reconcile_eligible_runs` counts lines with `eligible>0`; `media_reconcile_unresolved_runs` counts lines with `unresolved>0`. Proposed alert above zero occurrences in a five-minute window, the same posture as the WebSocket rejection policies below. Neither counts nor causes a deletion; `--delete` is never scheduled. | Eligible: a manager reviews a `--list-eligible` dry run and follows [DEPLOY.md](DEPLOY.md) section 8's approval-gated manual deletion. Unresolved: a stored `media_urls` value has a url form `resolve_object_names()` does not recognise - teach the resolver first, delete nothing on the strength of this signal alone. |
 | Backup freshness and PITR | Scheduled read-only `scripts/recovery-check` report, proposed automated-backup start age <=36 hours and latest recovery lag <=15 minutes. Alert on its gap/error and on a missing report after its own schedule plus grace. | Follow [RECOVERY-RETENTION.md](RECOVERY-RETENTION.md). Daily backup success does not prove PITR or a restore. Job wiring and actual recovery rehearsal remain open. |
@@ -260,8 +260,8 @@ With explicit authorization, stage a synthetic notification test without
 failing production dependencies or sending member messages. Confirm receipt,
 acknowledgement, backup escalation, and resolution behavior; preserve timestamps
 privately. Verify a normal signal and missing-signal scenario for every intended
-policy, including purge completion, missed schedules once c410 builds a
-mechanism for them, and stale recovery reports.
+policy, including purge completion, the c410 overdue-success condition, and stale
+recovery reports. c410 API-shape acceptance alone does not satisfy those proofs.
 Any evidence producer that is not scheduled, deployed or observed is still a
 coverage gap. Mark c370 done only after the current-service coverage matrix and
 responder/delivery evidence are accepted. The code and fixture tests alone are
@@ -276,12 +276,13 @@ same run just created: the seven log-based metrics under
 `ws_connect_capacity_rejected`, `ws_connect_suspended_rejected`, the purge
 job's stdout aggregate, and board c414's `media_reconcile_eligible_runs` and
 `media_reconcile_unresolved_runs`); the two `/_health` uptime checks under
-`infra/monitoring/uptime/` (`chirp-api`, `chirp-ws`); and twenty alert
+`infra/monitoring/uptime/` (`chirp-api`, `chirp-ws`); and twenty-two alert
 policies under `infra/monitoring/policies/`, covering API request failures,
 API latency, Cloud Run instance CPU/memory pressure, SQL availability, SQL
 disk warning/critical, SQL connections approaching the reserved ceiling,
 Redis memory pressure, Redis unexpected eviction, a failed-execution alert for
-`chirp-purge`, a failed-execution alert for `chirp-media-reconcile`, the two
+`chirp-purge`, a failed-execution alert for `chirp-media-reconcile`, a job-agnostic
+audit-log failure policy and a purge overdue-success policy (c410), the two
 uptime-check-failure policies, the two
 HTTP capacity/fallback policies, the two WebSocket rejection policies, the
 purge backlog policy, and the two media-reconciliation dry-run-findings
@@ -377,6 +378,7 @@ back. Re-inventory before retrying, and inspect an unconfirmed outcome rather
 than assuming nothing happened. There is no automatic retry or deletion.
 
 Field names for all three kinds (`conditionThreshold`, `conditionAbsent`,
+`conditionMatchedLog`, `evaluationMissingData`, `notificationPrompts`,
 `comparison`, `thresholdValue`, `duration`, `trigger`, `aggregations` with
 `alignmentPeriod`/`perSeriesAligner`/`crossSeriesReducer`/`groupByFields`,
 `denominatorFilter`, `denominatorAggregations`, `combiner`, `alertStrategy`
@@ -412,29 +414,51 @@ aggregation. The aligner keeps each series BOOL; the live API rejected
 `JSONResponse` serializes it compact, with no whitespace, as
 `{"status":"ok"}`, the exact string matched).
 
-**The purge missed-schedule condition does not ship (c407).** This paragraph
-used to say `MetricAbsence.duration` had no documented maximum, and
-`chirp-purge-job-failure.json` shipped a 24h `conditionAbsent` on that basis.
-The live API rejected it with "Durations longer than 23h30m are not supported".
-That ceiling is shorter than `chirp-purge`'s own 24h cadence (`0 9 * * *` UTC,
-per `infra/monitoring/evidence/c398-scheduler-chirp-purge-daily-2026-09-10.json`),
-so no absence window the API accepts spans the normal gap between two healthy
-runs: if the completion metric reports only when an execution completes, the
-condition would fire before every scheduled run. The condition is removed,
-`scripts/monitoring_apply.py` now refuses any `conditionAbsent` over 23h30m, and
-detecting a run that never starts is board card c410, one of c369's close
-conditions. The field's reference text, from the Cloud Monitoring discovery
-document (revision 20260903, `MetricAbsence.duration`), reads: "The minimum
-value of this field is 120 seconds. Larger values that are a multiple of a
-minute--for example, 240 or 300 seconds--are supported." It documents no
-maximum. The old note reported that correctly; its mistake was treating an
-undocumented maximum as no maximum. The 23h30m ceiling is known only from the
-live rejection. That error, c407's other two rejections and the reference text
-are kept verbatim in
-`infra/monitoring/evidence/c407-live-create-errors-2026-09-13.json`. The floor
-and the whole-minute text are documented but not exercised live, and nothing
-here ships a `conditionAbsent`, so neither is encoded; c410 encodes them if it
-builds an absence condition.
+**Daily purge overdue-success and job failure (c410).** The former 24-hour
+`conditionAbsent` in `chirp-purge-job-failure.json` was rejected by the live API
+(c407). The documented 23.5-hour absence limit cannot span this daily job's normal
+cadence. Keep the schedule at `0 9 * * *` UTC; the captured schedule and prior
+rejections remain in `infra/monitoring/evidence/`. No absence condition is added.
+
+`cloud-run-job-failure.json` matches ERROR-or-higher `/Jobs.RunJob` system-event
+audit entries across jobs. Its extracted `job_name` gives each job a separate
+incident timeline. The filter includes the 19 retained historical purge failures
+before any task started, when no native job metric was written. Started-task
+failures and cancellation were not observed in that retained positive set, so
+keep the existing native failure policies as complementary signals. Policy-wide
+limits still allow only 20 incidents and 20 notifications per day, and two new
+incidents per minute. Five-minute notification spacing and 30-minute auto-close
+are initial operating choices. Auto-close is administrative cleanup, not recovery.
+
+`chirp-purge-overdue-success.json` sums successful completed executions over
+24h45m, compares below one for five minutes, and treats missing data as violating.
+Its combined 24h50m evaluation window is below the 25-hour threshold limit.
+The native counter does not continually zero-fill: retained successes had one
+trailing zero then absent points. Keep missing-data evaluation ACTIVE. Before
+enabling or modifying this policy, read a recent successful native measurement
+and execute its exact filter and aggregation query. Never-written or uninitialized
+series remain unproven. The 45-minute grace and five-minute retest are initial
+choices, not measured evaluator latency. A manual success can clear overdue
+status without proving Scheduler health.
+
+On September 21, 2026, both exact policy shapes were accepted by the live API as
+disabled policies with no notification channels; each matched its readback and
+was deleted with a confirming 404. Those probes establish API acceptance and
+cleanup only. They do not prove enabled missing-data evaluation, future incident
+transitions, responder delivery, or c369 operational readiness. Activation must
+reuse the existing enabled channel references and leave Scheduler cadence intact.
+No synthetic log entry, job failure, or test notification is authorized by those
+shape probes. Retain explicit unproven incident/delivery status until observed.
+
+The [AlertPolicy REST reference](https://docs.cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.alertPolicies)
+documents the single-condition LogMatch requirement, its notification rate limit,
+and the minimum 60-second retest for missing-data evaluation. The
+[Monitoring limits](https://docs.cloud.google.com/monitoring/quotas) describe the
+combined threshold window and policy-wide notification/incident caps. See also
+[log-policy configuration](https://docs.cloud.google.com/logging/docs/alerting/log-based-alerts)
+and [metric-absence prerequisites](https://docs.cloud.google.com/monitoring/alerts/metric-absence).
+Local semantic guards supplement these references; only a live provider probe
+establishes acceptance for this project.
 
 Several thresholds not stated explicitly in the signal-plan table above (the
 SQL-up duration, the disk-warning/critical durations, the connections
