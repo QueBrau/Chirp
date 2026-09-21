@@ -1,0 +1,31 @@
+name: Crypto native boundary
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/crypto-native-boundary.yml
+      - spikes/vodozemac-native-boundary/**
+  pull_request:
+    paths:
+      - .github/workflows/crypto-native-boundary.yml
+      - spikes/vodozemac-native-boundary/**
+
+permissions:
+  contents: read
+
+jobs:
+  host-cpp-rust:
+    name: c23 C++ Rust boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup toolchain install 1.90.0 --profile minimal
+      - name: Compile and exercise the real native boundary
+        run: cargo +1.90.0 test --locked --manifest-path spikes/vodozemac-native-boundary/Cargo.toml
+      - name: Run aggregate-only host executable
+        run: cargo +1.90.0 run --locked --quiet --manifest-path spikes/vodozemac-native-boundary/Cargo.toml
