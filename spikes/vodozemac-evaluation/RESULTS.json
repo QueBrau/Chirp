@@ -1,0 +1,64 @@
+{
+  "evaluated_at_utc": "2026-09-21T18:10:34.326376+00:00",
+  "schema_source_baseline": "88a2179",
+  "candidate": {
+    "name": "vodozemac",
+    "version": "0.11.0",
+    "source_commit": "db1b34820f3102307284e762f335b3f72c735bf0",
+    "license": "Apache-2.0",
+    "crate_sha256": "ba935af014ca0ae5fb468daa51da81a8a0df7daad23c052c878b7c690cdf2574",
+    "default_features": false,
+    "session_config": "stable V1"
+  },
+  "toolchain": {
+    "rust": "1.90.0",
+    "host": "x86_64-apple-darwin",
+    "python_schema_dependency": "pydantic 2.13.4"
+  },
+  "checks": {
+    "rust_protocol_tests": 15,
+    "actual_schema_tests": 13,
+    "failures": 0,
+    "skips": 0,
+    "isolated_python_environment_schema_rerun": 13
+  },
+  "compile_probes": {
+    "aarch64-apple-ios": "rlib compiled; no app linking/execution",
+    "aarch64-linux-android": "rlib compiled; no app linking/execution"
+  },
+  "mutation_probes": [
+    {
+      "change": "remove experimental context check",
+      "result": "expected assertion failure; exit101"
+    },
+    {
+      "change": "reuse old group session instead of rotating",
+      "result": "expected assertion failure; exit101"
+    }
+  ],
+  "lengths": {
+    "raw_single_olm_transport_chars": 53928,
+    "single_device_transport_chars": 72100,
+    "text_unicode_scalars": 10000,
+    "text_utf8_bytes": 40000,
+    "two_device_transport_chars": 144220
+  },
+  "current_ciphertext_b64_limit": 65536,
+  "source_sha256": {
+    "spikes/vodozemac-evaluation/src/lib.rs": "f1f5abd382eb830e68a1c68a3456d7fc8e7e9fe02af0815a67cf90037b868dc3",
+    "spikes/vodozemac-evaluation/verify_contract.py": "6085c0bed8da70248945eca636201af386d4b2668e8a6ddd65c88bdff29f6bed",
+    "spikes/vodozemac-evaluation/schema_requirements.py": "f5ddbeff61551baaad3dea28c6420419af16f066c6eec656b1af0504ede55a85",
+    "spikes/vodozemac-evaluation/Cargo.lock": "35029529a639fa025411f67e464680a0bf2f5ece20c51400f3793bb5fa0bc50e",
+    ".github/workflows/crypto-evaluation.yml": "6c9bfaf75696028dccbf874de67d133f1b0af415a89d35eec348e0bf5a72b63c"
+  },
+  "not_proven": [
+    "production protocol selection or key-directory mapping",
+    "HTTP/WS/SQL integration",
+    "Expo module or native secure storage",
+    "phone execution or two-device acceptance",
+    "automatic membership rotation or post-leave key redistribution",
+    "post-quantum security",
+    "current-release or application security audit"
+  ],
+  "runtime_cloud_account_or_app_changes": false
+}

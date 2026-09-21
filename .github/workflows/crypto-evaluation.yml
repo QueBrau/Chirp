@@ -1,0 +1,48 @@
+name: Crypto evaluation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/crypto-evaluation.yml
+      - spikes/vodozemac-evaluation/**
+      - backend/app/schemas/**
+      - backend/app/core/validation.py
+      - backend/requirements.lock
+  pull_request:
+    paths:
+      - .github/workflows/crypto-evaluation.yml
+      - spikes/vodozemac-evaluation/**
+      - backend/app/schemas/**
+      - backend/app/core/validation.py
+      - backend/requirements.lock
+
+permissions:
+  contents: read
+
+jobs:
+  host-protocol-and-schema:
+    name: c23 host protocol and schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - name: Install schema dependencies from the backend hash lock
+        run: |
+          python spikes/vodozemac-evaluation/schema_requirements.py > "$RUNNER_TEMP/schema-requirements.lock"
+          pip install --require-hashes -r "$RUNNER_TEMP/schema-requirements.lock"
+      - name: Install the pinned evaluation toolchain
+        run: rustup toolchain install 1.90.0 --profile minimal
+      - name: Test real host protocol behavior
+        run: cargo +1.90.0 test --locked --manifest-path spikes/vodozemac-evaluation/Cargo.toml
+      - name: Check fresh public specimens against actual Chirp schemas
+        run: |
+          cargo +1.90.0 run --locked --quiet --manifest-path spikes/vodozemac-evaluation/Cargo.toml > "$RUNNER_TEMP/crypto-public-specimen.json"
+          python spikes/vodozemac-evaluation/verify_contract.py "$RUNNER_TEMP/crypto-public-specimen.json"
