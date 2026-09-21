@@ -10,7 +10,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:associations": "node scripts/verify-invite-association.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

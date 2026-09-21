@@ -7,9 +7,37 @@
  * public https hand-off URL and the QR must encode that exact same URL.
  */
 import { readFileSync } from "node:fs";
+import assert from "node:assert/strict";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 
 const chapterScreen = readFileSync(new URL("../app/(tabs)/chapter/index.tsx", import.meta.url), "utf8");
 const inviteLink = readFileSync(new URL("../src/auth/inviteLink.ts", import.meta.url), "utf8");
+const app = JSON.parse(readFileSync(new URL("../app.json", import.meta.url), "utf8")).expo;
+
+// Execute the real helper: a URL substring in source does not establish which
+// host the compiled default branch actually returns.
+const compiled = ts.transpileModule(inviteLink, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS },
+}).outputText;
+function links(env = {}) {
+  const context = { exports: {}, process: { env } };
+  runInNewContext(compiled, context);
+  return context.exports;
+}
+const publicLinks = links();
+assert.equal(publicLinks.inviteShareUrl("invite_123"), "https://chirpsocials.com/join-chapter?code=invite_123");
+assert.equal(publicLinks.inviteShareUrl("a+b?&"), "https://chirpsocials.com/join-chapter?code=a%2Bb%3F%26");
+assert.equal(publicLinks.inviteShareUrl(), "https://chirpsocials.com/join-chapter");
+assert.equal(links({ EXPO_PUBLIC_WEB_URL: "http://localhost:5173/" }).inviteShareUrl("test"),
+  "http://localhost:5173/join-chapter?code=test");
+assert.deepEqual(app.ios.associatedDomains, ["applinks:chirpsocials.com"]);
+assert.deepEqual(app.android.intentFilters, [{
+  action: "VIEW", autoVerify: true,
+  data: [{ scheme: "https", host: "chirpsocials.com", path: "/join-chapter" }],
+  category: ["BROWSABLE", "DEFAULT"],
+}]);
+console.log("  PASS  executed invite host, encoding, override and exact native route contracts");
 
 const checks = [
   ["native share-sheet API is imported", /import \{[^}]*Share[^}]*\} from "react-native"/s, chapterScreen],

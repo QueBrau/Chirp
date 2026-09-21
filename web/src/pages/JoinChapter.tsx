@@ -12,10 +12,9 @@ import { usePageMeta } from "../components/usePageMeta";
  * chirp://join-chapter?code=..., the deep link
  * app-mobile/app/(auth)/join-chapter.tsx already handles.
  *
- * Path must stay /join-chapter. app-mobile/app.json declares it in both the iOS
- * associatedDomains entry and the Android intent filter, so once universal
- * links are wired this same URL opens the app directly and this page never
- * renders at all.
+ * Path must stay /join-chapter. The hosted Apple association and Android intent
+ * filter use this exact path. This page remains the fallback for browsers and
+ * builds that do not have a verified native association.
  */
 /**
  * Invite codes are minted server-side by `secrets.token_urlsafe(9)`

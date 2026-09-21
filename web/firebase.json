@@ -1,6 +1,7 @@
 {
   "hosting": {
     "public": "dist",
+    "appAssociation": "NONE",
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -9,6 +10,14 @@
     "cleanUrls": true,
     "trailingSlash": false,
     "rewrites": [
+      {
+        "source": "/.well-known/apple-app-site-association",
+        "destination": "/apple-app-site-association"
+      },
+      {
+        "source": "/.well-known/assetlinks.json",
+        "destination": "/assetlinks.json"
+      },
       {
         "source": "/media/**",
         "run": {
@@ -23,15 +32,24 @@
     ],
     "headers": [
       {
+        "source": "/apple-app-site-association",
+        "headers": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Cache-Control", "value": "public, max-age=300" }
+        ]
+      },
+      {
         "source": "/.well-known/apple-app-site-association",
         "headers": [
-          { "key": "Content-Type", "value": "application/json" }
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Cache-Control", "value": "public, max-age=300" }
         ]
       },
       {
         "source": "/.well-known/assetlinks.json",
         "headers": [
-          { "key": "Content-Type", "value": "application/json" }
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Cache-Control", "value": "public, max-age=300" }
         ]
       },
       {

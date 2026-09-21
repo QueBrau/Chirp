@@ -11,7 +11,7 @@
       "bundleIdentifier": "app.chirps.mobile",
       "supportsTablet": false,
       "associatedDomains": [
-        "applinks:chirp.example.com"
+        "applinks:chirpsocials.com"
       ],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -26,8 +26,8 @@
           "data": [
             {
               "scheme": "https",
-              "host": "chirp.example.com",
-              "pathPrefix": "/join-chapter"
+              "host": "chirpsocials.com",
+              "path": "/join-chapter"
             }
           ],
           "category": [

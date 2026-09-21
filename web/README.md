@@ -2,7 +2,8 @@
 
 Vite + React + TypeScript, built to static files and served by **Firebase
 Hosting** on the existing `chirps-prod` project — the same project as Cloud Run,
-Cloud SQL and Firebase Auth. No new vendors.
+Cloud SQL and Firebase Auth. The landing-page domain is `chirpsocials.com`;
+`chirps-prod.web.app` remains available. No new vendors.
 
 Nothing here calls the Chirp API. No auth, no fetch, no CORS change. That is
 what keeps a marketing site from ever being able to break the product.
@@ -54,6 +55,7 @@ npm install
 npm run dev          # vite dev server, hot reload
 npm run typecheck    # tsc --noEmit
 npm run build        # tsc -b && vite build -> dist/
+npm run verify:associations # inspect the built invite association and Hosting contract
 npm run preview      # serve the real production build with SPA fallback
 ```
 
@@ -125,17 +127,21 @@ gcloud run services update chirp-api --region=us-central1 --project=chirps-prod 
   --update-env-vars=APP_PUBLIC_BASE_URL=https://chirps-prod.web.app
 ```
 
-## Not done yet, on purpose
+## Invite links and remaining release work
 
-- **No `.well-known/` files.** `apple-app-site-association` needs a real Apple
-  Team ID and `assetlinks.json` needs a release signing-cert fingerprint from
-  EAS. Neither exists. A file with a fabricated Team ID serving `200` would read
-  as finished while doing nothing, so there is nothing there instead. They go in
-  `public/.well-known/` when those values exist.
-- **Universal links are not wired.** `app-mobile/app.json` still declares the
-  placeholder `applinks:chirp.example.com`. Until a real domain and Team ID
-  exist, the visible "Open Chirp" button on the bounce pages is the mechanism,
-  not a fallback.
-- **No custom domain.** `chirps-prod.web.app` unblocks Stripe and the App Store
-  today; a domain purchase is a separate decision.
+Jose selected `chirpsocials.com` for c5. The native configuration and default
+shared invite URL use that apex domain. The iOS association uses the Apple team
+recorded on c39 and the app's existing bundle identifier. Hosting serves visible
+static JSON files through exact `.well-known` rewrites; hidden files remain
+excluded from uploads. Firebase automatic association generation is disabled.
+See [INVITE-LINKS.md](INVITE-LINKS.md) for the build, publication and device gates.
+
+- **A source change does not update installed native domains.** Publish and
+  verify the association, then produce and verify a newly signed app. The older
+  preview can still use the existing browser/custom-scheme fallback.
+- **Android association is pending.** The hosted `assetlinks.json` remains an
+  explicit empty array until the actual release signing certificate is known;
+  no placeholder certificate is claimed to verify the app.
+- **Stripe's callback origin is unchanged.** This invite-domain decision does
+  not change `APP_PUBLIC_BASE_URL` or move the marketing site to a subdomain.
 - **No store badges.** The app is not published, so linking one would 404.

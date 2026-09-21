@@ -385,3 +385,6 @@ jobs:
       - name: Build
         working-directory: web
         run: npm run build
+      - name: Built invite association and Hosting contract (c5)
+        working-directory: web
+        run: npm run verify:associations
