@@ -1,0 +1,73 @@
+{
+  "recorded_at_utc": "2026-09-21",
+  "scope": "Isolated host C++/Rust prototype only; not production selected, no native phone or cloud proof.",
+  "toolchain": "rustc 1.90.0",
+  "compiler": "Apple clang 14.0.0",
+  "host": "x86_64-apple-darwin",
+  "versions": {
+    "vodozemac": "0.11.0",
+    "cxx": "1.0.202",
+    "cxx-build": "1.0.202"
+  },
+  "tests": {
+    "passed": 9,
+    "failed": 0,
+    "skipped": 0,
+    "body_boundary_bytes": 1024,
+    "body_rejected_bytes": 1025,
+    "executable_passed": true,
+    "restored_source_passed": true,
+    "package_cleaned_between_copies": true,
+    "initial_shared_target_cache_mismatch": "An original-source rerun reused the last private mutant binary. All three mutants and original were rerun after cleaning this package; initial logs retained in private evidence.",
+    "negative_mutations": [
+      {
+        "mutation": "context_gate_removed",
+        "expected_test": "cpp_context_failure_preserves_ratchet_and_prekey",
+        "returncode": 101,
+        "package_cleaned_first": true,
+        "recompiled": true,
+        "targeted_assertion_failed": true
+      },
+      {
+        "mutation": "prekey_commit_before_validation",
+        "expected_test": "cpp_context_failure_preserves_ratchet_and_prekey",
+        "returncode": 101,
+        "package_cleaned_first": true,
+        "recompiled": true,
+        "targeted_assertion_failed": true
+      },
+      {
+        "mutation": "session_lock_gate_removed",
+        "expected_test": "cpp_account_lock_invalidates_existing_sessions",
+        "returncode": 101,
+        "package_cleaned_first": true,
+        "recompiled": true,
+        "targeted_assertion_failed": true
+      }
+    ]
+  },
+  "mobile_limits": {
+    "iphoneos_sdk_lookup_exit": 1,
+    "iphoneos_sdk_available": false,
+    "ios_native_bridge_build_attempted": false,
+    "android_native_bridge_build_attempted": false,
+    "expo_adapter_implemented": false,
+    "phone_execution": false
+  },
+  "host_metadata_registry_packages": 90,
+  "source_sha256": {
+    "spikes/vodozemac-native-boundary/.gitignore": "306fd52e74fca6746e12acc750f232de15e71da917756a1270d74c91f5eb7368",
+    "spikes/vodozemac-native-boundary/Cargo.lock": "6c9aceaea25c4c3c882a27a69d76984e4dd889de70977499f8954cb7b4391cb6",
+    "spikes/vodozemac-native-boundary/Cargo.toml": "3ec40c9f7f747cd39221ae9a0dba56e2e91bc1fba4ee38f1ec588a076a1e30d1",
+    "spikes/vodozemac-native-boundary/DEPENDENCY-LICENSES.json": "b33f3b45d98cb2af30c5f2b0fc4a9629f3dd500dd0b1165c8d74f8f56cefaac7",
+    "spikes/vodozemac-native-boundary/PROPOSED-CONTRACT.md": "2017f98a2e95304e19014421bb2a00e2d257fcbac680721edae487aaeb41dad7",
+    "spikes/vodozemac-native-boundary/README.md": "07fce70459bda652df0af8d0b799e3529b16d32105959cb9d99cc85552ad1395",
+    "spikes/vodozemac-native-boundary/build.rs": "0dd2a4531fb931fc3a474f1499144afee89ce33edbaa172c34111223317b77c9",
+    "spikes/vodozemac-native-boundary/include/probe.h": "af61f35f8c6eeb77bbd4bf2e2142e9891976090479e2d75bbfa582a711fd37a4",
+    "spikes/vodozemac-native-boundary/rust-toolchain.toml": "9cbde07377abdce69bc9580adb0315d52e2a09d6494a2005550a7e6733d9688b",
+    "spikes/vodozemac-native-boundary/src/lib.rs": "aa19d5b330cdae85bc645429943dba3e31b4baac7a45640e236b79ee9f8da12a",
+    "spikes/vodozemac-native-boundary/src/main.rs": "a76f9aac20fa48d0e367e7058833a44555a4d23d41ea7f21441a1653f6ab1a11",
+    "spikes/vodozemac-native-boundary/src/probe.cc": "3d9ff3fec385cdacf3cbf8f5a074c3e410fc6c955e8d818aef0fbccc826e2f09",
+    ".github/workflows/crypto-native-boundary.yml": "8b4e34a7ef26f548bab573c361e76899ea730b96316aceb8ec0f23eb9d232ca2"
+  }
+}
