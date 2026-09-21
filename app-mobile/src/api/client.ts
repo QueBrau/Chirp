@@ -51,6 +51,8 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export interface RequestOptions extends OperationOptions {
   /** Share this operation across a multi-step upload instead of resetting its budget. */
   operation?: Operation;
+  /** c405 socket probe delegates 401 recovery to SessionProvider; defaults to retrying. */
+  retryAuth?: boolean;
   method?: HttpMethod;
   /** JSON-serialized body. */
   body?: unknown;
@@ -84,7 +86,7 @@ function doFetch(path: string, options: RequestOptions, operation: Operation): P
 
 async function fetchWithAuthRetry(path: string, options: RequestOptions, operation: Operation): Promise<Response> {
   let response = await doFetch(path, options, operation);
-  if (response.status === 401 && !debugFirebaseUid && hasFirebaseConfig()) {
+  if (response.status === 401 && options.retryAuth !== false && !debugFirebaseUid && hasFirebaseConfig()) {
     const freshToken = await operation.wait(getIdToken(true, operation.owner));
     if (freshToken) response = await doFetch(path, options, operation);
   }

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import ts from "typescript";
 import { recoveryCases } from "./c354-recovery-cases.mjs";
+import { uncodedFailureCases } from "./c405-uncoded-failure-cases.mjs";
 
 const emittedModules = new Map();
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -770,4 +771,5 @@ await test("c354 unavailable AppState fails closed without subscribing to a miss
 });
 
 await recoveryCases({ test, flush, deferred, response, readySocket, nodes });
-console.log(`ALL PASS: ${count} executed c343/c346/c354 behavior regressions (TypeScript ${ts.version}).`);
+await uncodedFailureCases({ test, flush, deferred, response, readySocket, nodes });
+console.log(`ALL PASS: ${count} executed c343/c346/c354/c405 behavior regressions (TypeScript ${ts.version}).`);

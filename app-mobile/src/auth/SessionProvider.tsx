@@ -194,6 +194,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const unsubscribeStatus = chirpSocket.onStatus(setRealtimeStatus);
     const unsubscribeAuth = chirpSocket.setAuthHandlers({
       revalidate: async (owner, signal) => await loadMe({ owner, signal, forceToken: true, recoverOnFailure: true }) === "ready",
+      suspended: owner => {
+        if (!ownsIdentity(owner)) return;
+        // A current authenticated 403 outranks an older /me still in flight.
+        genRef.current += 1;
+        loadRef.current?.cancel();
+        setStatus("suspended");
+      },
       exhausted: owner => {
         if (!ownsIdentity(owner)) return;
         setStatus(prev => prev === "suspended" || prev === "unregistered" || prev === "signedOut" ? prev : "recoverable");
