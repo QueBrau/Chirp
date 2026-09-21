@@ -161,7 +161,7 @@ class MonitoringApplyTests(unittest.TestCase):
         self.assertEqual(report["skipped_files"], [])
         self.assertEqual(len(report["metrics"]), 7)
         self.assertEqual(len(report["uptime"]), 2)
-        self.assertEqual(len(report["policies"]), 20)
+        self.assertEqual(len(report["policies"]), 22)
         self.assertEqual({p["action"] for p in report["metrics"]}, {"create"})
         self.assertEqual({p["action"] for p in report["uptime"]}, {"create"})
         self.assertEqual({p["action"] for p in report["policies"]}, {"create"})
