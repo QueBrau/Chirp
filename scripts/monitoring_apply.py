@@ -56,6 +56,11 @@ NUMERIC_OUTPUT_ALIGNERS = frozenset({
     "ALIGN_PERCENTILE_99", "ALIGN_PERCENTILE_95", "ALIGN_PERCENTILE_50", "ALIGN_PERCENTILE_05",
 })
 CONDITION_ABSENT_MAX_SECONDS = 23 * 3600 + 30 * 60
+CONDITION_THRESHOLD_MAX_SECONDS = 25 * 3600
+MISSING_DATA_MODES = frozenset({
+    "EVALUATION_MISSING_DATA_UNSPECIFIED", "EVALUATION_MISSING_DATA_ACTIVE",
+    "EVALUATION_MISSING_DATA_INACTIVE", "EVALUATION_MISSING_DATA_NO_OP",
+})
 
 
 _DURATION_RE = re.compile(r"(?P<seconds>[0-9]+(?:\.[0-9]+)?)s")
@@ -100,6 +105,7 @@ ALERT_POLICY_SCHEMA: dict = {
     "documentation": {"content": str, "mimeType": str},
     "alertStrategy": {
         "notificationRateLimit": {"period": str},
+        "notificationPrompts": [str],
         "autoClose": str,
     },
     "conditions": [{
@@ -109,6 +115,7 @@ ALERT_POLICY_SCHEMA: dict = {
             "comparison": str,
             "thresholdValue": (int, float),
             "duration": str,
+            "evaluationMissingData": str,
             "trigger": {"count": (int, float), "percent": (int, float)},
             "aggregations": [{
                 "alignmentPeriod": str,
@@ -138,6 +145,7 @@ ALERT_POLICY_SCHEMA: dict = {
                 "groupByFields": [str],
             }],
         },
+        "conditionMatchedLog": {"filter": str, "labelExtractors": dict},
     }],
 }
 
@@ -330,13 +338,27 @@ def required_shape_errors(policy: dict, available_metric_types: Iterable[str],
     # known, so it accepted every one of them; a schema that says a field exists
     # says nothing about when it is allowed.
     strategy = policy.get("alertStrategy") if isinstance(policy, dict) else None
+    log_based = any(
+        isinstance(condition, dict) and "conditionMatchedLog" in condition
+        for condition in (conditions if isinstance(conditions, list) else [])
+    )
     if isinstance(strategy, dict) and "notificationRateLimit" in strategy:
-        log_based = any(
-            isinstance(condition, dict) and "conditionMatchedLog" in condition
-            for condition in (conditions if isinstance(conditions, list) else [])
-        )
         if not log_based:
             errors.append("notification_rate_limit_on_non_log_policy")
+    if log_based:
+        if len(conditions) != 1:
+            errors.append("log_match_requires_single_condition")
+        rate = strategy.get("notificationRateLimit") if isinstance(strategy, dict) else None
+        period = _duration_seconds(rate.get("period")) if isinstance(rate, dict) else None
+        if period is None or not math.isfinite(period) or period < 300:
+            errors.append("log_match_notification_period_below_300s_or_invalid")
+        if isinstance(strategy, dict) and "autoClose" in strategy:
+            auto_close = _duration_seconds(strategy["autoClose"])
+            if auto_close is None or not 1800 <= auto_close <= 604800:
+                errors.append("log_match_auto_close_out_of_range")
+        if isinstance(strategy, dict) and "notificationPrompts" in strategy:
+            if strategy["notificationPrompts"] != ["OPENED"]:
+                errors.append("log_match_notification_prompts_must_be_opened")
 
     # c407 causes 2 and 3, found by chirps-36's review: the data files were repaired
     # but nothing stopped the NEXT policy repeating either mistake, which is how all
@@ -356,6 +378,19 @@ def required_shape_errors(policy: dict, available_metric_types: Iterable[str],
     for condition in conditions if isinstance(conditions, list) else []:
         if not isinstance(condition, dict):
             continue
+        if sum(key.startswith("condition") for key in condition) != 1:
+            errors.append("condition_requires_one_type")
+        if "conditionMatchedLog" in condition:
+            log = condition["conditionMatchedLog"]
+            if not isinstance(log, dict) or not isinstance(log.get("filter"), str) or not log["filter"].strip():
+                errors.append("log_match_requires_filter")
+            if isinstance(log, dict) and "labelExtractors" in log:
+                labels = log["labelExtractors"]
+                if not isinstance(labels, dict) or any(
+                    not isinstance(key, str) or not key or not isinstance(value, str) or not value.strip()
+                    for key, value in labels.items()
+                ):
+                    errors.append("log_match_invalid_label_extractors")
         for kind in ("conditionThreshold", "conditionAbsent"):
             spec = condition.get(kind)
             if not isinstance(spec, dict):
@@ -377,6 +412,27 @@ def required_shape_errors(policy: dict, available_metric_types: Iterable[str],
                     errors.append(f"duration_not_seconds_format:{kind}")
                 elif kind == "conditionAbsent" and seconds > CONDITION_ABSENT_MAX_SECONDS:
                     errors.append("condition_absent_duration_over_api_ceiling")
+            if kind == "conditionThreshold":
+                # REST MetricThreshold requires minute-multiple retest windows;
+                # missing-data evaluation additionally requires at least 60s.
+                # Quotas cap alignment + retest at 25h, not each independently.
+                seconds = _duration_seconds(spec.get("duration"))
+                if seconds is not None and (not math.isfinite(seconds) or seconds % 60):
+                    errors.append("condition_threshold_duration_not_whole_minutes")
+                if "evaluationMissingData" in spec:
+                    if not isinstance(spec["evaluationMissingData"], str) or spec["evaluationMissingData"] not in MISSING_DATA_MODES:
+                        errors.append("invalid_evaluation_missing_data")
+                    if seconds is None or not math.isfinite(seconds) or seconds < 60:
+                        errors.append("evaluation_missing_data_requires_duration_60s")
+                for key in ("aggregations", "denominatorAggregations"):
+                    for aggregation in spec.get(key) or []:
+                        if not isinstance(aggregation, dict) or "alignmentPeriod" not in aggregation:
+                            continue
+                        alignment = _duration_seconds(aggregation["alignmentPeriod"])
+                        if alignment is None or not math.isfinite(alignment) or alignment < 60:
+                            errors.append("invalid_threshold_alignment_period")
+                        elif seconds is not None and alignment + seconds > CONDITION_THRESHOLD_MAX_SECONDS:
+                            errors.append("condition_threshold_window_over_api_ceiling")
 
     available = set(available_metric_types)
     defined_log_metrics = set(defined_log_metric_types)

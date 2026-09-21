@@ -161,7 +161,7 @@ class MonitoringApplyTests(unittest.TestCase):
         self.assertEqual(report["skipped_files"], [])
         self.assertEqual(len(report["metrics"]), 5)
         self.assertEqual(len(report["uptime"]), 2)
-        self.assertEqual(len(report["policies"]), 18)
+        self.assertEqual(len(report["policies"]), 20)
         self.assertEqual({p["action"] for p in report["metrics"]}, {"create"})
         self.assertEqual({p["action"] for p in report["uptime"]}, {"create"})
         self.assertEqual({p["action"] for p in report["policies"]}, {"create"})
@@ -669,13 +669,9 @@ class MonitoringApplyTests(unittest.TestCase):
         field NAME is known, which says nothing about when the field is allowed.
 
         Constructed both ways so the RULE discriminates: it fires for a threshold
-        condition and not for a matched-log one. That does not mean a matched-log
-        policy is accepted. The REST-shape allowlist has no conditionMatchedLog entry
-        yet, so such a policy is refused as an unknown key, and the exact refusal is
-        pinned below (found by chirps-fb running the validator; the old docstring
-        claimed acceptance and only asserted one error code was absent). When c410
-        adds the schema entry this test goes red ON PURPOSE: rewrite that half to
-        assert the matched-log policy returns exactly [].
+        condition and not for a matched-log one. c410 supports the matched-log
+        shape; require exact acceptance so an unrelated error cannot conceal a
+        broken rule or merely replace the former unknown-key refusal.
         """
         available = _inventory_available_metrics()
         base = {
@@ -691,7 +687,7 @@ class MonitoringApplyTests(unittest.TestCase):
         log_based["conditions"] = [{"conditionMatchedLog": {"filter": 'resource.type="cloud_run_revision"'}}]
         log_errors = m.required_shape_errors(log_based, available, [], [])
         assert "notification_rate_limit_on_non_log_policy" not in log_errors
-        assert log_errors == ['rest_shape:$.conditions[0].conditionMatchedLog: unknown_key'], log_errors
+        assert log_errors == [], log_errors
 
     def test_no_shipped_policy_carries_a_notification_rate_limit(self):
         """The 16 real files, not a fixture: this is what actually failed in prod."""

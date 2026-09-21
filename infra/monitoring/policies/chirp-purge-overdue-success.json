@@ -1,0 +1,26 @@
+{
+  "displayName": "chirp-purge overdue successful execution",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: Job failure and missed schedule (MONITORING-RUNBOOK.md; c410, coordinated with RECOVERY-RETENTION.md). Responder: on-call API responder. Keep the reviewed daily 09:00 UTC scheduler cadence. Sum successful chirp-purge completed executions over 24h45m and alert when the sum is below one for five minutes; treat missing data as violating. The combined 24h50m evaluation window is below the API's 25-hour ceiling. Native job counters do not continually zero-fill: archived successes had one trailing zero then no points, so missing-data ACTIVE is essential. The 45-minute grace and five-minute retest are initial operating choices, not measured evaluator latency. Before enabling or modifying this policy, verify a recent successful measurement in the selected series and its actual query result; a never-written or uninitialized series is not proven covered. Disabled, channel-free API acceptance and historical query arithmetic do not prove future incident evaluation or responder delivery. A manual or scheduled success can clear overdue status; it does not independently prove Scheduler health. See the runbook for activation and evidence requirements.",
+    "mimeType": "text/markdown"
+  },
+  "conditions": [{
+    "displayName": "chirp-purge no successful execution within 24h45m",
+    "conditionThreshold": {
+      "filter": "resource.type=\"cloud_run_job\" AND resource.labels.project_id=\"{{PROJECT}}\" AND resource.labels.job_name=\"chirp-purge\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"succeeded\"",
+      "comparison": "COMPARISON_LT",
+      "thresholdValue": 1,
+      "duration": "300s",
+      "evaluationMissingData": "EVALUATION_MISSING_DATA_ACTIVE",
+      "trigger": {"count": 1},
+      "aggregations": [{
+        "alignmentPeriod": "89100s",
+        "perSeriesAligner": "ALIGN_SUM",
+        "crossSeriesReducer": "REDUCE_SUM"
+      }]
+    }
+  }]
+}

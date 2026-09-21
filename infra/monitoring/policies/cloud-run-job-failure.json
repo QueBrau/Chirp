@@ -1,0 +1,22 @@
+{
+  "displayName": "Cloud Run job execution failure",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "300s"},
+    "notificationPrompts": ["OPENED"],
+    "autoClose": "1800s"
+  },
+  "documentation": {
+    "content": "Runbook row: Job failure and missed schedule (MONITORING-RUNBOOK.md; c410, coordinated with RECOVERY-RETENTION.md). Responder: on-call API responder. A Cloud Run Jobs.RunJob system-event audit entry at ERROR or higher, for any job in this project. The job_name extraction gives each job its own incident timeline; the policy-wide daily incident/notification caps still apply. This signal includes the 19 archived purge executions that failed before a task started and wrote no completed_execution_count. Historical failures after task start and cancellation were not observed: retain the native job-failure metric policies as complementary signals. A successful scheduler HTTP request only acknowledges dispatch. Auto-close after 30 minutes without a matching entry is administrative cleanup, not proof the job recovered. Five-minute notification spacing and 30-minute auto-close are initial operating choices. Disabled, channel-free API acceptance alone does not prove evaluator behavior or responder delivery. See the runbook for activation and evidence requirements.",
+    "mimeType": "text/markdown"
+  },
+  "conditions": [{
+    "displayName": "Cloud Run Jobs.RunJob ERROR system event",
+    "conditionMatchedLog": {
+      "filter": "logName=\"projects/{{PROJECT}}/logs/cloudaudit.googleapis.com%2Fsystem_event\" AND resource.type=\"cloud_run_job\" AND protoPayload.methodName=\"/Jobs.RunJob\" AND severity>=ERROR",
+      "labelExtractors": {"job_name": "EXTRACT(resource.labels.job_name)"}
+    }
+  }]
+}
