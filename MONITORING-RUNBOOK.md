@@ -1,8 +1,8 @@
 # Launch monitoring: preparation, not operational acceptance
 
 Live acceptance and ownership are recorded on `board.html`. This tooling supplies
-a read-only inventory checker, bounded runtime observations, eighteen alert policy
-definitions under `infra/monitoring/policies`, five log-based metric
+a read-only inventory checker, bounded runtime observations, twenty alert policy
+definitions under `infra/monitoring/policies`, seven log-based metric
 definitions under `infra/monitoring/metrics`, two uptime check definitions
 under `infra/monitoring/uptime`, and `scripts/monitoring-apply`, which is
 dry-run by default and installs all three kinds only under `--apply --channel`
@@ -170,7 +170,36 @@ job metrics are documented in [Cloud Run monitoring](https://docs.cloud.google.c
 | Redis pressure and fallback | Memorystore `clients/connected`, `server/uptime`, `stats/memory/usage_ratio`, `stats/evicted_keys`; new limiter warning and existing startup/WS broker errors. Proposed memory >80% for 10 minutes and unexpected eviction warning. | Check connectivity/configuration before resizing. Uptime and memory do not prove pub/sub delivery; direct reachability and reconnect signals still need operational verification. |
 | Job failure and missed schedule | Run `job/completed_execution_count` by configured job/result, and Scheduler execution start/end logs. Record each actual schedule, timezone, allowed duration and retries. Notify on a failed final execution or no expected successful completion by that schedule plus its reviewed grace period. The missed-schedule half is not built: a `conditionAbsent` cannot exceed 23h30m, which is shorter than a daily cadence (c407), and its replacement is board card c410. | Check invocation identity, secret access, exit status and domain report. Scheduler accepting a Run execution is not completion of that execution. |
 | Purge backlog and blocked work | Existing purge aggregate JSON: `mode`, `status`, `remaining`, `capped_counts`, `batches_committed`, `commit_outcome_unknown`. Successful dry-run/preview is not successful deletion. | Follow the purge section of [RECOVERY-RETENTION.md](RECOVERY-RETENTION.md). Investigate failed, timed-out or blocked apply; do not rerun unbounded deletes or infer remaining=0 from unknown. |
+| Media reconciliation dry-run findings | `app.jobs.media_reconcile`'s single stdout `media_reconcile_aggregate` JSON line (board c414), emitted on completion or an explicit `ReconcileAborted` path. Other database/storage failures may emit no aggregate and require the separate c410 failure coverage. `media_reconcile_eligible_runs` counts lines with `eligible>0`; `media_reconcile_unresolved_runs` counts lines with `unresolved>0`. Proposed alert above zero occurrences in a five-minute window, the same posture as the WebSocket rejection policies below. Neither counts nor causes a deletion; `--delete` is never scheduled. | Eligible: a manager reviews a `--list-eligible` dry run and follows [DEPLOY.md](DEPLOY.md) section 8's approval-gated manual deletion. Unresolved: a stored `media_urls` value has a url form `resolve_object_names()` does not recognise - teach the resolver first, delete nothing on the strength of this signal alone. |
 | Backup freshness and PITR | Scheduled read-only `scripts/recovery-check` report, proposed automated-backup start age <=36 hours and latest recovery lag <=15 minutes. Alert on its gap/error and on a missing report after its own schedule plus grace. | Follow [RECOVERY-RETENTION.md](RECOVERY-RETENTION.md). Daily backup success does not prove PITR or a restore. Job wiring and actual recovery rehearsal remain open. |
+
+### Media reconciliation: evidence gate for option (a) (proposal, board c414)
+
+Jose decided option (b) on Sep 15: a scheduled dry run plus the two alerts above,
+deletion kept manual and approval-gated. Option (a) — scheduled *real* deletion,
+`--delete` on the stored job's own cadence — is the stated end state, not something
+this change authorizes or schedules. The following is a proposal for what has to be
+true before anyone changes the stored job's args to `--delete`; chirps-17 and Jose can
+revise it, but it should not be waved through informally once it exists here:
+
+- At least 14 consecutive scheduled dry runs with `outcome="completed"` and
+  `unresolved=0` in the aggregate line — no misconfiguration, and no url shape the
+  resolver still cannot read.
+- At least one `--list-eligible` dry run whose full eligible set a manager personally
+  inspected against [DEPLOY.md](DEPLOY.md) section 8's database query, not merely
+  against the counts-only aggregate.
+- The 24-hour age floor (`DEFAULT_MIN_AGE_HOURS`) confirmed against real object
+  creation times in this bucket, not only against the in-code rationale — i.e. an
+  actual measurement of how long the finalize-then-commit race window can run in
+  production, not an assumption that a day is enough.
+- c410's job-agnostic failure alert for `chirp-media-reconcile` live and delivering,
+  so a scheduled `--delete` run that fails is actually noticed.
+- Jose's explicit approval of moving to option (a), separate from and in addition to
+  every approval already required for an individual manual `--delete` under option (b).
+
+None of these are met by this change. This gate exists so that reaching it is a
+deliberate decision, not an accumulation of dry-run history that quietly becomes a
+justification on its own.
 
 Metric prefixes in the shorter table cells are `run.googleapis.com/`,
 `cloudsql.googleapis.com/` and `redis.googleapis.com/`. Use `cloud_run_job` for
@@ -242,25 +271,33 @@ preparation, even when CI passes.
 
 This slice applies three kinds of resource, always in the order metrics ->
 uptime -> policies so a policy can reference a log metric or uptime check the
-same run just created: the five log-based metrics under
+same run just created: the seven log-based metrics under
 `infra/monitoring/metrics/` (`sql_pool_capacity_503`, `rate_limit_fallback`,
-`ws_connect_capacity_rejected`, `ws_connect_suspended_rejected`, and the purge
-job's stdout aggregate); the two `/_health` uptime checks under
-`infra/monitoring/uptime/` (`chirp-api`, `chirp-ws`); and eighteen alert
+`ws_connect_capacity_rejected`, `ws_connect_suspended_rejected`, the purge
+job's stdout aggregate, and board c414's `media_reconcile_eligible_runs` and
+`media_reconcile_unresolved_runs`); the two `/_health` uptime checks under
+`infra/monitoring/uptime/` (`chirp-api`, `chirp-ws`); and twenty alert
 policies under `infra/monitoring/policies/`, covering API request failures,
 API latency, Cloud Run instance CPU/memory pressure, SQL availability, SQL
 disk warning/critical, SQL connections approaching the reserved ceiling,
 Redis memory pressure, Redis unexpected eviction, a failed-execution alert for
 `chirp-purge`, a failed-execution alert for `chirp-media-reconcile`, the two
 uptime-check-failure policies, the two
-HTTP capacity/fallback policies, the two WebSocket rejection policies, and the
-purge backlog policy. The WebSocket policies each alert above zero sampled
-occurrences in a five-minute window, with initial thresholds reviewed after
-seven days. Each has its own metric and throttle; an HTTP capacity burst cannot
-hide WebSocket rejection evidence. Their documentation names the corresponding
-`Runtime observations` row above. Following c407, these metric-threshold policies
-omit `alertStrategy.notificationRateLimit`, which applies only to direct
-log-match policies, even when a threshold references a log-based metric. See
+HTTP capacity/fallback policies, the two WebSocket rejection policies, the
+purge backlog policy, and the two media-reconciliation dry-run-findings
+policies (`media_reconcile_eligible_runs`, `media_reconcile_unresolved_runs`,
+board c414). All four of the WebSocket rejection and media-reconciliation
+policies alert above zero sampled occurrences in a five-minute window, with
+initial thresholds reviewed after seven days. Each has its own metric; the
+WebSocket signals also have independent throttles. An HTTP capacity burst cannot
+hide WebSocket rejection evidence, and
+an eligible-object finding cannot hide an unresolved-url finding or the
+reverse. Their documentation names the corresponding runbook row above (the
+WebSocket pair under `Runtime observations`, the media-reconciliation pair
+under `Current-service signal plan`). Following c407, these metric-threshold
+policies omit `alertStrategy.notificationRateLimit`, which applies only to
+direct log-match policies, even when a threshold references a log-based
+metric. See
 the [AlertStrategy reference](https://docs.cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.alertPolicies#AlertStrategy).
 
 The purge missed-schedule condition is deliberately absent: c407 found the
@@ -428,16 +465,24 @@ helper (c392, merged) via `chirp_pick_python`, the same as
 `scripts/monitoring-check` and every other wrapper listed in
 `backend/tests/test_c392_script_interpreters.py`'s `WRAPPERS`.
 
-**Out of scope for this slice, deliberately**: `chirp-media-reconcile` gets no
-missed-schedule `conditionAbsent` and no uptime/log-metric coverage beyond its
-existing failed-execution policy. The only Cloud Scheduler job read and
-committed as evidence is `chirp-purge-daily`
+**Out of scope for this slice, deliberately**: `chirp-media-reconcile` still gets
+no missed-schedule `conditionAbsent`. Board c414 added the two dry-run-findings
+log metrics/policies above (`media_reconcile_eligible_runs`,
+`media_reconcile_unresolved_runs`), but a scheduled cadence for this job was
+not yet checked into this repo as evidence when c414 was written, so a
+`conditionAbsent` window for it still cannot be built the way `chirp-purge`'s
+was attempted (and rejected, c407): a daily cadence would hit the same 23h30m
+ceiling described above. The only Cloud Scheduler job read and committed as
+evidence is `chirp-purge-daily`
 (`infra/monitoring/evidence/c398-scheduler-chirp-purge-daily-2026-09-10.json`);
-a repo-wide check found no other Cloud Scheduler cadence anywhere in this
-repository, so a `conditionAbsent` window for `chirp-media-reconcile` would
-require fabricating a cadence. A future slice needs its own checked-in
-schedule evidence before that half can be built, and a daily cadence would hit
-the same 23h30m `conditionAbsent` ceiling described above.
+c414's proposed `chirp-media-reconcile-daily` cadence (30 10 * * * `Etc/UTC`)
+is a proposal until its own live evidence is recorded. Before creating any
+schedule, update the stored job to a reviewed immutable image containing the
+counts-only output and confirm it has neither `--delete` nor `--list-eligible`.
+The old image logs object names by default and must not be scheduled. c410
+job-failure coverage must be validated separately; its policy is not established
+by the two findings alerts here. Record the actual schedule and first execution
+the way c398 records its existing purge cadence.
 `rate_limit_redis_success_after_fallback` intentionally gets nothing in this
 slice either - the signal-plan table above already states it "must not
 automatically resolve a fleet incident", so it is not alert-worthy.
