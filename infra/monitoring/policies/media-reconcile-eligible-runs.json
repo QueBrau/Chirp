@@ -1,0 +1,30 @@
+{
+  "displayName": "chirp media_reconcile_eligible_runs occurring",
+  "combiner": "OR",
+  "enabled": true,
+  "notificationChannels": ["{{NOTIFICATION_CHANNEL}}"],
+  "documentation": {
+    "content": "Runbook row: Media reconciliation dry-run findings (MONITORING-RUNBOOK.md, Current-service signal plan). Responder: a manager reviews a --list-eligible dry run and follows DEPLOY.md section 8's approval-gated manual deletion; --delete is never scheduled (board c414). Log-based metric media_reconcile_eligible_runs (infra/monitoring/metrics/media-reconcile-eligible-runs.json) crossing zero occurrences in a 5-minute window - a scheduled dry run found at least one eligible object. This is expected, review-worthy output, not itself a failure; this alert adds no failure coverage; c410's separate job-failure policy still requires live validation. Risk: the jsonPayload.eligible>0 numeric comparison in the referenced log filter is not yet proven by a live create - the deploying operator creates this policy and validates the time series against a real scheduled execution before relying on it; no notification delivery is claimed by this change. Initial, review after 7 days.",
+    "mimeType": "text/markdown"
+  },
+  "conditions": [
+    {
+      "displayName": "media_reconcile_eligible_runs log occurrences over 0",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/media_reconcile_eligible_runs\" AND resource.type=\"cloud_run_job\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "0s",
+        "trigger": {"count": 1},
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": []
+          }
+        ]
+      }
+    }
+  ]
+}

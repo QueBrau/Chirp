@@ -159,7 +159,7 @@ class MonitoringApplyTests(unittest.TestCase):
         self.assertEqual(report["exit_code"], 0)
         self.assertTrue(report["read_only"])
         self.assertEqual(report["skipped_files"], [])
-        self.assertEqual(len(report["metrics"]), 5)
+        self.assertEqual(len(report["metrics"]), 7)
         self.assertEqual(len(report["uptime"]), 2)
         self.assertEqual(len(report["policies"]), 20)
         self.assertEqual({p["action"] for p in report["metrics"]}, {"create"})
@@ -491,7 +491,9 @@ class MonitoringApplyTests(unittest.TestCase):
                                 m.LOG_METRIC_TYPE_PREFIX + "rate_limit_fallback",
                                 m.LOG_METRIC_TYPE_PREFIX + "chirp_purge_aggregate",
                                 m.LOG_METRIC_TYPE_PREFIX + "ws_connect_capacity_rejected",
-                                m.LOG_METRIC_TYPE_PREFIX + "ws_connect_suspended_rejected"}
+                                m.LOG_METRIC_TYPE_PREFIX + "ws_connect_suspended_rejected",
+                                m.LOG_METRIC_TYPE_PREFIX + "media_reconcile_eligible_runs",
+                                m.LOG_METRIC_TYPE_PREFIX + "media_reconcile_unresolved_runs"}
         defined_hosts = {API_HOST, WS_HOST}
         for path in sorted(POLICIES_DIR.glob("*.json")):
             with self.subTest(file=path.name):
@@ -547,6 +549,42 @@ class MonitoringApplyTests(unittest.TestCase):
                     for e in ratio_errors),
                 msg=str(ratio_errors),
             )
+
+    # --- test_media_reconcile_metrics_and_policies_reference_their_own_signal ---
+    def test_media_reconcile_metrics_and_policies_reference_their_own_signal(self):
+        """T3 (board c414): each of the two new media-reconcile log metrics must
+        filter on the job name, the aggregate event, AND its own >0 comparison - a
+        metric whose filter forgot the threshold would count every run, not just
+        the runs worth a human's attention. Each policy must reference its OWN
+        metric type, not its sibling's - eligible firing on unresolved counts (or
+        the reverse) would send a manager to review the wrong signal.
+
+        Regression this guards against: drop the >0 comparison from the eligible
+        metric's filter.
+        """
+        cases = {
+            "eligible": ("media-reconcile-eligible-runs.json", "media_reconcile_eligible_runs",
+                         "jsonPayload.eligible>0"),
+            "unresolved": ("media-reconcile-unresolved-runs.json", "media_reconcile_unresolved_runs",
+                           "jsonPayload.unresolved>0"),
+        }
+        for label, (filename, metric_name, own_comparison) in cases.items():
+            with self.subTest(kind="metric", label=label):
+                metric = json.loads((METRICS_DIR / filename).read_text())
+                self.assertEqual(metric["name"], metric_name)
+                filt = metric["filter"]
+                self.assertIn('resource.type="cloud_run_job"', filt)
+                self.assertIn('resource.labels.job_name="chirp-media-reconcile"', filt)
+                self.assertIn('jsonPayload.event="media_reconcile_aggregate"', filt)
+                self.assertIn(own_comparison, filt)
+            with self.subTest(kind="policy", label=label):
+                policy = json.loads((POLICIES_DIR / filename).read_text())
+                policy_filter = policy["conditions"][0]["conditionThreshold"]["filter"]
+                self.assertIn(
+                    'metric.type="logging.googleapis.com/user/%s"' % metric_name, policy_filter
+                )
+                sibling_name = (cases["unresolved"] if label == "eligible" else cases["eligible"])[1]
+                self.assertNotIn(sibling_name, policy_filter)
 
     # --- test_policy_referencing_undefined_uptime_check_or_log_metric_is_skipped ---
     def test_policy_referencing_undefined_uptime_check_or_log_metric_is_skipped(self):
