@@ -14,7 +14,7 @@ export function withInviteCode(path: string, code?: string | null): string {
  * in so a build with no .env still produces working links.
  */
 export const WEB_BASE_URL: string = (
-  process.env.EXPO_PUBLIC_WEB_URL ?? "https://chirps-prod.web.app"
+  process.env.EXPO_PUBLIC_WEB_URL ?? "https://chirpsocials.com"
   // Trailing slash stripped for the same reason payments.py:39 does it on
   // APP_PUBLIC_BASE_URL: an origin pasted from a browser bar carries one, and
   // both halves of this URL contract have to agree.
@@ -30,9 +30,9 @@ export const WEB_BASE_URL: string = (
  * to chirp://join-chapter?code=..., so the in-app chain is unchanged — this only
  * changes what survives the trip through a text message.
  *
- * Path must stay /join-chapter: app.json declares it in both the iOS
- * associatedDomains entry and the Android intent filter, so once universal links
- * are wired this same URL opens the app directly with no page render at all.
+ * Path must stay /join-chapter: the hosted Apple association and Android intent
+ * filter use this exact path. Native opening also requires deployed associations
+ * and a signed build containing the domain; the browser hand-off stays available.
  */
 export function inviteShareUrl(code?: string | null): string {
   return withInviteCode(`${WEB_BASE_URL}/join-chapter`, code);
