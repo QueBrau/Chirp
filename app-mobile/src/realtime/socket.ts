@@ -9,7 +9,7 @@
  * a transport outage never decides the Firebase account has signed out.
  */
 
-import { wsAuthProtocol, wsUrl } from "../api/client";
+import { ApiError, request, wsAuthProtocol, wsUrl } from "../api/client";
 import { Operation } from "../api/operation";
 import { currentIdentity, ownsIdentity, onIdentityChanged, type AuthIdentity } from "../auth/identity";
 import type { MessageType } from "../api/messages";
@@ -72,6 +72,7 @@ export type SocketStatusListener = (status: SocketStatus) => void;
 /** SessionProvider owns the one auth decision; the socket never signs Firebase out. */
 export interface SocketAuthHandlers {
   revalidate: (owner: AuthIdentity, signal: AbortSignal) => Promise<boolean>;
+  suspended: (owner: AuthIdentity) => void;
   exhausted: (owner: AuthIdentity) => void;
 }
 
@@ -101,6 +102,7 @@ export class ChirpSocket {
   private runAbort: AbortController | null = null;
   private authOperation: Operation | null = null;
   private authAttempts = 0;
+  private failureBurstProbed = false;
   private authHandlers: SocketAuthHandlers | null = null;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -135,6 +137,7 @@ export class ChirpSocket {
     this.run += 1;
     this.runAbort = new AbortController();
     this.authAttempts = 0;
+    this.failureBurstProbed = false;
     this.reconnectAttempts = 0;
     this.unsubscribeIdentity = onIdentityChanged(() => this.disconnect());
     this.open();
@@ -252,6 +255,7 @@ export class ChirpSocket {
         this.stabilityTimer = setTimeout(() => {
           if (!isCurrent()) return;
           this.reconnectAttempts = 0;
+          this.failureBurstProbed = false;
           this.stabilityTimer = null;
         }, STABLE_CONNECTION_MS);
         this.setStatus("open");
@@ -260,17 +264,58 @@ export class ChirpSocket {
       if (!ready) return;
       for (const listener of this.eventListeners) listener(event);
     };
-    ws.onclose = (event: { code: number }) => {
+    ws.onclose = (event: { code?: number }) => {
       if (!isCurrent()) return;
       this.retire(ws, false);
       if (event.code === WS_AUTH_FAILED || event.code === WS_ACCOUNT_SUSPENDED) {
         void this.revalidate(run, owner);
+      } else if (event.code === undefined) {
+        void this.probeUncodedFailure(run, owner);
       } else {
         this.setStatus("closed");
         this.scheduleReconnect(run, owner);
       }
     };
-    ws.onerror = transientFailure;
+    ws.onerror = () => {
+      if (!isCurrent()) return;
+      // RN reports websocketFailed as error BEFORE synthetic close(1006). Retire
+      // both handlers here; that later close must not start a second recovery.
+      this.retire(ws, true);
+      void this.probeUncodedFailure(run, owner);
+    };
+  }
+
+  /** One authenticated observation per transport failure burst (c405 Option D).
+   * A new run or five stable ready seconds starts another burst; focus/brief ACKs
+   * do not. Unknown/offline/capacity outcomes retain the existing retry budget.
+   */
+  private async probeUncodedFailure(run: number, owner: AuthIdentity): Promise<void> {
+    const epoch = this.epoch;
+    if (!this.ownsEpoch(run, owner, epoch) || this.paused || this.authOperation) return;
+    this.setStatus("closed");
+    if (this.failureBurstProbed) { this.scheduleReconnect(run, owner); return; }
+    this.failureBurstProbed = true;
+    const operation = new Operation({ timeoutMs: AUTH_REVALIDATION_TIMEOUT_MS, signal: this.epochAbort.signal }, owner);
+    this.authOperation = operation;
+    let denial: "suspended" | "unauthorized" | null = null;
+    try {
+      await request("/auth/campus-verification", { operation, retryAuth: false });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403 && error.detail === "account_suspended") denial = "suspended";
+      else if (error instanceof ApiError && error.status === 401) denial = "unauthorized";
+    } finally {
+      operation.dispose();
+      if (this.authOperation === operation) this.authOperation = null;
+    }
+    if (!this.ownsEpoch(run, owner, epoch)) return;
+    if (denial === "suspended") {
+      this.pause();
+      this.authHandlers?.suspended(owner);
+    } else if (denial === "unauthorized") {
+      await this.revalidate(run, owner);
+    } else {
+      this.scheduleReconnect(run, owner);
+    }
   }
 
   private async revalidate(run: number, owner: AuthIdentity, terminal = true): Promise<void> {
