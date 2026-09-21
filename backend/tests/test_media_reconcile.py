@@ -585,10 +585,18 @@ async def test_an_unparsed_value_still_protects_an_object_by_raw_match(
 
 
 # ---------------------------------------------------------------------------
-# D1 (board c414): exactly one structured aggregate JSON line to stdout, every run,
-# success or abort, counts only. Cloud Run Jobs parses this into jsonPayload; the two
+# D1 (board c414): one structured aggregate JSON line to stdout on completion or
+# an explicit ReconcileAborted path, counts only. Cloud Run Jobs parses this into jsonPayload; the two
 # infra/monitoring/metrics/media-reconcile-*-runs.json log metrics filter on it.
 # ---------------------------------------------------------------------------
+
+
+# Fixed monitoring/privacy contract, independent of production constants.
+EXPECTED_AGGREGATE_KEYS = frozenset({
+    "schema_version", "signal_family", "event", "mode", "outcome",
+    "scanned", "referenced", "too_young", "eligible", "unresolved",
+    "protected_by_raw_match", "deleted",
+})
 
 
 def _aggregate_lines(capsys: pytest.CaptureFixture[str]) -> list[dict]:
@@ -625,7 +633,7 @@ async def test_aggregate_line_is_emitted_once_with_documented_keys_on_a_dry_run(
     lines = _aggregate_lines(capsys)
     assert len(lines) == 1
     line = lines[0]
-    assert set(line) == set(media_reconcile.AGGREGATE_KEYS)
+    assert set(line) == EXPECTED_AGGREGATE_KEYS
     assert line["schema_version"] == 1
     assert line["signal_family"] == "chirp_job"
     assert line["event"] == "media_reconcile_aggregate"
@@ -633,7 +641,7 @@ async def test_aggregate_line_is_emitted_once_with_documented_keys_on_a_dry_run(
     assert line["outcome"] == "completed"
     assert line["eligible"] == 1
     assert line["deleted"] == 0
-    int_keys = set(media_reconcile.AGGREGATE_KEYS) - {
+    int_keys = EXPECTED_AGGREGATE_KEYS - {
         "schema_version", "signal_family", "event", "mode", "outcome",
     }
     for key in int_keys:
@@ -660,7 +668,7 @@ async def test_aggregate_line_is_emitted_once_on_a_delete_run(
     lines = _aggregate_lines(capsys)
     assert len(lines) == 1
     line = lines[0]
-    assert set(line) == set(media_reconcile.AGGREGATE_KEYS)
+    assert set(line) == EXPECTED_AGGREGATE_KEYS
     assert line["mode"] == "delete"
     assert line["outcome"] == "completed"
     assert line["eligible"] == 1
@@ -694,7 +702,7 @@ async def test_aggregate_line_is_emitted_on_the_abort_path_before_it_propagates(
     lines = _aggregate_lines(capsys)
     assert len(lines) == 1
     line = lines[0]
-    assert set(line) == set(media_reconcile.AGGREGATE_KEYS)
+    assert set(line) == EXPECTED_AGGREGATE_KEYS
     assert line["outcome"] == "aborted"
     assert line["mode"] == "delete"
     assert line["unresolved"] == 0
@@ -717,7 +725,7 @@ async def test_aggregate_line_is_emitted_on_the_unconfigured_bucket_abort_path(
     lines = _aggregate_lines(capsys)
     assert len(lines) == 1
     line = lines[0]
-    assert set(line) == set(media_reconcile.AGGREGATE_KEYS)
+    assert set(line) == EXPECTED_AGGREGATE_KEYS
     assert line["outcome"] == "aborted"
     assert line["mode"] == "delete"
     assert line["scanned"] == 0

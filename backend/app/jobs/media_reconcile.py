@@ -66,19 +66,19 @@ run on a daily schedule (dry run only — see DEPLOY.md section 8), and every po
 object name embeds the user id who owns it. Writing that to Cloud Run logs once a
 day forever is not a cost worth paying for routine output, so every line that names
 an object or prints a raw stored media_urls value is gated behind list_eligible=True
-(`--list-eligible` on the CLI). The counts (how many, not which ones) always print,
-and the machine-readable aggregate line below is always emitted and never carries a
-name — a manager who needs the actual names re-runs with --list-eligible and follows
-DEPLOY.md section 8's approval-gated manual review.
+(`--list-eligible` on the CLI). On completion or an explicit abort, the counts and machine-readable aggregate below
+print without names. A manager who needs the actual names re-runs with
+--list-eligible and follows DEPLOY.md section 8's approval-gated manual review.
 
-STRUCTURED AGGREGATE LINE (board c414). Exactly one JSON line is printed to stdout at
-the end of every run, success or abort — Cloud Run Jobs promotes a single-line stdout
+STRUCTURED AGGREGATE LINE (board c414). Exactly one JSON line is printed to stdout
+on completion or either explicit ReconcileAborted path — Cloud Run Jobs promotes a single-line stdout
 JSON object into `jsonPayload` the same way Cloud Run Services does (the same
 assumption `app.jobs.purge` makes; unverified until a real execution, per
 infra/monitoring/metrics/purge-job-aggregate.json). It carries only counts, never a
 name, url or stored value, so it is safe to leave unconditional: infra/monitoring's
 media_reconcile_eligible_runs and media_reconcile_unresolved_runs log metrics parse
-it.
+it. Unexpected database/storage exceptions propagate as failed job executions; they
+do not guarantee an aggregate line and need separate job-failure monitoring (c410).
 """
 from __future__ import annotations
 
@@ -339,14 +339,6 @@ def _is_old_enough(blob, cutoff: datetime) -> bool:
 AGGREGATE_SCHEMA_VERSION = 1
 AGGREGATE_SIGNAL_FAMILY = "chirp_job"
 AGGREGATE_EVENT = "media_reconcile_aggregate"
-# The exact key set D1 (board c414) promises: schema_version/signal_family/event are
-# identifying, mode/outcome are enums, the rest are integer counts. Exposed so tests
-# can assert on the documented shape without hand-duplicating the key list.
-AGGREGATE_KEYS = (
-    "schema_version", "signal_family", "event", "mode", "outcome",
-    "scanned", "referenced", "too_young", "eligible", "unresolved",
-    "protected_by_raw_match", "deleted",
-)
 
 
 def _print_aggregate(
@@ -361,7 +353,7 @@ def _print_aggregate(
     protected_by_raw_match: int,
     deleted: int,
 ) -> None:
-    """D1 (board c414): exactly one JSON stdout line, every run, success or abort.
+    """D1 (board c414): one line on completion or explicit ReconcileAborted paths.
 
     Cloud Run Jobs promotes a single-line stdout JSON object into `jsonPayload` the
     same way Cloud Run Services does (the same assumption app.jobs.purge makes;
@@ -417,7 +409,7 @@ async def reconcile_orphaned_media(
         # total_urls-but-no-object_names guard below it has nothing to report -
         # _bucket_name() raises before scanned/referenced/etc exist, so every count
         # here is genuinely zero, not just unknown. Still exactly one aggregate line,
-        # same as every other path (Check 6): a scheduled dry run that hits this
+        # as on the other explicit abort path: a scheduled dry run that hits this
         # would otherwise vanish from the log-based metrics with no signal at all.
         _print_aggregate(
             mode=mode, outcome="aborted", scanned=0, referenced=0, too_young=0,
@@ -569,7 +561,7 @@ def format_cli_output(result: ReconcileResult, *, delete: bool, list_eligible: b
         lines.append(
             f"  unparsed stored values={result.unresolved_values} "
             f"objects protected only by raw match={result.protected_by_raw_match} "
-            "(see warnings: a url form the resolver does not recognize)"
+            "(re-run with --list-eligible to review unresolved references)"
         )
     if list_eligible:
         for name in result.eligible:
@@ -577,7 +569,7 @@ def format_cli_output(result: ReconcileResult, *, delete: bool, list_eligible: b
     if result.already_gone:
         lines.append(f"  already gone (counted as success): {len(result.already_gone)}")
     if not delete and result.eligible:
-        lines.append("  nothing was deleted; re-run with --delete to act on the list above")
+        lines.append("  nothing was deleted; review with --list-eligible before requesting deletion approval")
     return "\n".join(lines)
 
 

@@ -60,12 +60,12 @@ benign unreferenced object rather than trade away posts/ immutability to avoid i
 not add posts/ delete permission back to "fix" this.
 
 UNREFERENCED posts/ OBJECTS BECOME ELIGIBLE OUT OF BAND (board c153), which is what
-keeps the paragraph above a bounded trade rather than a permanent leak. PATCH clearing
+allows an operator to find the objects; their removal still depends on manual review. PATCH clearing
 or replacing a photo detaches the old permanent object for exactly the same reason —
 this identity cannot delete it — so app.jobs.media_reconcile diffs posts/ against every
 url the posts table actually references and flags what nothing points at, running as a
 SEPARATE service account whose delete grant is IAM-conditioned to posts/. Flagged is not
-deleted: as of board c414, that job runs on a schedule only as a dry run, and every
+deleted: under board c414, any scheduled execution must be a dry run, and every
 actual deletion is still a manual, manager-approved one-off (DEPLOY.md section 8). The
 runtime identity's tmp/-only condition is deliberately left alone (manager decision on
 c153): the ability to even attempt deleting a published photo belongs to that separate

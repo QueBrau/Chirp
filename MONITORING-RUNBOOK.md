@@ -170,7 +170,7 @@ job metrics are documented in [Cloud Run monitoring](https://docs.cloud.google.c
 | Redis pressure and fallback | Memorystore `clients/connected`, `server/uptime`, `stats/memory/usage_ratio`, `stats/evicted_keys`; new limiter warning and existing startup/WS broker errors. Proposed memory >80% for 10 minutes and unexpected eviction warning. | Check connectivity/configuration before resizing. Uptime and memory do not prove pub/sub delivery; direct reachability and reconnect signals still need operational verification. |
 | Job failure and missed schedule | Run `job/completed_execution_count` by configured job/result, and Scheduler execution start/end logs. Record each actual schedule, timezone, allowed duration and retries. Notify on a failed final execution or no expected successful completion by that schedule plus its reviewed grace period. The missed-schedule half is not built: a `conditionAbsent` cannot exceed 23h30m, which is shorter than a daily cadence (c407), and its replacement is board card c410. | Check invocation identity, secret access, exit status and domain report. Scheduler accepting a Run execution is not completion of that execution. |
 | Purge backlog and blocked work | Existing purge aggregate JSON: `mode`, `status`, `remaining`, `capped_counts`, `batches_committed`, `commit_outcome_unknown`. Successful dry-run/preview is not successful deletion. | Follow the purge section of [RECOVERY-RETENTION.md](RECOVERY-RETENTION.md). Investigate failed, timed-out or blocked apply; do not rerun unbounded deletes or infer remaining=0 from unknown. |
-| Media reconciliation dry-run findings | `app.jobs.media_reconcile`'s single stdout `media_reconcile_aggregate` JSON line (board c414), emitted on every run of the scheduled dry-run-only job. `media_reconcile_eligible_runs` counts lines with `eligible>0`; `media_reconcile_unresolved_runs` counts lines with `unresolved>0`. Proposed alert above zero occurrences in a five-minute window, the same posture as the WebSocket rejection policies below. Neither counts nor causes a deletion; `--delete` is never scheduled. | Eligible: a manager reviews a `--list-eligible` dry run and follows [DEPLOY.md](DEPLOY.md) section 8's approval-gated manual deletion. Unresolved: a stored `media_urls` value has a url form `resolve_object_names()` does not recognise - teach the resolver first, delete nothing on the strength of this signal alone. |
+| Media reconciliation dry-run findings | `app.jobs.media_reconcile`'s single stdout `media_reconcile_aggregate` JSON line (board c414), emitted on completion or an explicit `ReconcileAborted` path. Other database/storage failures may emit no aggregate and require the separate c410 failure coverage. `media_reconcile_eligible_runs` counts lines with `eligible>0`; `media_reconcile_unresolved_runs` counts lines with `unresolved>0`. Proposed alert above zero occurrences in a five-minute window, the same posture as the WebSocket rejection policies below. Neither counts nor causes a deletion; `--delete` is never scheduled. | Eligible: a manager reviews a `--list-eligible` dry run and follows [DEPLOY.md](DEPLOY.md) section 8's approval-gated manual deletion. Unresolved: a stored `media_urls` value has a url form `resolve_object_names()` does not recognise - teach the resolver first, delete nothing on the strength of this signal alone. |
 | Backup freshness and PITR | Scheduled read-only `scripts/recovery-check` report, proposed automated-backup start age <=36 hours and latest recovery lag <=15 minutes. Alert on its gap/error and on a missing report after its own schedule plus grace. | Follow [RECOVERY-RETENTION.md](RECOVERY-RETENTION.md). Daily backup success does not prove PITR or a restore. Job wiring and actual recovery rehearsal remain open. |
 
 ### Media reconciliation: evidence gate for option (a) (proposal, board c414)
@@ -288,8 +288,9 @@ purge backlog policy, and the two media-reconciliation dry-run-findings
 policies (`media_reconcile_eligible_runs`, `media_reconcile_unresolved_runs`,
 board c414). All four of the WebSocket rejection and media-reconciliation
 policies alert above zero sampled occurrences in a five-minute window, with
-initial thresholds reviewed after seven days. Each has its own metric and
-throttle; an HTTP capacity burst cannot hide WebSocket rejection evidence, and
+initial thresholds reviewed after seven days. Each has its own metric; the
+WebSocket signals also have independent throttles. An HTTP capacity burst cannot
+hide WebSocket rejection evidence, and
 an eligible-object finding cannot hide an unresolved-url finding or the
 reverse. Their documentation names the corresponding runbook row above (the
 WebSocket pair under `Runtime observations`, the media-reconciliation pair
@@ -475,9 +476,13 @@ ceiling described above. The only Cloud Scheduler job read and committed as
 evidence is `chirp-purge-daily`
 (`infra/monitoring/evidence/c398-scheduler-chirp-purge-daily-2026-09-10.json`);
 c414's proposed `chirp-media-reconcile-daily` cadence (30 10 * * * `Etc/UTC`)
-is specified in its PR body as text only, not applied and not yet checked in
-as evidence here — chirps-17 creates it after merge and should commit its own
-evidence file the way c398 did before this paragraph is updated again.
+is a proposal until its own live evidence is recorded. Before creating any
+schedule, update the stored job to a reviewed immutable image containing the
+counts-only output and confirm it has neither `--delete` nor `--list-eligible`.
+The old image logs object names by default and must not be scheduled. c410
+job-failure coverage must be validated separately; its policy is not established
+by the two findings alerts here. Record the actual schedule and first execution
+the way c398 records its existing purge cadence.
 `rate_limit_redis_success_after_fallback` intentionally gets nothing in this
 slice either - the signal-plan table above already states it "must not
 automatically resolve a fleet incident", so it is not alert-worthy.

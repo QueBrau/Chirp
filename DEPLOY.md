@@ -493,6 +493,14 @@ cannot create or replace a `posts/` object, cannot access `tmp/`, and that
 gcloud run jobs execute chirp-media-reconcile --project=$PROJECT --region=$REGION --args=-m,app.jobs.media_reconcile,--list-eligible --wait
 ```
 
+Before adding a schedule, confirm the stored immutable image includes c414's
+counts-only output. The older image logs object names by default and must not be
+scheduled. The two findings alerts do not cover job execution failures; validate
+c410's failure coverage separately. Record the actual schedule and the first
+execution, including the parsed aggregate. Zero eligible/unresolved findings
+legitimately produce no points in these two positive-only metrics; that result
+does not prove notification delivery.
+
 A scheduled DRY RUN is allowed (board c414, Jose, Sep 15): the stored job's args stay
 `python -m app.jobs.media_reconcile` with neither `--delete` nor `--list-eligible`, so
 a daily Cloud Scheduler trigger produces only the counts-only summary and the
