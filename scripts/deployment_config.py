@@ -19,7 +19,7 @@ from deploy_verify import ready_and_observed
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "infra/deployment.json"
 MAX_BYTES = 1024 * 1024
-ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE")
+ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE", "OUTBOX_SWEEPER_ENABLED")
 POOL_NAMES = {"DB_POOL_SIZE": "size", "DB_MAX_OVERFLOW": "max_overflow"}
 JOB_POOL_EVIDENCE_SCOPE = "operator_inspected_immutable_image_pool"
 JOB_POOL_EVIDENCE_MAX_AGE_HOURS = 24
@@ -147,9 +147,21 @@ def validate(config: dict) -> None:
         for value in list(shared["env"].values()) + [x for s in config["services"].values() for x in s["env"].values()]:
             if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+", value):
                 raise ConfigError("invalid_environment_value")
+        for env in [shared["env"], *[s["env"] for s in config["services"].values()]]:
+            if "OUTBOX_SWEEPER_ENABLED" in env and env["OUTBOX_SWEEPER_ENABLED"] not in ("true", "false"):
+                raise ConfigError("invalid_outbox_sweeper_setting")
         for key, value in (shared["secrets"] | {k: v for service in config["services"].values() for k, v in service.get("secrets", {}).items()}).items():
             if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key) or not re.fullmatch(r"[A-Za-z0-9_-]+:(?:latest|[1-9][0-9]*)", value):
                 raise ConfigError("invalid_secret_reference")
+        owned_secrets = set(shared["secrets"]) | {key for service in config["services"].values() for key in service.get("secrets", {})}
+        for service in config["services"].values():
+            removals = service.get("remove_secrets", [])
+            expected_secrets = set(shared["secrets"]) | set(service.get("secrets", {}))
+            if (not isinstance(removals, list)
+                    or any(not isinstance(key, str) or key not in owned_secrets for key in removals)
+                    or len(removals) != len(set(removals))
+                    or set(removals) & expected_secrets):
+                raise ConfigError("invalid_secret_removal")
         for key in ("service_account", "cloud_sql", "vpc_connector", "vpc_egress", "ingress"):
             if not re.fullmatch(r"[A-Za-z0-9_@.:-]+", shared[key]):
                 raise ConfigError("invalid_shared_setting")
@@ -424,6 +436,8 @@ def check_spec(report: dict, scope: str, spec: dict, ann: dict, config: dict, ro
             note(report, scope, "drift", key)
     expected_refs = shared["secrets"] | service.get("secrets", {})
     owned_ref_names = set(shared["secrets"]) | {key for row in config["services"].values() for key in row.get("secrets", {})}
+    if any(row.get("name") in service.get("remove_secrets", []) for row in container.get("env", [])):
+        note(report, scope, "drift", "removed_secret_binding_still_present")
     if any(row.get("name") in owned_ref_names - set(expected_refs) for row in container.get("env", [])):
         note(report, scope, "drift", "unexpected_owned_secret_binding")
     for key, value in expected_refs.items():
@@ -667,6 +681,8 @@ def plan(config: dict, release: dict, gcloud: str) -> dict:
         name, revision = service["name"], release["revisions"][role]
         env = shared["env"] | service["env"] | {"WEB_CONCURRENCY": str(service["workers"])}
         argv = [gcloud, "run", "deploy", name, "--project", config["project"], "--region", config["region"], "--image", release["image"], "--revision-suffix", revision[len(name)+1:], "--no-traffic", "--scaling", "auto", "--cpu", service["cpu"], "--memory", service["memory"], "--concurrency", str(service["concurrency"]), "--min-instances", str(service["revision_min_instances"]), "--max-instances", str(service["revision_max_instances"]), "--max", str(service["service_max_instances"]), "--timeout", str(shared["timeout_seconds"]), "--service-account", service_account(config, role), "--add-cloudsql-instances", shared["cloud_sql"], "--vpc-connector", shared["vpc_connector"], "--vpc-egress", shared["vpc_egress"], "--ingress", shared["ingress"], "--cpu-throttling" if shared["cpu_throttling"] else "--no-cpu-throttling", "--cpu-boost" if shared["startup_cpu_boost"] else "--no-cpu-boost", "--update-env-vars", ",".join(k+"="+v for k, v in sorted(env.items())), "--update-secrets", ",".join(k+"="+v for k, v in sorted((shared["secrets"] | service.get("secrets", {})).items()))]
+        if service.get("remove_secrets"):
+            argv.extend(["--remove-secrets", ",".join(sorted(service["remove_secrets"]))])
         promote = [gcloud, "run", "services", "update-traffic", name, "--project", config["project"], "--region", config["region"], "--to-revisions", revision+"=100"]
         steps.append({"service": role, "stage_command": shlex.join(argv), "promote_after_review_command": shlex.join(promote), "before_next_service": "Confirm old revision drained with zero instances; jobs remain quiescent. Traffic=0 alone is insufficient."})
     verify = ["scripts/deploy-verify", "--authenticated", "--project", config["project"], "--region", config["region"], "--api-service", config["services"]["api"]["name"], "--ws-service", config["services"]["ws"]["name"], "--expected-schema", release["schema_head"], "--api-revision", release["revisions"]["api"], "--ws-revision", release["revisions"]["ws"], "--api-image-digest", release["image"].split("@")[1], "--ws-image-digest", release["image"].split("@")[1], "--gcloud", gcloud]

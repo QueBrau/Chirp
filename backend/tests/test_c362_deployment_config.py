@@ -504,6 +504,88 @@ def test_wrong_secret_ref_redacted_and_api_bindings_not_added_to_ws(config, snap
     assert "STRIPE_SECRET_KEY" not in plan["steps"][1]["stage_command"]
 
 
+def split_media_secret(config):
+    """An explicit c375 transition, independent of the repository's live intent."""
+    config["services"]["api"]["secrets"]["MEDIA_SIGNING_SECRET"] = config["shared"]["secrets"].pop("MEDIA_SIGNING_SECRET")
+    config["services"]["ws"]["remove_secrets"] = ["MEDIA_SIGNING_SECRET"]
+
+
+def test_declared_secret_removal_is_exact_and_preserves_other_bindings(config, release):
+    default_plan = C.plan(config, release, "gcloud")
+    assert all("--remove-secrets" not in shlex.split(step["stage_command"]) for step in default_plan["steps"])
+    split_media_secret(config)
+    steps = {step["service"]: shlex.split(step["stage_command"]) for step in C.plan(config, release, "gcloud")["steps"]}
+    api, ws = steps["api"], steps["ws"]
+    assert "--remove-secrets" not in api
+    assert ws[ws.index("--remove-secrets") + 1] == "MEDIA_SIGNING_SECRET"
+    assert set(ws[ws.index("--update-secrets") + 1].split(",")) == {"DATABASE_URL=DATABASE_URL:latest", "REDIS_URL=REDIS_URL:latest"}
+    assert "MEDIA_SIGNING_SECRET=MEDIA_SIGNING_SECRET:latest" in api[api.index("--update-secrets") + 1].split(",")
+    assert "--clear-secrets" not in ws and "--set-secrets" not in ws
+
+    # Model gcloud's documented remove-then-update behavior on an existing WS
+    # revision. Unowned bindings survive; the named old media binding does not.
+    old = {"MEDIA_SIGNING_SECRET": "MEDIA_SIGNING_SECRET:latest", "UNOWNED_SECRET": "unchanged:7"}
+    for key in ws[ws.index("--remove-secrets") + 1].split(","):
+        old.pop(key, None)
+    old.update(item.split("=", 1) for item in ws[ws.index("--update-secrets") + 1].split(","))
+    assert old == {"DATABASE_URL": "DATABASE_URL:latest", "REDIS_URL": "REDIS_URL:latest", "UNOWNED_SECRET": "unchanged:7"}
+
+
+@pytest.mark.parametrize("removals", [None, "MEDIA_SIGNING_SECRET", {}, [True], [[]], ["UNKNOWN_SECRET"], [SECRET], ["DATABASE_URL"], ["MEDIA_SIGNING_SECRET", "MEDIA_SIGNING_SECRET"]])
+def test_invalid_or_required_secret_removals_fail_before_command_generation(config, release, removals):
+    split_media_secret(config)
+    config["services"]["ws"]["remove_secrets"] = removals
+    with pytest.raises(C.ConfigError, match="^invalid_secret_removal$"):
+        C.plan(config, release, "gcloud")
+
+
+@pytest.mark.parametrize("observed_scope", ["template", "revision"])
+@pytest.mark.parametrize("binding", ["secret", "literal"])
+def test_retired_media_binding_cannot_pass_live_comparison(config, release, observed_scope, binding):
+    split_media_secret(config)
+    snap = fixture(config, release)
+    assert run_compare(config, snap, release)["verdict"] == "CONFIG_MATCH"
+    spec = (snap["services"]["ws"]["spec"]["template"]["spec"] if observed_scope == "template"
+            else snap["revisions"][release["revisions"]["ws"]]["spec"])
+    row = {"name": "MEDIA_SIGNING_SECRET"}
+    row.update({"valueFrom": {"secretKeyRef": {"name": SECRET, "key": "latest"}}} if binding == "secret" else {"value": SECRET})
+    spec["containers"][0]["env"].append(row)
+    report = run_compare(config, snap, release)
+    assert report["verdict"] == "DRIFT"
+    assert finding(report, "removed_secret_binding_still_present")
+
+
+def test_explicit_outbox_ownership_binds_both_plan_and_serving_revision(config, release):
+    config["services"]["api"]["env"]["OUTBOX_SWEEPER_ENABLED"] = "true"
+    config["services"]["ws"]["env"]["OUTBOX_SWEEPER_ENABLED"] = "false"
+    for step in C.plan(config, release, "gcloud")["steps"]:
+        command = shlex.split(step["stage_command"])
+        assert "OUTBOX_SWEEPER_ENABLED=" + ("true" if step["service"] == "api" else "false") in command[command.index("--update-env-vars") + 1].split(",")
+    snap = fixture(config, release)
+    assert run_compare(config, snap, release)["verdict"] == "CONFIG_MATCH"
+    row = next(row for row in snap["revisions"][release["revisions"]["ws"]]["spec"]["containers"][0]["env"] if row["name"] == "OUTBOX_SWEEPER_ENABLED")
+    row["value"] = "true"
+    report = run_compare(config, snap, release)
+    assert report["verdict"] == "DRIFT" and finding(report, "OUTBOX_SWEEPER_ENABLED")
+
+
+@pytest.mark.parametrize("value", ["1", "yes", "FALSE", "False", "", SECRET])
+def test_outbox_ownership_requires_canonical_boolean_literal(config, release, value):
+    config["services"]["ws"]["env"]["OUTBOX_SWEEPER_ENABLED"] = value
+    with pytest.raises(C.ConfigError):
+        C.plan(config, release, "gcloud")
+
+
+@pytest.mark.parametrize("observed_scope", ["template", "revision"])
+def test_missing_explicit_ws_worker_retirement_is_drift(config, release, observed_scope):
+    config["services"]["ws"]["env"]["OUTBOX_SWEEPER_ENABLED"] = "false"
+    snap = fixture(config, release)
+    spec = (snap["services"]["ws"]["spec"]["template"]["spec"] if observed_scope == "template"
+            else snap["revisions"][release["revisions"]["ws"]]["spec"])
+    spec["containers"][0]["env"] = [row for row in spec["containers"][0]["env"] if row["name"] != "OUTBOX_SWEEPER_ENABLED"]
+    assert finding(run_compare(config, snap, release), "OUTBOX_SWEEPER_ENABLED")
+
+
 def test_unexpected_entrypoint_or_container_prevents_capacity_proof(config, snap, release):
     snap["revisions"][release["revisions"]["api"]]["spec"]["containers"][0]["args"] = ["--workers", "16", SECRET]
     report = run_compare(config, snap, release)
