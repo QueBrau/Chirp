@@ -45,6 +45,39 @@ releases so a hand-applied setting cannot be silently replaced by stale intent.
 Creating accounts, granting IAM, validating positive/negative access in staging,
 and applying or rolling back a deployment remain separate operational steps.
 
+A service may also declare `remove_secrets`, an explicit list of environment
+binding names to retire from that service. Each name must still be owned by the
+other service's reviewed secret configuration, and must not remain required by
+this service or `shared.secrets`. Unknown names, duplicates, malformed lists and
+required bindings are rejected before any commands are printed. An omitted or
+empty list preserves the existing update-only behavior; the planner never
+infers removals from a difference in observed cloud settings.
+
+For example, an approved c375 split can move `MEDIA_SIGNING_SECRET` from
+`shared.secrets` to `services.api.secrets`, then declare
+`services.ws.remove_secrets: ["MEDIA_SIGNING_SECRET"]`. The WS command combines
+that exact `--remove-secrets` with its retained `--update-secrets` entries;
+gcloud applies removals first and updates second. Unrelated bindings are
+preserved. Comparison refuses any remaining environment row with a retired
+name, including a literal value, on either the template or a serving revision.
+This removes a Cloud Run binding, not the Secret Manager resource, IAM grants,
+or an older revision's immutable configuration. Before rollback, remove the
+retirement declaration if the restored intended configuration needs that
+binding again. Review the actual live refs and IAM separately. See the
+[gcloud deploy secret flags](https://docs.cloud.google.com/sdk/gcloud/reference/run/deploy#--update-secrets).
+
+`OUTBOX_SWEEPER_ENABLED` is an optional managed environment setting with the
+canonical strings `"true"` or `"false"`. When declared, comparison requires the
+explicit value on the template and every serving revision; it does not infer an
+omitted value from the checkout. Existing configurations that omit it retain
+their behavior. The c375 split should explicitly retain `"true"` on API and set
+`"false"` on WS. Route mounting alone does not stop the lifespan outbox worker:
+the current image starts that worker under every role unless this setting is
+false. A staged API revision with it enabled can claim and publish durable
+outbox rows even at zero HTTP traffic. Review concurrent worker behavior, pool
+headroom and rollback before staging; `--no-traffic` does not make startup
+read-only. This setting changes no database principal or broker ACL.
+
 The intended mode is automatic scaling. The checker projects and validates both
 `scalingMode` and `manualInstanceCount`, and commands include `--scaling auto`.
 Manual scaling bypasses revision min/max limits and invalidates this capacity
