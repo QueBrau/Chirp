@@ -44,7 +44,7 @@ def test_default_cli_is_preview(monkeypatch: pytest.MonkeyPatch, capsys: pytest.
 
     async def job(**kwargs):
         received.update(kwargs)
-        return {"status": "preview", "physical_rows": 12}
+        return {"status": "preview", "key_retirement_status": "preview", "physical_rows": 12}
 
     monkeypatch.setattr(purge, "run_purge_job", job)
     purge.main([])
@@ -65,6 +65,32 @@ def test_incomplete_cli_is_nonzero(monkeypatch: pytest.MonkeyPatch, capsys: pyte
         purge.main(["--apply"])
     assert exc.value.code == 2
     assert json.loads(capsys.readouterr().out)["physical_rows"] == 100
+
+
+@pytest.mark.parametrize("key_status", ["incomplete", "blocked", "failed", "timed_out", "not_started", None])
+def test_content_complete_cannot_hide_incomplete_key_phase(key_status, monkeypatch, capsys):
+    report = {"status": "complete", "key_retirement_counts": {"retired_one_time_prekeys": 1}}
+    if key_status is not None:
+        report["key_retirement_status"] = key_status
+
+    async def job(**kwargs):
+        assert kwargs["apply"] is True
+        return report
+
+    monkeypatch.setattr(purge, "run_purge_job", job)
+    with pytest.raises(SystemExit) as exc:
+        purge.main(["--apply"])
+    assert exc.value.code == 2
+    assert json.loads(capsys.readouterr().out) == report
+
+
+def test_both_complete_phases_allow_success(monkeypatch, capsys):
+    async def job(**kwargs):
+        return {"status": "complete", "key_retirement_status": "complete"}
+
+    monkeypatch.setattr(purge, "run_purge_job", job)
+    purge.main(["--apply"])
+    assert json.loads(capsys.readouterr().out)["key_retirement_status"] == "complete"
 
 
 @pytest.mark.parametrize("retention", [0, -1, True, 1.5])
