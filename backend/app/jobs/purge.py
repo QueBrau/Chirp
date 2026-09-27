@@ -415,9 +415,9 @@ async def run_purge_job(
 ) -> dict[str, object]:
     """Run one finite job, reporting only aggregate counts and acknowledged commits.
 
-    Content purge (report["counts"]) and e2ee key-material retirement
-    (report["key_retirement_counts"]) are independent phases with independent cutoffs;
-    neither's count or status feeds the other's.
+    Content and key retirement have independent cutoffs, counts and progress.
+    Existing content fields keep their meaning; key_retirement_* fields report
+    the second phase. CLI success requires both phases to finish successfully.
     """
     cutoff, days = _cutoff(now, retention_days)
     key_cutoff, grace_days = _key_retirement_cutoff(now, key_retirement_grace_days)
@@ -435,11 +435,15 @@ async def run_purge_job(
         "batch_size": batch_size, "max_batches": max_batches,
         "max_seconds": max_seconds, "batches_committed": 0, "status": "incomplete",
         "remaining": None, "capped_counts": [], "commit_outcome_unknown": False,
+        "key_retirement_status": "not_started", "key_retirement_remaining": None,
+        "key_retirement_capped_counts": [], "key_retirement_batches_committed": 0,
     }
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max_seconds
     committing = False
     committed_batches = 0
+    committed_key_batches = 0
+    key_phase_started = False
     try:
         async with asyncio.timeout(max_seconds):
             async with get_session_factory()() as session:
@@ -453,11 +457,15 @@ async def run_purge_job(
                     total, capped = await preview_expired_soft_deletes(
                         session, cutoff=cutoff, count_limit=batch_size * max_batches,
                     )
-                    key_total, _key_capped = await preview_expired_key_material(
+                    key_phase_started = True
+                    key_total, key_capped = await preview_expired_key_material(
                         session, cutoff=key_cutoff, count_limit=batch_size * max_batches,
                     )
                     report.update(status="preview", capped_counts=capped,
-                                  remaining=total.physical_rows > 0)
+                                  remaining=total.physical_rows > 0,
+                                  key_retirement_status="preview",
+                                  key_retirement_remaining=key_total.physical_rows > 0,
+                                  key_retirement_capped_counts=sorted(set(key_capped)))
                     await session.rollback()
                 else:
                     for _ in range(max_batches):
@@ -482,6 +490,8 @@ async def run_purge_job(
                             break
                     # Independent second phase, same session/deadline: content-purge
                     # status/remaining above is untouched by whatever happens here.
+                    key_phase_started = True
+                    report["key_retirement_status"] = "incomplete"
                     for _ in range(max_batches):
                         await _transaction_limits(session, deadline - loop.time())
                         key_batch = await retire_key_material_batch(
@@ -491,18 +501,29 @@ async def run_purge_job(
                         await session.commit()
                         committing = False
                         key_total += key_batch
+                        committed_key_batches += 1
+                        report["key_retirement_batches_committed"] = committed_key_batches
                         await _transaction_limits(session, deadline - loop.time())
                         key_remaining = await _has_remaining_key_material(session, key_cutoff)
                         await session.rollback()
-                        if not key_remaining or key_batch.physical_rows == 0:
+                        report["key_retirement_remaining"] = key_remaining
+                        if not key_remaining:
+                            report["key_retirement_status"] = "complete"
+                            break
+                        if key_batch.physical_rows == 0:
+                            report["key_retirement_status"] = "blocked"
                             break
     except TimeoutError:
         report.update(status="timed_out", remaining=None, commit_outcome_unknown=committing)
+        if key_phase_started:
+            report.update(key_retirement_status="timed_out", key_retirement_remaining=None)
     except Exception as exc:
         # Database errors can contain SQL parameters and connection details. Do not
         # emit raw exceptions or tracebacks into the job log. Preserve prior commits.
         report.update(status="failed", remaining=None, commit_outcome_unknown=committing,
                       error_type=type(exc).__name__)
+        if key_phase_started:
+            report.update(key_retirement_status="failed", key_retirement_remaining=None)
     # Only acknowledged commits are counted on apply. A deadline during COMMIT may
     # have reached the server; report that uncertainty instead of asserting rollback.
     report["counts"] = asdict(total)
@@ -541,7 +562,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         batch_size=args.batch_size, max_batches=args.max_batches, max_seconds=args.max_seconds,
     ))
     print(json.dumps(result, sort_keys=True))
-    if result["status"] not in ("preview", "complete"):
+    expected_status = "complete" if args.apply else "preview"
+    if (result.get("status") != expected_status
+            or result.get("key_retirement_status") != expected_status):
         raise SystemExit(2)
 
 

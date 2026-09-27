@@ -86,7 +86,26 @@ The destructive mode must be explicit:
 python -m app.jobs.purge --apply --retention-days=30 --batch-size=100 --max-batches=10 --max-seconds=120
 ~~~
 
-Each application batch is independently committed. The batch size applies separately to six deletion reasons: posts, independently expired comments, chirps, post likes, comments removed with a post, and chirp votes. A size of 100 therefore permits at most 600 physical row deletions per batch; the size-25 canary permits at most 150. A parent with many children can require several batches. SQL timeouts and a finite wall-clock budget limit contention. Already committed batches remain committed if a later batch fails. A deadline during commit is an unknown commit outcome, not proof of rollback: inspect the summary and rerun the preview before resuming. Do not restore a database to undo one batch as an automatic response.
+Each application batch is independently committed. The batch size applies separately to six content deletion reasons: posts, independently expired comments, chirps, post likes, comments removed with a post, and chirp votes. A size of 100 therefore permits at most 600 content row deletions per batch. The separate key phase also permits at most six times the batch size: three ordinary retirement queries and three revoked-device table wipes. With one batch of size 25, the canary permits at most 150 content plus 150 key deletions, 300 total. Both phases have their own max-batches limit and share one wall-clock deadline. A parent with many children can require several batches. SQL timeouts and a finite wall-clock budget limit contention. Already committed batches remain committed if a later batch fails. A deadline during commit is an unknown commit outcome, not proof of rollback: inspect the summary and rerun the preview before resuming. Do not restore a database to undo one batch as an automatic response.
+
+The existing `counts`, `physical_rows`, `batches_committed`, `remaining` and
+`capped_counts` describe content. Key retirement separately reports
+`key_retirement_counts`, `key_retirement_batches_committed`,
+`key_retirement_remaining`, `key_retirement_capped_counts` and
+`key_retirement_status`. The last field is `not_started`, `preview`, `complete`,
+`incomplete`, `blocked`, `failed` or `timed_out`; unknown remaining work is null.
+Preview cap flags identify lower bounds, including a revoked-device aggregate
+capped separately in each of its three tables. Apply counts include only
+acknowledged commits, with empty committed batches counted as batches.
+
+The CLI exits successfully only when both phases report `preview` for a dry run,
+or both report `complete` for application. A content-complete run with key backlog
+therefore fails the Cloud Run execution rather than renewing a successful-job
+signal. Existing top-level `status` retains its content progress semantics and
+shared failure/deadline handling; it alone is insufficient to judge key completion.
+An unknown COMMIT outcome can apply to either phase. Inspect both phases and repeat
+the preview before a manually reviewed retry; neither zero counts nor an error
+means a server-side COMMIT was rolled back.
 
 The caller-owned Python helper keeps its full-run transaction semantics for existing callers. Use the CLI for operational batch and time limits. Reports and financial/audit history are outside this retention job's deletion scope. Purging database media references does not itself delete GCS objects.
 

@@ -8,13 +8,19 @@ revoked_at can be backdated precisely, mirroring test_purge.py's own reasoning.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from app import models
+from app.jobs import purge
 from app.db import get_session_factory
 from app.jobs.purge import preview_expired_key_material, retire_key_material_batch
 from tests.conftest import MakeUser
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 GRACE_DAYS = 7
 NOW = datetime.now(timezone.utc)
@@ -144,3 +150,125 @@ async def test_key_material_retirement_respects_grace_window_and_retains_newest_
         device_row = await session.get(models.Device, device_d)
         assert device_row is not None
         assert device_row.revoked_at is not None
+
+
+async def test_key_only_budget_reports_backlog_then_completes_and_repeats(make_user):
+    owner = await make_user("Bounded key retirement")
+    device = await _device(owner.id)
+    expired = [await _otk(device, consumed_at=PAST_GRACE, key_id=i) for i in (1, 2)]
+    survivor = await _otk(device, consumed_at=None, key_id=3)
+
+    preview = await purge.run_purge_job(now=NOW, batch_size=1, max_batches=1)
+    assert preview["status"] == "preview" and preview["remaining"] is False
+    assert preview["key_retirement_status"] == "preview"
+    assert preview["key_retirement_remaining"] is True
+    assert preview["key_retirement_capped_counts"] == ["retired_one_time_prekeys"]
+    assert preview["key_retirement_batches_committed"] == 0
+    assert preview["key_retirement_counts"]["retired_one_time_prekeys"] == 1
+    assert all([await _exists(models.OneTimePrekey, row) for row in expired])
+
+    first = await purge.run_purge_job(apply=True, now=NOW, batch_size=1, max_batches=1)
+    # Existing content fields keep their original meaning even with key backlog.
+    assert first["status"] == "complete" and first["remaining"] is False
+    assert first["physical_rows"] == 0 and first["batches_committed"] == 1
+    assert first["key_retirement_status"] == "incomplete"
+    assert first["key_retirement_remaining"] is True
+    assert first["key_retirement_batches_committed"] == 1
+    assert first["key_retirement_counts"]["retired_one_time_prekeys"] == 1
+    assert sum([await _exists(models.OneTimePrekey, row) for row in expired]) == 1
+
+    second = await purge.run_purge_job(apply=True, now=NOW, batch_size=1, max_batches=1)
+    assert second["key_retirement_status"] == "complete"
+    assert second["key_retirement_remaining"] is False
+    assert second["key_retirement_counts"]["retired_one_time_prekeys"] == 1
+    assert not any([await _exists(models.OneTimePrekey, row) for row in expired])
+    repeated = await purge.run_purge_job(apply=True, now=NOW, batch_size=1, max_batches=1)
+    assert repeated["key_retirement_status"] == "complete"
+    assert repeated["key_retirement_remaining"] is False
+    assert sum(repeated["key_retirement_counts"].values()) == 0
+    assert await _exists(models.OneTimePrekey, survivor)
+
+
+async def test_revoked_key_preview_reports_capped_aggregate_without_deleting(make_user):
+    owner = await make_user("Revoked key preview")
+    device = await _device(owner.id, revoked_at=PAST_GRACE)
+    rows = []
+    for i in (1, 2):
+        rows.extend([
+            (models.OneTimePrekey, await _otk(device, consumed_at=None, key_id=i)),
+            (models.KyberPrekey, await _kyber(device, consumed_at=None, key_id=i)),
+            (models.SignedPrekey, await _signed(device, created_at=NOW, key_id=i)),
+        ])
+    report = await purge.run_purge_job(now=NOW, batch_size=1, max_batches=1)
+    assert report["key_retirement_status"] == "preview"
+    assert report["key_retirement_remaining"] is True
+    assert report["key_retirement_counts"]["retired_revoked_device_prekeys"] == 3
+    assert report["key_retirement_capped_counts"] == ["retired_revoked_device_prekeys"]
+    assert all([await _exists(model, row) for model, row in rows])
+
+
+async def test_locked_key_is_blocked_until_real_lock_releases(make_user):
+    owner = await make_user("Locked key retirement")
+    device = await _device(owner.id)
+    row = await _otk(device, consumed_at=PAST_GRACE)
+    async with get_session_factory()() as writer:
+        await writer.execute(text(
+            "SELECT id FROM one_time_prekeys WHERE id=:id FOR UPDATE"
+        ), {"id": row})
+        report = await purge.run_purge_job(apply=True, now=NOW, batch_size=1, max_batches=2)
+        assert report["status"] == "complete"
+        assert report["key_retirement_status"] == "blocked"
+        assert report["key_retirement_remaining"] is True
+        assert report["key_retirement_batches_committed"] == 1
+        assert sum(report["key_retirement_counts"].values()) == 0
+        assert await _exists(models.OneTimePrekey, row)
+        await writer.rollback()
+    retry = await purge.run_purge_job(apply=True, now=NOW, batch_size=1, max_batches=2)
+    assert retry["key_retirement_status"] == "complete"
+    assert retry["key_retirement_remaining"] is False
+    assert not await _exists(models.OneTimePrekey, row)
+
+
+@pytest.mark.parametrize("fault", ["failure", "deadline", "unconfirmed_commit"])
+async def test_key_phase_failure_keeps_only_acknowledged_commits(make_user, monkeypatch, fault):
+    owner = await make_user("Partial key retirement")
+    device = await _device(owner.id)
+    rows = [await _otk(device, consumed_at=PAST_GRACE, key_id=i) for i in (1, 2, 3)]
+    real_batch = purge.retire_key_material_batch
+    real_commit = AsyncSession.commit
+    batches = commits = 0
+
+    async def interrupted_batch(*args, **kwargs):
+        nonlocal batches
+        batches += 1
+        if batches == 2:
+            if fault == "failure":
+                raise RuntimeError("private key SQL parameter must not be logged")
+            if fault == "deadline":
+                await asyncio.sleep(5)
+        return await real_batch(*args, **kwargs)
+
+    async def delayed_acknowledgement(session):
+        nonlocal commits
+        commits += 1
+        await real_commit(session)
+        # Commit1 is the empty content phase, commit2 the first key batch.
+        if fault == "unconfirmed_commit" and commits == 3:
+            await asyncio.sleep(5)
+
+    monkeypatch.setattr(purge, "retire_key_material_batch", interrupted_batch)
+    monkeypatch.setattr(AsyncSession, "commit", delayed_acknowledgement)
+    report = await purge.run_purge_job(
+        apply=True, now=NOW, batch_size=1, max_batches=3, max_seconds=1,
+    )
+    expected = "failed" if fault == "failure" else "timed_out"
+    assert report["status"] == report["key_retirement_status"] == expected
+    assert report["key_retirement_remaining"] is None
+    assert report["key_retirement_batches_committed"] == 1
+    assert report["key_retirement_counts"]["retired_one_time_prekeys"] == 1
+    assert report["commit_outcome_unknown"] is (fault == "unconfirmed_commit")
+    assert report["physical_rows"] == 0 and report["batches_committed"] == 1
+    assert "private key SQL parameter" not in json.dumps(report)
+    assert sum([await _exists(models.OneTimePrekey, row) for row in rows]) == (
+        1 if fault == "unconfirmed_commit" else 2
+    )
