@@ -173,25 +173,20 @@ single-service initial command is not a production redeploy recipe.
 
 ## Service roles (SERVICE_ROLE, board c375)
 
-Settings gained `service_role: Literal["all", "api", "ws"]` (env `SERVICE_ROLE`,
-default `"all"`), read once at `create_app()` time to decide which router
-families a process mounts. `"all"` is today's behavior and is what both
-`infra/deployment.json` service blocks carry right now: every domain router
-plus the `/ws` gateway, byte-identical to before this section existed. `"api"`
-drops the `/ws` gateway and keeps every domain router. `"ws"` drops every
-domain router except `app.routers.deployment` (kept because the paragraph
-below requires it) plus the `/ws` gateway; `/_health` is mounted under every
-role unconditionally, outside this dispatch entirely.
+`service_role: Literal["all", "api", "ws"]` (env `SERVICE_ROLE`, default `"all"`)
+is read once at `create_app()` time to decide which router families a process
+mounts. `"all"` mounts every domain router plus the `/ws` gateway. `"api"` keeps
+the domain routers and omits `/ws`. `"ws"` keeps `/ws` and authenticated
+`/_deployment`, with domain routers absent. `/_health` is mounted under every role.
 
-This section documents the mounting contract and the commands to flip it
-later. It does NOT flip anything now, and the commands below must NOT be run
-yet. `infra/deployment.json` intentionally ships `SERVICE_ROLE=all` on BOTH
-chirp-api and chirp-ws in this PR, not the eventual `api`/`ws` split, because
-`scripts/deployment-config plan` (section 7 below) renders `--update-env-vars`
-from every configured key on EVERY routine redeploy, unconditionally — shipping
-the eventual split values now would make the very next ordinary image release
-silently flip a live service's role as a side effect of what looks like a
-routine deploy.
+The reviewed `infra/deployment.json` intent now selects `api`/`ws`, separate
+`chirp-api-runtime`/`chirp-ws-runtime` service accounts and
+`API_DATABASE_URL:1`/`WS_DATABASE_URL:1` database secret bindings. It explicitly
+keeps the outbox worker on API and disables it on WS, while removing the old WS
+media binding. This source change does not perform the rollout. Board c375 is
+the live record of credential/IAM readiness, staged verification and remaining
+operational acceptance. The first activation requires those prerequisites and
+the serialized procedure below; a routine image release must not bypass them.
 
 The c411 verifier now accepts explicit expected roles and checks authenticated
 identity through `/_deployment` on every role. A `ws` target must also return 404
@@ -199,23 +194,19 @@ for the domain routes. See [DEPLOY-VERIFICATION.md](DEPLOY-VERIFICATION.md) for 
 contract. Deploy the updated endpoint before using this verifier, including for
 an ordinary `all`/`all` release: missing role or identity evidence fails closed.
 
-**The c375 live role flip remains a separate rollout decision.** Keep both
-reviewed configuration roles at `all` for routine releases until that decision
-is made. Before a split rollout, update the reviewed roles and regenerate the
-plan so subsequent releases and verification preserve the intended split.
-The role changes below describe that future rollout; they do not replace the
-serialized staging, promotion and drain procedure in section 7.
+Use the generated pinned-image plan in section 7 for this activation and later
+releases. Both comparison and command generation resolve each declared service
+identity and check every serving revision. Omitting `service_account` inherits
+`shared.service_account`; an empty value does not. These declarations create no
+accounts, SQL credentials or IAM grants.
 
-For an approved split, set each reviewed `services.<api|ws>.env.SERVICE_ROLE`
-to its intended role and, when approved, set its optional `service_account`.
-Omitting `service_account` inherits `shared.service_account`; an empty value does
-not. Regenerate and review the pinned-image plan in section 7. Both comparison and
-deployment command generation use the same intended identity, including checks
-against each serving revision. This prepares configuration support; it creates
-no accounts or IAM grants and leaves the current configuration unchanged.
-Plans with either specialized role stage and promote WS before API, with the
-first predecessor drained before the second service starts. Ordinary `all`/`all`
-image releases keep their API-before-WS sequence.
+The intended split stages and promotes WS before API. Confirm the WS predecessor
+has drained before starting API, and keep both jobs quiescent during the window.
+The old shared identity and broad operator database credential remain for existing
+consumers and compatible rollback; this change does not narrow those grants.
+Redis remains shared, with its separate isolation work tracked by c372. An
+explicitly reviewed legacy `all`/`all` configuration is still supported and keeps
+API-before-WS ordering.
 
 Rollback also requires reviewed intent: restore the approved role and identity in
 the source and follow the compatible-image, serialized rollback procedure in
