@@ -1,7 +1,7 @@
 /**
  * Sign-in / sign-up per DESIGN.md §7: ONE page (c385, braul, from a reference
- * shot) - oversized title, UnderlineField form, brand CTA, social row, footer
- * mode toggle, legal caption.
+ * shot) - pill mode switch (c426), oversized title, UnderlineField form, brand
+ * CTA, social row, legal caption.
  *
  * WHAT c385 CHANGED IS THE MARKUP AND NOTHING ELSE. This screen carries a lot of
  * hard-won correctness that is invisible in a screenshot, and all of it survives
@@ -14,8 +14,9 @@
  *
  * The two-stage shape is gone: there is no "Continue with Email" reveal and no
  * `showEmailForm`, because the reference puts the form, the CTA and the providers
- * on one screen. `resetEmailForm`'s sign-out-on-back survives as the mode toggle's
- * behaviour, which is now the only way to leave a pending wait.
+ * on one screen. `resetEmailForm`'s sign-out-on-back survives as the mode switch's
+ * behaviour (the switch at the top, c426, replaced the footer toggle), which is
+ * now the only way to leave a pending wait.
  *
  * Real auth (milestone 1): the email/password form is wired to src/auth/session.ts
  * (Firebase Auth). Apple runs the real native
@@ -56,7 +57,7 @@ import {
 } from "@/auth";
 import { AppText, Button, Screen, UnderlineField } from "@/components";
 import { MIN_PASSWORD_LENGTH } from "@/lib/passwordPolicy";
-import { canvasActionColor, spacing, useAppearance, useTheme } from "@/theme";
+import { canvasActionColor, contrastRatio, radii, spacing, useAppearance, useTheme } from "@/theme";
 
 type EmailAuthMode = "signin" | "signup";
 
@@ -66,6 +67,79 @@ type EmailAuthMode = "signin" | "signup";
  * 3s, so anything under ~12s would give up while it is still trying.
  */
 const SESSION_SETTLE_TIMEOUT_MS = 15_000;
+
+const AUTH_MODES: { key: EmailAuthMode; label: string }[] = [
+  { key: "signin", label: "Sign in" },
+  { key: "signup", label: "Sign up" },
+];
+
+/**
+ * c426, braul Oct 2: the two modes were nearly indistinguishable and the only
+ * switch was a caption-sized link at the bottom. This is the same pill segmented
+ * control as the Orgs tab (DESIGN 8.7), so the mode you are in is the first thing
+ * on the page. Local rather than shared on purpose: it is two fixed options bound
+ * to this screen's state, and the Orgs copy is not touched.
+ *
+ * Dumb on purpose: it reports a tap on either segment and leaves the "already
+ * active" decision and every piece of mode-switch state to the caller, so the
+ * pending-credential sign-out in toggleAuthMode stays the one place that owns it.
+ *
+ * The active fill is canvasActionColor rather than palette.accent because the
+ * segment sits on the bare canvas - with a campus-primary accent (UNCG navy) the
+ * active pill measured nearly invisible against the dark canvas in a render check
+ * (c426), the same failure canvasActionColor exists for and the reason Forgot
+ * password uses it. The label picks whichever of onAccent/bg reads better on that
+ * fill, since the fallback can be the light campus gold.
+ */
+function AuthModeSwitch({
+  mode,
+  onSelect,
+  disabled,
+}: {
+  mode: EmailAuthMode;
+  onSelect: (mode: EmailAuthMode) => void;
+  disabled: boolean;
+}) {
+  const palette = useTheme();
+  const { campusColors } = useAppearance();
+  const activeFill = canvasActionColor(palette, campusColors);
+  const activeText =
+    contrastRatio(palette.onAccent, activeFill) >= contrastRatio(palette.bg, activeFill)
+      ? palette.onAccent
+      : palette.bg;
+  return (
+    <View style={{ flexDirection: "row", gap: spacing.sm, opacity: disabled ? 0.4 : 1 }}>
+      {AUTH_MODES.map((option) => {
+        const active = option.key === mode;
+        return (
+          <Pressable
+            key={option.key}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            disabled={disabled}
+            onPress={() => onSelect(option.key)}
+            style={({ pressed }) => ({
+              flex: 1,
+              alignItems: "center",
+              paddingVertical: spacing.sm,
+              borderRadius: radii.pill,
+              backgroundColor: active ? activeFill : palette.surfaceAlt,
+              opacity: pressed ? 0.85 : 1,
+            })}
+          >
+            <AppText
+              variant="bodyBold"
+              tone={active ? undefined : "secondary"}
+              style={active ? { color: activeText } : undefined}
+            >
+              {option.label}
+            </AppText>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
 
 export default function SignInScreen() {
   const router = useRouter();
@@ -316,8 +390,9 @@ export default function SignInScreen() {
    * bug; same c45 family, lower frequency.
    *
    * c385 KEPT THIS AND MOVED ITS CALLER. It used to hang off the email form's
-   * "Back" button, which the one-page layout deletes. The footer mode toggle is now
-   * the only way to walk away from a pending wait, so it inherits the sign-out -
+   * "Back" button, which the one-page layout deletes. The mode switch at the top
+   * (c426; it replaced the footer toggle) is now the only way to walk away from a
+   * pending wait, so it inherits the sign-out -
    * dropping this along with the Back button would have quietly reintroduced the
    * exact bug the comment above describes.
    */
@@ -488,12 +563,24 @@ export default function SignInScreen() {
        device pass. The two go together; do not remove one and keep the other. */
     <Screen scroll fillHeight>
       <View style={{ flex: 1, gap: spacing.xl, paddingTop: spacing.xxl }}>
+        {/* c426: the mode switch leads the page. It is disabled while a credential is
+            in flight (same rule the footer link it replaced had), and tapping the
+            segment you are already on does nothing - only the OTHER segment runs
+            toggleAuthMode. */}
+        <AuthModeSwitch
+          mode={authMode}
+          disabled={submitting}
+          onSelect={(mode) => {
+            if (mode !== authMode) toggleAuthMode();
+          }}
+        />
+
         {/* The title IS the brand moment now (DESIGN section 7, c385) - it replaced
             an accentGradient HeroCard wordmark that was a block of chrome sitting
             above the screen's actual job. */}
         <View style={{ gap: spacing.xs }}>
           <AppText variant="display">
-            {isSignUp ? "Welcome to Chirp" : "Welcome back"}
+            {isSignUp ? "Join Chirp" : "Welcome back"}
           </AppText>
           <AppText variant="caption" tone="secondary">
             {isSignUp ? "Create your account" : "Sign in to your account"}
@@ -655,32 +742,9 @@ export default function SignInScreen() {
           ) : null}
         </View>
 
-        {/* The other half of the pair above: keeps the footer and legal line at the
-            bottom rather than letting them float up under the social buttons. */}
+        {/* The other half of the pair above: keeps the legal line at the bottom
+            rather than letting it float up under the social buttons. */}
         <View style={{ flex: 1, minHeight: spacing.lg }} />
-
-        {/* The reference's own footer says "Don't have an account? Sign Up" on a
-            screen titled "Create your account", which is self-contradictory. This one
-            reflects the mode actually showing. */}
-        <Pressable
-          accessibilityRole="button"
-          disabled={submitting}
-          onPress={toggleAuthMode}
-          hitSlop={spacing.sm}
-          style={{
-            flexDirection: "row",
-            justifyContent: "center",
-            gap: spacing.xs,
-            opacity: submitting ? 0.4 : 1,
-          }}
-        >
-          <AppText variant="caption" tone="secondary">
-            {isSignUp ? "Already have an account?" : "Don't have an account?"}
-          </AppText>
-          <AppText variant="caption" style={{ color: linkColor, fontWeight: "700" }}>
-            {isSignUp ? "Sign in" : "Sign up"}
-          </AppText>
-        </Pressable>
 
         <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
           By continuing, you agree to Chirp's Terms of Service and acknowledge our Privacy Policy.

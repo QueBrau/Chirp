@@ -65,8 +65,9 @@ if (!signIn.includes("socialAuthUnavailableMessage")) {
 // c385, and both of these guard something the one-page layout made newly fragile.
 //
 // (1) The sign-out-on-abandon used to hang off the email form's "Back" button. That
-// button is gone, so the footer mode toggle is the ONLY way to walk away from a
-// pending credential, and it has to inherit the sign-out - otherwise the user sits
+// button is gone, so the mode switch at the top (c426; it replaced the footer
+// toggle) is the ONLY way to walk away from a pending credential, and it has to
+// inherit the sign-out - otherwise the user sits
 // on a signed-out-looking screen while genuinely authenticated, the 15s timer is
 // cancelled so no error ever appears, and the social buttons then walk a registered
 // user through onboarding again (the c45 family).
