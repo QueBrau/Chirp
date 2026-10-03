@@ -239,13 +239,10 @@ const DETAIL_COPY: Record<string, string> = {
   not_your_campus: "That belongs to a different campus, so it isn't yours to post to or open.",
   not_your_device: "That device belongs to a different account.",
   on_payment_plan: "You're already on a payment plan for these dues.",
-  // c427: a Stripe-side failure while opening Connect onboarding. Before that card
-  // the route let the exception escape, so this case arrived as an unmappable body
-  // and the treasurer screen could only fall back to its own title. Mapped rather
-  // than added to SYSTEM_CODES on purpose: unlike the two config codes below, this
-  // one is genuinely transient and retrying is the right instruction.
+  // Provider failures can include outages or configuration problems. Account
+  // creation may already have succeeded before its onboarding link failed.
   onboarding_unavailable:
-    "Stripe didn't respond, so payment setup couldn't start. Nothing changed — try again in a moment.",
+    "Payment setup is unavailable right now. Try again later; if it keeps failing, contact support.",
   only_little_can_confirm: "Only the little can confirm this pairing.",
   option_not_found: "That poll option no longer exists.",
   // Two DISTINCT backend codes deliberately sharing one string — both entries are
