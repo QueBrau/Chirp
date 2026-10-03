@@ -46,6 +46,40 @@ RESERVATION_PROVIDER_TIMEOUT_SECONDS = 15.0
 _INTENT_NOT_AWAITING_PAYMENT = {"processing", "succeeded"}
 
 
+# c427: this route was the ONLY provider I/O in payments.py with no handler on it.
+# The dues path has caught stripe.StripeError since c366, and app/main.py registers no
+# catch-all (its one handler is for SQLAlchemy's TimeoutError), so a Stripe timeout, a
+# rate limit, a key rotated mid-flight or a Connect capability problem left the
+# exception to escape the route entirely. On the deployed service that becomes an
+# opaque 500 whose body is not the app's usual {"detail": ...} shape at all, so the
+# phone could not map it to anything: the treasurer screen showed "Couldn't open Stripe
+# setup" over a generic body, and no part of the response said which layer failed.
+# That is both a real defect and the reason a phone report of this flow could not be
+# diagnosed. Proven uncaught before this change by tests/test_c427_onboarding_provider_errors.py.
+ONBOARDING_PROVIDER_DETAIL = "onboarding_unavailable"
+
+
+def _onboarding_provider_failure(
+    exc: stripe.StripeError, chapter_id: uuid.UUID, step: str,
+) -> HTTPException:
+    """A clean 503 for a Stripe-side onboarding failure, mirroring the dues path.
+
+    Logs the exception CLASS and Stripe's own error code, never str(exc) and never
+    any part of a key: Stripe's messages can quote the credential prefix they were
+    called with, and this line goes to Cloud Logging where the board's rule is that
+    credential material never lands.
+
+    No session.rollback() here, unlike the dues path: both call sites below have
+    already committed and expired their session, so there is no in-flight money row
+    for a Stripe failure to leave half-written.
+    """
+    logger.warning(
+        "c427: Connect onboarding stopped chapter=%s step=%s error=%s code=%s",
+        chapter_id, step, type(exc).__name__, getattr(exc, "code", None),
+    )
+    return HTTPException(status_code=503, detail=ONBOARDING_PROVIDER_DETAIL)
+
+
 def _onboarding_urls() -> tuple[str, str]:
     """(return_url, refresh_url) for Connect onboarding.
 
@@ -103,7 +137,10 @@ async def create_connect_onboarding_link(
     session.expire_all()
 
     if account_id is None:
-        candidate = await stripe_service.create_express_account(chapter_id, org_name)
+        try:
+            candidate = await stripe_service.create_express_account(chapter_id, org_name)
+        except stripe.StripeError as exc:
+            raise _onboarding_provider_failure(exc, chapter_id, "create_account") from None
         user = await get_current_user(uid=uid, session=session)
         chapter = await _onboarding_chapter(session, user, chapter_id)
         # Never overwrite a competing onboarding winner's account association.
@@ -118,7 +155,10 @@ async def create_connect_onboarding_link(
         await session.commit()
         session.expire_all()
 
-    link = await stripe_service.create_account_link(account_id, return_url, refresh_url)
+    try:
+        link = await stripe_service.create_account_link(account_id, return_url, refresh_url)
+    except stripe.StripeError as exc:
+        raise _onboarding_provider_failure(exc, chapter_id, "account_link") from None
     user = await get_current_user(uid=uid, session=session)
     chapter = await _onboarding_chapter(session, user, chapter_id)
     if chapter.stripe_account_id != account_id:
