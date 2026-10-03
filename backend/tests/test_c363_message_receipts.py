@@ -12,6 +12,7 @@ from pathlib import Path
 import time
 from uuid import uuid4
 
+import httpx
 import pytest
 from websockets.asyncio.server import serve
 
@@ -19,6 +20,7 @@ from loadtest import message_receipts as workload
 from loadtest.config import load_config
 from loadtest.metrics import REFERENCE_CLASS, Sample
 from loadtest.receipt_contract import ReceiptError, parse_manifest, validate_run, validate_target
+from loadtest.runner import REQUEST_TIMEOUT, ramp_delay
 from tests.test_c226_load_harness import _config_dict, _write
 
 
@@ -48,6 +50,7 @@ class Peer:
         self.payloads = []
         self.post_starts = []
         self.response_finished_at = []
+        self.phase_complete = None
         self.posted = asyncio.Event()
         self.closed = 0
         self.writers = set()
@@ -150,6 +153,9 @@ class Peer:
             writer.write(f"HTTP/1.1 {status} Test\r\nContent-Length: {len(body)}\r\nContent-Type: application/json\r\nConnection: close\r\n".encode()
                          + extra + b"\r\n" + body)
             await writer.drain()
+            if method == "POST" and path.endswith("/messages") and len(self.post_starts) == 2:
+                if self.phase_complete is not None:
+                    self.phase_complete.set()
         except (asyncio.IncompleteReadError, ConnectionError, asyncio.CancelledError):
             pass
         finally:
@@ -315,11 +321,62 @@ async def test_no_post_window_http_responses_cannot_be_hidden_by_ready_fence(tmp
 
 
 @pytest.mark.asyncio
-async def test_global_bucket_and_semaphore_cover_message_dispatch_and_interval(tmp_path):
+@pytest.mark.parametrize("startup_delay", [0.0, 0.6], ids=["immediate", "delayed-startup"])
+async def test_global_bucket_and_semaphore_cover_message_dispatch_and_interval(tmp_path, startup_delay):
     raw = manifest_data(1)
     async with peers(raw) as peer:
         config = replace(config_for(tmp_path, peer.http_port, peer.ws_port), duration_seconds=4.5)
         observation = workload.Observation(config, parse_manifest(json.dumps(raw)), 2, 4, .1)
+        # The real phase normally ends on a wall-clock duration. For this focused
+        # two-dispatch proof, end it at the peer's real second POST response instead:
+        # the first-mix response gate remains real, while CI scheduling cannot expire
+        # the phase between the two required dispatches. This fixture drives the
+        # real user loops, bucket, semaphore, spacing, and receipt reconciliation;
+        # other tests retain the production phase-duration behavior.
+        phase_complete = asyncio.Event()
+        peer.phase_complete = phase_complete
+
+        async def run_http_phase_until_second_post(runner):
+            limits = httpx.Limits(
+                max_connections=runner.config.caps.max_concurrent_requests + 5,
+                max_keepalive_connections=runner.config.caps.max_concurrent_requests,
+            )
+            async with httpx.AsyncClient(
+                base_url=runner.config.base_url, timeout=REQUEST_TIMEOUT, limits=limits,
+                trust_env=False,
+            ) as client:
+                runner._http_client = client
+                await runner._warmup(client)
+                if runner.stop.is_set():
+                    return
+                runner.recorder.set_http_mix_active(True)
+                try:
+                    async with asyncio.TaskGroup() as group:
+                        children = [group.create_task(runner._reference_probe(), name="loadtest-probe")]
+                        total = len(runner.manifest.users)
+
+                        async def delayed_user(user, start_delay):
+                            # Delay after the phase is active, beyond the old 0.5s
+                            # startup allowance, without forging the response gate.
+                            await asyncio.sleep(startup_delay)
+                            await runner._user_loop(client, user, start_delay)
+
+                        children.extend(
+                            group.create_task(
+                                delayed_user(
+                                    user, ramp_delay(index, total, runner.config.ramp_in_seconds)
+                                ),
+                                name="loadtest-http-user",
+                            )
+                            for index, user in enumerate(runner.manifest.users)
+                        )
+                        await asyncio.wait_for(phase_complete.wait(), timeout=15)
+                        for child in children:
+                            child.cancel()
+                finally:
+                    runner.recorder.set_http_mix_active(False)
+
+        observation.runner.run_http_phase = lambda: run_http_phase_until_second_post(observation.runner)
         original_acquire = observation.runner.pacer.global_bucket.acquire
         original_semaphore_acquire = observation.runner.pacer.semaphore.acquire
         acquisitions, slots = [], []
@@ -332,7 +389,7 @@ async def test_global_bucket_and_semaphore_cover_message_dispatch_and_interval(t
         observation.runner.pacer.global_bucket.acquire = acquire
         observation.runner.pacer.semaphore.acquire = acquire_slot
         result = await observation.run()
-    assert result["status"] == "LOCAL_RECEIPTS_OBSERVED"
+    assert result["status"] == "LOCAL_RECEIPTS_OBSERVED", result
     assert len(peer.post_starts) == 2
     assert peer.post_starts[1] - peer.post_starts[0] >= 3.99
     assert acquisitions.count("receipt-producer") == slots.count("receipt-producer") == 2
