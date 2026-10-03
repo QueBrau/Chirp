@@ -417,6 +417,33 @@
   ],
   "cards": [
     {
+      "id": "c424",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "bug",
+      "area": "yak",
+      "title": "c424 IN PROGRESS Oct 2 (Q): voting on a chirp changes the size of chirp cards. CAUSE FOUND: app/(tabs)/chirps/index.tsx pads the top-scoring card spacing.xl and every other card spacing.lg, so any vote that changes WHICH chirp is top grows one card and shrinks another. DESIGN 10 rule 6 asks only for a gold top score, not a bigger card. Fix: one padding for every card, gold score unchanged. Branch q/c424-vote-card-size.",
+      "detail": "Reported by braul on a phone Oct 2. isTop = score === topScore && score > 0, recomputed on every optimistic vote, so the padding flip happens on the tap itself. The VotePill's own width is stable for scores up to three characters (stat type is tabular-nums and the glyph buttons set the pill's minimum width)."
+    },
+    {
+      "id": "c425",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "bug",
+      "area": "auth",
+      "title": "c425 IN PROGRESS Oct 2 (Q): Sign up with Apple fails on a real phone with the generic 'Sign in with Apple didn't work'. RULED OUT: the 93fd0f65 binary AND its ad hoc profile both carry com.apple.developer.applesignin; Firebase's Apple provider is enabled (createAuthUri answers 'Code flow is not enabled for Apple' = configured for native tokens only, which is all the app needs). PRIME SUSPECT: app.chirps.mobile is not registered as an iOS app in the chirps-prod Firebase project, so Firebase rejects the Apple token's audience (auth/invalid-credential). c296 concluded 'Firebase does NOT key off the bundle id' - true for email, false for native Apple tokens. SECOND SUSPECT: auth/account-exists-with-different-credential if the Apple ID's email already has an email/password account. NEEDS A FIREBASE CONSOLE CHECK - this Mac's gcloud login has no access to chirps-prod. Code side: name those two failures in the copy so the next attempt says which one it is.",
+      "detail": "The generic copy is appleErrorMessage()'s default branch in src/auth/appleSignIn.ts, which every unmapped code falls into. Console checks: Project settings > General > Your apps must list an iOS app with bundle ID app.chirps.mobile (add it if missing; no plist needed for the JS SDK). Authentication > Users: does a user already exist with the Apple ID's email?"
+    },
+    {
+      "id": "c426",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "design",
+      "area": "auth",
+      "title": "c426 IN PROGRESS Oct 2 (Q): sign-in and sign-up look almost identical (braul: make it obvious which is which, but not too different). PLAN: a pill segmented control 'Sign in | Sign up' at the top of the page, the same pattern as the Orgs Feed/Events/Tools control (DESIGN 8.7), replacing the footer text toggle, plus a sign-up title that no longer starts with 'Welcome'. Fields, CTA and social row stay where they are. DESIGN 7 updated in the same PR. Branch q/c426-auth-mode-switch.",
+      "detail": "Today the only differences are the title (Welcome back / Welcome to Chirp), one extra field and the CTA label, and the mode switch is a caption-sized link at the very bottom."
+    },
+    {
       "id": "c423",
       "col": "backlog",
       "owner": "",
@@ -1391,7 +1418,7 @@
     {
       "id": "c39",
       "col": "done",
-      "title": "c39 DONE Oct 2: verified EAS preview build 31078cdd already recorded; Jose now reports successful phone use across profile, organizations, roles, invites and posting. Build/install gate complete; feature-specific acceptance stays on its own cards.",
+      "title": "c39 NEW BUILD Oct 3 (Q): preview 93fd0f65-b572-4368-8b16-3a12bfb080c6, commit 6e10ed3 (main head, no app code beyond 31078cdd), finished 00:05 UTC, link expires Oct 16. It provisions BOTH iPhones, read from the embedded profile rather than assumed: Q iPhone (24) 00008140-001A211A0EC2801C and Jose 00008120-001C4DC10C40201E (registered Oct 2 via eas device:create). Do NOT give Jose e855c56c - same commit, built minutes earlier, Q phone only. 31078cdd expires Oct 6. | c39 DONE Oct 2: verified EAS preview build 31078cdd already recorded; Jose now reports successful phone use across profile, organizations, roles, invites and posting. Build/install gate complete; feature-specific acceptance stays on its own cards.",
       "owner": "Q",
       "tag": "m8",
       "area": "infra",
