@@ -236,6 +236,105 @@ if (profile.includes(`router.push("${expectedRoute}")`)) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// 9. The POST-SAVE navigation is guarded by the focus that submitted it.
+//    c432, pinning Codex's 9122e17 review fix. The editor used to call
+//    router.back() unconditionally on success, so a save still in flight when
+//    the user left popped whichever screen they had moved to instead.
+//
+//    Targeted positionally, not globally: there are THREE router.back() calls
+//    in this file and only this one may be guarded. The Back button in the
+//    load-failure state and the Cancel button are user-initiated and must fire
+//    unconditionally, so a blanket "every router.back() is guarded" check would
+//    demand the wrong thing.
+// ---------------------------------------------------------------------------
+const submitIdx = editor.indexOf("await updateAlumniProfile(");
+const saveCatchIdx = editor.indexOf("} catch (err) {", submitIdx);
+if (submitIdx === -1 || saveCatchIdx === -1) {
+  fail("post-save navigation is focus-guarded", "could not bound the save success path");
+} else {
+  const successPath = editor.slice(submitIdx, saveCatchIdx);
+  const navLine = successPath.split("\n").find((l) => l.includes("router.back()"));
+  if (navLine === undefined) {
+    fail("post-save navigation is focus-guarded", "no router.back() in the save success path at all");
+  } else if (!/activeFocus\.current === submittingFocus/.test(navLine)) {
+    fail(
+      "post-save navigation is focus-guarded",
+      `the success path navigates unconditionally — a save resolving after the user leaves pops their current screen. Line: ${navLine.trim()}`,
+    );
+  } else {
+    pass("post-save navigation only fires for the focus that submitted it");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 10. The guard can actually TRIP. Two ways it silently cannot, both checked:
+//     the identity must be captured BEFORE the await (comparing a value read
+//     after the await against itself is always true), and the focus effect must
+//     CLEAR it on blur (without the cleanup, `current` keeps the same identity
+//     forever and the comparison can never be false).
+// ---------------------------------------------------------------------------
+const captureIdx = editor.indexOf("const submittingFocus = activeFocus.current;");
+if (captureIdx === -1) {
+  fail("the focus guard can trip", "no captured focus identity — nothing to compare against");
+} else if (submitIdx !== -1 && captureIdx > submitIdx) {
+  fail(
+    "the focus guard can trip",
+    "the identity is captured AFTER the await, so the comparison comes out true no matter what happened",
+  );
+} else {
+  const focusEffectIdx = editor.indexOf("useFocusEffect(");
+  const effect = focusEffectIdx === -1 ? null : span(editor, focusEffectIdx, "(", ")");
+  const clears = effect !== null && /return \(\) =>[\s\S]*activeFocus\.current = null/.test(effect.text);
+  if (!clears) {
+    fail(
+      "the focus guard can trip",
+      "the focus effect never clears activeFocus on blur, so its identity never changes and the guard is inert",
+    );
+  } else {
+    pass("focus identity is captured before the await and cleared on blur");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 11. Every input is frozen while saving. Counted rather than spot-checked: the
+//     submit reads `form` at call time, so a field still editable mid-save lets
+//     someone type edits that look saved and are not. A seventh input added
+//     without the guard fails this.
+// ---------------------------------------------------------------------------
+const inputCount = (editor.match(/<TextInput\b/g) ?? []).length;
+const editableGuards = (editor.match(/editable=\{!saving\}/g) ?? []).length;
+if (inputCount === 0) {
+  fail("inputs freeze while saving", "found no TextInput in the editor");
+} else if (inputCount !== editableGuards) {
+  fail(
+    "inputs freeze while saving",
+    `${inputCount} TextInput(s) but ${editableGuards} editable={!saving} — ${inputCount - editableGuards} stay editable mid-save, so edits made then are silently dropped`,
+  );
+} else {
+  pass(`all ${inputCount} inputs freeze while saving`);
+}
+
+// ---------------------------------------------------------------------------
+// 12. The mentoring toggle is inert while saving, for the same reason: it is the
+//     one field that is not a TextInput, so check 11 cannot see it.
+// ---------------------------------------------------------------------------
+const toggleIdx = editor.indexOf('title="Open to mentoring"');
+const toggleRow = toggleIdx === -1 ? null : editor.slice(toggleIdx, toggleIdx + 700);
+if (toggleRow === null) {
+  fail("mentoring toggle is inert while saving", "could not find the toggle row");
+} else {
+  const onPress = /onPress=\{([^\n]*)\}/.exec(toggleRow);
+  if (onPress === null || !onPress[1].includes("saving")) {
+    fail(
+      "mentoring toggle is inert while saving",
+      "the toggle's onPress does not consult `saving`, so it can change a value the in-flight submit has already read",
+    );
+  } else {
+    pass("mentoring toggle consults saving before changing the value");
+  }
+}
+
 console.log(
   failures === 0
     ? "\nverify:c423-alumni — all checks passed"
