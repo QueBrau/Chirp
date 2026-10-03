@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1790988392714,
+  "updated": 1790989995095,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -458,7 +458,7 @@
       "owner": "J",
       "tag": "bug",
       "area": "alumni",
-      "title": "c423 IN PROGRESS Oct 2 (J/chirps-a2) [P2 | PHONE-REPORTED Oct 2]: Alumni Add your company / Add your class year rows do nothing when tapped; no profile editor is connected. CLAIMED for implementation on jose/c423-alumni-editor-20261002; investigation starting, no source edits and no implementation claim yet.",
+      "title": "c423 BUILT, PR #332 OPEN Oct 2 (J/chirps-a2): alumni editor added at app/(tabs)/profile/alumni-info.tsx and all three alumni rows now navigate to it (they had no onPress, and updateAlumniProfile had no caller anywhere). KEY FINDING: PUT /alumni/profile is a FULL REPLACE - upsert_own_profile assigns every column and every AlumniProfileUpdate field defaults None/False - so the obvious per-field editor would have silently wiped the rest of the profile on each save; the editor submits all 7 fields instead. Failed LOAD shows an error with retry rather than a blank form (c319 class: blank + full replace overwrites a real profile with nothing); failed SAVE keeps all input; blank normalizes to null not empty string; class-year and LinkedIn validated client-side mirroring validate_public_url. Profile refetches on FOCUS (it does not remount when the editor pops back). No privilege inferred from self-declared account_type. EVIDENCE: npm run verify:c423-alumni-editor, 8 computed/positional checks green, registered in ci.yml; FALSIFIED TWICE - restoring origin/main's profile/index.tsx failed exactly checks 6/7/8 (exit 1), and dropping industry from the submit failed check 2 naming it as the field that would be wiped. tsc --noEmit exit 0, 0 lines, TS 5.9.3, unpiped. Rebased onto dc7a0be before opening; PR diff 655+/11-, deletions only in the 2 files edited, so no revert. REMAINS: review + merge (Jose), then rebuilt preview and phone save/reopen confirmation - NO device or preview run was done and none is claimed.",
       "detail": "Jose reports that selecting Alumni loads the add-class/company section, but neither prompt can be clicked to enter information. Read-only source inspection on origin/main 6e10ed3 confirms app-mobile/app/(tabs)/profile/index.tsx alumni ListRow entries have no onPress. app-mobile/src/api/alumni.ts exports updateAlumniProfile but no mobile screen calls it. c377 fixes the successful-empty versus load-failure display and is accepted separately; this is an unimplemented editing path.\n\nProposed scope: reachable alumni editor using the existing API and existing fields, prefill saved values, allow first-profile creation and subsequent edits, validate input, preserve entered values on failure, and refresh the profile after save. Do not infer privileges from self-declared alumni account type.\n\nAcceptance: actual UI save/reopen for class year/company and supported existing fields; cancel makes no write; network/save failure remains truthful and preserves input; focused verification and reviewed PR; rebuilt preview and phone confirmation. No implementation claim or source edits in this intake. Build/device/OS for reported symptom not supplied."
     },
     {
