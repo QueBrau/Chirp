@@ -13,16 +13,20 @@ consume the same source; changing a cap requires reviewing its rollout arithmeti
 
 ## Scope and current architecture
 
-Both services still run the complete FastAPI application under the same runtime
-service account. The split manages HTTP/socket concurrency; it is not a security
-boundary. `SERVICE_ROLE` (board c375) is now in the `ENV_NAMES` allowlist and in
-both services' `env` blocks in [infra/deployment.json](infra/deployment.json),
-currently `all`/`all` on both — the mounting contract exists in code (see
-DEPLOY.md's "Service roles" section) but nothing live has changed yet.
-API-specific Stripe and email secret bindings remain API-specific. The
-shared account's permissions have not been narrowed. Neither this file nor the
-checker proves least privilege, resolved secret-version parity, every environment
-variable, an effective deployed image's Python defaults, or runtime worker behavior.
+The reviewed intent now selects `SERVICE_ROLE=api` and `SERVICE_ROLE=ws`, with
+`chirp-api-runtime` and `chirp-ws-runtime` service-account overrides. API uses
+`API_DATABASE_URL:1`; WS uses `WS_DATABASE_URL:1`. The API keeps its Stripe, email
+and media secret bindings. WS explicitly retires its legacy media binding and
+outbox worker; API retains the worker. Both still share Redis, whose broker ACL
+isolation is outside this change (c372).
+
+This is intended configuration, not evidence of a completed rollout. Board c375
+records the current credential/IAM preparation, staged checks and live acceptance.
+The old `chirp-api-run` account and privileged operator database credential remain
+for existing consumers and compatible rollback; declaring new identities does
+not narrow those old grants. Neither this file nor the checker proves least
+privilege, resolved secret-version parity, every environment variable, an
+effective deployed image's Python defaults, or runtime worker behavior.
 The checked Dockerfile starts one uvicorn process; the generated service commands
 make its `WEB_CONCURRENCY=1` and pool values explicit. Command/argument overrides or
 additional containers produce incomplete evidence instead of trusting this model.
@@ -35,12 +39,13 @@ an explicit empty, null or malformed value is refused, never treated as omission
 The same resolution is used for the service template, every inspected revision,
 and the generated `--service-account` argument. Validation checks the declared
 argument's syntax; it does not establish that the account exists or has suitable
-IAM permissions. The checked-in configuration has no overrides and retains the
-current shared identity and `all`/`all` roles.
+IAM permissions. The checked-in overrides select the separate runtime identities;
+the shared fallback remains available for an explicitly reviewed legacy rollback
+configuration with `all`/`all` roles.
 
-Before c375's identity or role rollout, review required secret, SQL, storage and
-broker access per service and record the approved identities and roles in this
-source. Use the generated pinned-image plan for the rollout and subsequent image
+Before activating c375's reviewed intent, complete the separately reviewed
+credential and IAM preparation and verify the actual SQL, storage and secret
+authority of each identity. Use the generated pinned-image plan for the rollout and subsequent image
 releases so a hand-applied setting cannot be silently replaced by stale intent.
 Creating accounts, granting IAM, validating positive/negative access in staging,
 and applying or rolling back a deployment remain separate operational steps.
@@ -53,9 +58,8 @@ required bindings are rejected before any commands are printed. An omitted or
 empty list preserves the existing update-only behavior; the planner never
 infers removals from a difference in observed cloud settings.
 
-For example, an approved c375 split can move `MEDIA_SIGNING_SECRET` from
-`shared.secrets` to `services.api.secrets`, then declare
-`services.ws.remove_secrets: ["MEDIA_SIGNING_SECRET"]`. The WS command combines
+The c375 intent places `MEDIA_SIGNING_SECRET` in `services.api.secrets` and
+declares `services.ws.remove_secrets: ["MEDIA_SIGNING_SECRET"]`. The WS command combines
 that exact `--remove-secrets` with its retained `--update-secrets` entries;
 gcloud applies removals first and updates second. Unrelated bindings are
 preserved. Comparison refuses any remaining environment row with a retired
@@ -70,8 +74,8 @@ binding again. Review the actual live refs and IAM separately. See the
 canonical strings `"true"` or `"false"`. When declared, comparison requires the
 explicit value on the template and every serving revision; it does not infer an
 omitted value from the checkout. Existing configurations that omit it retain
-their behavior. The c375 split should explicitly retain `"true"` on API and set
-`"false"` on WS. Route mounting alone does not stop the lifespan outbox worker:
+their behavior. The c375 intent explicitly sets `"true"` on API and `"false"`
+on WS. Route mounting alone does not stop the lifespan outbox worker:
 the current image starts that worker under every role unless this setting is
 false. A staged API revision with it enabled can claim and publish durable
 outbox rows even at zero HTTP traffic. Review concurrent worker behavior, pool
@@ -355,9 +359,9 @@ scripts/deployment-config plan --release /tmp/chirp-release.json --gcloud "$HOME
 ```
 
 4. With jobs quiescent, execute the **first service in the printed plan** after
-   operator review. Current `all`/`all` releases stage API first. If either reviewed
-   role is specialized (`api` or `ws`), the plan stages **WS first**, preserving
-   c375's WS-before-API role-split sequence regardless of JSON key order. Each stage
+   operator review. The current `api`/`ws` intent stages **WS first**, preserving
+   c375's WS-before-API sequence regardless of JSON key order. An explicitly
+   reviewed legacy `all`/`all` configuration retains API-first ordering. Each stage
    deploys the pinned image with `--no-traffic`, the chosen revision name and all
    owned sizing/network settings. It uses `--update-env-vars` and
    `--update-secrets`, preserving unrelated settings. It does not change IAM.
@@ -378,8 +382,8 @@ scripts/deployment-config plan --release /tmp/chirp-release.json --gcloud "$HOME
    `DEPLOY_VERIFY_BEARER` using the approved credential source. Execute the printed
    verifier command; its digests, revisions, service names, project and schema are
    derived from this release, and its expected roles come from each service's
-   reviewed `env.SERVICE_ROLE` in `infra/deployment.json`. Both remain `all` in the
-   current intended configuration. The plan rejects missing or incompatible
+   reviewed `env.SERVICE_ROLE` in `infra/deployment.json`: `api` for API and `ws`
+   for WS in the current intent. The plan rejects missing or incompatible
    roles and never substitutes roles observed from production. Follow
    [DEPLOY-VERIFICATION.md](DEPLOY-VERIFICATION.md),
    then unset the bearer. Require authenticated readiness on **both** services.

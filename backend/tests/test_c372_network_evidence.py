@@ -273,12 +273,17 @@ def test_split_identity_rejects_other_services_identity(monkeypatch, cfg, policy
     assert {"scope": scope, "issue": "runtime_identity_differs_from_source"} in result["findings"]
 
 
-@pytest.mark.parametrize("override_roles", [(), ("ws",), ("api", "ws")])
+@pytest.mark.parametrize("override_roles", [None, (), ("ws",), ("api", "ws")])
 def test_iam_membership_and_broad_grants_cover_effective_service_identities(cfg, policy, override_roles):
-    accounts = {role: cfg["shared"]["service_account"] for role in ("api", "ws")}
-    for role in override_roles:
-        accounts[role] = f"reviewed-{role}-runtime@chirps-prod.iam.gserviceaccount.com"
-        cfg["services"][role]["service_account"] = accounts[role]
+    # None exercises current checked-in intent. Other cases explicitly model
+    # legacy shared fallback and partial/full overrides, regardless of that intent.
+    if override_roles is not None:
+        for service in cfg["services"].values():
+            service.pop("service_account", None)
+        for role in override_roles:
+            cfg["services"][role]["service_account"] = f"reviewed-{role}-runtime@chirps-prod.iam.gserviceaccount.com"
+    accounts = {role: cfg["services"][role].get("service_account", cfg["shared"]["service_account"])
+                for role in ("api", "ws")}
     bindings = [{"role": "roles/editor", "members": ["serviceAccount:" + account],
                  "condition": {"expression": PRIVATE}} for account in sorted(set(accounts.values()))]
     iam = N.iam_summary({"bindings": bindings}, cfg)
@@ -293,11 +298,15 @@ def test_iam_membership_and_broad_grants_cover_effective_service_identities(cfg,
     assert all(account not in json.dumps(result) for account in accounts.values())
 
 
-def test_vm_identity_counts_distinguish_override_and_shared_fallback(cfg, policy):
+@pytest.mark.parametrize("api_shared_fallback", [False, True])
+def test_vm_identity_counts_distinguish_override_and_shared_fallback(cfg, policy, api_shared_fallback):
+    if api_shared_fallback:
+        cfg["services"]["api"].pop("service_account", None)
+    api = cfg["services"]["api"].get("service_account", cfg["shared"]["service_account"])
     override = "reviewed-ws-runtime@chirps-prod.iam.gserviceaccount.com"
     cfg["services"]["ws"]["service_account"] = override
     body = [{"serviceAccounts": [{"email": account}]} for account in
-            (override, cfg["shared"]["service_account"], PRIVATE)]
+            dict.fromkeys((override, api, cfg["shared"]["service_account"], PRIVATE))]
     result = N.summarize("vms", body, cfg, policy)
     assert result["shared_runtime_identity_count"] == 1
     assert result["runtime_identity_counts"] == {"api": 1, "ws": 1}

@@ -29,9 +29,7 @@
       "DB_POOL_TIMEOUT": "10"
     },
     "secrets": {
-      "DATABASE_URL": "DATABASE_URL:latest",
-      "REDIS_URL": "REDIS_URL:latest",
-      "MEDIA_SIGNING_SECRET": "MEDIA_SIGNING_SECRET:latest"
+      "REDIS_URL": "REDIS_URL:latest"
     },
     "scaling_mode": "automatic"
   },
@@ -48,7 +46,8 @@
       "env": {
         "DB_POOL_SIZE": "3",
         "DB_MAX_OVERFLOW": "2",
-        "SERVICE_ROLE": "all",
+        "SERVICE_ROLE": "api",
+        "OUTBOX_SWEEPER_ENABLED": "true",
         "APP_PUBLIC_BASE_URL": "https://chirps-prod.web.app"
       },
       "client_origin": "https://chirp-api-593616178468.us-central1.run.app",
@@ -56,8 +55,11 @@
         "STRIPE_SECRET_KEY": "STRIPE_SECRET_KEY:latest",
         "STRIPE_PUBLISHABLE_KEY": "STRIPE_PUBLISHABLE_KEY:latest",
         "STRIPE_WEBHOOK_SECRET": "STRIPE_WEBHOOK_SECRET:latest",
-        "RESEND_API_KEY": "RESEND_API_KEY:latest"
-      }
+        "RESEND_API_KEY": "RESEND_API_KEY:latest",
+        "MEDIA_SIGNING_SECRET": "MEDIA_SIGNING_SECRET:latest",
+        "DATABASE_URL": "API_DATABASE_URL:1"
+      },
+      "service_account": "chirp-api-runtime@chirps-prod.iam.gserviceaccount.com"
     },
     "ws": {
       "name": "chirp-ws",
@@ -71,10 +73,17 @@
       "env": {
         "DB_POOL_SIZE": "1",
         "DB_MAX_OVERFLOW": "1",
-        "SERVICE_ROLE": "all"
+        "SERVICE_ROLE": "ws",
+        "OUTBOX_SWEEPER_ENABLED": "false"
       },
       "client_origin": "https://chirp-ws-593616178468.us-central1.run.app",
-      "secrets": {}
+      "secrets": {
+        "DATABASE_URL": "WS_DATABASE_URL:1"
+      },
+      "service_account": "chirp-ws-runtime@chirps-prod.iam.gserviceaccount.com",
+      "remove_secrets": [
+        "MEDIA_SIGNING_SECRET"
+      ]
     }
   },
   "jobs": {

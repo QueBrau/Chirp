@@ -49,7 +49,7 @@ def fixture(config, release):
         env = shared["env"] | service["env"] | {"WEB_CONCURRENCY": "1"}
         container = {"image": release["image"], "resources": {"limits": {"cpu": service["cpu"], "memory": service["memory"]}}, "env": [{"name": k, "value": v} for k, v in env.items()] + [{"name": k, "valueFrom": {"secretKeyRef": {"name": v.split(":")[0], "key": v.split(":")[1]}}} for k, v in (shared["secrets"] | service.get("secrets", {})).items()]}
         ann = {"autoscaling.knative.dev/minScale": str(service["revision_min_instances"]), "autoscaling.knative.dev/maxScale": str(service["revision_max_instances"]), "run.googleapis.com/cloudsql-instances": shared["cloud_sql"], "run.googleapis.com/vpc-access-connector": shared["vpc_connector"], "run.googleapis.com/vpc-access-egress": shared["vpc_egress"], "run.googleapis.com/startup-cpu-boost": "true"}
-        spec = {"containers": [container], "containerConcurrency": service["concurrency"], "timeoutSeconds": shared["timeout_seconds"], "serviceAccountName": shared["service_account"]}
+        spec = {"containers": [container], "containerConcurrency": service["concurrency"], "timeoutSeconds": shared["timeout_seconds"], "serviceAccountName": service.get("service_account", shared["service_account"])}
         ready = {"observedGeneration": 1, "conditions": [{"type": "Ready", "status": "True"}]}
         canonical = "https://" + name + "-example-uc.a.run.app"
         result["services"][role] = {"metadata": {"name": name, "generation": 1, "annotations": {"run.googleapis.com/maxScale": "20", "run.googleapis.com/ingress": "all", "run.googleapis.com/urls": json.dumps([canonical, service["client_origin"]])}}, "spec": {"template": {"metadata": {"annotations": copy.deepcopy(ann)}, "spec": copy.deepcopy(spec)}}, "status": ready | {"url": canonical, "traffic": [{"revisionName": revision, "percent": 100}], "latestCreatedRevisionName": revision, "latestReadyRevisionName": revision}}
@@ -400,7 +400,7 @@ def test_print_only_plan_derives_both_services_and_verification(config, release,
         assert "--no-traffic" in cmd and "--timeout" in cmd
         assert "--set-env-vars" not in cmd and "--set-secrets" not in cmd and "--allow-unauthenticated" not in cmd
         assert release["revisions"][role] + "=100" in shlex.split(row["promote_after_review_command"])
-        assert config["shared"]["service_account"] in cmd
+        assert config["services"][role].get("service_account", config["shared"]["service_account"]) in cmd
         expected_role = config["services"][role]["env"]["SERVICE_ROLE"]
         assert "SERVICE_ROLE=" + expected_role in cmd[cmd.index("--update-env-vars")+1].split(",")
         assert verification[verification.index("--" + role + "-expected-role")+1] == expected_role
@@ -561,17 +561,32 @@ def test_wrong_secret_ref_redacted_and_api_bindings_not_added_to_ws(config, snap
     assert finding(report, "secret_reference:DATABASE_URL")
     assert finding(report, "unexpected_owned_secret_binding")
     plan = C.plan(config, release, "gcloud")
-    assert "STRIPE_SECRET_KEY" in plan["steps"][0]["stage_command"]
-    assert "STRIPE_SECRET_KEY" not in plan["steps"][1]["stage_command"]
+    steps = {step["service"]: step for step in plan["steps"]}
+    assert "STRIPE_SECRET_KEY" in steps["api"]["stage_command"]
+    assert "STRIPE_SECRET_KEY" not in steps["ws"]["stage_command"]
+
+
+def legacy_shared_configuration(config):
+    """The pre-c375 all/all release remains an explicit supported rollback input."""
+    config["shared"]["secrets"].update(DATABASE_URL="DATABASE_URL:latest", MEDIA_SIGNING_SECRET="MEDIA_SIGNING_SECRET:latest")
+    for service in config["services"].values():
+        service.pop("service_account", None)
+        service.pop("remove_secrets", None)
+        service["env"]["SERVICE_ROLE"] = "all"
+        service["env"].pop("OUTBOX_SWEEPER_ENABLED", None)
+        service.get("secrets", {}).pop("DATABASE_URL", None)
+        service.get("secrets", {}).pop("MEDIA_SIGNING_SECRET", None)
 
 
 def split_media_secret(config):
     """An explicit c375 transition, independent of the repository's live intent."""
-    config["services"]["api"]["secrets"]["MEDIA_SIGNING_SECRET"] = config["shared"]["secrets"].pop("MEDIA_SIGNING_SECRET")
+    if "MEDIA_SIGNING_SECRET" in config["shared"]["secrets"]:
+        config["services"]["api"]["secrets"]["MEDIA_SIGNING_SECRET"] = config["shared"]["secrets"].pop("MEDIA_SIGNING_SECRET")
     config["services"]["ws"]["remove_secrets"] = ["MEDIA_SIGNING_SECRET"]
 
 
 def test_declared_secret_removal_is_exact_and_preserves_other_bindings(config, release):
+    legacy_shared_configuration(config)
     default_plan = C.plan(config, release, "gcloud")
     assert all("--remove-secrets" not in shlex.split(step["stage_command"]) for step in default_plan["steps"])
     split_media_secret(config)
@@ -706,7 +721,7 @@ def test_compiled_artifact_requires_nonblank_build_identity(config, snap, releas
 
 @pytest.mark.parametrize("overrides", [("api",), ("ws",), ("api", "ws")])
 def test_service_identity_overrides_bind_plan_template_and_serving_revision(config, snap, release, overrides):
-    expected = {role: config["shared"]["service_account"] for role in ("api", "ws")}
+    expected = {role: config["services"][role].get("service_account", config["shared"]["service_account"]) for role in ("api", "ws")}
     for role in overrides:
         account = f"reviewed-{role}-runtime@chirps-prod.iam.gserviceaccount.com"
         config["services"][role]["service_account"] = account
@@ -748,7 +763,35 @@ def test_explicit_invalid_service_account_never_falls_back_or_renders(config, re
         C.plan(config, release, "gcloud")
 
 
-def test_current_identity_defaults_and_all_roles_preserved(config, snap, release):
+def test_current_intent_isolates_roles_sql_and_worker_without_changing_endpoints(config, snap, release):
+    assert config["shared"]["secrets"] == {"REDIS_URL": "REDIS_URL:latest"}
+    assert config["shared"]["service_account"] == "chirp-api-run@chirps-prod.iam.gserviceaccount.com"
+    steps = C.plan(config, release, "gcloud")["steps"]
+    assert [step["service"] for step in steps] == ["ws", "api"]
+    for step in steps:
+        role = step["service"]
+        service = config["services"][role]
+        command = shlex.split(step["stage_command"])
+        assert service["env"]["SERVICE_ROLE"] == role
+        assert service["env"]["OUTBOX_SWEEPER_ENABLED"] == ("true" if role == "api" else "false")
+        assert command[command.index("--service-account") + 1] == f"chirp-{role}-runtime@chirps-prod.iam.gserviceaccount.com"
+        secrets = dict(item.split("=", 1) for item in command[command.index("--update-secrets") + 1].split(","))
+        assert secrets["DATABASE_URL"] == role.upper() + "_DATABASE_URL:1"
+        assert secrets["REDIS_URL"] == "REDIS_URL:latest"
+        assert "--no-traffic" in command and "--source" not in command
+        if role == "ws":
+            assert set(secrets) == {"DATABASE_URL", "REDIS_URL"}
+            assert command[command.index("--remove-secrets") + 1] == "MEDIA_SIGNING_SECRET"
+        else:
+            assert secrets["MEDIA_SIGNING_SECRET"] == "MEDIA_SIGNING_SECRET:latest"
+            assert "--remove-secrets" not in command
+    assert C.client_repository(config)
+    assert run_compare(config, snap, release)["verdict"] == "CONFIG_MATCH"
+
+
+def test_legacy_identity_defaults_and_all_roles_preserved(config, release):
+    legacy_shared_configuration(config)
+    snap = fixture(config, release)
     assert all("service_account" not in row for row in config["services"].values())
     assert all(row["env"]["SERVICE_ROLE"] == "all" for row in config["services"].values())
     before = C.plan(config, release, "gcloud")
