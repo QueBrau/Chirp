@@ -120,7 +120,9 @@ function AuthModeSwitch({
             onPress={() => onSelect(option.key)}
             style={({ pressed }) => ({
               flex: 1,
+              minHeight: 44,
               alignItems: "center",
+              justifyContent: "center",
               paddingVertical: spacing.sm,
               borderRadius: radii.pill,
               backgroundColor: active ? activeFill : palette.surfaceAlt,
