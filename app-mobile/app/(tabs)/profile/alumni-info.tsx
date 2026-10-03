@@ -33,8 +33,8 @@
  * failure gets an error state with a retry and no editable fields.
  */
 
-import { useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { TextInput, View } from "react-native";
 
 import {
@@ -134,6 +134,14 @@ function linkedinProblem(raw: string): string | null {
 export default function AlumniInfoScreen() {
   const router = useRouter();
   const palette = useTheme();
+  const activeFocus = useRef<object | null>(null);
+
+  // A save may finish after Back, a tab change, or a later visit to this editor.
+  // Only the focus that submitted it owns the resulting navigation.
+  useFocusEffect(useCallback(() => {
+    activeFocus.current = {};
+    return () => { activeFocus.current = null; };
+  }, []));
 
   const [form, setForm] = useState<AlumniForm>(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
@@ -179,6 +187,8 @@ export default function AlumniInfoScreen() {
   };
 
   const save = async () => {
+    const submittingFocus = activeFocus.current;
+    if (saving || submittingFocus === null) return;
     const problem = gradYearProblem(form.gradYear, thisYear) ?? linkedinProblem(form.linkedinUrl);
     if (problem !== null) {
       setError(problem);
@@ -201,7 +211,7 @@ export default function AlumniInfoScreen() {
       });
       // The profile screen refetches on focus (c423), so going back is enough
       // to show the saved values — no param passing or shared store needed.
-      router.back();
+      if (activeFocus.current === submittingFocus) router.back();
     } catch (err) {
       // `form` is deliberately untouched: a failed save must leave every
       // keystroke where the user left it, not hand back a cleared form.
@@ -254,6 +264,7 @@ export default function AlumniInfoScreen() {
           <View style={{ gap: spacing.md }}>
             <AppText variant="headline">Company</AppText>
             <TextInput
+              editable={!saving}
               value={form.company}
               onChangeText={(value) => update("company", value)}
               placeholder="e.g. Red Hat"
@@ -264,6 +275,7 @@ export default function AlumniInfoScreen() {
 
             <AppText variant="headline">Role</AppText>
             <TextInput
+              editable={!saving}
               value={form.title}
               onChangeText={(value) => update("title", value)}
               placeholder="e.g. Software Engineer"
@@ -274,6 +286,7 @@ export default function AlumniInfoScreen() {
 
             <AppText variant="headline">Class year</AppText>
             <TextInput
+              editable={!saving}
               value={form.gradYear}
               onChangeText={(value) => update("gradYear", value)}
               placeholder="e.g. 2021"
@@ -285,6 +298,7 @@ export default function AlumniInfoScreen() {
 
             <AppText variant="headline">Industry</AppText>
             <TextInput
+              editable={!saving}
               value={form.industry}
               onChangeText={(value) => update("industry", value)}
               placeholder="e.g. Software"
@@ -295,6 +309,7 @@ export default function AlumniInfoScreen() {
 
             <AppText variant="headline">Location</AppText>
             <TextInput
+              editable={!saving}
               value={form.location}
               onChangeText={(value) => update("location", value)}
               placeholder="e.g. Raleigh, NC"
@@ -305,6 +320,7 @@ export default function AlumniInfoScreen() {
 
             <AppText variant="headline">LinkedIn</AppText>
             <TextInput
+              editable={!saving}
               value={form.linkedinUrl}
               onChangeText={(value) => update("linkedinUrl", value)}
               placeholder="https://linkedin.com/in/you"
@@ -337,7 +353,7 @@ export default function AlumniInfoScreen() {
                 {form.openToMentoring ? "Yes" : "No"}
               </AppText>
             }
-            onPress={() => update("openToMentoring", !form.openToMentoring)}
+            onPress={saving ? undefined : () => update("openToMentoring", !form.openToMentoring)}
             divider={false}
           />
         </Card>
