@@ -84,28 +84,36 @@ async def test_a_slow_finalize_does_not_stall_an_unrelated_request(
 ) -> None:
     """The claim c223 actually makes, asserted rather than asserted-about.
 
-    One post create is held inside a 0.3s finalize. A completely unrelated feed read is
-    issued only AFTER that finalize is confirmed in flight, and must come back before it
-    finishes. Called inline the copy owns the single event loop for its whole duration,
-    so the reader could not even be dispatched, let alone answered, until the copy was
-    done - it would land after finalize_end rather than between the two marks.
+    One post create is held inside a worker-thread finalizer. A completely unrelated feed
+    read is issued only AFTER that finalizer is confirmed in flight, and must come back
+    before the finalizer is released. Called inline, the finalizer is rejected immediately
+    by its worker-versus-event-loop assertion instead of waiting for the reader.
 
-    Asserts the reader's completion against the finalize call's OWN start/end marks, not
-    against wall-clock elapsed time: each test spins up a fresh app and truncates the
-    database, and that cold start dwarfs a 0.3s sleep (the same flakiness c211's overlap
-    test called out). Comparing the two against each other is immune to it.
+    The reader's completion is asserted against the finalize call's OWN start/end marks,
+    not against wall-clock elapsed time. The worker and pending request task are always
+    released and drained on success or failure, so a broken implementation cannot strand
+    a thread.
     """
     _configure_bucket(monkeypatch)
     setup = await make_chapter_with("member")
     in_finalize = threading.Event()
+    release_finalize = threading.Event()
+    finalize_finished = threading.Event()
+    loop_thread_id = threading.get_ident()
     marks: dict[str, float] = {}
 
     def _slow_finalize(user_id: str, tmp_object_name: str, **kwargs) -> str:
         marks["finalize_start"] = time.monotonic()
         in_finalize.set()
-        time.sleep(0.3)
-        marks["finalize_end"] = time.monotonic()
-        return _permanent_url(user_id, "abc123.jpg")
+        try:
+            if threading.get_ident() == loop_thread_id:
+                raise AssertionError("finalizer ran on the event-loop thread")
+            if not release_finalize.wait(timeout=5):
+                raise AssertionError("finalizer release deadline expired")
+            marks["finalize_end"] = time.monotonic()
+            return _permanent_url(user_id, "abc123.jpg")
+        finally:
+            finalize_finished.set()
 
     monkeypatch.setattr(feed, "finalize_media_object", _slow_finalize)
 
@@ -121,21 +129,42 @@ async def test_a_slow_finalize_does_not_stall_an_unrelated_request(
         )
 
     async def _read_the_feed_while_that_is_in_flight():
-        # Polled with asyncio.sleep rather than Event.wait, deliberately: a blocking wait
-        # here would stall the loop itself and the test would prove nothing about the
-        # route. This yields, so it only ever gets to run if the loop is actually free -
-        # which is the property under test.
-        while not in_finalize.is_set():
-            await asyncio.sleep(0.005)
-        response = await client.get(
-            f"/chapters/{setup.chapter_id}/posts", headers=setup.member.headers
-        )
-        marks["read_done"] = time.monotonic()
-        return response
+        # Event.wait runs in a worker so the test never blocks the event loop while it
+        # waits for the finalizer.
+        if not await asyncio.to_thread(in_finalize.wait, 5):
+            raise AssertionError("finalizer did not start before reader deadline")
+        try:
+            response = await client.get(
+                f"/chapters/{setup.chapter_id}/posts", headers=setup.member.headers
+            )
+            marks["read_done"] = time.monotonic()
+            return response
+        finally:
+            release_finalize.set()
 
-    created, read = await asyncio.gather(
-        _create_the_photo_post(), _read_the_feed_while_that_is_in_flight()
-    )
+    create_task = asyncio.create_task(_create_the_photo_post())
+    read_task = asyncio.create_task(_read_the_feed_while_that_is_in_flight())
+    tasks = (create_task, read_task)
+    try:
+        created, read = await asyncio.wait_for(
+            asyncio.gather(*tasks),
+            timeout=10,
+        )
+    finally:
+        finalizer_entered = in_finalize.is_set()
+        release_finalize.set()
+        if not finalizer_entered:
+            # Wake a reader that is still waiting for the create request to enter the
+            # finalizer, without later mistaking this synthetic signal for worker entry.
+            in_finalize.set()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if finalizer_entered:
+            assert await asyncio.to_thread(finalize_finished.wait, 5), (
+                "finalizer worker did not drain before test cleanup"
+            )
 
     assert created.status_code == 201, created.text
     assert read.status_code == 200, read.text
