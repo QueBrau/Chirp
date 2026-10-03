@@ -175,9 +175,26 @@ Several Claude sessions work this repo simultaneously. The full rules live in
 - **Run `scripts/board-check` before committing `board.html`, and
   `scripts/board-check --pushed` after pushing.** Four board changes vanished silently in
   one day and a JSON-parse check caught none of them.
-- Edit the embedded `<script id="board-data">` JSON by parsing and re-serializing it
-  (`json.dumps(..., indent=2, ensure_ascii=True)` round-trips byte-identically, so the
-  diff stays minimal). Never regex or find/replace the HTML.
+- Edit the embedded `<script id="board-data">` JSON by parsing and re-serializing it, never
+  by regex or find/replace on the HTML. The round-trip is
+  **`json.dumps(..., indent=2, ensure_ascii=False)`**, written back with a leading and a
+  trailing newline inside the script tag.
+  **`ensure_ascii=True` is wrong and this file said so until c432.** The board is full of
+  em-dashes and curly quotes, so `True` re-escapes every one of them: a one-card edit came
+  back as a 1,478-character whole-file diff on 1.5MB, which is the exact shape that reverts
+  a peer's card with no conflict. Do not take the setting above on trust either -- assert
+  the round-trip before your first board edit of a session, and if it does not match, find
+  the setting that does:
+
+  ```python
+  import re, json
+  html = open("board.html", encoding="utf-8").read()
+  m = re.search(r'<script id="board-data"[^>]*>(.*?)</script>', html, re.S)
+  assert "\n" + json.dumps(json.loads(m.group(1)), indent=2, ensure_ascii=False) + "\n" == m.group(1)
+  ```
+
+  Then confirm `git diff --stat board.html` is single-digit lines before committing. A large
+  diff means the serialization is wrong, not that you edited a lot.
 
 ## Environment
 
