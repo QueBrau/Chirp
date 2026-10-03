@@ -347,6 +347,16 @@ jobs:
         # routes - this keeps a future edit from silently dropping it again.
         run: npm run verify:c359-continuation
 
+      - name: Alumni editor stays reachable and submits the whole profile
+        working-directory: app-mobile
+        # c423. The alumni rows had no onPress and updateAlumniProfile had no caller,
+        # so the section invited an edit the app could not perform. The load-bearing
+        # half is the submit: PUT /alumni/profile replaces the whole row, so a body
+        # that omits a field ERASES it. The check derives the required field set from
+        # AlumniProfileUpdate itself, so adding a field to the API type fails here
+        # until the editor sends it too.
+        run: npm run verify:c423-alumni-editor
+
       - name: Every verifier actually runs
         working-directory: app-mobile
         # c336's own ratchet. Eight of fourteen guards here were never wired, so they

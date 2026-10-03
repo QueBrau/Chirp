@@ -425,6 +425,67 @@ def test_plan_rejects_malformed_service_environment(config, release, env):
         C.plan(config, release, "gcloud")
 
 
+@pytest.mark.parametrize("value", [
+    None,
+    "",
+    "http://chirps-prod.web.app",
+    "https://chirps-prod.web.app/return",
+    "https://chirps-prod.web.app/?next=1",
+    "https://user@chirps-prod.web.app",
+    "https://chirps-prod.web.app:443",
+    "https://chirps-prod.web.app?",
+    "https://chirps-prod.web.app#",
+    "\nhttps://chirps-prod.web.app",
+    "https://chirps-prod.web.app\n",
+    "https://chirps-prod.web.app\t",
+    "https://chirps_prod.web.app",
+    "https://-chirps-prod.web.app",
+    "https://chirps-prod..web.app",
+])
+def test_api_public_base_url_requires_canonical_https_origin(config, value):
+    config["services"]["api"]["env"]["APP_PUBLIC_BASE_URL"] = value
+    with pytest.raises(C.ConfigError, match="^invalid_public_base_url$"):
+        C.validate(config)
+
+
+def test_api_public_base_url_is_required(config):
+    config["services"]["api"]["env"].pop("APP_PUBLIC_BASE_URL")
+    with pytest.raises(C.ConfigError, match="^invalid_public_base_url$"):
+        C.validate(config)
+
+
+@pytest.mark.parametrize("owner", ["ws", "shared"])
+def test_api_public_base_url_cannot_be_owned_by_ws_or_shared(config, owner):
+    if owner == "ws":
+        config["services"]["ws"]["env"]["APP_PUBLIC_BASE_URL"] = "https://chirps-prod.web.app"
+    else:
+        config["shared"]["env"]["APP_PUBLIC_BASE_URL"] = "https://chirps-prod.web.app"
+    with pytest.raises(C.ConfigError, match="^invalid_public_base_url$"):
+        C.validate(config)
+
+
+@pytest.mark.parametrize("observed_scope", ["template", "revision"])
+@pytest.mark.parametrize("value", [None, "https://other.example"])
+def test_api_public_base_url_missing_or_mismatched_is_drift(config, snap, release, observed_scope, value):
+    spec = (snap["services"]["api"]["spec"]["template"]["spec"]
+            if observed_scope == "template"
+            else snap["revisions"][release["revisions"]["api"]]["spec"])
+    env = spec["containers"][0]["env"]
+    if value is None:
+        spec["containers"][0]["env"] = [row for row in env if row["name"] != "APP_PUBLIC_BASE_URL"]
+    else:
+        next(row for row in env if row["name"] == "APP_PUBLIC_BASE_URL")["value"] = value
+    report = run_compare(config, snap, release)
+    assert report["verdict"] == "DRIFT" and finding(report, "APP_PUBLIC_BASE_URL")
+
+
+def test_api_public_base_url_is_in_generated_api_command(config, release):
+    steps = {step["service"]: shlex.split(step["stage_command"]) for step in C.plan(config, release, "gcloud")["steps"]}
+    api_env = steps["api"][steps["api"].index("--update-env-vars") + 1].split(",")
+    assert "APP_PUBLIC_BASE_URL=https://chirps-prod.web.app" in api_env
+    assert all("APP_PUBLIC_BASE_URL=" not in value for value in steps["ws"])
+
+
 def test_plan_rejects_mutable_image_and_unsafe_scale(config, release):
     release["image"] = config["image_repository"] + ":latest"
     with pytest.raises(C.ConfigError): C.plan(config, release, "gcloud")

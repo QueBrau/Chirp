@@ -13,13 +13,14 @@ import shlex
 import subprocess
 import sys
 from typing import Any
+from urllib.parse import urlsplit
 
 from deploy_verify import ready_and_observed
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "infra/deployment.json"
 MAX_BYTES = 1024 * 1024
-ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE", "OUTBOX_SWEEPER_ENABLED")
+ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE", "OUTBOX_SWEEPER_ENABLED", "APP_PUBLIC_BASE_URL")
 POOL_NAMES = {"DB_POOL_SIZE": "size", "DB_MAX_OVERFLOW": "max_overflow"}
 JOB_POOL_EVIDENCE_SCOPE = "operator_inspected_immutable_image_pool"
 JOB_POOL_EVIDENCE_MAX_AGE_HOURS = 24
@@ -90,6 +91,25 @@ def public_origin(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"https://[a-z0-9-]+(?:\.[a-z0-9-]+)*\.run\.app", value) is not None
 
 
+def public_https_origin(value: Any) -> bool:
+    """Accept only a canonical HTTPS DNS origin with no URL decorations."""
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        if (parsed.scheme != "https" or not hostname or parsed.netloc != hostname
+                or parsed.path or parsed.query or parsed.fragment
+                or parsed.username is not None or parsed.password is not None):
+            return False
+        parsed.port  # Force malformed-port rejection without accepting ports.
+    except ValueError:
+        return False
+    label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    return (len(hostname) <= 253 and value == "https://" + hostname
+            and re.fullmatch(label + r"(?:\." + label + r")+", hostname) is not None)
+
+
 def defaults(root: Path = ROOT) -> dict[str, int]:
     """Read actual checked-out settings, without importing app/secrets/dependencies."""
     tree = ast.parse((root / "backend/app/config.py").read_text())
@@ -126,10 +146,16 @@ def validate(config: dict) -> None:
         for role, service in config["services"].items():
             if not identifier(service["name"]) or not public_origin(service["client_origin"]):
                 raise ConfigError("invalid_service")
+            if not isinstance(service.get("env"), dict):
+                raise ConfigError("invalid_service_role")
+            if role == "api" and not public_https_origin(service["env"].get("APP_PUBLIC_BASE_URL")):
+                raise ConfigError("invalid_public_base_url")
+            if role != "api" and "APP_PUBLIC_BASE_URL" in service["env"]:
+                raise ConfigError("invalid_public_base_url")
             account = service_account(config, role)
             if not isinstance(account, str) or not re.fullmatch(r"[A-Za-z0-9_@.:-]+", account):
                 raise ConfigError("invalid_service_account")
-            if not isinstance(service["env"], dict) or service["env"].get("SERVICE_ROLE") not in ("all", role):
+            if service["env"].get("SERVICE_ROLE") not in ("all", role):
                 raise ConfigError("invalid_service_role")
             for key in ("concurrency", "revision_min_instances", "revision_max_instances", "service_max_instances", "workers"):
                 positive(service[key], 0 if key == "revision_min_instances" else 1)
@@ -142,11 +168,17 @@ def validate(config: dict) -> None:
             for key in ("DB_POOL_SIZE", "DB_MAX_OVERFLOW"):
                 positive(int(service["env"][key]), 0 if key.endswith("OVERFLOW") else 1)
         shared = config["shared"]
+        if "APP_PUBLIC_BASE_URL" in shared["env"]:
+            raise ConfigError("invalid_public_base_url")
         if set(shared["env"]) - set(ENV_NAMES) or any(set(s["env"]) - set(ENV_NAMES) for s in config["services"].values()):
             raise ConfigError("unapproved_environment_key")
-        for value in list(shared["env"].values()) + [x for s in config["services"].values() for x in s["env"].values()]:
-            if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+", value):
-                raise ConfigError("invalid_environment_value")
+        for env in [shared["env"], *[s["env"] for s in config["services"].values()]]:
+            for key, value in env.items():
+                if key == "APP_PUBLIC_BASE_URL":
+                    if not public_https_origin(value):
+                        raise ConfigError("invalid_public_base_url")
+                elif not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+", value):
+                    raise ConfigError("invalid_environment_value")
         for env in [shared["env"], *[s["env"] for s in config["services"].values()]]:
             if "OUTBOX_SWEEPER_ENABLED" in env and env["OUTBOX_SWEEPER_ENABLED"] not in ("true", "false"):
                 raise ConfigError("invalid_outbox_sweeper_setting")

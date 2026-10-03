@@ -90,6 +90,19 @@ function appleErrorMessage(error: unknown): string {
       return "This account has been disabled. Contact support if you think that's a mistake.";
     case "auth/too-many-requests":
       return "Too many attempts. Wait a few minutes and try again.";
+    case "auth/invalid-credential":
+      // Firebase rejected the Apple identity token. The likely cause (board
+      // c425) is project configuration - the token's audience is the bundle id
+      // app.chirps.mobile, which the Firebase project must list as a registered
+      // iOS app - so the copy does not ask the user to retry something that
+      // cannot succeed. The JS SDK reports Identity Toolkit's INVALID_IDP_RESPONSE
+      // (including an audience mismatch) as this code.
+      return "Apple sign-in couldn't be verified. Use Email or Google for now.";
+    case "auth/account-exists-with-different-credential":
+      // The Apple ID's email already belongs to an account created with another
+      // provider, and Firebase is set to one account per email. Not an
+      // enumeration leak: only the owner of that Apple ID can reach this branch.
+      return "That Apple ID's email already has a Chirp account. Sign in with Email or Google instead.";
     default:
       return "Sign in with Apple didn't work. Try again or use Email.";
   }
@@ -138,7 +151,15 @@ export async function signInWithApple(): Promise<AppleSignInOutcome> {
       if (readErrorCode(error) === "ERR_REQUEST_CANCELED") {
         return { status: "cancelled" };
       }
-      return { status: "error", message: appleErrorMessage(error) };
+      // These are the native sheet's own failures (ERR_REQUEST_FAILED /
+      // ERR_REQUEST_UNKNOWN and friends), never Firebase's, so they get copy
+      // distinct from the Firebase-side failures below (c425) - a device report
+      // can then tell the two apart.
+      return {
+        status: "error",
+        message:
+          "Apple couldn't finish signing you in. Check that you're signed in to your Apple ID in Settings, then try again.",
+      };
     }
 
     if (!appleCredential.identityToken) {

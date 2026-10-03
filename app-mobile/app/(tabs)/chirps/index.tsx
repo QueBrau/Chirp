@@ -437,7 +437,11 @@ export default function ChirpScreen() {
                       borderRadius: radii.card,
                       borderWidth: 1,
                       borderColor: palette.border,
-                      padding: isTop ? spacing.xl : spacing.lg,
+                      // Every card gets the same padding (c424). The top chirp is
+                      // marked by its gold score alone (DESIGN section 10 rule 6);
+                      // padding it larger meant any vote that changed which chirp
+                      // is top resized two cards under the user's thumb.
+                      padding: spacing.lg,
                       ...cardShadow(palette),
                     }}
                   >

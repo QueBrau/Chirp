@@ -276,11 +276,22 @@ Money always tabular-nums. Screen titles pair with a `caption` subtitle in inkSe
   persist in local state (mock persistence for now; real per-user prefs later).
   No drag-drop dependency — arrows only.
 - **Sign-in / sign-up**: ONE page, not two stages (c385, braul, Sep 7, from a
-  reference shot). Oversized `display` title + `caption` subtitle, then the email
-  form, then the CTA, then the social row, then the footer mode toggle. The title
-  IS the brand moment now: the accentGradient HeroCard wordmark it replaced was a
-  block of chrome above a screen whose actual job — the form — was hidden behind a
-  "Continue with Email" tap.
+  reference shot). The segmented mode switch (c426), then the oversized `display`
+  title + `caption` subtitle, then the email form, then the CTA, then the social
+  row; there is no footer mode toggle. The title IS the brand moment now: the
+  accentGradient HeroCard wordmark it replaced was a block of chrome above a
+  screen whose actual job — the form — was hidden behind a "Continue with Email"
+  tap.
+  - **Mode switch** — a pill segmented control, "Sign in | Sign up", at the top of
+    the page (c426, braul, Oct 2), the same control as the Orgs tab's
+    Feed/Events/Tools (§8.7). It replaced the footer "Don't have an account? Sign
+    up" link: with only a caption-sized link at the bottom and one extra field, the
+    two modes were nearly impossible to tell apart. Sign-up's title is "Join Chirp"
+    so the two titles no longer both open with "Welcome". It is disabled while a
+    credential is in flight, and it is still the only way to leave a pending wait.
+    The active segment fills with `canvasActionColor` (accent where it reads on the
+    canvas, campus secondary where it does not), not raw accent, because it sits on
+    the bare canvas.
   - Fields are UnderlineFields (§5): E-mail (decorative `at-sign`), Password (eye
     toggle), and on sign-up only, Repeat password (eye toggle, real client-side
     match check before Firebase is called).

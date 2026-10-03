@@ -9,7 +9,7 @@
  */
 
 import { Feather } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useState, type ComponentProps } from "react";
 import { Pressable, View } from "react-native";
 
@@ -212,10 +212,18 @@ export default function ProfileScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    if (accountType !== "alumni") return;
-    void loadAlumniProfile();
-  }, [accountType, loadAlumniProfile]);
+  /**
+   * c423: refetched on FOCUS, not only on mount. The alumni editor below is a
+   * pushed screen that saves and pops straight back here, and this screen does
+   * not remount on that pop — a mount-only effect left the rows showing the
+   * pre-edit values until a cold start, which reads as a save that did nothing.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      if (accountType !== "alumni") return;
+      void loadAlumniProfile();
+    }, [accountType, loadAlumniProfile]),
+  );
 
   /**
    * c321. The catch was `() => setMemberships([])`, and THIS ONE IS DIFFERENT FROM ITS
@@ -600,9 +608,21 @@ export default function ProfileScreen() {
                   />
                 ) : (
                 <View>
+                  {/* c423: these three rows invited an edit the app could not
+                      perform — no onPress anywhere, and updateAlumniProfile had
+                      no caller in the codebase. They all open the one editor
+                      rather than deep-linking a single field, because
+                      PUT /alumni/profile replaces the whole row (see
+                      profile/alumni-info.tsx). */}
                   <ListRow
                     title={alumniProfile?.company ?? "Add your company"}
                     subtitle={alumniProfile?.title ?? undefined}
+                    accessibilityLabel={
+                      alumniProfile?.company === undefined || alumniProfile?.company === null
+                        ? "Add your company"
+                        : `Company, ${alumniProfile.company}. Edit alumni info`
+                    }
+                    onPress={() => router.push("/profile/alumni-info")}
                   />
                   <ListRow
                     title={
@@ -611,10 +631,18 @@ export default function ProfileScreen() {
                         : "Add your class year"
                     }
                     subtitle={alumniProfile?.industry ?? undefined}
+                    accessibilityLabel={
+                      alumniProfile?.grad_year
+                        ? `Class of ${alumniProfile.grad_year}. Edit alumni info`
+                        : "Add your class year"
+                    }
+                    onPress={() => router.push("/profile/alumni-info")}
                   />
                   <ListRow
                     title="Mentoring"
                     subtitle={alumniProfile?.open_to_mentoring ? "Open to mentoring" : "Not right now"}
+                    accessibilityLabel={`Mentoring, ${alumniProfile?.open_to_mentoring ? "open to mentoring" : "not right now"}. Edit alumni info`}
+                    onPress={() => router.push("/profile/alumni-info")}
                     divider={false}
                   />
                 </View>

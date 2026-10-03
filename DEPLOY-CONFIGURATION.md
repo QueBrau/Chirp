@@ -82,6 +82,12 @@ outbox rows even at zero HTTP traffic. Review concurrent worker behavior, pool
 headroom and rollback before staging; `--no-traffic` does not make startup
 read-only. This setting changes no database principal or broker ACL.
 
+The API also owns the required `APP_PUBLIC_BASE_URL` environment setting. It is
+the canonical HTTPS origin used for public callback URLs, so it has no path,
+query, fragment, userinfo or port. The checker compares that value on the
+intended API configuration and includes it in generated API deploy commands;
+the WebSocket service must not declare it.
+
 The intended mode is automatic scaling. The checker projects and validates both
 `scalingMode` and `manualInstanceCount`, and commands include `--scaling auto`.
 Manual scaling bypasses revision min/max limits and invalidates this capacity
