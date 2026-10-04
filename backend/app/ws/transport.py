@@ -15,13 +15,24 @@ base class already uses one method away for a different malformed-input case
 (send_receive_event_to_app's UnicodeDecodeError branch: conn.send_close(1007)
 then handle_parser_exception()).
 
-No __init__ override: uvicorn's existing call sites construct this class the
-same way they construct the stock one, so it is a drop-in `--ws` value.
+The small `__init__` override only initializes diagnostic bookkeeping; uvicorn's
+existing call sites still construct this class the same way they construct the
+stock one, so it remains a drop-in `--ws` value.
 """
 from __future__ import annotations
 
+import json
+import logging
+import re
+
+from app.config import get_settings
 from uvicorn.protocols.websockets.websockets_sansio_impl import WebSocketsSansIOProtocol
 from websockets.frames import Frame
+
+logger = logging.getLogger(__name__)
+_PROBE_HEADER = b"x-chirp-close-probe"
+_PROBE_VALUE = re.compile(r"[0-9a-f]{32}\Z")
+_DIAGNOSTIC_EVENT = "ws_close_diagnostic"
 
 # Order of magnitude of app/ws/gateway.py's outbound WS_QUEUE_MAX_FRAMES=32 (a
 # plain module constant there too, not a Settings field -- same convention).
@@ -39,6 +50,66 @@ class BoundedFragmentWebSocketsProtocol(WebSocketsSansIOProtocol):
     past WS_MAX_CONTINUATION_FRAMES entries -- the list stays bounded, not just
     the eventual close.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._close_probe: str | None = None
+        self._close_probe_events: set[str] = set()
+
+    def handle_connect(self, event) -> None:
+        super().handle_connect(event)
+        self._configure_close_probe()
+
+    def _configure_close_probe(self) -> None:
+        try:
+            if not get_settings().ws_close_diagnostics:
+                return
+            values = [
+                value for key, value in self.scope.get("headers", [])
+                if key.lower() == _PROBE_HEADER
+            ]
+            if len(values) != 1:
+                return
+            probe = values[0].decode("ascii")
+            if _PROBE_VALUE.fullmatch(probe):
+                self._close_probe = probe
+        except Exception:
+            # Diagnostics are strictly observational and cannot affect the
+            # handshake or subsequent protocol state.
+            self._close_probe = None
+
+    def _close_code(self, name: str):
+        close = getattr(self.conn, name, None)
+        return getattr(close, "code", None)
+
+    def _emit_close_probe(self, event: str) -> None:
+        if self._close_probe is None or event in self._close_probe_events:
+            return
+        self._close_probe_events.add(event)
+        try:
+            state = getattr(getattr(self.conn, "state", None), "name", None)
+            payload = {
+                "event": _DIAGNOSTIC_EVENT,
+                "phase": event,
+                "probehex": self._close_probe,
+                "received_close_code": self._close_code("close_rcvd"),
+                "sent_close_code": self._close_code("close_sent"),
+                "transport_closing": bool(self.transport.is_closing()),
+                "state": state,
+            }
+            logger.info(json.dumps(payload, separators=(",", ":")))
+        except Exception:
+            # A logging handler, formatter, or state inspection must never
+            # change the protocol's close behavior.
+            return
+
+    def handle_close(self, event) -> None:
+        super().handle_close(event)
+        self._emit_close_probe("peer_close")
+
+    def connection_lost(self, exc) -> None:
+        super().connection_lost(exc)
+        self._emit_close_probe("transport_lost")
 
     def handle_cont(self, event: Frame) -> None:
         # Once the bound trips once, handle_parser_exception() has already

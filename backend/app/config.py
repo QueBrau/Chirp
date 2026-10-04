@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # dispatch and DEPLOY.md's "Service roles" section for the operational
     # picture, including why this PR does not flip any live service's value.
     service_role: Literal["all", "api", "ws"] = "all"
+    # Diagnostic-only close tracing is opt-in and additionally requires a
+    # per-connection probe header; it must never become ambient production log
+    # traffic.
+    ws_close_diagnostics: bool = False
     firebase_project_id: str | None = None
     stripe_secret_key: str | None = None
     stripe_publishable_key: str | None = None
