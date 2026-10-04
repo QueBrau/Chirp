@@ -192,6 +192,19 @@ Teardown is shielded from AnyIO's repeated outer cancellation while its own
 operation deadlines remain active. Both direct task cancellation and AnyIO
 level-cancellation regressions assert worker/subscription cleanup.
 
+### Diagnostic close canary
+
+The shipped transport has a diagnostic-only close canary for investigating a
+live abnormal close. It is disabled by default (`WS_CLOSE_DIAGNOSTICS=false`)
+and also requires exactly one `X-Chirp-Close-Probe` header whose value is 32
+lowercase hexadecimal characters. A valid probe emits at most two INFO JSON
+records per connection (`peer_close` and `transport_lost`) containing only
+numeric close codes, transport state, and the probe value; it never records
+credentials, headers, payloads, close reasons, exception text, or user IDs.
+Enable it only for a short, explicitly identified live canary after the
+diagnostic request is approved. This is an observation path for c433 evidence,
+not a runtime close fix or an uptime probe.
+
 ## Reproducing the local measurements
 
 The Redis 7.2.15 source archive came from
