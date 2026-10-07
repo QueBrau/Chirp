@@ -6,12 +6,14 @@ with.
 Encodings and safety numbers use only the standard library. Ed25519 verification (and
 re-signing from the seeds, which is deterministic per RFC 8032) needs the `cryptography`
 package, which the backend already depends on; without it those checks are skipped and
-the script says so.
+the script says so. Set REQUIRE_CRYPTOGRAPHY=1 (CI does) to make a missing package a
+failure instead of a skip.
 
     backend/.venv/bin/python app-mobile/modules/chirp-crypto/rust/test-vectors/verify_vectors.py
 """
 import hashlib
 import json
+import os
 import pathlib
 import struct
 import sys
@@ -23,6 +25,8 @@ try:
         Ed25519PublicKey,
     )
 except ImportError:  # pragma: no cover
+    if os.environ.get("REQUIRE_CRYPTOGRAPHY"):
+        sys.exit("FAIL  REQUIRE_CRYPTOGRAPHY is set but the `cryptography` package is missing")
     Ed25519PrivateKey = Ed25519PublicKey = InvalidSignature = None
 
 HERE = pathlib.Path(__file__).resolve().parent

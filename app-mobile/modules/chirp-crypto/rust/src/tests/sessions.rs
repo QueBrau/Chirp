@@ -22,8 +22,8 @@ fn several_prekey_messages_before_a_reply_share_one_session() {
     assert_eq!(bob.receive(&alice, &l2[0], 2, 2).unwrap().body, "second");
     // Only one one-time key was ever consumed.
     assert_eq!(bob.core.key_status().unwrap().published_one_time, 9);
-    // Replays of each are still rejected.
-    assert_eq!(bob.receive(&alice, &l2[0], 2, 2).err(), Some(Error::Replay));
+    // Replays of each (under another server id) are still rejected.
+    assert_eq!(bob.receive(&alice, &l2[0], 2, 8).err(), Some(Error::Replay));
 
     let r = bob.send(&mut [&mut alice], 4, "reply").unwrap();
     assert_eq!(r[0].olm_type, 1);

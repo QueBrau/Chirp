@@ -53,7 +53,7 @@ fn crash_decrypt(point: FailPoint, restart: bool, normal: bool) {
         );
     } else {
         // Fully new: the message is committed and the key consumed, but the caller never
-        // saw the plaintext, so a retry is a replay and the app reads the stored row.
+        // saw the plaintext. The retry is idempotent: it returns the stored message.
         let history = bob.core.list_messages(CONV, None, 50).unwrap();
         assert_eq!(history.len(), messages_before + 1);
         assert_eq!(history[0].body, "crash me");
@@ -63,9 +63,20 @@ fn crash_decrypt(point: FailPoint, restart: bool, normal: bool) {
                 status_before.published_one_time - 1
             );
         }
+        let generation = bob.core.store_generation().unwrap();
+        let retried = bob.receive(&alice, &legs[0], cm, cm).unwrap();
         assert_eq!(
-            bob.receive(&alice, &legs[0], cm, cm).err(),
-            Some(Error::Replay)
+            retried, history[0],
+            "the retry must return the identical message"
+        );
+        assert_eq!(
+            bob.core.store_generation().unwrap(),
+            generation,
+            "the idempotent path must not write anything"
+        );
+        assert_eq!(
+            bob.core.list_messages(CONV, None, 50).unwrap().len(),
+            messages_before + 1
         );
         // The committed ratchet is coherent: the next message decrypts.
         let next_legs = alice.send(&mut [&mut bob], cm + 1, "after").unwrap();

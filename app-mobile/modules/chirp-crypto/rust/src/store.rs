@@ -58,9 +58,11 @@ pub(crate) const T_OUTBOX: &str = "outbox";
 pub(crate) const T_MESSAGE: &str = "msg";
 pub(crate) const T_REPLAY_CIPHER: &str = "rplc";
 pub(crate) const T_REPLAY_MESSAGE: &str = "rplm";
+/// Server message id -> (ciphertext hash, local seq): makes a committed retry idempotent.
+pub(crate) const T_REPLAY_ID: &str = "rplid";
 
 const MUTABLE: [&str; 6] = [T_ACCOUNT, T_DEVICE, T_KEYS, T_SESSION, T_TRUST, T_OUTBOX];
-const APPEND_ONLY: [&str; 3] = [T_MESSAGE, T_REPLAY_CIPHER, T_REPLAY_MESSAGE];
+const APPEND_ONLY: [&str; 4] = [T_MESSAGE, T_REPLAY_CIPHER, T_REPLAY_MESSAGE, T_REPLAY_ID];
 
 const FORMAT_VERSION: i64 = 1;
 const HEADER_RID: &[u8] = b"\x00";

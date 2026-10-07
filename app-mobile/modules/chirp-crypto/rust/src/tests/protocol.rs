@@ -485,18 +485,15 @@ fn replay_is_rejected_by_ciphertext_and_by_logical_message_id() {
     let mut bob = Dev::new(0xb1, 2);
     let legs = alice.send(&mut [&mut bob], 1, "once").unwrap();
     assert_eq!(bob.receive(&alice, &legs[0], 1, 1).unwrap().body, "once");
-    // Same leg again, same server id and a different server id.
-    assert_eq!(
-        bob.receive(&alice, &legs[0], 1, 1).err(),
-        Some(Error::Replay)
-    );
+    // The same leg under a DIFFERENT server id is a replay. (Under the SAME server id it
+    // is an idempotent retry: see `idempotent.rs`.)
     assert_eq!(
         bob.receive(&alice, &legs[0], 1, 9).err(),
         Some(Error::Replay)
     );
     bob.reopen();
     assert_eq!(
-        bob.receive(&alice, &legs[0], 1, 1).err(),
+        bob.receive(&alice, &legs[0], 1, 9).err(),
         Some(Error::Replay)
     );
 
@@ -545,8 +542,10 @@ fn fallback_key_prekey_replay_is_rejected() {
         bob.receive(&carol, &legs[0], 2, 2).unwrap().body,
         "via fallback"
     );
+    // Under another server id the same prekey message is a replay, even though Olm itself
+    // would happily start a new session from it.
     assert_eq!(
-        bob.receive(&carol, &legs[0], 2, 2).err(),
+        bob.receive(&carol, &legs[0], 2, 7).err(),
         Some(Error::Replay)
     );
     bob.reopen();

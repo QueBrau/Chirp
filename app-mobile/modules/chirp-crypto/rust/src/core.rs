@@ -33,12 +33,12 @@ use crate::encoding::{
 use crate::envelope::{self, Envelope, MAX_LEG_B64_LEN};
 use crate::error::{Error, Result};
 use crate::records::{
-    DeviceRecord, KeyEntry, KeyMap, KeyState, MessageRecord, OutboxRecord, SessionMeta,
-    SessionRecord, StoredLeg, TrustRecord, from_json, to_json,
+    DeviceRecord, KeyEntry, KeyMap, KeyState, MessageRecord, OutboxRecord, ReplayIdRecord,
+    SessionMeta, SessionRecord, StoredLeg, TrustRecord, from_json, to_json,
 };
 use crate::store::{
-    Store, T_ACCOUNT, T_DEVICE, T_KEYS, T_MESSAGE, T_OUTBOX, T_REPLAY_CIPHER, T_REPLAY_MESSAGE,
-    T_SESSION, T_TRUST, Tx, remove_namespace_files,
+    Store, T_ACCOUNT, T_DEVICE, T_KEYS, T_MESSAGE, T_OUTBOX, T_REPLAY_CIPHER, T_REPLAY_ID,
+    T_REPLAY_MESSAGE, T_SESSION, T_TRUST, Tx, remove_namespace_files,
 };
 use crate::trust;
 use crate::types::*;
@@ -208,7 +208,9 @@ impl Core {
         self.run(|r| r.encrypt(conversation_id, client_message_id, body, sender, recipients))
     }
 
-    /// Decrypt one leg addressed to this device. See `Ready::decrypt`.
+    /// Decrypt one leg addressed to this device. A retry of a leg that is already committed
+    /// under the same server `message_id` returns the stored message and writes nothing.
+    /// See `Ready::decrypt`.
     pub fn decrypt(
         &self,
         message_id: MessageId,
@@ -972,6 +974,9 @@ impl Ready {
 
     /// Decrypt one leg that the server says is addressed to this device.
     ///
+    /// Retrying a leg that is already committed under the same server `message_id` is
+    /// idempotent: the stored message comes back and nothing is written.
+    ///
     /// Nothing is persisted until every check has passed: signatures, routing, replay,
     /// Olm decryption on a private copy of the session (and of the account for a prekey
     /// message), strict envelope parsing, and field-by-field comparison against
@@ -1010,9 +1015,39 @@ impl Ready {
             return Err(Error::InvalidInput);
         }
 
+        let cipher_hash = sha256(&[&[leg.olm_type], &leg.ciphertext]);
+
+        // Idempotent retry: this server message id is already committed. The same leg
+        // returns the stored message and writes nothing (so a crash between commit and
+        // delivery costs the caller nothing). A DIFFERENT ciphertext under a committed id
+        // is refused as a replay, and so is the same ciphertext under a different id
+        // (below); a retry whose routing disagrees with what was committed is a mismatch.
+        let replay_id_rid = self.store.idx("rplid", &message_id);
+        if let Some(bytes) = self.store.get(T_REPLAY_ID, &replay_id_rid)? {
+            let committed: ReplayIdRecord = from_json(&bytes)?;
+            if committed.cipher_hash != cipher_hash {
+                return Err(Error::Replay);
+            }
+            let row = self
+                .store
+                .get(T_MESSAGE, &committed.seq.to_be_bytes())?
+                .ok_or(Error::StoreCorrupt)?;
+            let record: MessageRecord = from_json(&row)?;
+            if record.seq != committed.seq || record.message_id != Some(message_id) {
+                return Err(Error::StoreCorrupt);
+            }
+            if record.conversation_id != expected.conversation_id
+                || record.client_message_id != expected.client_message_id
+                || record.sender_user_id != expected.sender_user_id
+                || record.sender_device_id != expected.sender_device_id
+            {
+                return Err(Error::EnvelopeMismatch);
+            }
+            return Ok(message_from_record(record));
+        }
+
         // Replay: by ciphertext (covers fallback-key prekey replays, which would
         // otherwise start a fresh session) and by the sender's logical message id.
-        let cipher_hash = sha256(&[&[leg.olm_type], &leg.ciphertext]);
         let replay_cipher_rid = self.store.idx("rplc", &cipher_hash);
         let replay_message_rid = self.store.idx(
             "rplm",
@@ -1143,6 +1178,12 @@ impl Ready {
             seq.to_be_bytes().to_vec(),
             Some(self.store.idx("conv", &record.conversation_id)),
             to_json(&record)?,
+        )?;
+        tx.put(
+            T_REPLAY_ID,
+            replay_id_rid,
+            None,
+            to_json(&ReplayIdRecord { cipher_hash, seq })?,
         )?;
         tx.next_seq = Some(seq + 1);
         self.store.commit(tx)?;

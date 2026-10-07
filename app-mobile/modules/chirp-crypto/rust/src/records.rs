@@ -209,6 +209,16 @@ pub(crate) struct OutboxRecord {
     pub legs: Vec<StoredLeg>,
 }
 
+/// What was committed for one server message id.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ReplayIdRecord {
+    /// SHA-256 over (olm_type, ciphertext) of the leg that was decrypted.
+    #[serde(with = "hexser")]
+    pub cipher_hash: [u8; 32],
+    /// Local seq of the stored plaintext row.
+    pub seq: u64,
+}
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct MessageRecord {
     pub seq: u64,
