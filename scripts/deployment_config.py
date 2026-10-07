@@ -20,7 +20,7 @@ from deploy_verify import ready_and_observed
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "infra/deployment.json"
 MAX_BYTES = 1024 * 1024
-ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE", "OUTBOX_SWEEPER_ENABLED", "APP_PUBLIC_BASE_URL")
+ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE", "OUTBOX_SWEEPER_ENABLED", "APP_PUBLIC_BASE_URL", "CORS_ORIGINS", "EMAIL_FROM", "EMAIL_PROVIDER", "MEDIA_BUCKET_NAME")
 POOL_NAMES = {"DB_POOL_SIZE": "size", "DB_MAX_OVERFLOW": "max_overflow"}
 JOB_POOL_EVIDENCE_SCOPE = "operator_inspected_immutable_image_pool"
 JOB_POOL_EVIDENCE_MAX_AGE_HOURS = 24
@@ -85,6 +85,28 @@ def fresh(value: Any, now: datetime, hours: int) -> bool:
 
 def identifier(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,62}", value) is not None
+
+
+def environment_value(key: str, value: Any) -> bool:
+    """Validate an intentional nonsecret value without losing provider-safe bytes."""
+    if not isinstance(value, str) or not value or len(value) > 4096 or any(ord(char) < 32 for char in value):
+        return False
+    if key == "CORS_ORIGINS":
+        try:
+            origins = json.loads(value)
+        except (TypeError, ValueError):
+            return False
+        return (isinstance(origins, list) and bool(origins)
+                and all(isinstance(origin, str)
+                        and (public_https_origin(origin) or origin == "http://localhost:8081")
+                        for origin in origins))
+    if key == "EMAIL_FROM":
+        return re.fullmatch(r"[^<>\r\n]+ <[^<>\s@]+@[^<>\s@]+>", value) is not None
+    if key == "EMAIL_PROVIDER":
+        return re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", value) is not None
+    if key == "MEDIA_BUCKET_NAME":
+        return re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]", value) is not None
+    return re.fullmatch(r"[a-zA-Z0-9_-]+", value) is not None
 
 
 def public_origin(value: Any) -> bool:
@@ -174,10 +196,9 @@ def validate(config: dict) -> None:
             raise ConfigError("unapproved_environment_key")
         for env in [shared["env"], *[s["env"] for s in config["services"].values()]]:
             for key, value in env.items():
-                if key == "APP_PUBLIC_BASE_URL":
-                    if not public_https_origin(value):
-                        raise ConfigError("invalid_public_base_url")
-                elif not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+", value):
+                if key == "APP_PUBLIC_BASE_URL" and not public_https_origin(value):
+                    raise ConfigError("invalid_public_base_url")
+                if key != "APP_PUBLIC_BASE_URL" and not environment_value(key, value):
                     raise ConfigError("invalid_environment_value")
         for env in [shared["env"], *[s["env"] for s in config["services"].values()]]:
             if "OUTBOX_SWEEPER_ENABLED" in env and env["OUTBOX_SWEEPER_ENABLED"] not in ("true", "false"):
@@ -379,6 +400,11 @@ def container_fields(prefix: str) -> list[str]:
     return [prefix + "." + field for field in ("image", "resources", "command", "args")]+[prefix + '.env.filter("name:(' + " ".join(ENV_NAMES) + ') OR valueFrom.secretKeyRef.name:*")']
 
 
+def environment_name_fields(prefix: str) -> str:
+    """Collect names separately so unknown literals are detected without values."""
+    return prefix + ".env[].name"
+
+
 def revision_fields() -> list[str]:
     return ["metadata.name", 'metadata.labels."serving.knative.dev/service"', "metadata.generation", "status.observedGeneration", "status.conditions[].type", "status.conditions[].status", "status.imageDigest", "spec.containerConcurrency", "spec.timeoutSeconds", "spec.serviceAccountName"] + annotations("metadata.annotations", ANN) + container_fields("spec.containers[]")
 
@@ -392,9 +418,11 @@ def collect(args: argparse.Namespace) -> dict:
     config = args.config_data
     region = ["--region", config["region"]]
     snapshot = {"services": {}, "revisions": {}, "jobs": {}}
+    snapshot["environment_names"] = {"services": {}, "revisions": {}}
     for role, service in config["services"].items():
         body = cloud(args, ["run", "services", "describe", service["name"], *region], service_fields())
         snapshot["services"][role] = body
+        snapshot["environment_names"]["services"][role] = cloud(args, ["run", "services", "describe", service["name"], *region], environment_name_fields("spec.template.spec.containers[]"))
         status = body.get("status", {})
         names = {row.get("revisionName") for row in status.get("traffic", [])}
         names.update(status.get(k) for k in ("latestCreatedRevisionName", "latestReadyRevisionName"))
@@ -403,6 +431,7 @@ def collect(args: argparse.Namespace) -> dict:
             raise ConfigError("unaccounted_revision_inventory")
         for name in sorted(names):
             snapshot["revisions"][name] = cloud(args, ["run", "revisions", "describe", name, *region], ",".join(revision_fields()))
+            snapshot["environment_names"]["revisions"][name] = cloud(args, ["run", "revisions", "describe", name, *region], environment_name_fields("spec.containers[]"))
     fields = ["metadata.name", "spec.template.spec.parallelism", "spec.template.spec.taskCount"] + container_fields("spec.template.spec.template.spec.containers[]")
     rows = cloud(args, ["run", "jobs", "list", *region], ",".join(fields))
     if not isinstance(rows, list) or len(rows) > 100:
@@ -438,7 +467,25 @@ def env_values(container: dict, runtime: dict) -> tuple[dict, list[str]]:
     return values, inferred
 
 
-def check_spec(report: dict, scope: str, spec: dict, ann: dict, config: dict, role: str, runtime: dict) -> dict:
+def projected_names(body: dict, *, revision: bool = False) -> set[str] | None:
+    """Read only the env-name projection; malformed/missing projections fail closed."""
+    try:
+        containers = (body["spec"]["containers"] if revision
+                      else body["spec"]["template"]["spec"]["containers"])
+        if not isinstance(containers, list) or len(containers) != 1:
+            return None
+        rows = containers[0]["env"]
+        if not isinstance(rows, list):
+            return None
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {"name"} or not isinstance(row["name"], str):
+                return None
+        return {row["name"] for row in rows}
+    except (KeyError, TypeError):
+        return None
+
+
+def check_spec(report: dict, scope: str, spec: dict, ann: dict, config: dict, role: str, runtime: dict, observed_names: set[str] | None = None) -> dict:
     service, shared = config["services"][role], config["shared"]
     expected = {"containerConcurrency": service["concurrency"], "timeoutSeconds": shared["timeout_seconds"], "serviceAccountName": service_account(config, role)}
     for key, value in expected.items():
@@ -467,6 +514,12 @@ def check_spec(report: dict, scope: str, spec: dict, ann: dict, config: dict, ro
         if values.get(key) != value:
             note(report, scope, "drift", key)
     expected_refs = shared["secrets"] | service.get("secrets", {})
+    declared_names = set(expected_env) | set(expected_refs) | set(service.get("remove_secrets", []))
+    actual_names = (observed_names if observed_names is not None else
+                    {row.get("name") for row in container.get("env", [])
+                     if isinstance(row, dict) and isinstance(row.get("name"), str)})
+    for key in sorted(actual_names - declared_names):
+        note(report, scope, "drift", "undeclared_environment:" + key)
     owned_ref_names = set(shared["secrets"]) | {key for row in config["services"].values() for key in row.get("secrets", {})}
     if any(row.get("name") in service.get("remove_secrets", []) for row in container.get("env", [])):
         note(report, scope, "drift", "removed_secret_binding_still_present")
@@ -554,7 +607,14 @@ def compare(config: dict, snapshot: dict, release: dict | None, now: datetime, r
         if not alias_ok:
             note(report, role, "drift", "published_client_origin")
         template = body.get("spec", {}).get("template", {})
-        settings = check_spec(report, role + ":template", template.get("spec", {}), template.get("metadata", {}).get("annotations", {}), config, role, runtime)
+        name_snapshot = snapshot.get("environment_names")
+        service_projection = (name_snapshot.get("services", {}).get(role)
+                              if name_snapshot is not None else None)
+        service_names = (projected_names(service_projection)
+                         if service_projection is not None else None)
+        if name_snapshot is not None and service_names is None:
+            note(report, role + ":template", "unknown", "environment_name_projection")
+        settings = check_spec(report, role + ":template", template.get("spec", {}), template.get("metadata", {}).get("annotations", {}), config, role, runtime, service_names)
         template_containers = template.get("spec", {}).get("containers", [])
         template_image = template_containers[0].get("image") if len(template_containers) == 1 else None
         latest_name = status.get("latestCreatedRevisionName")
@@ -575,7 +635,13 @@ def compare(config: dict, snapshot: dict, release: dict | None, now: datetime, r
             revision = snapshot["revisions"].get(name, {})
             if not ready_and_observed(revision) or revision.get("metadata", {}).get("name") != name or revision.get("metadata", {}).get("labels", {}).get("serving.knative.dev/service") != service["name"]:
                 note(report, role, "unknown", "revision_readiness_or_identity")
-            revision_settings = check_spec(report, name, revision.get("spec", {}), revision.get("metadata", {}).get("annotations", {}), config, role, runtime)
+            revision_projection = (name_snapshot.get("revisions", {}).get(name)
+                                   if name_snapshot is not None else None)
+            revision_names = (projected_names(revision_projection, revision=True)
+                              if revision_projection is not None else None)
+            if name_snapshot is not None and revision_names is None:
+                note(report, name, "unknown", "environment_name_projection")
+            revision_settings = check_spec(report, name, revision.get("spec", {}), revision.get("metadata", {}).get("annotations", {}), config, role, runtime, revision_names)
             capacity = None
             try:
                 if not automatic:
@@ -705,6 +771,18 @@ def plan(config: dict, release: dict, gcloud: str) -> dict:
         raise ConfigError("unsafe_intended_pool_envelope")
     steps = []
     shared = config["shared"]
+
+    def env_flag(values: dict[str, str]) -> str:
+        rendered = [key + "=" + value for key, value in sorted(values.items())]
+        for delimiter in ("@", "|", ";", "~", "%"):
+            if all(delimiter not in item for item in rendered):
+                return "^" + delimiter + "^" + delimiter.join(rendered)
+        raise ConfigError("environment_value_has_no_safe_delimiter")
+
+    def secret_flag(values: dict[str, str]) -> str:
+        rendered = [key + "=" + value for key, value in sorted(values.items())]
+        return ",".join(rendered)
+
     # Establish the dedicated WS route before restricting the API's routes.
     # Ordinary all/all image releases retain their existing API-first sequence.
     role_split = any(service["env"]["SERVICE_ROLE"] != "all" for service in config["services"].values())
@@ -712,7 +790,7 @@ def plan(config: dict, release: dict, gcloud: str) -> dict:
         service = config["services"][role]
         name, revision = service["name"], release["revisions"][role]
         env = shared["env"] | service["env"] | {"WEB_CONCURRENCY": str(service["workers"])}
-        argv = [gcloud, "run", "deploy", name, "--project", config["project"], "--region", config["region"], "--image", release["image"], "--revision-suffix", revision[len(name)+1:], "--no-traffic", "--scaling", "auto", "--cpu", service["cpu"], "--memory", service["memory"], "--concurrency", str(service["concurrency"]), "--min-instances", str(service["revision_min_instances"]), "--max-instances", str(service["revision_max_instances"]), "--max", str(service["service_max_instances"]), "--timeout", str(shared["timeout_seconds"]), "--service-account", service_account(config, role), "--add-cloudsql-instances", shared["cloud_sql"], "--vpc-connector", shared["vpc_connector"], "--vpc-egress", shared["vpc_egress"], "--ingress", shared["ingress"], "--cpu-throttling" if shared["cpu_throttling"] else "--no-cpu-throttling", "--cpu-boost" if shared["startup_cpu_boost"] else "--no-cpu-boost", "--update-env-vars", ",".join(k+"="+v for k, v in sorted(env.items())), "--update-secrets", ",".join(k+"="+v for k, v in sorted((shared["secrets"] | service.get("secrets", {})).items()))]
+        argv = [gcloud, "run", "deploy", name, "--project", config["project"], "--region", config["region"], "--image", release["image"], "--revision-suffix", revision[len(name)+1:], "--no-traffic", "--scaling", "auto", "--cpu", service["cpu"], "--memory", service["memory"], "--concurrency", str(service["concurrency"]), "--min-instances", str(service["revision_min_instances"]), "--max-instances", str(service["revision_max_instances"]), "--max", str(service["service_max_instances"]), "--timeout", str(shared["timeout_seconds"]), "--service-account", service_account(config, role), "--add-cloudsql-instances", shared["cloud_sql"], "--vpc-connector", shared["vpc_connector"], "--vpc-egress", shared["vpc_egress"], "--ingress", shared["ingress"], "--cpu-throttling" if shared["cpu_throttling"] else "--no-cpu-throttling", "--cpu-boost" if shared["startup_cpu_boost"] else "--no-cpu-boost", "--update-env-vars", env_flag(env), "--update-secrets", secret_flag(shared["secrets"] | service.get("secrets", {}))]
         if service.get("remove_secrets"):
             argv.extend(["--remove-secrets", ",".join(sorted(service["remove_secrets"]))])
         promote = [gcloud, "run", "services", "update-traffic", name, "--project", config["project"], "--region", config["region"], "--to-revisions", revision+"=100"]
