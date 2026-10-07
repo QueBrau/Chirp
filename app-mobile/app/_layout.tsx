@@ -15,12 +15,14 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { useColorScheme } from "react-native";
 
-import { hasFirebaseConfig, onIdTokenChanged, SessionProvider } from "@/auth";
+import { hasFirebaseConfig, onIdTokenChanged, SessionProvider, useRememberCampus } from "@/auth";
 import { AppearanceProvider, useTheme } from "@/theme";
 import { MOCK_CAMPUS_COLORS, mockAppearancePrefs } from "@/mocks/data";
 
 /** Consumes useTheme() — must render inside AppearanceProvider. */
 function RootLayoutNav() {
+  // Remember the campus on the device so the next cold start can paint it (c434).
+  useRememberCampus();
   const scheme = useColorScheme();
   const palette = useTheme();
   const base = scheme === "dark" ? DarkTheme : DefaultTheme;

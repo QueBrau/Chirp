@@ -340,6 +340,13 @@ The app themes itself around THE USER'S SCHOOL COLORS, and the user controls it.
 - Contrast rule: campus colors are used for accent/tint only — body text stays
   ink on neutral surfaces. If a campus primary is too light for white button
   text, darken it for the accent role (document the adjustment in code).
+- **Loading screen** (c434, braul, Oct 6): while a returning user's session
+  restores, the campus primary fills the screen with the chirp mark and the campus
+  name in the campus secondary (falling back to white or ink when secondary does not
+  clear 4.5:1 on primary). First launches and signed-out launches get the neutral
+  chirp tile on the canvas. It is the in-app loading screen, not the native launch
+  screen, which renders before the app can know the campus. The campus is remembered
+  on the device after a full sign-in and forgotten on sign-out.
 
 ## 8.6 Greek org colors (Aug 12 — Jose)
 
