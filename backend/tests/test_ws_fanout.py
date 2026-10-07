@@ -395,8 +395,14 @@ def test_legal_enforcement_rejects_then_allows_current_acceptance(ws_client: Tes
     async def remove_privacy() -> None:
         from app import models
         from app.db import get_session_factory
-        from sqlalchemy import delete
+        from sqlalchemy import delete, select
         async with get_session_factory()() as session:
+            policy_ids = (await session.execute(
+                select(models.LegalPolicy.id).where(models.LegalPolicy.policy_key == "privacy")
+            )).scalars().all()
+            await session.execute(delete(models.LegalAcceptance).where(
+                models.LegalAcceptance.policy_id.in_(policy_ids)
+            ))
             await session.execute(delete(models.LegalPolicy).where(models.LegalPolicy.policy_key == "privacy"))
             await session.commit()
     client.portal.call(remove_privacy)
