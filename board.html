@@ -417,6 +417,24 @@
   ],
   "cards": [
     {
+      "id": "c443",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "security",
+      "area": "messages",
+      "title": "c443 IN PROGRESS Oct 7 (Q): E2EE M1 - Rust crypto core per E2EE-DESIGN.md section 3 (PR #341). New crate modules/chirp-crypto/rust on vodozemac 0.11.1 (Apache-2.0, stable V1, default features off): encrypted SQLite state store per account namespace, serial executor, commit-before-release encrypt/decrypt, inner-envelope checks, trust pins + safety number, lock/wipe. Host tests only (two accounts round trip, tamper/replay/context failures, crash at each commit boundary). Bindings layer deferred until the uniffi (MPL-2.0) call on PR #341 section 11. Branch q/c443-e2ee-rust-core.",
+      "detail": ""
+    },
+    {
+      "id": "c444",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "backend",
+      "area": "messages",
+      "title": "c444 IN PROGRESS Oct 7 (Q): E2EE M2 - backend v2 per E2EE-DESIGN.md sections 4-5 (PR #341): versioned device directory (suite, Ed25519 identity, binding + approval signatures verified server-side, pending approval), POST /v2/keys/claim separate from directory read, per-device message legs with the exact-device-set rule (409 device_list_mismatch) and (sender_device_id, client_message_id) idempotency. MIGRATION 0042 CLAIMED HERE. Its down_revision is whatever main's head is at merge time: 0040 (c438) and 0041 (c436) are claimed on Jose's branches and not merged yet, so 0042 must be re-pointed if they land first. Not deployed - prod sees v2 only through a normal redeploy after the M6 two-phone proof. Branch q/c444-e2ee-backend-v2.",
+      "detail": ""
+    },
+    {
       "id": "c440",
       "col": "progress",
       "owner": "Q",
