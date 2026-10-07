@@ -26,16 +26,18 @@ confused with a real conversation. What it exercises is the transport: does the
 socket deliver, does a backgrounded app catch up, does a hard-killed app recover
 history. Whether the ciphertext decrypts is c23's question, not c354's.
 
-WHAT IT WILL NOT DO. It refuses a production target unless you say so on the
-command line. The device walk genuinely runs against production, because that is
-what the phone build points at, so the flag exists to make that a decision rather
-than a default. Every row it writes is real, in a real conversation, visible to
-every real member of it - so send into a conversation you own.
+WHAT IT WILL NOT DO. It refuses every non-loopback target unless you say so on the
+command line. The device walk may run against production, because that is what the
+phone build points at, so the flag exists to make any remote write a decision rather
+than a default. Redirects are refused so the bearer token cannot follow an untrusted
+target. Every row it writes is real, in a real conversation, visible to every real
+member of it - so send into a conversation you own.
 """
 from __future__ import annotations
 
 import argparse
 import base64
+import ipaddress
 import json
 import os
 import secrets
@@ -44,6 +46,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 # From app/schemas/e2ee.py. Sizes are validated on registration; contents are not.
 IDENTITY_KEY_BYTES = 32
@@ -54,12 +57,35 @@ PREKEY_SIGNATURE_BYTES = 64
 PROD_MARKERS = ("run.app", "chirpsocials.com", "chirps-prod")
 
 
+def _validate_api_target(api: str, allow_remote: bool) -> str:
+    """Validate the base URL before credentials or a request are constructed."""
+    try:
+        parsed = urlsplit(api)
+        hostname = parsed.hostname
+        port = parsed.port  # force malformed ports to fail here
+    except (TypeError, ValueError):
+        _fail("invalid --api URL")
+    if parsed.scheme not in {"http", "https"} or not hostname:
+        _fail("--api must be an http(s) URL with a hostname")
+    if parsed.username is not None or parsed.password is not None:
+        _fail("--api must not contain URL userinfo")
+    if parsed.query or parsed.fragment:
+        _fail("--api must not contain a query or fragment")
+    try:
+        is_loopback = ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        is_loopback = hostname.lower() == "localhost"
+    if not is_loopback and not allow_remote:
+        _fail("--api is remote; pass --allow-prod deliberately for any non-loopback target")
+    return api.rstrip("/")
+
+
 def _b64(n: int) -> str:
     return base64.b64encode(secrets.token_bytes(n)).decode("ascii")
 
 
 def _call(api: str, path: str, token: str, body: dict | None = None, method: str = "GET") -> tuple[int, object]:
-    """One JSON request. Returns (status, parsed-or-raw-text). Never raises on HTTP status."""
+    """One JSON request, with credentials never followed to another origin."""
     data = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(
         api.rstrip("/") + path,
@@ -72,8 +98,21 @@ def _call(api: str, path: str, token: str, body: dict | None = None, method: str
         },
     )
     context = ssl.create_default_context()
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def _reject(self, req, fp, code, msg, headers):
+            raise urllib.error.URLError("redirect refused")
+
+        http_error_301 = _reject
+        http_error_302 = _reject
+        http_error_303 = _reject
+        http_error_307 = _reject
+        http_error_308 = _reject
+
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=context), _NoRedirect
+    )
     try:
-        with urllib.request.urlopen(request, timeout=30, context=context) as response:
+        with opener.open(request, timeout=30) as response:
             raw = response.read().decode("utf-8")
             return response.status, (json.loads(raw) if raw else None)
     except urllib.error.HTTPError as error:
@@ -82,6 +121,10 @@ def _call(api: str, path: str, token: str, body: dict | None = None, method: str
             return error.code, json.loads(raw)
         except ValueError:
             return error.code, raw
+    except (urllib.error.URLError, TimeoutError, OSError):
+        # Do not expose a traceback or echo an untrusted URL. The operator only
+        # needs a stable failure class; retry/target diagnosis stays local.
+        return 0, "network_error"
 
 
 def _fail(message: str) -> None:
@@ -153,22 +196,20 @@ def main() -> int:
     parser.add_argument("--label", default="c354-stimulus",
                         help="Device label, so this sender is identifiable later.")
     parser.add_argument("--allow-prod", action="store_true",
-                        help="Required when --api looks like production. Every row written is real and "
-                             "visible to every member of the conversation.")
+                        help="Required for every non-loopback --api target. Every row written is real "
+                             "and visible to every member of the conversation.")
     args = parser.parse_args()
 
     if not args.token:
         _fail("no token: pass --token or set CHIRP_STIMULUS_TOKEN")
 
-    looks_prod = any(marker in args.api for marker in PROD_MARKERS)
-    if looks_prod and not args.allow_prod:
-        _fail(f"--api looks like production ({args.api}) and --allow-prod was not given. "
-              "The device walk does run against production; say so deliberately.")
+    api = _validate_api_target(args.api, args.allow_prod)
+    looks_prod = any(marker in api for marker in PROD_MARKERS)
     if looks_prod:
-        print(f"TARGET IS PRODUCTION: {args.api}")
+        print(f"TARGET IS PRODUCTION: {api}")
 
     if args.conversation is None:
-        conversations = list_conversations(args.api, args.token)
+        conversations = list_conversations(api, args.token)
         if not conversations:
             _fail("this identity is in no conversations; it must share one with the account on the "
                   "phone before it can send anything there")
@@ -178,7 +219,7 @@ def main() -> int:
         print("\nRe-run with --conversation <id>. Pick one the phone's account is also in.")
         return 0
 
-    device = args.device or register_sender_device(args.api, args.token, args.label)
+    device = args.device or register_sender_device(api, args.token, args.label)
     if args.device is None:
         print(f"registered sender device {device} (pass --device {device} next time)")
 
@@ -187,7 +228,7 @@ def main() -> int:
         # Distinguishable on purpose: a device-holder watching several arrive needs to
         # say WHICH one showed up late, or not at all, rather than "some did".
         stamp = time.strftime("%H:%M:%S")
-        status, payload = send(args.api, args.token, args.conversation, device,
+        status, payload = send(api, args.token, args.conversation, device,
                                f"c354 stimulus {index}/{args.count} at {stamp}")
         if status == 201:
             sent += 1
