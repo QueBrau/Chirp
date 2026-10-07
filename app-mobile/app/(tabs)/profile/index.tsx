@@ -685,6 +685,12 @@ export default function ProfileScreen() {
                     onPress={() => void openLegalLink("Privacy Policy", PRIVACY_URL)}
                   />
                   <ListRow
+                    title="Your data"
+                    subtitle="Request a copy or account deletion"
+                    left={<SettingsIconWell name="database" />}
+                    onPress={() => router.push("/profile/account-data")}
+                  />
+                  <ListRow
                     title="Contact support"
                     subtitle="chirp.shared@gmail.com"
                     left={<SettingsIconWell name="mail" />}
