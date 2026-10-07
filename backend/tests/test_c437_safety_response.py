@@ -23,6 +23,8 @@ def test_complete_notice_starts_48_hour_deadline_and_incomplete_does_not(tmp_pat
     assert incomplete_notice.missing == tuple(field for field in NOTICE_FIELDS if field != "contact")
     assert store.snapshot(complete)["deadline_at"] == "2026-10-08T12:00:00Z"
     assert store.snapshot(incomplete)["deadline_at"] is None
+    store.complete_notice(incomplete, elements=dict.fromkeys(NOTICE_FIELDS, True), actor="Jose", when=start + timedelta(minutes=5))
+    assert store.snapshot(incomplete)["deadline_at"] == "2026-10-08T12:00:00Z"
     store.close()
 
 
@@ -47,6 +49,20 @@ def test_evidence_and_audit_never_store_fixture_or_raw_path(tmp_path):
     store.close()
 
 
+def test_action_schema_rejects_nested_or_unbounded_metadata(tmp_path):
+    store = SafetyCaseStore(tmp_path / "cases.sqlite3")
+    case_ref, _ = store.intake(
+        received_at=datetime.now(timezone.utc),
+        elements=dict.fromkeys(NOTICE_FIELDS, True),
+        actor="Jose",
+    )
+    with pytest.raises(ValueError):
+        store.action(case_ref, event="access_grant", actor="Jose", details={"purpose": {"raw": "content"}, "scope": "fixture"}, when=datetime.now(timezone.utc))
+    with pytest.raises(ValueError):
+        store.action(case_ref, event="access_grant", actor="Jose", details={"purpose": "fixture", "scope": "fixture", "url": "https://example.invalid"}, when=datetime.now(timezone.utc))
+    store.close()
+
+
 def test_attempts_are_retried_and_duplicate_attempts_are_rejected(tmp_path):
     store = SafetyCaseStore(tmp_path / "cases.sqlite3")
     case_ref, _ = store.intake(
@@ -57,8 +73,10 @@ def test_attempts_are_retried_and_duplicate_attempts_are_rejected(tmp_path):
     when = datetime.now(timezone.utc)
     store.attempt(case_ref, surface="post", attempt=1, outcome="transient_failure", actor="Jose", verification_ref=None, when=when)
     store.attempt(case_ref, surface="post", attempt=2, outcome="removed", actor="Jose", verification_ref="verified", when=when + timedelta(minutes=1))
-    with pytest.raises(Exception):
-        store.attempt(case_ref, surface="post", attempt=2, outcome="removed", actor="Jose", verification_ref="verified", when=when)
+    # Exact replay is idempotent and does not create a second audit row.
+    store.attempt(case_ref, surface="post", attempt=2, outcome="removed", actor="Jose", verification_ref="verified", when=when)
+    with pytest.raises(ValueError):
+        store.attempt(case_ref, surface="post", attempt=2, outcome="not_found", actor="Jose", verification_ref="verified", when=when)
     assert [item["attempt"] for item in store.snapshot(case_ref)["attempts"]] == [1, 2]
     store.close()
 
@@ -69,7 +87,10 @@ def test_drill_exercises_incomplete_case_retries_and_reappearance(tmp_path):
     assert report["notice"] is True
     assert report["missing"]
     assert complete["status"] == "reopened"
-    assert [item["outcome"] for item in complete["attempts"]] == ["transient_failure", "removed", "none_found"]
+    assert [item["outcome"] for item in complete["attempts"]] == [
+        "transient_failure", "removed", "transient_failure", "removed",
+        "transient_failure", "removed", "none_found",
+    ]
     assert {item["event"] for item in complete["audit"]} >= {
-        "access_grant", "platform_remove", "verify_absent", "reappearance", "child_safety_escalate"
+        "access_grant", "access_revoke", "reappearance", "child_safety_escalate"
     }

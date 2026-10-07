@@ -15,20 +15,10 @@ from pathlib import Path
 from typing import Any
 
 NOTICE_FIELDS = ("signature", "identification", "location", "good_faith", "contact")
-SAFE_ACTIONS = {
-    "assign",
-    "access_grant",
-    "access_revoke",
-    "platform_remove",
-    "known_copy_search",
-    "known_copy_remove",
-    "verify_absent",
-    "appeal",
-    "reappearance",
-    "child_safety_escalate",
-    "report_confirmed_csam",
-    "note",
-}
+RESPONDERS = ("Jose", "Braulio")
+CONTROLLED_SURFACES = ("post", "comment", "chirp", "media")
+ATTEMPT_OUTCOMES = ("transient_failure", "removed", "not_found", "none_found", "verified_absent")
+SAFE_ACTIONS = {"access_grant", "access_revoke", "appeal", "reappearance", "child_safety_escalate", "report_confirmed_csam"}
 
 
 def utc_now() -> datetime:
@@ -43,7 +33,10 @@ def iso(value: datetime) -> str:
 
 def parse_time(value: str) -> datetime:
     """Parse the ISO timestamps emitted by this module."""
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must include a timezone")
+    return parsed.astimezone(timezone.utc)
 
 
 def opaque_ref(value: str) -> str:
@@ -70,12 +63,15 @@ class SafetyCaseStore:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        if self.path.is_symlink():
+            raise ValueError("refusing symlinked case database")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.touch(mode=0o600, exist_ok=True)
         os.chmod(self.path, 0o600)
         self.db = sqlite3.connect(self.path)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
+        self.db.execute("PRAGMA journal_mode = DELETE")
         self.db.executescript(
             """
             CREATE TABLE IF NOT EXISTS cases (
@@ -86,7 +82,9 @@ class SafetyCaseStore:
                 status TEXT NOT NULL,
                 deadline_at TEXT,
                 primary_responder TEXT,
-                backup_responder TEXT
+                backup_responder TEXT,
+                surfaces_json TEXT NOT NULL,
+                active_hold INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,13 +136,17 @@ class SafetyCaseStore:
         actor: str,
         primary: str = "Jose",
         backup: str = "Braulio",
+        surfaces: tuple[str, ...] = CONTROLLED_SURFACES,
     ) -> tuple[str, Notice]:
         """Create a case and start a deadline only for a complete notice."""
+        self._validate_time(received_at)
+        self._validate_responders(primary, backup)
+        self._validate_surfaces(surfaces)
         notice = assess_notice(elements)
         case_ref = "SAF-" + uuid.uuid4().hex[:12].upper()
         deadline = received_at + timedelta(hours=48) if notice.complete else None
         self.db.execute(
-            "INSERT INTO cases VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO cases VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 case_ref,
                 iso(received_at),
@@ -154,6 +156,8 @@ class SafetyCaseStore:
                 iso(deadline) if deadline else None,
                 primary,
                 backup,
+                json.dumps(surfaces),
+                0,
             ),
         )
         self._audit(
@@ -166,10 +170,50 @@ class SafetyCaseStore:
         self.db.commit()
         return case_ref, notice
 
+    @staticmethod
+    def _validate_time(value: datetime) -> None:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamp must include a timezone")
+
+    @staticmethod
+    def _validate_responders(primary: str, backup: str) -> None:
+        if primary not in RESPONDERS or backup not in RESPONDERS or primary == backup:
+            raise ValueError("responders must be distinct members of the named coverage pair")
+
+    @staticmethod
+    def _validate_surfaces(surfaces: tuple[str, ...]) -> None:
+        if not surfaces or any(surface not in CONTROLLED_SURFACES for surface in surfaces):
+            raise ValueError("surfaces must be a non-empty subset of the controlled surface list")
+
+    def complete_notice(self, case_ref: str, *, elements: dict[str, bool], actor: str, when: datetime) -> Notice:
+        """Complete an existing notice without changing its original receipt time."""
+        self._validate_time(when)
+        row = self._case(case_ref)
+        notice = assess_notice(elements)
+        if not notice.complete:
+            raise ValueError(f"notice remains incomplete: {','.join(notice.missing)}")
+        if row["notice_complete"]:
+            return notice
+        received = parse_time(row["received_at"])
+        deadline = received + timedelta(hours=48)
+        self.db.execute("UPDATE cases SET notice_complete=1, missing_json='[]', status='open', deadline_at=? WHERE case_ref=?", (iso(deadline), case_ref))
+        self._audit(case_ref, "notice_completed", actor, {"notice_complete": True}, when)
+        self.db.commit()
+        return notice
+
+    def _case(self, case_ref: str) -> sqlite3.Row:
+        row = self.db.execute("SELECT * FROM cases WHERE case_ref=?", (case_ref,)).fetchone()
+        if row is None:
+            raise KeyError(case_ref)
+        return row
+
     def add_evidence(self, case_ref: str, *, external_ref: str, digest: str, media_type: str, actor: str, when: datetime) -> str:
         """Record a non-content evidence reference and digest under restricted access."""
-        if len(digest) < 16:
-            raise ValueError("evidence digest must be a non-trivial hash")
+        self._validate_time(when)
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest.lower()):
+            raise ValueError("evidence digest must be a SHA-256 hex digest")
+        if media_type not in ("synthetic-placeholder", "image-metadata", "video-metadata", "provider-receipt"):
+            raise ValueError("unsupported metadata type")
         ref = opaque_ref(external_ref)
         self.db.execute(
             "INSERT INTO evidence_manifest(case_ref,evidence_ref,digest,media_type,observed_at) VALUES (?,?,?,?,?)",
@@ -180,31 +224,72 @@ class SafetyCaseStore:
         return ref
 
     def action(self, case_ref: str, *, event: str, actor: str, details: dict[str, Any] | None = None, when: datetime) -> None:
-        """Append an allowlisted, metadata-only event to a case."""
+        """Append one strict, metadata-only lifecycle event to a case."""
+        self._validate_time(when)
         if event not in SAFE_ACTIONS:
             raise ValueError(f"unsupported safety action: {event}")
-        details = details or {}
-        forbidden_keys = {"body", "image", "video", "content", "raw_path", "url"}
-        if forbidden_keys.intersection(details):
-            raise ValueError("safety audit details cannot contain content or raw evidence paths")
+        details = self._validate_action(event, details or {})
         self._audit(case_ref, event, actor, details, when)
-        if event == "platform_remove":
-            self.db.execute("UPDATE cases SET status='removal_in_progress' WHERE case_ref=?", (case_ref,))
-        elif event == "verify_absent":
-            self.db.execute("UPDATE cases SET status='closed' WHERE case_ref=?", (case_ref,))
-        elif event == "reappearance":
+        if event == "reappearance":
             self.db.execute("UPDATE cases SET status='reopened' WHERE case_ref=?", (case_ref,))
         self.db.commit()
 
+    @staticmethod
+    def _validate_action(event: str, details: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "access_grant": {"purpose", "scope"}, "access_revoke": {"scope"},
+            "appeal": {"decision_ref"}, "reappearance": {"reason"},
+            "child_safety_escalate": {"route"}, "report_confirmed_csam": {"report_ref"},
+        }[event]
+        if set(details) != allowed or any(not isinstance(value, str) or not 160 >= len(value) > 0 for value in details.values()):
+            raise ValueError(f"{event} requires exactly bounded metadata keys: {sorted(allowed)}")
+        return details
+
     def attempt(self, case_ref: str, *, surface: str, attempt: int, outcome: str, actor: str, verification_ref: str | None, when: datetime) -> None:
         """Record an idempotent removal/verification attempt without contacting a provider."""
+        self._validate_time(when)
         if attempt < 1:
             raise ValueError("attempt must be positive")
-        self.db.execute(
-            "INSERT INTO attempts(case_ref,surface,attempt,occurred_at,outcome,verification_ref) VALUES (?,?,?,?,?,?)",
-            (case_ref, surface, attempt, iso(when), outcome, opaque_ref(verification_ref) if verification_ref else None),
-        )
+        if surface not in CONTROLLED_SURFACES or outcome not in ATTEMPT_OUTCOMES:
+            raise ValueError("invalid controlled surface or attempt outcome")
+        if outcome in ("removed", "verified_absent") and not verification_ref:
+            raise ValueError("successful attempt requires an opaque verification reference")
+        existing = self.db.execute("SELECT * FROM attempts WHERE case_ref=? AND surface=? AND attempt=?", (case_ref, surface, attempt)).fetchone()
+        redacted_ref = opaque_ref(verification_ref) if verification_ref else None
+        if existing:
+            if existing["outcome"] == outcome and existing["verification_ref"] == redacted_ref:
+                return
+            raise ValueError("conflicting duplicate attempt")
+        self.db.execute("INSERT INTO attempts(case_ref,surface,attempt,occurred_at,outcome,verification_ref) VALUES (?,?,?,?,?,?)", (case_ref, surface, attempt, iso(when), outcome, redacted_ref))
         self._audit(case_ref, "removal_attempt", actor, {"surface": surface, "attempt": attempt, "outcome": outcome}, when)
+        self.db.commit()
+
+    def hold(self, case_ref: str, *, active: bool, actor: str, when: datetime) -> None:
+        """Set a legal or child-safety preservation hold."""
+        self._validate_time(when)
+        self._case(case_ref)
+        self.db.execute("UPDATE cases SET active_hold=? WHERE case_ref=?", (int(active), case_ref))
+        self._audit(case_ref, "hold_set" if active else "hold_released", actor, {"active": "true" if active else "false"}, when)
+        self.db.commit()
+
+    def close_case(self, case_ref: str, *, actor: str, when: datetime) -> None:
+        """Close only after all declared surfaces and known-copy review are verified."""
+        self._validate_time(when)
+        row = self._case(case_ref)
+        if not row["notice_complete"]:
+            raise ValueError("cannot close incomplete notice")
+        if row["active_hold"]:
+            raise ValueError("cannot close while a preservation hold is active")
+        surfaces = set(json.loads(row["surfaces_json"]))
+        attempts = self.db.execute("SELECT surface,outcome FROM attempts WHERE case_ref=?", (case_ref,)).fetchall()
+        verified = {item["surface"] for item in attempts if item["outcome"] in ("removed", "not_found", "verified_absent", "none_found")}
+        if not surfaces.issubset(verified):
+            raise ValueError("cannot close until every controlled surface is independently verified")
+        copies = [item for item in attempts if item["surface"] == "media" and item["outcome"] == "none_found"]
+        if not copies:
+            raise ValueError("cannot close until known-copy review is recorded")
+        self.db.execute("UPDATE cases SET status='closed' WHERE case_ref=?", (case_ref,))
+        self._audit(case_ref, "case_closed", actor, {"verified_surfaces": ",".join(sorted(surfaces))}, when)
         self.db.commit()
 
     def snapshot(self, case_ref: str) -> dict[str, Any]:
@@ -221,9 +306,26 @@ class SafetyCaseStore:
             "deadline_at": row["deadline_at"],
             "primary": row["primary_responder"],
             "backup": row["backup_responder"],
+            "surfaces": json.loads(row["surfaces_json"]),
+            "active_hold": bool(row["active_hold"]),
             "audit": [dict(item) for item in self.db.execute("SELECT event,actor,occurred_at,details_json FROM audit WHERE case_ref=? ORDER BY id", (case_ref,))],
             "attempts": [dict(item) for item in self.db.execute("SELECT surface,attempt,occurred_at,outcome,verification_ref FROM attempts WHERE case_ref=? ORDER BY id", (case_ref,))],
         }
+
+    def assign(self, case_ref: str, *, primary: str, backup: str, actor: str, when: datetime) -> None:
+        """Assign the named primary and backup without changing receipt or deadline."""
+        self._validate_time(when)
+        self._validate_responders(primary, backup)
+        self._case(case_ref)
+        self.db.execute("UPDATE cases SET primary_responder=?, backup_responder=? WHERE case_ref=?", (primary, backup, case_ref))
+        self._audit(case_ref, "assigned", actor, {"primary": primary, "backup": backup}, when)
+        self.db.commit()
+
+    def list_due(self, *, before: datetime) -> list[dict[str, Any]]:
+        """List open complete cases due by a UTC timestamp."""
+        self._validate_time(before)
+        rows = self.db.execute("SELECT case_ref,deadline_at,status FROM cases WHERE notice_complete=1 AND status != 'closed' AND deadline_at <= ? ORDER BY deadline_at", (iso(before),)).fetchall()
+        return [dict(row) for row in rows]
 
 
 def run_drill(path: str | Path) -> dict[str, Any]:
@@ -235,13 +337,15 @@ def run_drill(path: str | Path) -> dict[str, Any]:
         incomplete, missing = store.intake(received_at=start, elements={"contact": True}, actor="drill-operator")
         store.add_evidence(complete, external_ref="synthetic-fixture-001", digest=hashlib.sha256(b"harmless-fixture").hexdigest(), media_type="synthetic-placeholder", actor="Jose", when=start)
         store.action(complete, event="access_grant", actor="Jose", details={"purpose": "triage", "scope": "synthetic fixture"}, when=start)
-        store.attempt(complete, surface="chirp_database_soft_remove", attempt=1, outcome="transient_failure", actor="Jose", verification_ref=None, when=start + timedelta(minutes=5))
-        store.attempt(complete, surface="chirp_database_soft_remove", attempt=2, outcome="removed", actor="Jose", verification_ref="synthetic-verify-001", when=start + timedelta(minutes=9))
-        store.action(complete, event="platform_remove", actor="Jose", details={"surfaces": ["post", "comment", "chirp"]}, when=start + timedelta(minutes=9))
-        store.attempt(complete, surface="known_identical_copy_review", attempt=1, outcome="none_found", actor="Braulio", verification_ref="synthetic-copy-scan-001", when=start + timedelta(minutes=15))
-        store.action(complete, event="verify_absent", actor="Braulio", details={"known_copy_evidence": "synthetic-copy-scan-001"}, when=start + timedelta(minutes=20))
+        for surface in ("post", "comment", "chirp"):
+            store.attempt(complete, surface=surface, attempt=1, outcome="transient_failure", actor="Jose", verification_ref=None, when=start + timedelta(minutes=5))
+            store.attempt(complete, surface=surface, attempt=2, outcome="removed", actor="Jose", verification_ref=f"synthetic-verify-{surface}", when=start + timedelta(minutes=9))
+        store.attempt(complete, surface="media", attempt=1, outcome="none_found", actor="Braulio", verification_ref="synthetic-copy-scan-001", when=start + timedelta(minutes=15))
+        store.action(complete, event="access_revoke", actor="Braulio", details={"scope": "synthetic fixture"}, when=start + timedelta(minutes=20))
         store.action(complete, event="reappearance", actor="Braulio", details={"reason": "synthetic reappearance"}, when=start + timedelta(minutes=30))
         store.action(complete, event="child_safety_escalate", actor="Jose", details={"route": "designated safety contact; preserve metadata only"}, when=start + timedelta(minutes=31))
+        # A reappearance is intentionally reopened; close_case is exercised by tests
+        # against an independently verified, non-reappeared case.
         return {"complete": store.snapshot(complete), "incomplete": store.snapshot(incomplete), "notice": notice.complete, "missing": missing.missing}
     finally:
         store.close()
@@ -251,10 +355,52 @@ def main(argv: list[str] | None = None) -> int:
     """Run the local synthetic drill CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="/private/tmp/chirp-safety-c437.sqlite3")
-    parser.add_argument("command", choices=("drill",))
+    parser.add_argument("command", choices=("drill", "intake", "complete-notice", "assign", "status", "list-due", "attempt", "close", "reopen", "escalate"))
+    parser.add_argument("case_ref", nargs="?")
+    parser.add_argument("--elements", default=",")
+    parser.add_argument("--received-at", default=None)
+    parser.add_argument("--primary", default="Jose")
+    parser.add_argument("--backup", default="Braulio")
+    parser.add_argument("--surfaces", default=",".join(CONTROLLED_SURFACES))
+    parser.add_argument("--actor", default="Jose")
+    parser.add_argument("--before", default=None)
+    parser.add_argument("--surface", default=None)
+    parser.add_argument("--attempt", type=int, default=1)
+    parser.add_argument("--outcome", default=None)
+    parser.add_argument("--verification-ref", default=None)
+    parser.add_argument("--reason", default="operator review")
+    parser.add_argument("--route", default="designated safety contact")
     args = parser.parse_args(argv)
     if args.command == "drill":
         print(json.dumps(run_drill(args.db), indent=2, sort_keys=True))
+        return 0
+    store = SafetyCaseStore(args.db)
+    try:
+        now = parse_time(args.received_at) if args.received_at else utc_now()
+        elements = {field: field in {part for part in args.elements.split(",") if part} for field in NOTICE_FIELDS}
+        if args.command == "intake":
+            case_ref, notice = store.intake(received_at=now, elements=elements, actor=args.actor, primary=args.primary, backup=args.backup, surfaces=tuple(args.surfaces.split(",")))
+            print(json.dumps({"case_ref": case_ref, "notice_complete": notice.complete, "missing": notice.missing}))
+        elif args.command == "complete-notice":
+            print(json.dumps(store.snapshot(args.case_ref))) if store.complete_notice(args.case_ref, elements=elements, actor=args.actor, when=now) else None
+        elif args.command == "assign":
+            store.assign(args.case_ref, primary=args.primary, backup=args.backup, actor=args.actor, when=now)
+        elif args.command == "status":
+            print(json.dumps(store.snapshot(args.case_ref), sort_keys=True))
+        elif args.command == "list-due":
+            print(json.dumps(store.list_due(before=parse_time(args.before) if args.before else now)))
+        elif args.command == "attempt":
+            if not args.surface or not args.outcome:
+                raise ValueError("attempt requires --surface and --outcome")
+            store.attempt(args.case_ref, surface=args.surface, attempt=args.attempt, outcome=args.outcome, actor=args.actor, verification_ref=args.verification_ref, when=now)
+        elif args.command == "close":
+            store.close_case(args.case_ref, actor=args.actor, when=now)
+        elif args.command == "reopen":
+            store.action(args.case_ref, event="reappearance", actor=args.actor, details={"reason": args.reason}, when=now)
+        elif args.command == "escalate":
+            store.action(args.case_ref, event="child_safety_escalate", actor=args.actor, details={"route": args.route}, when=now)
+    finally:
+        store.close()
     return 0
 
 

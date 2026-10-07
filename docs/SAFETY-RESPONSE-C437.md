@@ -21,6 +21,23 @@ clock until the notice is valid. Once all required elements are present, record
 the UTC received time and the deadline at `received + 48 hours`; assign Jose or
 Braulio and acknowledge the case reference.
 
+The operator commands are explicit and metadata-only. For example:
+
+```sh
+scripts/safety-case --db /private/tmp/chirp-safety.sqlite3 intake \
+  --elements contact --received-at 2026-10-06T12:00:00Z
+scripts/safety-case --db /private/tmp/chirp-safety.sqlite3 complete-notice SAF-REFERENCE \
+  --elements signature,identification,location,good_faith,contact
+scripts/safety-case --db /private/tmp/chirp-safety.sqlite3 attempt SAF-REFERENCE \
+  --surface post --attempt 1 --outcome removed --verification-ref provider-receipt-1
+scripts/safety-case --db /private/tmp/chirp-safety.sqlite3 status SAF-REFERENCE
+```
+
+`close` refuses incomplete notices, active preservation holds, unverified
+controlled surfaces, and missing known-copy review. Exact duplicate attempt
+replays are idempotent; conflicting replays fail. Reopening preserves the
+original receipt time and deadline.
+
 The 48-hour handling rule is a current legal requirement only if Chirp is a
 covered platform and the request is valid under the TAKE IT DOWN Act. This tool
 records the operational clock while counsel reviews applicability and edge
