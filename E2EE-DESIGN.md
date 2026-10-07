@@ -18,8 +18,8 @@ wins for v1; where this file is silent, the contract's requirements still apply.
 | 4 | Trust-on-first-use, safety numbers, a **hard stop** on any identity change, and a new device must be **approved from an existing one**. |
 | 5 | No history on a new phone in v1. Losing every device means a fresh start (SPEC). |
 
-Defaults chosen here that need a yes or no (section 11): the Rust-to-Swift/Kotlin
-binding tool (uniffi, MPL-2.0), iOS adapter before Android, the 10,000-character
+Three further calls, approved Oct 7 (section 11): uniffi (MPL-2.0) for the
+Rust-to-Swift/Kotlin bindings, the iOS adapter before Android, and the 10,000-character
 message limit unchanged.
 
 ## 2. Architecture
@@ -210,7 +210,10 @@ backups stay c14. No post-quantum (decision 3).
 M1 and M2 run in parallel; M3 needs M0 and M1. Backend changes reach prod only
 through the normal Cloud Run redeploy, after M6.
 
-## 11. Open calls for Jose + Q
+## 11. Calls made by Jose + Q (Oct 7, after the first draft)
+
+All three were approved as recommended: uniffi for the bindings, iPhone first, and
+the 10,000-character limit kept. The reasoning stays below for the record.
 
 1. **uniffi (MPL-2.0)** to generate the Swift and Kotlin bindings. MPL is file-level
    copyleft: using it unmodified in a closed app only requires keeping its notices and
