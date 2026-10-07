@@ -63,11 +63,25 @@ async def test_inventory_covers_shared_post_references_removed_rows_and_avatar(
     async with get_session_factory()() as session:
         first = await inventory_media_reference(session, object_name)
     async with get_session_factory()() as session:
+        snapshot = (
+            (await session.execute(text("SELECT count(*) FROM posts"))).scalar_one(),
+            (await session.execute(text("SELECT count(*) FROM users"))).scalar_one(),
+            (await session.execute(text("SELECT avatar_url FROM users WHERE id = :id"), {"id": setup.president.id})).scalar_one(),
+        )
+    async with get_session_factory()() as session:
         second = await inventory_media_reference(session, object_name)
+    async with get_session_factory()() as session:
+        after = (
+            (await session.execute(text("SELECT count(*) FROM posts"))).scalar_one(),
+            (await session.execute(text("SELECT count(*) FROM users"))).scalar_one(),
+            (await session.execute(text("SELECT avatar_url FROM users WHERE id = :id"), {"id": setup.president.id})).scalar_one(),
+        )
 
-    assert first.complete is True
-    assert first.ready_to_apply is True
+    assert first.supported_reference_scan_complete is True
+    assert first.ready_for_review is True
+    assert first.deletion_authorized is False
     assert first.manifest_digest == second.manifest_digest
+    assert after == snapshot, "inventory must not mutate rows or create/delete references"
     assert {(ref.surface, ref.row_id, ref.state) for ref in first.references} == {
         ("posts.media_urls", live_id, "live"),
         ("posts.media_urls", removed_id, "removed"),
@@ -80,8 +94,8 @@ async def test_inventory_covers_shared_post_references_removed_rows_and_avatar(
     avatar_name = f"avatars/{setup.president.id}/avatar.jpg"
     async with get_session_factory()() as session:
         avatar_inventory = await inventory_media_reference(session, avatar_name)
-    assert avatar_inventory.complete is True
-    assert avatar_inventory.ready_to_apply is True
+    assert avatar_inventory.supported_reference_scan_complete is True
+    assert avatar_inventory.ready_for_review is True
     assert [(ref.surface, ref.row_id, ref.state) for ref in avatar_inventory.references] == [
         ("users.avatar_url", setup.president.id, "active")
     ]
@@ -102,13 +116,50 @@ async def test_inventory_refuses_ready_for_unknown_owned_reference_and_ignores_f
 
     assert result.references[0].surface == "posts.media_urls"
     assert result.references[0].state == "live"
-    assert result.complete is False
-    assert result.ready_to_apply is False
+    assert result.supported_reference_scan_complete is False
+    assert result.ready_for_review is False
+    assert result.deletion_authorized is False
     assert len(result.unknown_references) == 1
     assert result.unknown_references[0].surface == "posts.media_urls"
-    assert result.unknown_references[0].reason == "unsupported_owned_url"
+    assert result.unknown_references[0].reason == "ambiguous_reference"
     # Foreign references are known to be outside this bucket and are not a match.
     assert result.unknown_references[0].value_digest != __import__("hashlib").sha256(foreign.encode()).hexdigest()
+
+
+async def test_inventory_marks_ambiguous_storage_forms_unknown(
+    make_chapter_with: MakeChapterWith,
+) -> None:
+    setup = await make_chapter_with("president")
+    object_name = f"posts/{setup.president.id}/target.jpg"
+    values = [
+        f"gs://{BUCKET}/{object_name}",
+        f"https://{BUCKET}.storage.googleapis.com/{object_name}",
+    ]
+    await _insert_post(setup.chapter_id, setup.president.id, values)
+    async with get_session_factory()() as session:
+        result = await inventory_media_reference(session, object_name)
+    assert result.supported_reference_scan_complete is False
+    assert result.ready_for_review is False
+    assert len(result.unknown_references) == 2
+    assert {item.reason for item in result.unknown_references} == {"ambiguous_reference"}
+
+
+async def test_inventory_refuses_review_when_post_scan_cap_is_hit(
+    make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup = await make_chapter_with("president")
+    target = f"posts/{setup.president.id}/target.jpg"
+    canonical = f"https://storage.googleapis.com/{BUCKET}/{target}"
+    await _insert_post(setup.chapter_id, setup.president.id, [canonical])
+    await _insert_post(setup.chapter_id, setup.president.id, [canonical.replace("target", "other")])
+    import app.services.removal_inventory as inventory
+
+    monkeypatch.setattr(inventory, "MAX_POST_ROWS", 1)
+    async with get_session_factory()() as session:
+        result = await inventory.inventory_media_reference(session, target)
+    assert result.supported_reference_scan_complete is False
+    assert result.ready_for_review is False
+    assert "post_row_cap_reached" in result.incomplete_reasons
 
 
 @pytest.mark.parametrize("bad_name", ["", "posts/not-a-uuid/a.jpg", "posts/../x.jpg", "posts/%s/a.jpg" % uuid.uuid4() + "?x=1"])

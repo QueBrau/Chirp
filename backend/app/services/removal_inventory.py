@@ -14,8 +14,9 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -24,6 +25,12 @@ from app.services.storage_service import object_name_from_stored_url
 
 _OBJECT_NAME_RE = re.compile(r"^(posts|avatars)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/([A-Za-z0-9][A-Za-z0-9._-]{0,255})$")
 _MAX_OBJECT_NAME_LENGTH = 512
+POST_PAGE_SIZE = 250
+USER_PAGE_SIZE = 250
+MAX_POST_ROWS = 10_000
+MAX_USER_ROWS = 10_000
+MAX_MEDIA_VALUES_PER_ROW = 64
+STATEMENT_TIMEOUT_MS = 2_000
 SUPPORTED_SURFACES = ("posts.media_urls", "users.avatar_url")
 UNSUPPORTED_MEDIA_SURFACES = ("content_reports.forwarded_plaintext",)
 
@@ -34,6 +41,7 @@ class Reference:
     row_id: str
     state: str
     slot: int | None = None
+    row_generation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -53,8 +61,10 @@ class RemovalInventory:
     references: tuple[Reference, ...]
     unknown_references: tuple[UnknownReference, ...]
     unsupported_media_surfaces: tuple[str, ...]
-    complete: bool
-    ready_to_apply: bool
+    supported_reference_scan_complete: bool
+    incomplete_reasons: tuple[str, ...]
+    ready_for_review: bool
+    deletion_authorized: bool
     manifest_digest: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -63,6 +73,7 @@ class RemovalInventory:
             "references": [asdict(item) for item in self.references],
             "unknown_references": [asdict(item) for item in self.unknown_references],
             "unsupported_media_surfaces": list(self.unsupported_media_surfaces),
+            "incomplete_reasons": list(self.incomplete_reasons),
         }
 
 
@@ -81,14 +92,19 @@ def _value_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _owned_url(value: str, bucket: str) -> bool:
-    return value.startswith(
-        (
-            f"https://storage.googleapis.com/{bucket}/",
-            f"https://storage.cloud.google.com/{bucket}/",
-            f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/",
-        )
-    )
+def _known_foreign_url(value: str) -> bool:
+    """Classify only plainly foreign HTTP(S) URLs as out of scope.
+
+    ``gs://``, virtual-hosted storage URLs, malformed local values, and unknown
+    storage.google.com shapes remain ambiguous and therefore block completeness.
+    """
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    if host in {"storage.googleapis.com", "storage.cloud.google.com"} or host.endswith(".storage.googleapis.com"):
+        return False
+    return True
 
 
 def _manifest_digest(
@@ -113,39 +129,81 @@ def _manifest_digest(
 async def inventory_media_reference(session: AsyncSession, object_name: str) -> RemovalInventory:
     """Return a deterministic, read-only inventory for ``object_name``.
 
-    ``ready_to_apply`` means only that every value in the supported reference columns
-    was classified and the supplied object has at least one reference. It does not
-    mean byte-identical copies were found, a provider object exists, or deletion is
-    authorized. Unknown owned-bucket formats make the result incomplete and refuse
-    readiness. Foreign-host URLs are known out-of-scope values and do not match.
+    ``ready_for_review`` means only that every scanned value was classified and the
+    supplied object has at least one reference. It does not mean byte-identical copies
+    were found, a provider object exists, or deletion is authorized. This function
+    never authorizes deletion. Ambiguous formats and scan caps make the result
+    incomplete; plainly foreign HTTP(S) URLs are known out-of-scope values.
     """
     bucket = get_settings().media_bucket_name or ""
     _validate_object_name(object_name, bucket)
     references: list[Reference] = []
     unknown: list[UnknownReference] = []
+    incomplete_reasons: list[str] = []
+    await session.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT_MS}ms'"))
 
-    posts = await session.execute(select(models.Post.id, models.Post.deleted_at, models.Post.media_urls))
-    for row_id, deleted_at, media_urls in posts:
-        for slot, value in enumerate(media_urls or []):
+    scanned_posts = 0
+    last_post_id = None
+    while scanned_posts < MAX_POST_ROWS:
+        remaining = MAX_POST_ROWS - scanned_posts
+        stmt = (
+            select(models.Post.id, models.Post.created_at, models.Post.deleted_at, models.Post.media_urls)
+            .order_by(models.Post.id)
+            .limit(min(POST_PAGE_SIZE, remaining + 1))
+        )
+        if last_post_id is not None:
+            stmt = stmt.where(models.Post.id > last_post_id)
+        rows = list((await session.execute(stmt)).all())
+        if not rows:
+            break
+        if len(rows) > remaining:
+            rows = rows[:remaining]
+            incomplete_reasons.append("post_row_cap_reached")
+        for row_id, created_at, deleted_at, media_urls in rows:
+            values = media_urls or []
+            if len(values) > MAX_MEDIA_VALUES_PER_ROW:
+                unknown.append(UnknownReference("posts.media_urls", str(row_id), _value_digest(str(len(values))), "media_value_cap_reached"))
+                values = values[:MAX_MEDIA_VALUES_PER_ROW]
+            for slot, value in enumerate(values):
+                parsed = object_name_from_stored_url(value)
+                if parsed is None or not _OBJECT_NAME_RE.fullmatch(parsed):
+                    if not _known_foreign_url(value):
+                        unknown.append(UnknownReference("posts.media_urls", str(row_id), _value_digest(value), "ambiguous_reference"))
+                    continue
+                if parsed == object_name:
+                    references.append(Reference("posts.media_urls", str(row_id), "removed" if deleted_at else "live", slot, created_at.isoformat()))
+        scanned_posts += len(rows)
+        last_post_id = rows[-1][0]
+        if len(rows) < min(POST_PAGE_SIZE, remaining + 1) or "post_row_cap_reached" in incomplete_reasons:
+            break
+
+    scanned_users = 0
+    last_user_id = None
+    while scanned_users < MAX_USER_ROWS:
+        remaining = MAX_USER_ROWS - scanned_users
+        stmt = select(models.User.id, models.User.avatar_url).order_by(models.User.id).limit(min(USER_PAGE_SIZE, remaining + 1))
+        if last_user_id is not None:
+            stmt = stmt.where(models.User.id > last_user_id)
+        rows = list((await session.execute(stmt)).all())
+        if not rows:
+            break
+        if len(rows) > remaining:
+            rows = rows[:remaining]
+            incomplete_reasons.append("user_row_cap_reached")
+        for row_id, value in rows:
+            if value is None:
+                continue
             parsed = object_name_from_stored_url(value)
             if parsed is None or not _OBJECT_NAME_RE.fullmatch(parsed):
-                if _owned_url(value, bucket):
-                    unknown.append(UnknownReference("posts.media_urls", str(row_id), _value_digest(value), "unsupported_owned_url"))
+                if not _known_foreign_url(value):
+                    unknown.append(UnknownReference("users.avatar_url", str(row_id), _value_digest(value), "ambiguous_reference"))
                 continue
             if parsed == object_name:
-                references.append(Reference("posts.media_urls", str(row_id), "removed" if deleted_at else "live", slot))
-
-    users = await session.execute(select(models.User.id, models.User.avatar_url))
-    for row_id, value in users:
-        if value is None:
-            continue
-        parsed = object_name_from_stored_url(value)
-        if parsed is None or not _OBJECT_NAME_RE.fullmatch(parsed):
-            if _owned_url(value, bucket):
-                unknown.append(UnknownReference("users.avatar_url", str(row_id), _value_digest(value), "unsupported_owned_url"))
-            continue
-        if parsed == object_name:
-            references.append(Reference("users.avatar_url", str(row_id), "active", None))
+                references.append(Reference("users.avatar_url", str(row_id), "active", None, None))
+        scanned_users += len(rows)
+        last_user_id = rows[-1][0]
+        if len(rows) < min(USER_PAGE_SIZE, remaining + 1) or "user_row_cap_reached" in incomplete_reasons:
+            break
 
     references.sort(key=lambda item: (item.surface, item.row_id, item.slot if item.slot is not None else -1, item.state))
     unknown.sort(key=lambda item: (item.surface, item.row_id, item.value_digest, item.reason))
@@ -157,7 +215,7 @@ async def inventory_media_reference(session: AsyncSession, object_name: str) -> 
         references=refs,
         unknown_references=unknown_refs,
     )
-    complete = not unknown_refs
+    complete = not unknown_refs and not incomplete_reasons
     return RemovalInventory(
         schema_version=1,
         bucket=bucket,
@@ -166,7 +224,9 @@ async def inventory_media_reference(session: AsyncSession, object_name: str) -> 
         references=refs,
         unknown_references=unknown_refs,
         unsupported_media_surfaces=UNSUPPORTED_MEDIA_SURFACES,
-        complete=complete,
-        ready_to_apply=complete and bool(refs),
+        supported_reference_scan_complete=complete,
+        incomplete_reasons=tuple(sorted(set(incomplete_reasons))),
+        ready_for_review=complete and bool(refs),
+        deletion_authorized=False,
         manifest_digest=digest,
     )
