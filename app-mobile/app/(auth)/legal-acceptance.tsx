@@ -78,7 +78,9 @@ export default function LegalAcceptanceScreen() {
         }
       }
     }
-    finally { setSubmitting(false); }
+    finally {
+      if (ownsIdentity(owner) && epoch === loadEpoch.current) setSubmitting(false);
+    }
   };
   const decline = async () => {
     const owner = ownerRef.current;
