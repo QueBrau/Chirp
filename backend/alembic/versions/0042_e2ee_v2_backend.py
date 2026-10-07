@@ -1,9 +1,8 @@
 """E2EE v2 backend: versioned device directory, fallback keys, per-device message legs (c444).
 
-RE-POINT AT MERGE TIME. down_revision below is 0039, the head of origin/main when this was
-written. 0040 (c438) and 0041 (c436) are claimed on other unmerged branches; whichever of
-them lands first, re-point this file at the then-current head, re-run `alembic heads` to
-confirm a single head, and say so in the PR body (same rule 0039's header followed).
+RE-POINTED Oct 7: down_revision is 0041. This was written against 0039 while 0040 (c438)
+and 0041 (c436) were still on unmerged branches; both landed on main first, so it now
+chains after 0041 (`alembic heads` shows the single head 0042).
 
 WHY A NEW SHAPE AND NOT A REINTERPRETATION OF THE OLD COLUMNS (E2EE-DESIGN.md section 4).
 The v1 tables are Signal-shaped: one DH identity, a signed-prekey slot, Kyber columns, and
@@ -48,7 +47,7 @@ from alembic import op
 from sqlalchemy import text
 
 revision = "0042"
-down_revision = "0039"
+down_revision = "0041"
 branch_labels = None
 depends_on = None
 
