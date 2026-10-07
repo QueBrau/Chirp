@@ -1,6 +1,7 @@
 """Authentication dependencies: verified Firebase uid and registered-user resolution."""
 import time
 import math
+from functools import partial
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,7 +56,11 @@ async def _verify_identity(
         firebase_admin.initialize_app(options=options)
 
     try:
-        decoded = await run_verification(firebase_auth.verify_id_token, token)
+        verifier = (
+            partial(firebase_auth.verify_id_token, check_revoked=True)
+            if require_fresh else firebase_auth.verify_id_token
+        )
+        decoded = await run_verification(verifier, token)
     except Exception:  # invalid/expired token
         raise HTTPException(status_code=401, detail="invalid_token")
     uid = decoded.get("uid")

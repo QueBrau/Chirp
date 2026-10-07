@@ -15,3 +15,8 @@ Rollout order:
 3. Verify suspended users can still read their own request status while sensitive creation/download remains fresh-auth protected; verify owner isolation and rate limits.
 4. Ship the mobile settings screen and web support fallback after backend behavior is observable.
 5. Treat deletion as manual processing until each provider step has a durable journal, an idempotent retry contract, and provider-specific confirmation.
+
+Sensitive request creation and downloads check both Firebase token revocation and
+recent authentication. Verify the API identity can read Firebase account status
+before release; existing certificate-only token verification does not prove that
+permission. No new cloud permission is granted by this code change.

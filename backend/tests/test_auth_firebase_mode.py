@@ -96,13 +96,32 @@ async def test_firebase_mode_non_bearer_authorization_header_raises_401(
     assert exc_info.value.detail == "missing_bearer_token"
 
 
-@pytest.mark.parametrize("auth_time", [float("inf"), float("nan"), time.time() + 60])
+@pytest.mark.parametrize("auth_time", [None, True, float("inf"), float("nan"), time.time() + 60, time.time() - 901])
 async def test_privacy_auth_rejects_nonfinite_or_future_auth_time(
     monkeypatch: pytest.MonkeyPatch, auth_time: float,
 ) -> None:
     _use_firebase_mode(monkeypatch)
     _stub_already_initialized_app(monkeypatch)
-    monkeypatch.setattr(firebase_auth, "verify_id_token", lambda token: {"uid": "privacy-user", "auth_time": auth_time})
+    monkeypatch.setattr(firebase_auth, "verify_id_token", lambda token, **kwargs: {"uid": "privacy-user", "auth_time": auth_time})
     with pytest.raises(HTTPException) as exc_info:
         await get_fresh_verified_uid(x_debug_firebase_uid=None, authorization="Bearer fresh-token")
     assert exc_info.value.detail == "recent_authentication_required"
+
+
+async def test_privacy_auth_checks_revocation_even_for_a_recent_token(monkeypatch) -> None:
+    _use_firebase_mode(monkeypatch)
+    _stub_already_initialized_app(monkeypatch)
+    checks = []
+
+    def verify(token, *, check_revoked=False):
+        checks.append(check_revoked)
+        if token == "revoked" and check_revoked:
+            raise ValueError("revoked token")
+        return {"uid": "privacy-user", "auth_time": time.time()}
+
+    monkeypatch.setattr(firebase_auth, "verify_id_token", verify)
+    assert await get_fresh_verified_uid(None, "Bearer recent") == "privacy-user"
+    with pytest.raises(HTTPException) as error:
+        await get_fresh_verified_uid(None, "Bearer revoked")
+    assert error.value.status_code == 401
+    assert checks == [True, True]

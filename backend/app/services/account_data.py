@@ -15,7 +15,7 @@ from app import models
 
 
 async def purge_expired_export_artifacts(session: AsyncSession) -> int:
-    """Delete expired export copies; callers run this from the retention job."""
+    """Delete expired export copies. Scheduling this helper is not yet implemented."""
     result = await session.execute(
         delete(models.AccountDataArtifact).where(
             models.AccountDataArtifact.expires_at.is_not(None),
@@ -36,6 +36,7 @@ EXPORT_EXCLUDED = [
     "provider-held authentication, payment, email, storage, logging, and backup copies",
     "message plaintext that the server never stores",
     "prekey byte material and dormant client-only SQLite data",
+    "installment details, delivery-outbox records, and role history changed by other officers",
 ]
 RETENTION_REASONS = [
     "shared organization and safety records may need attribution or legal preservation",
