@@ -10,7 +10,7 @@ from sqlalchemy import text
 from app.config import get_settings
 from app.db import get_session_factory
 from app.services.removal_inventory import inventory_media_reference
-from tests.conftest import MakeChapterWith
+from tests.conftest import MakeChapterWith, MakeUser
 
 BUCKET = "c437-inventory-media"
 
@@ -144,22 +144,32 @@ async def test_inventory_marks_ambiguous_storage_forms_unknown(
     assert {item.reason for item in result.unknown_references} == {"ambiguous_reference"}
 
 
-async def test_inventory_refuses_review_when_post_scan_cap_is_hit(
-    make_chapter_with: MakeChapterWith, monkeypatch: pytest.MonkeyPatch
+async def test_inventory_refuses_review_when_exact_post_and_user_page_caps_are_hit(
+    make_chapter_with: MakeChapterWith, make_user: MakeUser, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     setup = await make_chapter_with("president")
     target = f"posts/{setup.president.id}/target.jpg"
     canonical = f"https://storage.googleapis.com/{BUCKET}/{target}"
     await _insert_post(setup.chapter_id, setup.president.id, [canonical])
     await _insert_post(setup.chapter_id, setup.president.id, [canonical.replace("target", "other")])
+    await _insert_post(setup.chapter_id, setup.president.id, [canonical.replace("target", "third")])
+    await make_user("Inventory cap user one")
+    await make_user("Inventory cap user two")
     import app.services.removal_inventory as inventory
 
-    monkeypatch.setattr(inventory, "MAX_POST_ROWS", 1)
+    # Both caps are exact page multiples while an additional row exists. The
+    # inventory must conservatively refuse completeness instead of treating the
+    # final full page as proof that the table ended there.
+    monkeypatch.setattr(inventory, "POST_PAGE_SIZE", 2)
+    monkeypatch.setattr(inventory, "MAX_POST_ROWS", 2)
+    monkeypatch.setattr(inventory, "USER_PAGE_SIZE", 2)
+    monkeypatch.setattr(inventory, "MAX_USER_ROWS", 2)
     async with get_session_factory()() as session:
         result = await inventory.inventory_media_reference(session, target)
     assert result.supported_reference_scan_complete is False
     assert result.ready_for_review is False
     assert "post_row_cap_reached" in result.incomplete_reasons
+    assert "user_row_cap_reached" in result.incomplete_reasons
 
 
 @pytest.mark.parametrize("bad_name", ["", "posts/not-a-uuid/a.jpg", "posts/../x.jpg", "posts/%s/a.jpg" % uuid.uuid4() + "?x=1"])

@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -113,12 +114,25 @@ def _manifest_digest(
     object_name: str,
     references: tuple[Reference, ...],
     unknown_references: tuple[UnknownReference, ...],
+    incomplete_reasons: tuple[str, ...],
+    supported_reference_scan_complete: bool,
 ) -> str:
     payload = {
         "schema_version": 1,
         "bucket": bucket,
         "object_name": object_name,
         "scope": list(SUPPORTED_SURFACES),
+        "unsupported_media_surfaces": list(UNSUPPORTED_MEDIA_SURFACES),
+        "limits": {
+            "post_page_size": POST_PAGE_SIZE,
+            "user_page_size": USER_PAGE_SIZE,
+            "max_post_rows": MAX_POST_ROWS,
+            "max_user_rows": MAX_USER_ROWS,
+            "max_media_values_per_row": MAX_MEDIA_VALUES_PER_ROW,
+            "statement_timeout_ms": STATEMENT_TIMEOUT_MS,
+        },
+        "supported_reference_scan_complete": supported_reference_scan_complete,
+        "incomplete_reasons": list(incomplete_reasons),
         "references": [asdict(item) for item in references],
         "unknown_references": [asdict(item) for item in unknown_references],
     }
@@ -140,6 +154,19 @@ async def inventory_media_reference(session: AsyncSession, object_name: str) -> 
     references: list[Reference] = []
     unknown: list[UnknownReference] = []
     incomplete_reasons: list[str] = []
+    # A caller that already opened a transaction cannot retroactively request a
+    # repeatable-read snapshot. Keep scanning for an operator diagnostic, but bind
+    # that fact into the manifest so it can never look apply-ready.
+    if session.in_transaction():
+        incomplete_reasons.append("repeatable_read_snapshot_unavailable")
+    else:
+        try:
+            # This must be the first command in a fresh transaction. A caller that
+            # already used its session cannot retroactively provide a snapshot; the
+            # branch above marks that manifest incomplete instead.
+            await session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"))
+        except SQLAlchemyError:
+            incomplete_reasons.append("repeatable_read_snapshot_unavailable")
     await session.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT_MS}ms'"))
 
     scanned_posts = 0
@@ -176,6 +203,10 @@ async def inventory_media_reference(session: AsyncSession, object_name: str) -> 
         last_post_id = rows[-1][0]
         if len(rows) < min(POST_PAGE_SIZE, remaining + 1) or "post_row_cap_reached" in incomplete_reasons:
             break
+    if scanned_posts >= MAX_POST_ROWS:
+        # Conservative by design: an exact page-multiple gives no proof that a
+        # subsequent row did not appear between pages, so it is never apply-ready.
+        incomplete_reasons.append("post_row_cap_reached")
 
     scanned_users = 0
     last_user_id = None
@@ -204,18 +235,23 @@ async def inventory_media_reference(session: AsyncSession, object_name: str) -> 
         last_user_id = rows[-1][0]
         if len(rows) < min(USER_PAGE_SIZE, remaining + 1) or "user_row_cap_reached" in incomplete_reasons:
             break
+    if scanned_users >= MAX_USER_ROWS:
+        incomplete_reasons.append("user_row_cap_reached")
 
     references.sort(key=lambda item: (item.surface, item.row_id, item.slot if item.slot is not None else -1, item.state))
     unknown.sort(key=lambda item: (item.surface, item.row_id, item.value_digest, item.reason))
     refs = tuple(references)
     unknown_refs = tuple(unknown)
+    incomplete = tuple(sorted(set(incomplete_reasons)))
+    scan_complete = not unknown_refs and not incomplete
     digest = _manifest_digest(
         bucket=bucket,
         object_name=object_name,
         references=refs,
         unknown_references=unknown_refs,
+        incomplete_reasons=incomplete,
+        supported_reference_scan_complete=scan_complete,
     )
-    complete = not unknown_refs and not incomplete_reasons
     return RemovalInventory(
         schema_version=1,
         bucket=bucket,
@@ -224,9 +260,9 @@ async def inventory_media_reference(session: AsyncSession, object_name: str) -> 
         references=refs,
         unknown_references=unknown_refs,
         unsupported_media_surfaces=UNSUPPORTED_MEDIA_SURFACES,
-        supported_reference_scan_complete=complete,
-        incomplete_reasons=tuple(sorted(set(incomplete_reasons))),
-        ready_for_review=complete and bool(refs),
+        supported_reference_scan_complete=scan_complete,
+        incomplete_reasons=incomplete,
+        ready_for_review=scan_complete and bool(refs),
         deletion_authorized=False,
         manifest_digest=digest,
     )
