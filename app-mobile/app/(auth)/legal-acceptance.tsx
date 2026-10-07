@@ -37,6 +37,10 @@ export default function LegalAcceptanceScreen() {
     setSubmitting(true);
     const owner = ownerRef.current;
     const epoch = loadEpoch.current;
+    if (!ownsIdentity(owner) || epoch !== loadEpoch.current) {
+      setSubmitting(false);
+      return;
+    }
     try {
       const terms = status.policies.find(p => p.key === "terms");
       const privacy = status.policies.find(p => p.key === "privacy");
@@ -53,6 +57,7 @@ export default function LegalAcceptanceScreen() {
   };
   const decline = async () => {
     const owner = ownerRef.current;
+    if (!ownsIdentity(owner)) return;
     if (hasFirebaseConfig()) await signOutUser();
     if ((!hasFirebaseConfig() && ownsIdentity(owner)) || currentIdentity().uid === null) router.replace("/sign-in");
   };
