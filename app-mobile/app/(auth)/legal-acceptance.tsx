@@ -8,7 +8,7 @@ import { useSession, withInviteCode } from "@/auth";
 import { spacing, useTheme } from "@/theme";
 import { openLegalLink, PRIVACY_URL, TERMS_URL } from "@/lib/legalLinks";
 import { hasFirebaseConfig, signOutUser } from "@/auth";
-import { currentIdentity, ownsIdentity, type AuthIdentity } from "@/auth/identity";
+import { currentIdentity, onIdentityChanged, ownsIdentity, type AuthIdentity } from "@/auth/identity";
 
 export default function LegalAcceptanceScreen() {
   const { refresh } = useSession();
@@ -32,6 +32,21 @@ export default function LegalAcceptanceScreen() {
     });
     return () => { loadEpoch.current += 1; };
   }, []);
+  useEffect(() => onIdentityChanged(() => {
+    const nextOwner = currentIdentity();
+    ownerRef.current = nextOwner;
+    const epoch = ++loadEpoch.current;
+    setStatus(null);
+    setAge(null);
+    setGuardian(false);
+    setSubmitting(false);
+    setError("Your account changed. Reloading the current policies.");
+    void getLegalStatus().then(value => {
+      if (epoch === loadEpoch.current && ownsIdentity(nextOwner)) setStatus(value);
+    }).catch(() => {
+      if (epoch === loadEpoch.current && ownsIdentity(nextOwner)) setError("Couldn't load the current policies. Try again.");
+    });
+  }), []);
   const submit = async () => {
     if (submitting) return;
     if (!status || age === null || (age === 17 && !guardian)) { setError("Choose your age category, and confirm a parent or guardian gave permission if you are 17."); return; }
