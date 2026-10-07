@@ -18,10 +18,12 @@ export function DataRequests() {
       <section className="wrap section--tight">
         <div className="prose">
           <p>
-            Email <a href={`mailto:${CONTACT_EMAIL}?subject=Chirp%20data%20request`}>{CONTACT_EMAIL}</a>
-            {" "}with the subject &ldquo;Chirp data request.&rdquo; You do not need to sign in, pay,
-            or create an account to make a request. If you cannot use the email link, copy the
-            address into your email app.
+            If your app has a &ldquo;Your data&rdquo; screen in profile settings, you can request
+            a copy or account deletion there and check its status. If that screen is unavailable
+            or you cannot sign in, email <a href={`mailto:${CONTACT_EMAIL}?subject=Chirp%20data%20request`}>{CONTACT_EMAIL}</a>
+            {" "}with the subject &ldquo;Chirp data request.&rdquo; You do not need to pay or create
+            an account to make a request. If you cannot use the email link, copy the address into
+            your email app.
           </p>
           <h2>What to include</h2>
           <ul>
@@ -45,9 +47,12 @@ export function DataRequests() {
           </p>
           <h2>Account deletion and retained records</h2>
           <p>
-            Chirp currently receives account-deletion and complete data-copy requests through
-            support. The app does not offer self-service account deletion. Signing out, uninstalling
-            the app, leaving an organization or removing a post does not delete your whole account.
+            Submitting a request starts a review; it does not erase records automatically or
+            guarantee that every provider copy, backup, message, shared organization record or
+            financial record can be removed. Signing out, uninstalling the app, leaving an
+            organization or removing a post does not delete your whole account. Support remains
+            available for requests that need identity verification, provider coordination or a
+            fuller explanation of retained records.
           </p>
           <p>
             Deletion requests include review of associated account data, rather than merely disabling

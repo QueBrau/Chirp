@@ -369,6 +369,10 @@ jobs:
         # replacement, stale form, cancellation, and duplicate-confirmation races.
         run: npm run verify:c438-authority
 
+      - name: Account data stays accessible across auth states
+        working-directory: app-mobile
+        run: npm run verify:c436-account-data
+
       - name: Every verifier actually runs
         working-directory: app-mobile
         # c336's own ratchet. Eight of fourteen guards here were never wired, so they
