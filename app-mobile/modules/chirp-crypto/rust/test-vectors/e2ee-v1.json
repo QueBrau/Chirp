@@ -1,0 +1,93 @@
+{
+  "accounts": {
+    "approver": {
+      "curve25519_secret": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+      "ed25519_seed": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "identity_curve25519": "675dd574ed7789310b3d2e7681f3790b466c773b1521fecf36577958371ea52f",
+      "identity_ed25519": "2543b92ff1095511476adc8369db6ddc933665a11978dda1404ee1066ca9559d"
+    },
+    "device": {
+      "curve25519_secret": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "ed25519_seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "identity_curve25519": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254",
+      "identity_ed25519": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+    },
+    "peer": {
+      "ed25519_seed": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+      "identity_ed25519": "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+    }
+  },
+  "description": "Test vectors for chirp-crypto-core signed encodings and safety numbers. Ed25519 signatures are deterministic (RFC 8032), so every field below is reproducible from the seeds.",
+  "device_approval": {
+    "domain": "chirp-e2ee-v1/device-approval",
+    "encoded": "001d63686972702d653265652d76312f6465766963652d617070726f76616c0000001000112233445566778899aabbccddeeff000000040000000700000020358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd1662540000002003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+    "generation_u32": 7,
+    "identity_curve25519": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254",
+    "identity_ed25519": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+    "note": "fields are those of the NEW device; the signer is the approver",
+    "signature": "443356ad59d16c1c04c8e4b523aa22f4f976ea3cd0b7616c898845a7b285b0876e45c87a1ef985fdc09f2981b5a19b2266cc1342108d55e1ba2079680ee4380e",
+    "signer_ed25519": "2543b92ff1095511476adc8369db6ddc933665a11978dda1404ee1066ca9559d",
+    "user_id": "00112233445566778899aabbccddeeff"
+  },
+  "device_binding": {
+    "domain": "chirp-e2ee-v1/device-binding",
+    "encoded": "001c63686972702d653265652d76312f6465766963652d62696e64696e6700000010766f646f7a656d61632d6f6c6d2d76310000001000112233445566778899aabbccddeeff000000040000000700000020358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd1662540000002003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+    "generation_u32": 7,
+    "identity_curve25519": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254",
+    "identity_ed25519": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+    "signature": "f1f005682bc32d63fe2247f0d187a6c92738abd2c2b0b68ddfbeb7c98877cc1e22c3cbaf8212f295fdd45c33f85be087b22e1991678cf8f72fa24c1dd93c3008",
+    "signer_ed25519": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+    "user_id": "00112233445566778899aabbccddeeff"
+  },
+  "encoding": "u16_be(len(domain)) || domain || for each field in order: u32_be(len(field)) || field",
+  "safety_number": {
+    "algorithm": "per user: d = 0x00 || sorted(identity_ed25519 keys) || user_id; d = SHA-512(d) applied 5200 times; first 30 bytes as six 5-byte big-endian u40 values, each mod 100000, zero padded to 5 digits; halves concatenated with the lower user_id (bytewise) first",
+    "cases": [
+      {
+        "digits": "392074560414034884342504898688448945896927249447335016256280",
+        "my_identities": [
+          "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+          "2543b92ff1095511476adc8369db6ddc933665a11978dda1404ee1066ca9559d"
+        ],
+        "my_user_id": "00112233445566778899aabbccddeeff",
+        "peer_identities": [
+          "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+        ],
+        "peer_user_id": "ffeeddccbbaa99887766554433221100"
+      },
+      {
+        "digits": "560839850200584869168153309870448945896927249447335016256280",
+        "my_identities": [
+          "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+        ],
+        "my_user_id": "00112233445566778899aabbccddeeff",
+        "peer_identities": [
+          "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+        ],
+        "peer_user_id": "ffeeddccbbaa99887766554433221100"
+      }
+    ]
+  },
+  "signed_keys": [
+    {
+      "encoded": "001163686972702d653265652d76312f6f746b000000086f6e655f74696d6500000008010203040506070800000020493e82fc74464a59268817623d2053c5eb8e2cc4a988b4fee179ec6b010d531d00000020358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254",
+      "key_id_u64": "72623859790382856",
+      "kind": "one_time",
+      "owner_identity_curve25519": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254",
+      "public_key": "493e82fc74464a59268817623d2053c5eb8e2cc4a988b4fee179ec6b010d531d",
+      "signature": "771bf0a5357250d59d328fdfbd7233cb014f4819611b28cf311bb802e2a916dddf521782576033e3c8e094ab40d4c6fca2e141d3b60a8afe162b038deba9170e",
+      "signer_ed25519": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+    },
+    {
+      "encoded": "001163686972702d653265652d76312f6f746b0000000866616c6c6261636b00000008010203040506070800000020493e82fc74464a59268817623d2053c5eb8e2cc4a988b4fee179ec6b010d531d00000020358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254",
+      "key_id_u64": "72623859790382856",
+      "kind": "fallback",
+      "owner_identity_curve25519": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254",
+      "public_key": "493e82fc74464a59268817623d2053c5eb8e2cc4a988b4fee179ec6b010d531d",
+      "signature": "812aa56bb9ef358e10a4f3d4c6c440adf87ed229a2d5bb7187661d853af574d092bb0d06495ed5fba758d53d69a3339135b29a2a1a6098364d732418f93dbf0a",
+      "signer_ed25519": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+    }
+  ],
+  "suite": "vodozemac-olm-v1",
+  "version": 1
+}
