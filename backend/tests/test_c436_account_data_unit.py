@@ -1,6 +1,7 @@
 """Focused c436 safety tests that do not contact a provider or mutate a database."""
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import AsyncClient
@@ -112,3 +113,25 @@ async def test_export_is_immutable_authenticated_and_explicitly_partial(
     assert export.status_code == 200
     assert export.headers["content-disposition"].startswith("attachment;")
     assert export.json()["format"] == "chirp-account-export-v1"
+
+
+@pytest.mark.asyncio
+async def test_expired_export_artifact_is_purged(
+    client: AsyncClient, make_user
+) -> None:
+    owner: ApiUser = await make_user("Retention owner")
+    from app.db import get_session_factory
+
+    async with get_session_factory()() as session:
+        request = models.AccountDataRequest(user_id=uuid.UUID(owner.id), kind="export", open_key=None)
+        session.add(request)
+        await session.flush()
+        session.add(models.AccountDataArtifact(
+            request_id=request.id,
+            content={"format": "synthetic"},
+            content_sha256=uuid.uuid4().hex,
+            expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        ))
+        await session.commit()
+        assert await account_data.purge_expired_export_artifacts(session) == 1
+        await session.commit()
