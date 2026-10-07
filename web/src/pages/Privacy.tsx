@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 
 import { usePageMeta } from "../components/usePageMeta";
-import { CONTACT_EMAIL, LEGAL_AUDIENCE, LEGAL_LAST_UPDATED, LEGAL_OPERATORS, MIN_AGE } from "../siteConfig";
+import { CONTACT_EMAIL, LEGAL_AUDIENCE, LEGAL_LAST_UPDATED, LEGAL_OPERATORS, MIN_AGE, OPERATING_STATE } from "../siteConfig";
 
 // Source map: docs/legal-data-inventory.md. Publication requires the operational
 // review in docs/legal-publication-checklist.md; copy does not implement erasure.
@@ -40,8 +40,8 @@ export function Privacy() {
 
           <h2>1. Who and what this policy covers</h2>
           <p>
-            This policy covers the Chirp app and website, an unincorporated service operated by{" "}
-            {LEGAL_OPERATORS}.
+            This policy covers the Chirp app and website, an unincorporated service operated from{" "}
+            {OPERATING_STATE} by {LEGAL_OPERATORS}.
             Chirp is intended for students and alumni of participating U.S. colleges and universities;
             availability varies by campus and feature. Contact us at{" "}
             <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.

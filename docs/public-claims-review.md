@@ -1,14 +1,14 @@
 # Public product claims review — October 6, 2026 (c435)
 
 The current refresh is a draft for 17+ U.S. colleges and alumni, operated by Jose
-Perdomo and Braulio Pantoja Esquina (not incorporated, user confirmed). See
+Perdomo and Braulio Pantoja Esquina in Florida (not incorporated, user confirmed). See
 [the full source inventory](legal-data-inventory.md) and
 [publication review and operating gates](legal-publication-checklist.md).
 It is not counsel approval or evidence of a new production deployment.
 
 | Current correction | Evidence / limit |
 | --- | --- |
-| National participating-campus audience; actual operators | User decision October 6. Availability still depends on supported campus/feature. No operating state or LLC invented. |
+| National participating-campus audience; actual operators and Florida location | User decisions October 6. Availability still depends on supported campus/feature. Florida governing law is a draft proposal informed by the confirmed location, with no invented county or LLC. |
 | Account/device/org/event/poll/finance and support data | Backend models/routes and mobile Firebase/OS integrations mapped in the inventory. Not every field is public and not every table has a purge. |
 | Selected usage events can be linked to users | `backend/app/core/analytics.py`, `ANALYTICS-VERIFICATION.md`: allowlisted identifiers; Google Logging/BigQuery; no anonymous-analytics or complete-live-delivery claim. |
 | Photo metadata and deletion are separate | `storage_service.py` strips EXIF on final JPEG; temporary uploads may contain it. c414 media reconciliation remains dry-run. Database purge does not erase permanent objects. |

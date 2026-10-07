@@ -5,8 +5,8 @@ Draft dated October 6, 2026. This is a review and operating plan, not a legal op
 ## Confirmed drafting decisions
 
 - Jose confirmed Chirp is not incorporated and identified the operators as **Jose Perdomo and Braulio Pantoja Esquina**. These are the named operators in the proposed Terms and Privacy; no LLC, school affiliation or registered agent is invented.
-- Audience: **17+, participating U.S. colleges and alumni**. This does not say every campus is supported, verify age, or establish enforceability against minors. The operators' actual state was not supplied with the names; the draft does not state an operating location as fact.
-- Keep `chirp.shared@gmail.com`, current chapter fees (1% card / 2% ACH), and the existing North Carolina/Guilford governing-law and court wording pending c75. The existing cap based on fees paid in the previous twelve months is preserved, not endorsed as sufficient protection.
+- Audience: **17+, participating U.S. colleges and alumni**. This does not say every campus is supported, verify age, or establish enforceability against minors. Jose subsequently confirmed both operators are located in **Florida**; the draft identifies that operating location.
+- Keep `chirp.shared@gmail.com` and current chapter fees (1% card / 2% ACH). Following the Florida confirmation, the draft proposes Florida governing law and courts with jurisdiction under applicable law, replacing the old North Carolina/Guilford wording without inventing a Florida county. This legal clause is a proposal for review, not an explicit venue selection by Jose or a counsel-approved conclusion. The existing cap based on fees paid in the previous twelve months is preserved, not endorsed as sufficient protection.
 - Preserve existing 30-day response and in-app material-change notice commitments, the nonuser family-tree removal promise, and nonwaivable rights. Add no arbitration, class-action waiver, indemnity, unrelated content licence, automatic debit authorization, automatic renewal or sale/advertising permission.
 
 ## Documents and scope
@@ -24,13 +24,13 @@ Mobile links target the already-existing `/terms`, `/privacy` and `/contact` pag
 
 ## Material changes to review before publication
 
-National audience and named individual operators replace UNCG-only/team-only wording. New community and organization/payment terms are incorporated into Terms, the parental-permission rule is explicit, and urgent image-removal commitments have a separate deadline. The privacy notice adds omitted data facts, including user-linked product events, media retention, email/support providers, votes, device metadata and direct requests to external image hosts. These changes do not themselves authorize new processing of previously collected data. Archive the old version and identify the effective version when releasing.
+National audience and named individual operators in Florida replace UNCG-only/team-only wording. Florida law and ordinary court jurisdiction replace the old NC/Guilford clause as a material proposed change. New community and organization/payment terms are incorporated into Terms, the parental-permission rule is explicit, and urgent image-removal commitments have a separate deadline. The privacy notice adds omitted data facts, including user-linked product events, media retention, email/support providers, votes, device metadata and direct requests to external image hosts. These changes do not themselves authorize new processing of previously collected data. Archive the old version and identify the effective version when releasing.
 
 ## Required operating evidence
 
 | Gate | Current state and evidence needed |
 | --- | --- |
-| Operator identity and legal allocation | Names supplied by Jose. Confirm actual operating state and review retained NC/Guilford terms, minor capacity, individual responsibilities, consumer-law limits and the fee-based cap. c75 retains its existing counsel/expansion/TestFlight triggers. |
+| Operator identity and legal allocation | Names and Florida operating location supplied by Jose. Review proposed Florida law/ordinary jurisdiction, minor capacity, individual responsibilities, consumer-law limits and the fee-based cap. c75 retains its existing counsel/expansion/TestFlight triggers. |
 | Data-request fulfillment (c436) | Email intake is described; no general account deletion/export API or full fulfillment proof exists. Establish proportionate verification, secure export, associated Firebase/DB/media/provider handling, legitimate retention exceptions, status/appeal responses and nonuser tree removal. A disabled login is not deletion. Prove on synthetic data before claiming implementation. |
 | Urgent safety operations (c437) | Name primary and backup responders, confirm mailbox coverage including weekends, log receipt time/reference, and rehearse removal plus reasonable efforts for known identical copies within the required period using harmless fixtures. Cover posts, comments, avatars and external-media references; feed hiding alone is insufficient. Define child-safety escalation and legally required reporting/preservation. No real harmful imagery in email or fixtures. |
 | Assent, age and change notice (c438) | Links alone do not record agreement. Decide and implement appropriate age declaration/controls, email/social signup acceptance evidence, existing-user material-change notice and organization representative acceptance. Keep the 17+ product decision visible; assess platform classification independently. |
@@ -53,6 +53,7 @@ Urgent image requests: route immediately to the designated primary and backup; i
 - [Stripe service terms](https://stripe.com/legal/ssa-service-terms), Connect section 3.4, and [Connected Account Agreement](https://stripe.com/legal/connect-account): describe and obtain the relevant organization authority, activity and data-sharing acceptance. The actual direct-charge integration, not generic Stripe capabilities, controls the draft's description.
 - [FTC on retroactive privacy changes](https://www.ftc.gov/policy/advocacy-research/tech-at-ftc/2024/02/ai-other-companies-quietly-changing-your-terms-service-could-be-unfair-or-deceptive): updating a notice does not silently permit inconsistent new data uses.
 - [California AG privacy guidance](https://oag.ca.gov/privacy/ccpa), [education-record definition](https://studentprivacy.ed.gov/faq/what-education-record), and [Copyright Office section 512](https://www.copyright.gov/512/index.html): counsel must assess actual applicability; do not claim blanket exemptions or registered-agent/safe-harbor status.
+- [Florida Statutes section 743.07](https://www.flsenate.gov/Laws/Statutes/2026/743.07): majority generally begins at 18. Parental permission alone does not establish contractual capacity for every 17-year-old; minors' capacity and state-specific exceptions require c75 review.
 
 ## Release procedure
 

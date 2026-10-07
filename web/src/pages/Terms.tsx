@@ -3,16 +3,16 @@ import { Link } from "react-router-dom";
 import { usePageMeta } from "../components/usePageMeta";
 import {
   CONTACT_EMAIL,
-  GOVERNING_COUNTY,
   GOVERNING_STATE,
   LEGAL_AUDIENCE,
   LEGAL_LAST_UPDATED,
   LEGAL_OPERATORS,
   MIN_AGE,
+  OPERATING_STATE,
 } from "../siteConfig";
 
 // Factual and policy refresh, not counsel approval. The existing liability cap,
-// governing law and no-arbitration/no-class-waiver choices remain subject to c75.
+// no-arbitration/no-class-waiver choices and proposed Florida law require c75 review.
 // Publishing these pages does not establish versioned acceptance in the app.
 export function Terms() {
   usePageMeta(
@@ -48,7 +48,8 @@ export function Terms() {
 
           <h2>1. About Chirp and these terms</h2>
           <p>
-            Chirp is an unincorporated service operated by {LEGAL_OPERATORS}. In these terms,
+            Chirp is an unincorporated service operated from {OPERATING_STATE} by {LEGAL_OPERATORS}.
+            In these terms,
             &ldquo;Chirp,&rdquo; &ldquo;we&rdquo; and &ldquo;us&rdquo; refer to those operators.
             You can contact us at{" "}
             <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
@@ -225,11 +226,10 @@ export function Terms() {
             terms.</strong> Small claims court remains available for claims that qualify.
           </p>
           <p>
-            These terms are governed by the laws of the State of {GOVERNING_STATE}, without regard
-            to its conflict-of-laws rules. Claims relating to Chirp may be brought in the state
-            or federal courts located in {GOVERNING_COUNTY}, and we each agree those courts may
-            hear them. This does not override mandatory protections or other court rights that
-            applicable law gives you. If part of these terms cannot be enforced, the remaining
+            The laws of {GOVERNING_STATE} govern these terms, except where applicable law requires
+            otherwise. Nothing in these terms removes mandatory consumer protections or other
+            rights that cannot be waived. Disputes may be brought before courts having jurisdiction
+            under applicable law. If part of these terms cannot be enforced, the remaining
             provisions still apply to the extent permitted by law.
           </p>
 
