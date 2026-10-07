@@ -103,11 +103,11 @@ export default function LegalAcceptanceScreen() {
     <View style={{ gap: spacing.md }}>
       <Button label="I am 18 or older" variant={age === 18 ? "primary" : "secondary"} onPress={() => { setAge(18); setGuardian(false); }} />
       <Button label="I am 17" variant={age === 17 ? "primary" : "secondary"} onPress={() => setAge(17)} />
-      {age === 17 ? <Button label={guardian ? "Parent or guardian permission confirmed" : "Confirm parent or guardian permission"} variant="secondary" onPress={() => setGuardian(v => !v)} /> : null}
+      {age === 17 ? <Button label={guardian ? "Parent or guardian permission confirmed" : "Confirm parent or guardian permission"} variant={guardian ? "primary" : "secondary"} onPress={() => setGuardian(v => !v)} /> : null}
       <AppText variant="caption" tone="secondary">Read the Terms and Privacy Policy. By continuing, I agree to the Terms and acknowledge the Privacy Policy. We store this acknowledgement, its time, your account, and the age category you selected.</AppText>
       <View style={{ flexDirection: "row", gap: spacing.md }}>
-        <Pressable accessibilityRole="link" accessibilityLabel="Read Terms" onPress={() => void openLegalLink("Terms", TERMS_URL)} style={{ minHeight: 44, justifyContent: "center" }}><AppText variant="caption" style={{ color: palette.accent }}>Read Terms</AppText></Pressable>
-        <Pressable accessibilityRole="link" accessibilityLabel="Read Privacy Policy" onPress={() => void openLegalLink("Privacy Policy", PRIVACY_URL)} style={{ minHeight: 44, justifyContent: "center" }}><AppText variant="caption" style={{ color: palette.accent }}>Read Privacy Policy</AppText></Pressable>
+        <Pressable accessibilityRole="link" accessibilityLabel="Read Terms" onPress={() => void openLegalLink("Terms", TERMS_URL)} style={{ minHeight: 44, justifyContent: "center" }}><AppText variant="caption" style={{ color: palette.ink, textDecorationLine: "underline" }}>Read Terms</AppText></Pressable>
+        <Pressable accessibilityRole="link" accessibilityLabel="Read Privacy Policy" onPress={() => void openLegalLink("Privacy Policy", PRIVACY_URL)} style={{ minHeight: 44, justifyContent: "center" }}><AppText variant="caption" style={{ color: palette.ink, textDecorationLine: "underline" }}>Read Privacy Policy</AppText></Pressable>
       </View>
       {status ? <AppText variant="micro" tone="secondary">Current versions: Terms {status.policies.find(p => p.key === "terms")?.version ?? "unavailable"}; Privacy {status.policies.find(p => p.key === "privacy")?.version ?? "unavailable"}. Effective dates are shown in the linked policies.</AppText> : null}
       {error ? <AppText variant="caption" style={{ color: palette.danger }}>{error}</AppText> : null}
