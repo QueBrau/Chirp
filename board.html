@@ -417,6 +417,15 @@
   ],
   "cards": [
     {
+      "id": "c434",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "design",
+      "area": "mobile",
+      "title": "c434 IN PROGRESS Oct 6 (Q): campus-colored loading screen for returning users (braul picked option D from four launch-screen mockups). While a returning user's session restores, show the campus primary full-bleed with the chirp mark in campus secondary and the campus name - today (tabs)/_layout and join-chapter render NULL during status loading, a blank screen. FOUND WHILE SCOPING: campus colors are not real data yet - the backend campuses table has no color columns and app/_layout passes MOCK_CAMPUS_COLORS (UNCG navy/gold) to everyone - and nothing about the campus is stored on the device, so a cold start cannot know it. Plan: remember {campus name, colors} in AsyncStorage when the session reaches ready, clear it on sign-out, render from it while loading; contrast fallback when secondary-on-primary is too faint; first-time users get the neutral chirp tile instead of blank. Pure JS, no new native module. Touches src/components (new LoadingScreen + ChirpMark). Branch q/c434-campus-loading-screen.",
+      "detail": "The native launch screen before JS runs is still the Expo default (none configured, no app icon either) - D cannot be the native splash because one build serves every campus. Pairing D with a native splash (mockup A, B or C) is a separate, smaller decision."
+    },
+    {
       "id": "c431",
       "col": "done",
       "owner": "J",
