@@ -3,6 +3,9 @@
 import uuid
 
 import pytest
+from httpx import AsyncClient
+
+from tests.conftest import ApiUser
 
 from app import models
 from app.services import account_data
@@ -70,3 +73,26 @@ async def test_provider_success_allows_core_executor(monkeypatch: pytest.MonkeyP
     result = await account_data.fulfill_request(object(), request, user)
     assert result.status == "completed"
     assert deleted is True
+
+
+@pytest.mark.asyncio
+async def test_request_status_is_owner_scoped_and_provider_block_is_retryable(
+    client: AsyncClient, make_user
+) -> None:
+    owner: ApiUser = await make_user("Owner")
+    other: ApiUser = await make_user("Other")
+    created = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["status"] == "blocked"
+    request_id = body["id"]
+
+    assert (await client.get(f"/me/data-requests/{request_id}", headers=other.headers)).status_code == 404
+    own = await client.get(f"/me/data-requests/{request_id}", headers=owner.headers)
+    assert own.status_code == 200
+    assert own.json()["failure_code"] == "provider_fulfillment_required"
+    retry = await client.post(f"/me/data-requests/{request_id}/retry", headers=owner.headers)
+    assert retry.status_code == 200
+    assert retry.json()["status"] == "blocked"
+    # The failed provider preflight leaves the account available for status/retry.
+    assert (await client.get("/auth/me", headers=owner.headers)).status_code == 200
