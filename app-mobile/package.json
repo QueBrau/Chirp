@@ -29,7 +29,8 @@
     "verify:messages-inbox": "node scripts/verify-messages-inbox.mjs",
     "verify:c359-continuation": "node scripts/verify-c359-continuation.mjs",
     "verify:c423-alumni-editor": "node scripts/verify-c423-alumni-editor.mjs",
-    "verify:c438-legal-flow": "node scripts/verify-c438-legal-flow.mjs"
+    "verify:c438-legal-flow": "node scripts/verify-c438-legal-flow.mjs",
+    "verify:c438-authority": "node scripts/verify-c438-authority.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/muli": "^0.1.0",
