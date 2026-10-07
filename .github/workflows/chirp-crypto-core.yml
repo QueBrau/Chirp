@@ -1,0 +1,38 @@
+name: Chirp crypto core
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/chirp-crypto-core.yml
+      - app-mobile/modules/chirp-crypto/rust/**
+  pull_request:
+    paths:
+      - .github/workflows/chirp-crypto-core.yml
+      - app-mobile/modules/chirp-crypto/rust/**
+
+permissions:
+  contents: read
+
+jobs:
+  host-rust-core:
+    name: c443 E2EE Rust core
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup toolchain install 1.90.0 --profile minimal
+      - name: Test the Rust core (encrypted store, Olm protocol, trust, vectors)
+        run: cargo +1.90.0 test --locked --manifest-path app-mobile/modules/chirp-crypto/rust/Cargo.toml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the Ed25519 verifier at the version the backend pins
+        run: python -m pip install "cryptography==50.0.0"
+      - name: Cross-check the committed test vectors without any Rust code
+        env:
+          REQUIRE_CRYPTOGRAPHY: "1"
+        run: python app-mobile/modules/chirp-crypto/rust/test-vectors/verify_vectors.py
