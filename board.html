@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1791340050599,
+  "updated": 1791340549462,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -535,11 +535,11 @@
     },
     {
       "id": "c424",
-      "col": "progress",
+      "col": "done",
       "owner": "Q",
       "tag": "bug",
       "area": "yak",
-      "title": "c424 PR329 mergedbbffa5f Oct3: constant chirp-card padding reviewed; all4CIgreen after1backendtiming rerun. Fresh preview and phone voting check remain.",
+      "title": "c424 DONE Oct 7: JOSE VERIFIED ON DEVICE - \"the voting works fine\", checked on the c428 preview 2386fe09 (commit 9efed91, which embeds c424's bbffa5f). Card is Q's; chirps-a2 recorded the result on Jose's report rather than claiming the test. PR329 merged bbffa5f Oct 3, all four CI checks green after one backend timing rerun (that rerun was the c430 flake, since fixed in PR334). The defect: isTop = score === topScore && score > 0 was recomputed on every optimistic vote, and the top card carried spacing.xl against spacing.lg elsewhere, so any vote that changed WHICH chirp led grew one card and shrank another under the user's thumb. Now one padding for every card with the gold top-score accent kept, which is all DESIGN 10 rule 6 actually asks for. verify:chirps-board exit 0, tsc 5.9.3 exit 0.",
       "detail": "Reported by braul on a phone Oct 2. isTop = score === topScore && score > 0, recomputed on every optimistic vote, so the padding flip happens on the tap itself. The VotePill's own width is stable for scores up to three characters (stat type is tabular-nums and the glyph buttons set the pill's minimum width).\n\nPRIOR TITLE BEFORE CODEX REVIEW\nc424 PR OPEN Oct 3 (Q): PR #329, branch q/c424-vote-card-size @460566f - one padding for every chirp card, gold top score kept. tsc 5.9.3 exit 0, verify:chirps-board exit 0; CI running. LEFT: merge, then a new preview build to see it on a phone | c424 IN PROGRESS Oct 2 (Q): voting on a chirp changes the size of chirp cards. CAUSE FOUND: app/(tabs)/chirps/index.tsx pads the top-scoring card spacing.xl and every other card spacing.lg, so any vote that changes WHICH chirp is top grows one card and shrinks another. DESIGN 10 rule 6 asks only for a gold top score, not a bigger card. Fix: one padding for every card, gold score unchanged. Branch q/c424-vote-card-size.\n\nCodex review requested by Jose Oct2, ownerQ retained. Exacthead460566fe changes onlychirps/index.tsx to constantspacing.lg; topgoldscore preserved. CI failure is tests/test_feed_c223_finalize_off_loop.py::test_a_slow_finalize_does_not_stall_an_unrelated_request: read_done0.1365s afterfinalize_end,2312passed/12skipped. Source uses0.3ssleep/strictcompletionordering,consistentwithtimingflake; no backendchange inPR. Reran onlyfailedjob111084391499 ofrun37082015216 once; queued acknowledged. No merge ornewpreview claimed.\n\nMERGED Oct3 01:16:59UTC: exacthead460566fe, all4requiredCIgreen includingrun37082015216attempt2. Squashbbffa5f. No codechange tobackendflakytest/no testweakening. Oldpreviewdoesnotcontainfix; rebuiltpreview/phonecheckremain."
     },
     {
@@ -4563,10 +4563,10 @@
     "Oct 6 22:07 EDT: authorized c435 Florida legal pack published from merged PR340/12e3069 to existing Chirp Hosting only, version d03497cbb206d83b. Both public domains pass36 exact-content HTTP checks and28 legal/contact renders; c435 Done. Installed-app links require next preview. c436-c438 and c75 remain open; Claude c427/c433/c376/c375 work remains separate.",
     "Oct 6 Jose requests c438/c436/c437 in parallel with Luna medium. c438 migration0040 down0039; c436 migration0041 down0040 reserved with ordered integration. Jose confirms17/18+ declaration without birthdate and permission checkbox for17, and safety coverage Jose primary/Braulio backup every day including weekends. Root coordinates shared files; no live deletion, email or cloud rollout included.",
     "Oct 6 user supplied newest Expo build2386fe09-3303-4964-86a0-a896c5d5c330. Dependency-complete EAS read reached Expo but project authorization was denied; no build metadata or inclusion proof claimed. User chose manual testing instead of granting access. Coding c436-c438 continues; do not assume this build contains unmerged changes.",
-    "Oct 6 - c423 CLOSED on Jose's device confirmation (\"alumni section is working great\"). Recorded with an explicit evidence split rather than a blanket pass: the user-visible save/reopen flow is device-proven, while cancel-writes-nothing, failed-save-input-preservation, full-replace field preservation and the focus-epoch navigation guard rest on the 12 committed checks plus four falsification runs, not on separate hand tests. Said plainly so nobody later reads this card as meaning every clause was exercised by thumb."
+    "Oct 6 - c423 CLOSED on Jose's device confirmation (\"alumni section is working great\"). Recorded with an explicit evidence split rather than a blanket pass: the user-visible save/reopen flow is device-proven, while cancel-writes-nothing, failed-save-input-preservation, full-replace field preservation and the focus-epoch navigation guard rest on the 12 committed checks plus four falsification runs, not on separate hand tests. Said plainly so nobody later reads this card as meaning every clause was exercised by thumb.",
+    "Oct 7 - c424 closed on Jose's device verification against the new c428 preview 2386fe09. Worth noting the chain: c424's only CI failure was the timing-racy feed test chirps-a2 diagnosed and filed as c430, which Codex then fixed in PR334 - so the one thing that made this PR look unhealthy was never its own code. Device checks are now flowing again because c428's preview finally cut."
   ]
 }
-
 </script>
 <script>
 (function () {
