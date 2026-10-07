@@ -2,7 +2,7 @@
 
 import { Feather } from "@expo/vector-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Linking, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 
 import {
   createDataRequest,
@@ -16,22 +16,41 @@ import { AppText, Button, Card, EmptyState, Screen } from "@/components";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { shareJson } from "@/lib/export";
 import { radii, spacing, useTheme } from "@/theme";
-import { useSession } from "@/auth";
+import { currentIdentity, onIdentityChanged, ownsIdentity, type AuthIdentity } from "@/auth/identity";
+import { openLegalLink } from "@/lib/legalLinks";
+
+function showRequestError(error: unknown, title: string) {
+  if (error instanceof ApiError && error.detail === "recent_authentication_required") {
+    showAlert("Sign in again", "For your privacy, sign out and sign back in before requesting or downloading account data.");
+  } else {
+    showApiError(error, title);
+  }
+}
 
 function statusLabel(status: DataRequestOut["status"]): string {
   return status.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function RequestCard({ item, onRefresh }: { item: DataRequestOut; onRefresh: () => void }) {
+function RequestCard({ item, owner, onRefresh }: { item: DataRequestOut; owner: AuthIdentity; onRefresh: () => void }) {
   const palette = useTheme();
+  const downloading = useRef(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
   const isExport = item.kind === "export";
   const canDownload = isExport && (item.status === "ready" || item.status === "partially_completed");
 
   const download = async () => {
+    if (downloading.current || !ownsIdentity(owner)) return;
+    downloading.current = true;
+    setDownloadBusy(true);
     try {
-      await shareJson(`chirp-account-export-${item.id}.json`, await downloadDataRequest(item.id));
-    } catch {
-      showAlert("Couldn't share export", "Refresh the request and try again, or contact support.");
+      const payload = await downloadDataRequest(item.id);
+      if (!ownsIdentity(owner)) return;
+      await shareJson(`chirp-account-export-${item.id}.json`, payload, owner);
+    } catch (error) {
+      if (ownsIdentity(owner)) showRequestError(error, "Couldn't share export");
+    } finally {
+      downloading.current = false;
+      if (ownsIdentity(owner)) setDownloadBusy(false);
     }
   };
 
@@ -75,11 +94,11 @@ function RequestCard({ item, onRefresh }: { item: DataRequestOut; onRefresh: () 
       ) : null}
       {item.failure_code ? (
         <AppText variant="caption" tone="danger" style={{ marginTop: spacing.sm }}>
-          Account deletion requests are received and tracked here. A deletion request needs manual provider review before any account record is removed. Reference: {item.id}.
+          Your request is recorded. Our team still needs to review and complete the deletion. Your account has not been deleted. Reference: {item.id}.
         </AppText>
       ) : null}
       <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
-        {canDownload ? <Button label="Download copy" onPress={() => void download()} /> : null}
+        {canDownload ? <Button label={downloadBusy ? "Preparing copy..." : "Download copy"} disabled={downloadBusy} onPress={() => void download()} /> : null}
         <Button label="Refresh status" variant="neutral" onPress={onRefresh} />
       </View>
     </Card>
@@ -87,11 +106,12 @@ function RequestCard({ item, onRefresh }: { item: DataRequestOut; onRefresh: () 
 }
 
 export default function AccountDataScreen() {
-  const { user } = useSession();
-  const ownerId = user?.id ?? null;
-  const ownerRef = useRef(ownerId);
-  ownerRef.current = ownerId;
+  const [owner, setOwner] = useState(currentIdentity);
+  const ownerRef = useRef(owner);
+  const mountedRef = useRef(true);
   const generationRef = useRef(0);
+  const submitGenerationRef = useRef(0);
+  const submitBusyRef = useRef(false);
   const [items, setItems] = useState<DataRequestOut[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<DataRequestKind | null>(null);
@@ -99,7 +119,7 @@ export default function AccountDataScreen() {
   const load = useCallback(async () => {
     const requestedOwner = ownerRef.current;
     const generation = ++generationRef.current;
-    const current = () => generationRef.current === generation && ownerRef.current === requestedOwner;
+    const current = () => mountedRef.current && ownsIdentity(requestedOwner) && generationRef.current === generation;
     setLoading(true);
     try {
       const result = await listDataRequests();
@@ -115,11 +135,35 @@ export default function AccountDataScreen() {
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
+    const reset = () => {
+      const next = currentIdentity();
+      ownerRef.current = next;
+      generationRef.current += 1;
+      submitGenerationRef.current += 1;
+      submitBusyRef.current = false;
+      setSubmitting(null);
+      setItems(null);
+      setOwner(next);
+    };
+    const unsubscribe = onIdentityChanged(reset);
+    if (!ownsIdentity(ownerRef.current)) reset();
+    return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
+      submitGenerationRef.current += 1;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     setItems(null);
     void load();
-  }, [load, ownerId]);
+  }, [load, owner]);
 
   const submit = (kind: DataRequestKind) => {
+    const requestedOwner = ownerRef.current;
+    if (submitBusyRef.current || !ownsIdentity(requestedOwner)) return;
     const isDeletion = kind === "deletion";
     confirmAction({
       title: isDeletion ? "Request account deletion?" : "Request a copy of your data?",
@@ -129,15 +173,16 @@ export default function AccountDataScreen() {
       confirmLabel: isDeletion ? "Request deletion" : "Request copy",
       destructive: isDeletion,
       onConfirm: () => {
-        const requestedOwner = ownerRef.current;
-        const generation = generationRef.current;
-        const current = () => generationRef.current === generation && ownerRef.current === requestedOwner;
+        if (!mountedRef.current || !ownsIdentity(requestedOwner) || submitBusyRef.current) return;
+        submitBusyRef.current = true;
+        const generation = ++submitGenerationRef.current;
+        const current = () => mountedRef.current && ownsIdentity(requestedOwner) && submitGenerationRef.current === generation;
         setSubmitting(kind);
         void createDataRequest(kind)
           .then((created) => {
             if (current()) {
-              setItems((previous) => [created, ...(previous ?? [])]);
-              showAlert("Request received", "You can return here to check its status. We may contact you to verify the request.");
+              setItems((previous) => [created, ...(previous ?? []).filter(item => item.id !== created.id)]);
+              showAlert("Request received", "Return here to check its status. Keep the request reference if you contact support.");
             }
           })
           .catch((error) => {
@@ -145,10 +190,15 @@ export default function AccountDataScreen() {
             if (error instanceof ApiError && error.detail === "request_already_open") {
               showAlert("Request already open", "A request of this type is already being handled. Refresh status to see it.");
             } else {
-              showApiError(error, "Couldn't submit your request");
+              showRequestError(error, "Couldn't submit your request");
             }
           })
-          .finally(() => { if (current()) setSubmitting(null); });
+          .finally(() => {
+            if (current()) {
+              submitBusyRef.current = false;
+              setSubmitting(null);
+            }
+          });
       },
     });
   };
@@ -159,7 +209,7 @@ export default function AccountDataScreen() {
         <Card>
           <AppText variant="headline">Account data requests</AppText>
           <AppText variant="body" tone="secondary" style={{ marginTop: spacing.sm }}>
-            These requests are authenticated to your current account. A request starts scoped review and fulfillment; it does not promise that every provider copy or shared record can be erased.
+            Request data for your signed-in account. Deletion requires review, and some financial or safety records may need to be kept. We explain any remaining records in your request status.
           </AppText>
           <View style={{ gap: spacing.sm, marginTop: spacing.lg }}>
             <Button label="Request a data copy" onPress={() => submit("export")} disabled={submitting !== null} />
@@ -170,8 +220,8 @@ export default function AccountDataScreen() {
         {items !== null && items.length === 0 ? (
           <EmptyState title="No requests yet" message="Your request history will appear here." />
         ) : null}
-        {items?.map((item) => <RequestCard key={item.id} item={item} onRefresh={() => void load()} />)}
-        <Pressable onPress={() => void Linking.openURL("https://chirpsocials.com/data-requests")} accessibilityRole="link">
+        {items?.map((item) => <RequestCard key={`${owner.generation}:${item.id}`} item={item} owner={owner} onRefresh={() => void load()} />)}
+        <Pressable onPress={() => void openLegalLink("Data requests", "https://chirpsocials.com/data-requests")} accessibilityRole="link" style={{ minHeight: 44, justifyContent: "center" }}>
           <AppText variant="caption" tone="accent" style={{ textAlign: "center" }}>
             Read the data request policy
           </AppText>
