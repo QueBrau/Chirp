@@ -31,3 +31,24 @@ authorization is also unchanged: it continues to use its existing Firebase ident
 and suspension checks, and is deferred remaining c438 acceptance work rather than
 being covered by the HTTP enforcement flag. Store review and app-store age-rating
 classification remain release-owner steps after the mobile policy screen is reviewed.
+
+## Store policy review (2026-10-07)
+
+Google Play’s [Families and social features policy](https://support.google.com/googleplay/android-developer/answer/16302250?hl=en)
+requires minor declarations and related Play Console treatment when a core feature
+enables anonymous communication or random connections; its expansion is dated
+August 26, 2026 in the [distribution policy update](https://developer.android.com/distribute/play-policies).
+Chirp’s campus board deliberately hides authors and assigns daily pseudonyms, so
+campus or organization scope does not establish an exemption. Verified .edu status
+also does not resolve the under-18 classification. The product choice remains
+access from age 17 with guardian permission; this review does not claim Google
+approval. Store classification and any Play Console minor declarations remain
+release-owner decisions after policy and safety review.
+
+Apple’s [App Store Review Guidelines 1.2 and 2.3.6](https://developer.apple.com/app-store/review/guidelines/)
+require UGC filtering, reporting, blocking, contact information, and accurate age
+rating, with additional scrutiny for primarily anonymous chat. Chirp has campus
+and org scopes plus named DMs, but those facts alone do not prove that its anonymous
+board is outside the guideline’s concern. This is a reviewed classification issue,
+not a silent age change; the approved 17+ product choice remains pending the
+release owner’s final store submission and age-rating decision.
