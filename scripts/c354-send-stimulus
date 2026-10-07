@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Send synthetic messages so a device can be observed RECEIVING them (board c354).
+#
+# The walk needs a sender and the app cannot be one: the composer is
+# editable={false} and src/crypto/groups.ts throws on every entry point, so no
+# account on any build can type and send. See scripts/c354_send_stimulus.py.
+#
+# c391/c392: resolve a TLS-capable interpreter through the shared picker rather
+# than `exec python3`. This script makes https calls, and a python.org framework
+# build with an un-run Install Certificates step has an EMPTY trust store - which
+# once turned a healthy deployment into a false NOT_READY. A wrong interpreter
+# must fail here with a message, not as a confusing send failure mid-walk.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+source "$here/lib/pick-python.sh"
+python=$(chirp_pick_python c354-send-stimulus) || exit $?
+exec "$python" "$here/c354_send_stimulus.py" "$@"
