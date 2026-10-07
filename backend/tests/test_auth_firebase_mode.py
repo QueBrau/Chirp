@@ -96,10 +96,18 @@ async def test_firebase_mode_non_bearer_authorization_header_raises_401(
     assert exc_info.value.detail == "missing_bearer_token"
 
 
-@pytest.mark.parametrize("auth_time", [None, True, float("inf"), float("nan"), time.time() + 60, time.time() - 901])
+@pytest.mark.parametrize("auth_time", [None, True, float("inf"), float("nan"), "future", "stale"])
 async def test_privacy_auth_rejects_nonfinite_or_future_auth_time(
-    monkeypatch: pytest.MonkeyPatch, auth_time: float,
+    monkeypatch: pytest.MonkeyPatch, auth_time: object,
 ) -> None:
+    # Relative times are resolved HERE, when the case runs, not in the parametrize list
+    # (c449). The list is evaluated at collection, and a full suite runs ~16 minutes, so a
+    # `time.time() + 60` baked in then is already in the past by the time this executes -
+    # the "future" case stopped raising and turned main's CI red on a timing coin flip.
+    if auth_time == "future":
+        auth_time = time.time() + 60
+    elif auth_time == "stale":
+        auth_time = time.time() - 901
     _use_firebase_mode(monkeypatch)
     _stub_already_initialized_app(monkeypatch)
     monkeypatch.setattr(firebase_auth, "verify_id_token", lambda token, **kwargs: {"uid": "privacy-user", "auth_time": auth_time})
