@@ -16,10 +16,15 @@ device left (every phone lost or revoked), the next registration becomes a new r
 is the "Reset security" path (design section 8), and every contact's client shows the
 identity-change hard stop. The server cannot prevent that, only make it loud.
 
-WHO MAY LOOK UP WHOM mirrors GET /users/{id}/prekey-bundle exactly: any authenticated
-caller, the target user must exist (404 user_not_found), rate-limited per (caller, target).
-That is an open lookup, as it is today. It is called out in the c444 report as a gap worth
-closing with a shared-conversation check; it is deliberately not invented here.
+WHO MAY LOOK UP WHOM (directory read and key claim) is NOT v1's open lookup. A target is
+allowed only when it is the caller themself, or the caller and the target are both CURRENT
+members of at least one common conversation (services.e2ee_v2_service.lookup_allowed_user_ids
+has the full rule, including blocks). Everything else - a stranger, a user who does not exist,
+someone who left the conversation, someone who has blocked the caller - gets the SAME
+403 `recipient_not_reachable` that send_message and create_conversation use for blocks and
+unreachable recipients, so the answer is no existence oracle and no block oracle. Closing
+this stops any account from enumerating device identities or draining another account's
+one-time keys.
 """
 from __future__ import annotations
 
@@ -44,7 +49,7 @@ from app.core.e2ee_v2 import (
     one_time_key_message,
     verify_ed25519,
 )
-from app.core.errors import conflict, forbidden, not_found, too_many_requests
+from app.core.errors import conflict, forbidden, too_many_requests
 from app.db import get_session
 from app.middleware.auth import get_current_user
 from app.core.rate_limits import limit_per_user
@@ -83,10 +88,16 @@ from app.services.e2ee_v2_service import (
     conflict_response,
     get_fallback_key,
     lock_account,
+    lookup_allowed_user_ids,
 )
 from app.services.rate_limit import allow as rate_limit_allow
 
 router = APIRouter(prefix="/v2", tags=["keys-v2"])
+
+# The one refusal for directory read and key claim when the target is not the caller or a
+# current conversation mate. The SAME string v1 send_message / create_conversation return
+# for an unreachable or blocking recipient, deliberately: see lookup_allowed_user_ids.
+NOT_ALLOWED_DETAIL = "recipient_not_reachable"
 
 # Claim burns a one-time key per call, so it keeps v1's pool-drain guard (SECURITY-REVIEW
 # finding 9): the same per-(caller, target) number as the v1 bundle fetch. The fallback key
@@ -496,7 +507,8 @@ async def get_user_directory(
     This is the fix for the contract finding that v1's bundle fetch burns a one-time key
     before anything is sent: reading identities and approval chains here is free and
     repeatable, and key consumption is a separate, explicit POST /v2/keys/claim. Pending,
-    revoked and legacy devices are never listed.
+    revoked and legacy devices are never listed. Gated to the caller and their current
+    conversation mates (see the module docstring); 403 `recipient_not_reachable` otherwise.
     """
     if not await rate_limit_allow(
         f"e2ee_directory:{user.id}:{user_id}",
@@ -504,8 +516,10 @@ async def get_user_directory(
         window_seconds=_DIRECTORY_RATE_WINDOW_SECONDS,
     ):
         raise too_many_requests("e2ee_directory_rate_limited")
-    if await session.get(models.User, user_id) is None:
-        raise not_found("user_not_found")
+    # The gate runs before ANY lookup of the target, so a user who does not exist and a
+    # stranger who does are answered identically.
+    if user_id not in await lookup_allowed_user_ids(session, user.id, [user_id]):
+        raise forbidden(NOT_ALLOWED_DETAIL)
 
     devices = await approved_v2_devices_for_users(session, [user_id], limit=MAX_ACTIVE_DEVICES)
     if len(devices) > MAX_ACTIVE_DEVICES:
@@ -560,11 +574,17 @@ async def claim_keys(
 ) -> KeyClaimOut | JSONResponse:
     """Atomically claim one key per named device: a one-time key, else the fallback key.
 
-    ALL OR NOTHING. If any named device is not currently claimable (unknown, pending,
-    revoked or legacy) the answer is 409 `device_unavailable` listing those ids and NO key
-    is consumed: the client refreshes its directory and retries with the right set.
-    Claiming the others and reporting the rest later would burn keys for a send that is
-    about to be redone.
+    GATE FIRST. Every named device must exist and belong to the caller or to a current
+    conversation mate who has not blocked them (lookup_allowed_user_ids). Otherwise 403
+    `recipient_not_reachable`, with nothing claimed. A device id that does not exist is
+    answered the same as a stranger's device: a different answer would tell a stranger which
+    device ids are real.
+
+    ALL OR NOTHING. If any named device of an ALLOWED owner is not currently claimable
+    (pending, revoked or legacy) the answer is 409 `device_unavailable` listing those ids
+    and NO key is consumed: the client refreshes its directory and retries with the right
+    set. Claiming the others and reporting the rest later would burn keys for a send that
+    is about to be redone.
 
     A one-time key is consumed (UPDATE ... SKIP LOCKED, so concurrent claimers never
     share one); a fallback key is returned WITHOUT being consumed. Rows are staged in one
@@ -574,6 +594,18 @@ async def claim_keys(
     ids = body.device_ids
     if len(set(ids)) != len(ids):
         raise HTTPException(status_code=422, detail="duplicate_device_ids")
+
+    # Owners of the named devices, whatever state each device is in.
+    owners = dict(
+        (
+            await session.execute(
+                select(models.Device.id, models.Device.user_id).where(models.Device.id.in_(ids))
+            )
+        ).tuples().all()
+    )
+    allowed_owners = await lookup_allowed_user_ids(session, user.id, set(owners.values()))
+    if any(device_id not in owners or owners[device_id] not in allowed_owners for device_id in ids):
+        raise forbidden(NOT_ALLOWED_DETAIL)
 
     rows = await session.execute(
         select(models.Device).where(

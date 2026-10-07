@@ -22,11 +22,13 @@ from sqlalchemy import func, select
 from app import models
 from app.core import e2ee_v2
 from app.db import get_session_factory
-from tests.conftest import MakeUser, RegisterDevice, b64
+from tests.conftest import MakeUser, RegisterDevice, b64, share_verified_campus
 from tests.e2ee_v2_helpers import (
     Keyring,
     approve,
     directory,
+    make_mate,
+    open_dm,
     register,
     register_approved_pair,
 )
@@ -76,7 +78,7 @@ async def test_first_device_is_a_self_approved_root(
     client: AsyncClient, make_user: MakeUser
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     root = Keyring(owner, 1)
     body = await register(client, root)
 
@@ -100,7 +102,7 @@ async def test_later_device_is_pending_and_invisible_until_approved(
     client: AsyncClient, make_user: MakeUser
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     root = Keyring(owner, 1)
     await register(client, root)
     phone = Keyring(owner, 2)
@@ -592,7 +594,7 @@ async def test_revoke_removes_a_device_everywhere_and_is_idempotent(
     client: AsyncClient, make_user: MakeUser
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     root, phone = await register_approved_pair(client, owner)
 
     first = await client.delete(f"/v2/devices/{phone.id}", headers=owner.headers)
@@ -628,7 +630,7 @@ async def test_a_device_approved_by_a_since_revoked_device_stays_in_the_director
     client: AsyncClient, make_user: MakeUser
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     root, phone = await register_approved_pair(client, owner)
     assert (await client.delete(f"/v2/devices/{root.id}", headers=owner.headers)).status_code == 200
     (entry,) = await directory(client, viewer, owner.id)
@@ -669,7 +671,7 @@ async def test_directory_lists_only_approved_unrevoked_v2_devices_and_claims_not
     client: AsyncClient, make_user: MakeUser, register_device: RegisterDevice
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     root, phone = await register_approved_pair(client, owner)
     pending = Keyring(owner, 3)
     await register(client, pending)
@@ -701,26 +703,191 @@ async def test_directory_lists_only_approved_unrevoked_v2_devices_and_claims_not
     )
 
 
-async def test_directory_visibility_mirrors_the_v1_bundle_rule(
+NOT_ALLOWED = {"detail": "recipient_not_reachable"}
+
+
+async def _leave(client: AsyncClient, user: Any, conversation_id: str) -> None:
+    response = await client.post(f"/conversations/{conversation_id}/leave", headers=user.headers)
+    assert response.status_code == 200, response.text
+
+
+async def _get_directory(client: AsyncClient, viewer: Any, target_user_id: str) -> Any:
+    return await client.get(f"/v2/users/{target_user_id}/devices", headers=viewer.headers)
+
+
+async def test_directory_is_gated_to_self_and_current_conversation_mates(
     client: AsyncClient, make_user: MakeUser
 ) -> None:
-    """Authenticated callers only, target must exist, rate-limited per (caller, target)."""
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
-    await register(client, Keyring(owner, 1))
+    mate = await make_user("Mate")
+    stranger = await make_user("Stranger")
+    root = Keyring(owner, 1)
+    await register(client, root)
+    convo = await open_dm(client, owner, mate)
 
     assert (await client.get(f"/v2/users/{owner.id}/devices")).status_code == 401
-    missing = await client.get(f"/v2/users/{uuid.uuid4()}/devices", headers=viewer.headers)
-    assert missing.status_code == 404 and missing.json()["detail"] == "user_not_found"
-    empty = await make_user("No Devices")
-    assert (await directory(client, viewer, empty.id)) == []
+
+    # Self, and a current mate, are allowed.
+    assert [d["device_id"] for d in await directory(client, owner, owner.id)] == [root.id]
+    assert [d["device_id"] for d in await directory(client, mate, owner.id)] == [root.id]
+    # A user with no devices is still a valid (empty) answer for a mate.
+    assert await directory(client, owner, mate.id) == []
+
+    # A stranger is refused - and so is a user id that does not exist, IDENTICALLY.
+    refused = await _get_directory(client, stranger, owner.id)
+    ghost = await _get_directory(client, stranger, str(uuid.uuid4()))
+    assert refused.status_code == ghost.status_code == 403
+    assert refused.json() == ghost.json() == NOT_ALLOWED
+    # ... also for a caller who is a member of OTHER conversations.
+    elsewhere = await make_user("Elsewhere")
+    await open_dm(client, elsewhere, stranger)
+    assert (await _get_directory(client, elsewhere, owner.id)).json() == NOT_ALLOWED
+    # The same answer for a mate asking about a user id that does not exist.
+    mate_ghost = await _get_directory(client, mate, str(uuid.uuid4()))
+    assert mate_ghost.status_code == 403 and mate_ghost.json() == NOT_ALLOWED
+
+    # A member who LEFT no longer counts - whichever side left.
+    await _leave(client, mate, convo)
+    left = await _get_directory(client, mate, owner.id)
+    assert left.status_code == 403 and left.json() == NOT_ALLOWED
+    assert (await _get_directory(client, owner, mate.id)).json() == NOT_ALLOWED
+    # Re-creating the DM re-joins both rows (existing DM-reuse rule): allowed again.
+    again = await client.post(
+        "/conversations", json={"kind": "dm", "member_user_ids": [owner.id]}, headers=mate.headers
+    )
+    assert again.status_code == 200, again.text
+    assert (await _get_directory(client, mate, owner.id)).status_code == 200
+    await _leave(client, owner, convo)
+    assert (await _get_directory(client, mate, owner.id)).json() == NOT_ALLOWED
+
+
+async def test_any_shared_current_conversation_counts_including_groups(
+    client: AsyncClient, make_user: MakeUser
+) -> None:
+    owner = await make_user("Owner")
+    peer = await make_user("Peer")
+    await register(client, Keyring(owner, 1))
+    await share_verified_campus(owner.id, peer.id)
+    group = await client.post(
+        "/conversations",
+        json={"kind": "group", "title": "Trio", "member_user_ids": [peer.id]},
+        headers=owner.headers,
+    )
+    assert group.status_code == 201, group.text
+    assert (await _get_directory(client, peer, owner.id)).status_code == 200
+    await _leave(client, peer, group.json()["id"])
+    assert (await _get_directory(client, peer, owner.id)).json() == NOT_ALLOWED
+
+
+async def test_block_handling_mirrors_the_dm_send_path(client: AsyncClient, make_user: MakeUser) -> None:
+    """A target who BLOCKED the caller is refused with the same code as every other refusal.
+
+    The caller's OWN blocks are never consulted (core/blocks.py: consulting them would let a
+    by-chirp blocker find the anonymous author by looking people up one at a time), so a
+    caller who blocked the target keeps access - exactly as send_message lets them send.
+    """
+    owner = await make_user("Owner")
+    mate = await make_user("Mate")
+    stranger = await make_user("Stranger")
+    await register(client, Keyring(owner, 1))
+    await open_dm(client, owner, mate)
+
+    blocked = await client.post("/moderation/blocks", json={"blocked_id": mate.id}, headers=owner.headers)
+    assert blocked.status_code == 201, blocked.text
+    # owner blocked mate: the BLOCKER keeps access to the person they blocked ...
+    assert (await _get_directory(client, owner, mate.id)).status_code == 200
+    # ... and the BLOCKED mate is the one who is shut out, exactly like a DM send.
+    shut_out = await _get_directory(client, mate, owner.id)
+    assert shut_out.status_code == 403 and shut_out.json() == NOT_ALLOWED
+
+    # mate blocks owner back: now owner -> mate is refused too, indistinguishably from a
+    # stranger (same status, same body).
+    blocked = await client.post("/moderation/blocks", json={"blocked_id": owner.id}, headers=mate.headers)
+    assert blocked.status_code == 201, blocked.text
+    by_blocker = await _get_directory(client, owner, mate.id)
+    by_stranger = await _get_directory(client, stranger, mate.id)
+    assert by_blocker.status_code == by_stranger.status_code == 403
+    assert by_blocker.json() == by_stranger.json() == NOT_ALLOWED
+    # And the same for key claims: the blocker's devices are not claimable by the blocked.
+    mate_ring = Keyring(mate, 1)
+    await register(client, mate_ring)
+    claim = await client.post("/v2/keys/claim", json={"device_ids": [mate_ring.id]}, headers=owner.headers)
+    assert claim.status_code == 403 and claim.json() == NOT_ALLOWED
+
+
+async def test_directory_rate_limit_is_per_caller_and_target(
+    client: AsyncClient, make_user: MakeUser
+) -> None:
+    owner = await make_user("Owner")
+    viewer = await make_mate(client, make_user, owner)
+    await register(client, Keyring(owner, 1))
 
     for _ in range(60):
-        assert (await client.get(f"/v2/users/{owner.id}/devices", headers=viewer.headers)).status_code == 200
-    limited = await client.get(f"/v2/users/{owner.id}/devices", headers=viewer.headers)
+        assert (await _get_directory(client, viewer, owner.id)).status_code == 200
+    limited = await _get_directory(client, viewer, owner.id)
     assert limited.status_code == 429 and limited.json()["detail"] == "e2ee_directory_rate_limited"
     # The budget is per (caller, target): another target is unaffected.
-    assert (await client.get(f"/v2/users/{viewer.id}/devices", headers=viewer.headers)).status_code == 200
+    assert (await _get_directory(client, viewer, viewer.id)).status_code == 200
+    # The limiter sits in front of the gate, so a refused lookup spends budget like any other.
+    stranger = await make_user("Stranger")
+    for _ in range(60):
+        assert (await _get_directory(client, stranger, owner.id)).status_code == 403
+    assert (await _get_directory(client, stranger, owner.id)).status_code == 429
+
+
+async def test_claim_is_gated_to_self_and_current_conversation_mates(
+    client: AsyncClient, make_user: MakeUser
+) -> None:
+    owner = await make_user("Owner")
+    mate = await make_user("Mate")
+    stranger = await make_user("Stranger")
+    root, phone = await register_approved_pair(client, owner, one_time_keys=2)
+    pending = Keyring(owner, 3)
+    await register(client, pending)
+    convo = await open_dm(client, owner, mate)
+
+    async def available() -> tuple[int, int]:
+        return (
+            (await _counts(client, root))["one_time_keys_available"],
+            (await _counts(client, phone))["one_time_keys_available"],
+        )
+
+    # A stranger is refused for an approved device, a pending device and a device id that
+    # does not exist - ALL THREE IDENTICALLY, and nothing is consumed.
+    answers = []
+    for device_id in (root.id, pending.id, str(uuid.uuid4())):
+        response = await client.post(
+            "/v2/keys/claim", json={"device_ids": [device_id]}, headers=stranger.headers
+        )
+        answers.append((response.status_code, response.json()))
+    assert answers == [(403, NOT_ALLOWED)] * 3
+    assert await available() == (2, 2)
+
+    # One refused device refuses the whole request, even next to devices the caller may claim.
+    ghost_with_valid = await client.post(
+        "/v2/keys/claim", json={"device_ids": [root.id, str(uuid.uuid4())]}, headers=mate.headers
+    )
+    assert ghost_with_valid.status_code == 403 and ghost_with_valid.json() == NOT_ALLOWED
+    stranger_device = Keyring(stranger, 1)
+    await register(client, stranger_device)
+    mixed = await client.post(
+        "/v2/keys/claim", json={"device_ids": [root.id, stranger_device.id]}, headers=mate.headers
+    )
+    assert mixed.status_code == 403 and mixed.json() == NOT_ALLOWED
+    assert await available() == (2, 2), "nothing is consumed by a refused request"
+
+    # A current mate may claim; so may the owner for their own devices.
+    claimed = await _claim(client, mate, root)
+    assert claimed["keys"][0]["device_id"] == root.id
+    own = await _claim(client, owner, phone)
+    assert own["keys"][0]["device_id"] == phone.id
+    assert await available() == (1, 1)
+
+    # A mate who left is refused.
+    await _leave(client, mate, convo)
+    left = await client.post("/v2/keys/claim", json={"device_ids": [root.id]}, headers=mate.headers)
+    assert left.status_code == 403 and left.json() == NOT_ALLOWED
+    assert await available() == (1, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -749,7 +916,7 @@ async def test_replacing_the_fallback_key_swaps_the_one_row(
     client: AsyncClient, make_user: MakeUser
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     ring = Keyring(owner, 1)
     await register(client, ring, one_time_keys=0)
     old = (await _claim(client, viewer, ring))["keys"][0]
@@ -878,7 +1045,7 @@ async def test_claim_hands_out_one_time_keys_in_order_then_falls_back_without_co
     client: AsyncClient, make_user: MakeUser
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     ring = Keyring(owner, 1)
     await register(client, ring, one_time_keys=2)
 
@@ -907,7 +1074,7 @@ async def test_claim_returns_keys_in_request_order_for_several_devices(
     client: AsyncClient, make_user: MakeUser
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     root, phone = await register_approved_pair(client, owner, one_time_keys=1)
     keys = (await _claim(client, viewer, phone, root))["keys"]
     assert [k["device_id"] for k in keys] == [phone.id, root.id]
@@ -921,7 +1088,7 @@ async def test_concurrent_claims_never_hand_out_the_same_one_time_key(
     client: AsyncClient, make_user: MakeUser
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     ring = Keyring(owner, 1)
     await register(client, ring, one_time_keys=3)
 
@@ -942,7 +1109,7 @@ async def test_concurrent_claims_across_callers_split_one_key_exactly(
     client: AsyncClient, make_user: MakeUser
 ) -> None:
     owner = await make_user("Owner")
-    callers = [await make_user(f"Caller {n}") for n in range(4)]
+    callers = [await make_mate(client, make_user, owner, f"Caller {n}") for n in range(4)]
     ring = Keyring(owner, 1)
     await register(client, ring, one_time_keys=1)
     responses = await asyncio.gather(*(
@@ -956,7 +1123,7 @@ async def test_claim_is_all_or_nothing_when_a_device_is_unavailable(
     client: AsyncClient, make_user: MakeUser, register_device: RegisterDevice
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     root, phone = await register_approved_pair(client, owner, one_time_keys=2)
     pending = Keyring(owner, 3)
     await register(client, pending)
@@ -965,17 +1132,18 @@ async def test_claim_is_all_or_nothing_when_a_device_is_unavailable(
     await approve(client, approver=root, new=revoked)
     assert (await client.delete(f"/v2/devices/{revoked.id}", headers=owner.headers)).status_code == 200
     legacy = await register_device(owner)
-    ghost = str(uuid.uuid4())
 
     response = await client.post(
         "/v2/keys/claim",
-        json={"device_ids": [root.id, pending.id, revoked.id, legacy["id"], ghost, phone.id]},
+        json={"device_ids": [root.id, pending.id, revoked.id, legacy["id"], phone.id]},
         headers=viewer.headers,
     )
     assert response.status_code == 409
     body = response.json()
     assert body["detail"] == "device_unavailable"
-    assert body["device_ids"] == [pending.id, revoked.id, legacy["id"], ghost]
+    # A device id that does not exist at all is NOT listed here: it is a gate refusal
+    # (403), answered like a stranger's device, so ids cannot be probed through this list.
+    assert body["device_ids"] == [pending.id, revoked.id, legacy["id"]]
     # The two valid devices lost nothing.
     assert (await _counts(client, root))["one_time_keys_available"] == 2
     assert (await _counts(client, phone))["one_time_keys_available"] == 2
@@ -983,7 +1151,7 @@ async def test_claim_is_all_or_nothing_when_a_device_is_unavailable(
 
 async def test_claim_input_bounds_and_rate_limits(client: AsyncClient, make_user: MakeUser) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     ring = Keyring(owner, 1)
     await register(client, ring, one_time_keys=0)
 
@@ -1002,7 +1170,7 @@ async def test_claim_input_bounds_and_rate_limits(client: AsyncClient, make_user
     limited = await post([ring.id])
     assert limited.status_code == 429 and limited.json()["detail"] == "e2ee_claim_rate_limited"
     # A different caller has its own budget.
-    other_viewer = await make_user("Other Viewer")
+    other_viewer = await make_mate(client, make_user, owner, "Other Viewer")
     response = await client.post("/v2/keys/claim", json={"device_ids": [ring.id]}, headers=other_viewer.headers)
     assert response.status_code == 200
 
@@ -1016,7 +1184,7 @@ async def test_legacy_v1_flows_are_untouched_by_v2_devices(
     client: AsyncClient, make_user: MakeUser, register_device: RegisterDevice
 ) -> None:
     owner = await make_user("Owner")
-    viewer = await make_user("Viewer")
+    viewer = await make_mate(client, make_user, owner)
     legacy = await register_device(owner, one_time_prekey_count=2)
     ring = Keyring(owner, 1)
     await register(client, ring, one_time_keys=3)

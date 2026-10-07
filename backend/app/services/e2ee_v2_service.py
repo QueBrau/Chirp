@@ -17,9 +17,66 @@ from typing import Any
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app import models
+from app.core.blocks import blockers_of
 from app.core.e2ee_v2 import KEY_KIND_FALLBACK, KEY_KIND_ONE_TIME
+
+
+async def lookup_allowed_user_ids(
+    session: AsyncSession, caller_id: uuid.UUID, target_ids: Iterable[uuid.UUID]
+) -> set[uuid.UUID]:
+    """The subset of `target_ids` whose devices the caller may read or claim keys for.
+
+    THE GATE FOR GET /v2/users/{id}/devices AND POST /v2/keys/claim (board c444). v1's
+    prekey-bundle fetch was an open lookup: any account could enumerate any other
+    account's device identities and drain its one-time keys. v2 closes that. A target is
+    allowed when it is:
+
+      * the caller themself (their own other phones - the sender's legs); or
+      * a CURRENT member of at least one conversation the caller is also a CURRENT
+        member of. "Current" is exactly what routers.messages._require_active_member
+        means: a conversation_members row with left_at IS NULL. A member who has left
+        does not count, on either side, and the conversation's kind does not matter.
+        Real clients always create the DM first (POST /conversations, which already
+        applies the reachability rule), so this costs them nothing.
+
+    BLOCKS mirror the existing contact paths (send_message, create_conversation) and
+    nothing more: a target who has BLOCKED the caller is refused, via the same
+    core.blocks.blockers_of. The caller's OWN blocks are deliberately never consulted -
+    see that module's docstring: consulting them would let a by-chirp blocker find the
+    anonymous author by looking up each person in turn.
+
+    Callers must answer every excluded target IDENTICALLY (403 recipient_not_reachable).
+    This function returns only the allowed set, so it cannot itself leak WHY a target
+    was excluded: no such user, no shared conversation, left the conversation and
+    blocked-the-caller are indistinguishable by construction.
+    """
+    targets = set(target_ids)
+    allowed = {caller_id} & targets
+    others = targets - {caller_id}
+    if not others:
+        return allowed
+
+    mine = aliased(models.ConversationMember)
+    theirs = aliased(models.ConversationMember)
+    shared = await session.execute(
+        select(theirs.user_id)
+        .select_from(mine)
+        .join(theirs, theirs.conversation_id == mine.conversation_id)
+        .where(
+            mine.user_id == caller_id,
+            mine.left_at.is_(None),
+            theirs.user_id.in_(others),
+            theirs.left_at.is_(None),
+        )
+        .distinct()
+    )
+    candidates = set(shared.scalars().all())
+    if candidates:
+        candidates -= await blockers_of(session, subject_id=caller_id, candidate_ids=candidates)
+    return allowed | candidates
 
 
 def approved_v2_device_conditions() -> tuple[Any, ...]:

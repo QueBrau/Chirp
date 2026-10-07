@@ -148,6 +148,20 @@ async def open_dm(client: AsyncClient, creator: ApiUser, other: ApiUser) -> str:
     return response.json()["id"]
 
 
+async def make_mate(
+    client: AsyncClient, make_user: Any, other: ApiUser, name: str = "Viewer"
+) -> ApiUser:
+    """A new user who shares a current DM with `other`.
+
+    That is the precondition (c444) for reading other's v2 directory or claiming other's
+    keys: only the user themself or a current conversation mate may. Real clients always
+    create the DM first, so tests that are about something else get the same starting point.
+    """
+    mate = await make_user(name)
+    await open_dm(client, other, mate)
+    return mate
+
+
 def leg(ring: Keyring, *, olm_type: int = 0, body: bytes | None = None) -> dict[str, Any]:
     """A leg addressed to `ring`'s device with distinctive ciphertext bytes."""
     assert ring.id is not None
