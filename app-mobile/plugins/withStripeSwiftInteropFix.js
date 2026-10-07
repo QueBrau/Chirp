@@ -13,13 +13,21 @@
  * SDK 54 still pins 0.50.3, so we patch the one line at prebuild time instead of
  * bumping the payments SDK.
  *
- * This runs during `expo prebuild` (and therefore `expo run:ios` and EAS builds),
- * BEFORE `pod install`, so ios/ can stay generated and gitignored. It is idempotent
- * and a no-op on 0.61.0+ (header already fixed). Switching the declaration to the
- * type Swift actually uses is also correct on older Xcode, so it cannot regress EAS.
+ * This runs during local `expo prebuild` (and therefore `expo run:ios`), BEFORE
+ * `pod install`, so ios/ can stay generated and gitignored. It is idempotent and a
+ * no-op on 0.61.0+ (header already fixed).
  *
- * Delete this plugin (and its app.json entry) when @stripe/stripe-react-native is
- * bumped to >= 0.61.0.
+ * It is LOCAL-ONLY ON PURPOSE and does nothing when EAS_BUILD is set. EAS builds
+ * compile today, which means the EAS image's Xcode is older than 26.4. The same Xcode
+ * 26.4 that turns this header into a compile error also has a PaymentSheetLoader.load
+ * runtime crash with Stripe iOS 24.x (stripe-react-native#2364), so on EAS the compile
+ * error is currently a free guard against shipping that crash. Patching it there would
+ * remove the guard silently the day the EAS image moves to Xcode 26.4. Local builds
+ * are dev-only (Xcode 26.6 here, where a PaymentSheet probe showed no crash in the
+ * failure path), so the patch is safe to apply for them.
+ *
+ * The real fix is bumping @stripe/stripe-react-native to >= 0.61.0 (a separate,
+ * payments-gated card); delete this plugin and its app.json entry when that lands.
  */
 const fs = require("fs");
 const path = require("path");
@@ -27,6 +35,8 @@ const { withDangerousMod } = require("expo/config-plugins");
 
 const BAD = "typedef NS_ENUM(NSUInteger, STPPaymentStatus);";
 const GOOD = "typedef NS_ENUM(NSInteger, STPPaymentStatus);";
+
+let loggedEasSkip = false;
 
 function patchHeader(projectRoot) {
   let pkgJson;
@@ -60,6 +70,15 @@ function patchHeader(projectRoot) {
 }
 
 module.exports = function withStripeSwiftInteropFix(config) {
+  if (process.env.EAS_BUILD) {
+    // See the header comment: on EAS the unpatched compile error is the guard.
+    // Expo evaluates plugins several times per prebuild, so log once per process.
+    if (!loggedEasSkip) {
+      loggedEasSkip = true;
+      console.log("[withStripeSwiftInteropFix] EAS_BUILD set; leaving StripeSwiftInterop.h unpatched (local-only fix)");
+    }
+    return config;
+  }
   return withDangerousMod(config, [
     "ios",
     (cfg) => {

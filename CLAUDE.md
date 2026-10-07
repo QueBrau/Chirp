@@ -89,22 +89,29 @@ see what is going on. Update it at EVERY step, not just at the end of a task:
   resource bundle - `ls <sim-container>/chirp.app | grep RNCAsyncStorage` settles it
   in one command. Booted simulators hold builds of DIFFERENT ages, so take the
   newest-dated .app across ALL of them, not the first sim that boots.
-- **Local iOS builds still do NOT work on this Mac, but the REASON changed (c267,
-  Aug 31) - and the old reason in this file was wrong.** It used to say "no
-  CocoaPods, and Xcode 15.3 is below what Expo SDK 54 / RN 0.81 with newArchEnabled
-  needs". Both halves are now false: Xcode is 26.6 (build 17F113), CocoaPods 1.17.0
-  is installed, and `npx expo prebuild --platform ios` SUCCEEDS, producing
-  app-mobile/ios with chirp.xcworkspace and a populated Pods/. What actually fails is
-  the COMPILE, and it is one pod: @stripe/stripe-react-native 0.50.3 vs Xcode 26.6.
-  Its generated stripe_react_native-Swift.h forward-declares STPPaymentStatus as
-  NSInteger while the Stripe iOS SDK declares it NSUInteger, so clang aborts with
-  "enumeration redeclared with different underlying type" and xcodebuild exits 65.
-  Nothing else in the build failed. Do NOT re-derive this from scratch: prebuild
-  succeeding makes it look like the toolchain is fine right up until the Stripe pod.
-- Two consequences worth knowing before planning around it. A SIMULATOR build needs
-  no code signing, so it is NOT blocked by Apple Developer enrollment - the enrollment
-  gate and this build gate are separate problems, and fixing one does not touch the
-  other. And src/api/client.ts defaults to the PROD api, so any local build talks to
+- **Local iOS simulator builds work on this Mac (c267 diagnosed it Aug 31, c441 fixed
+  it), but only through a local-only patch.** The old note said "no CocoaPods, and
+  Xcode 15.3 is too old" - both false: Xcode is 26.6 (build 17F113), CocoaPods 1.17.0
+  is installed, and `npx expo prebuild --platform ios` SUCCEEDS with a populated
+  Pods/. What failed was the COMPILE of one pod, @stripe/stripe-react-native 0.50.3:
+  its hand-written ios/StripeSwiftInterop.h:14 declares STPPaymentStatus as NSUInteger
+  while Stripe iOS 24.19.0 and the generated stripe_react_native-Swift.h use NSInteger
+  (an earlier version of this note had them reversed). clang 21 makes that a hard
+  error with no flag to downgrade it, so xcodebuild exits 65 and only the header can
+  change. `app-mobile/plugins/withStripeSwiftInteropFix.js` (c441) rewrites that line
+  at prebuild. It is local-only ON PURPOSE (it skips when EAS_BUILD is set): EAS
+  compiles today, so its Xcode is older than 26.4, and on 26.4 the unpatched compile
+  error is a free guard against the PaymentSheetLoader.load crash with Stripe iOS
+  24.x (stripe-react-native #2364). The real fix is bumping @stripe/stripe-react-native
+  to 0.61.0 - payments-gated, its own card - after which the plugin is deleted.
+- `expo prebuild` needs a UTF-8 locale (`export LANG=en_US.UTF-8`); without one it
+  exits 0 but its `pod install` silently fails (no Podfile.lock, no Pods/).
+- A universal Debug simulator build needs ~8 GB of free disk for DerivedData;
+  `ARCHS=arm64` halves it, and arm64 is all this Mac runs.
+- Two consequences worth knowing before planning around local builds. A SIMULATOR
+  build needs no code signing, so it is NOT blocked by Apple Developer enrollment -
+  the enrollment gate and the (now fixed) build gate were separate problems. And
+  src/api/client.ts defaults to the PROD api, so any local build talks to
   production unless EXPO_PUBLIC_API_URL says otherwise; eas.json's EXPO_PUBLIC_WS_URL
   is EAS-only and does NOT reach a local build, so a local client will not exercise
   chirp-ws unless it is set in the environment.
