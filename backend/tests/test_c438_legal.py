@@ -134,13 +134,31 @@ def test_policy_version_length_is_validated_at_request_boundary() -> None:
         LegalAcceptanceCreate(terms_version="x" * 41, privacy_version="2026-10-06", age_declaration=18)
 
 
-def test_migration_0040_downgrade_and_upgrade(migrated_db) -> None:
-    """The reserved revision can roll back without leaving policy tables behind."""
-    from alembic import command
-    from alembic.config import Config
-    from pathlib import Path
+def test_migration_0040_downgrade_and_upgrade(database_url) -> None:
+    """Round-trip a dedicated scratch database, never the suite's current head."""
+    import os
+    import uuid
+    from tests.test_c344_dm_key_migration import _admin_execute, _alembic, _swap_database
+    from tests.test_c356_outbox_migration import _drop_db_with_retry, _table_exists
+    from app.config import get_settings
 
-    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-    config.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
-    command.downgrade(config, "0039")
-    command.upgrade(config, "0040")
+    admin_url = _swap_database(database_url, "postgres")
+    db_name = f"chirp_c438_migration_{uuid.uuid4().hex[:12]}"
+    url = _swap_database(database_url, db_name)
+    original = os.environ.get("DATABASE_URL")
+    asyncio.run(_admin_execute(admin_url, [f'CREATE DATABASE "{db_name}"']))
+    try:
+        _alembic(url, "0040")
+        assert asyncio.run(_table_exists(url, "legal_acceptances"))
+        _alembic(url, "0039", down=True)
+        assert not asyncio.run(_table_exists(url, "legal_acceptances"))
+        assert not asyncio.run(_table_exists(url, "legal_policies"))
+        _alembic(url, "0040")
+        assert asyncio.run(_table_exists(url, "legal_policies"))
+    finally:
+        if original is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = original
+        get_settings.cache_clear()
+        asyncio.run(_drop_db_with_retry(admin_url, db_name))
