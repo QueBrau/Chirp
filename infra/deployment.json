@@ -27,10 +27,7 @@
       "AUTH_MODE": "firebase",
       "FIREBASE_PROJECT_ID": "chirps-prod",
       "DB_POOL_TIMEOUT": "10",
-      "CORS_ORIGINS": "[\"https://chirps-prod.web.app\",\"http://localhost:8081\"]",
-      "EMAIL_FROM": "Chirp <hello@josedev.app>",
-      "EMAIL_PROVIDER": "resend",
-      "MEDIA_BUCKET_NAME": "chirps-prod-media"
+      "CORS_ORIGINS": "[\"https://chirps-prod.web.app\",\"http://localhost:8081\"]"
     },
     "secrets": {
       "REDIS_URL": "REDIS_URL:latest"
@@ -52,7 +49,10 @@
         "DB_MAX_OVERFLOW": "2",
         "SERVICE_ROLE": "api",
         "OUTBOX_SWEEPER_ENABLED": "true",
-        "APP_PUBLIC_BASE_URL": "https://chirps-prod.web.app"
+        "APP_PUBLIC_BASE_URL": "https://chirps-prod.web.app",
+        "EMAIL_FROM": "Chirp <hello@josedev.app>",
+        "EMAIL_PROVIDER": "resend",
+        "MEDIA_BUCKET_NAME": "chirps-prod-media"
       },
       "client_origin": "https://chirp-api-593616178468.us-central1.run.app",
       "secrets": {

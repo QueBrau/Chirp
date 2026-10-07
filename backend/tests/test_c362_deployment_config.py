@@ -497,12 +497,16 @@ def test_api_public_base_url_is_in_generated_api_command(config, release):
 def test_plan_preserves_current_nonsecret_environment_bytes_for_both_services(config, release):
     expected = {
         "CORS_ORIGINS": '["https://chirps-prod.web.app","http://localhost:8081"]',
-        "EMAIL_FROM": "Chirp <hello@josedev.app>",
-        "EMAIL_PROVIDER": "resend",
-        "MEDIA_BUCKET_NAME": "chirps-prod-media",
     }
     for step in C.plan(config, release, "gcloud")["steps"]:
-        assert {key: planned_env(shlex.split(step["stage_command"]))[key] for key in expected} == expected
+        environment = planned_env(shlex.split(step["stage_command"]))
+        assert {key: environment[key] for key in expected} == expected
+        if step["service"] == "api":
+            assert {environment[key] for key in ("EMAIL_FROM", "EMAIL_PROVIDER", "MEDIA_BUCKET_NAME")} == {
+                "Chirp <hello@josedev.app>", "resend", "chirps-prod-media",
+            }
+        else:
+            assert all(key not in environment for key in ("EMAIL_FROM", "EMAIL_PROVIDER", "MEDIA_BUCKET_NAME"))
 
 
 def test_live_undeclared_environment_is_drift(config, snap, release):
