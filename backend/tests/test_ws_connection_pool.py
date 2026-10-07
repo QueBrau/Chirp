@@ -50,6 +50,12 @@ def ws_client(migrated_db: str) -> Any:
         table_names = ", ".join(t.name for t in app_db.Base.metadata.sorted_tables)
         async with setup_engine.begin() as conn:
             await conn.execute(text(f"TRUNCATE TABLE {table_names} CASCADE"))
+            # Restore the migration-seeded policy configuration, as the shared
+            # HTTP fixture does. The pool check must still exercise /auth/me.
+            await conn.execute(text(
+                "INSERT INTO legal_policies (policy_key, version) "
+                "VALUES ('terms', '2026-10-06'), ('privacy', '2026-10-06')"
+            ))
         await setup_engine.dispose()
 
     import asyncio

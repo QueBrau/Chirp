@@ -7,6 +7,7 @@ from app import models
 from app.config import get_settings
 from app.db import get_session
 from app.services.identity_verification import run_verification
+from app.services.legal_enforcement import current_legal_status
 
 
 async def _verify_identity(
@@ -107,6 +108,26 @@ async def get_current_user(
     router's current-user dependency passes through — so it cannot be forgotten on a
     route added later the way a per-route check could be.
     """
+    user = await get_user_by_uid(session, uid)
+    if user is None:
+        raise HTTPException(status_code=401, detail="user_not_registered")
+    if user.suspended_at is not None:
+        raise HTTPException(status_code=403, detail="account_suspended")
+    settings = get_settings()
+    if settings.legal_enforcement_enabled:
+        status = await current_legal_status(session, user.id)
+        if status == "unavailable":
+            raise HTTPException(status_code=503, detail="legal_policy_unavailable")
+        if status != "accepted":
+            raise HTTPException(status_code=428, detail="legal_acceptance_required")
+    return user
+
+
+async def get_current_user_without_legal_gate(
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Resolve an account for legal status/acceptance endpoints during rollout."""
     user = await get_user_by_uid(session, uid)
     if user is None:
         raise HTTPException(status_code=401, detail="user_not_registered")

@@ -33,6 +33,7 @@ from app.routers import (
     moderation,
     payments,
     chirps,
+    legal,
 )
 from app.ws import gateway
 
@@ -65,6 +66,7 @@ ALL_HTTP_ROUTERS = (
     payments,
     events,
     house,
+    legal,
 )
 WS_ROLE_HTTP_ROUTERS = (deployment,)
 

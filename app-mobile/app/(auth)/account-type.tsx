@@ -137,13 +137,16 @@ export default function AccountTypeScreen() {
       // Seed the session from the bootstrap response directly — no second
       // round trip, and navigation can't outrun a failed refresh.
       applyBootstrap(created);
-      proceed();
+      router.replace(withInviteCode("/legal-acceptance", inviteCode));
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         // Already registered (signed back in). Only proceed once the session
         // actually reflects it, or the guards would bounce us straight back.
         const settled = await refresh();
         if (settled) {
+          // A 409 means the account already exists. Let the normal destination
+          // guard decide whether current policy acceptance is still required;
+          // forcing the legal screen here traps already-accepted returners.
           proceed();
           return;
         }

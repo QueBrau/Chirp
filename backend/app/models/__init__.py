@@ -25,6 +25,7 @@ from app.models.identity import (
     RoleTerm,
     User,
 )
+from app.models.legal import LegalAcceptance, LegalPolicy, OrganizationAuthorityAcceptance
 from app.models.lineage import Family, LineageEdge
 from app.models.meetings import Meeting, MeetingAttendance
 from app.models.polls import Poll, PollOption, PollVote
@@ -65,6 +66,9 @@ __all__ = [
     "HouseBallot",
     "LedgerEntry",
     "LineageEdge",
+    "LegalAcceptance",
+    "OrganizationAuthorityAcceptance",
+    "LegalPolicy",
     "Meeting",
     "MeetingAttendance",
     "Poll",

@@ -5,6 +5,7 @@
  */
 
 import { request } from "./client";
+import type { PaymentAuthority } from "./authority";
 
 /**
  * Which rail the member is paying on. Chosen BEFORE the intent exists because
@@ -58,10 +59,10 @@ export function platformFeeCents(amountCents: number, rail: PaymentRail): number
   return Math.floor((amountCents * PLATFORM_FEE_BPS[rail]) / 10_000);
 }
 
-export async function createOnboardingLink(chapterId: string): Promise<OnboardingLinkOut> {
+export async function createOnboardingLink(chapterId: string, authority?: PaymentAuthority): Promise<OnboardingLinkOut> {
   return request<OnboardingLinkOut>("/payments/connect/onboarding-link", {
     method: "POST",
-    body: { chapter_id: chapterId },
+    body: { chapter_id: chapterId, authority },
   });
 }
 
