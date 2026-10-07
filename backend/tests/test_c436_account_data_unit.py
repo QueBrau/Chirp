@@ -5,13 +5,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from tests.conftest import ApiUser
 
 from app import models
 from app.services import account_data
 from app.db import get_session_factory
+from app.jobs.account_data import main as expiry_main
 from app.jobs.account_data import run_export_artifact_expiry
 
 
@@ -167,7 +168,7 @@ async def test_export_expiry_job_is_dry_run_bounded_owner_safe_and_idempotent(
             "mode": "dry_run", "cutoff": now.isoformat(), "eligible": 1,
             "deleted": 0, "capped": True, "budget": 1,
         }
-        assert (await session.scalar(select(models.AccountDataArtifact.id))) is not None
+        assert (await session.scalar(select(func.count()).select_from(models.AccountDataArtifact))) == 3
 
         applied = await run_export_artifact_expiry(session, now=now, batch_size=1, max_batches=1, apply=True)
         assert applied["mode"] == "apply" and applied["deleted"] == 1
@@ -178,6 +179,24 @@ async def test_export_expiry_job_is_dry_run_bounded_owner_safe_and_idempotent(
         rerun = await run_export_artifact_expiry(session, now=now, apply=True)
         assert rerun["deleted"] == 1
         await session.commit()
+        assert (await session.scalar(select(func.count()).select_from(models.AccountDataArtifact))) == 1
+        for request in requests:
+            persisted = await session.get(models.AccountDataRequest, request.id)
+            assert persisted is not None and persisted.status == "partially_completed"
+        final = await run_export_artifact_expiry(session, now=now, apply=True)
+        assert final["deleted"] == 0
+        await session.rollback()
+
+
+def test_export_expiry_job_rejects_non_boolean_apply_and_naive_time() -> None:
+    with pytest.raises(TypeError, match="apply must be a bool"):
+        import asyncio
+        asyncio.run(run_export_artifact_expiry(object(), apply="false"))
+    with pytest.raises(ValueError, match="timezone"):
+        import asyncio
+        asyncio.run(run_export_artifact_expiry(object(), now=datetime(2026, 10, 7)))
+    with pytest.raises(SystemExit):
+        expiry_main(["--max-rows", "1001"])
 
 
 @pytest.mark.asyncio

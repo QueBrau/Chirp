@@ -1,6 +1,7 @@
 /** Account export and deletion request status. */
 
 import { Feather } from "@expo/vector-icons";
+import { Redirect } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 
@@ -12,7 +13,8 @@ import {
   downloadDataRequest,
 } from "@/api/dataRequests";
 import { ApiError } from "@/api/client";
-import { AppText, Button, Card, EmptyState, Screen } from "@/components";
+import { AppText, Button, Card, EmptyState, LoadingScreen, Screen } from "@/components";
+import { useSession } from "@/auth";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { shareJson } from "@/lib/export";
 import { radii, spacing, useTheme } from "@/theme";
@@ -106,6 +108,7 @@ function RequestCard({ item, owner, onRefresh }: { item: DataRequestOut; owner: 
 }
 
 export default function AccountDataScreen() {
+  const { status } = useSession();
   const [owner, setOwner] = useState(currentIdentity);
   const ownerRef = useRef(owner);
   const mountedRef = useRef(true);
@@ -157,9 +160,10 @@ export default function AccountDataScreen() {
   }, []);
 
   useEffect(() => {
+    if (status !== "ready" && status !== "suspended" && status !== "legalRequired") return;
     setItems(null);
     void load();
-  }, [load, owner]);
+  }, [load, owner, status]);
 
   const submit = (kind: DataRequestKind) => {
     const requestedOwner = ownerRef.current;
@@ -203,8 +207,16 @@ export default function AccountDataScreen() {
     });
   };
 
+  if (status === "loading") return <LoadingScreen />;
+  if (status === "signedOut") return <Redirect href="/sign-in" />;
+  if (status === "unregistered") return <Redirect href="/account-type" />;
+  if (status === "recoverable") {
+    return <Screen title="Your data" subtitle="Request a copy or account deletion"><EmptyState title="Can't load your account" message="Try again when your session is available." /></Screen>;
+  }
+
+  const canLoad = status === "ready" || status === "suspended" || status === "legalRequired";
   return (
-    <Screen title="Your data" subtitle="Request a copy or account deletion" onRefresh={load}>
+    <Screen title="Your data" subtitle="Request a copy or account deletion" onRefresh={canLoad ? load : undefined}>
       <View style={{ gap: spacing.lg }}>
         <Card>
           <AppText variant="headline">Account data requests</AppText>

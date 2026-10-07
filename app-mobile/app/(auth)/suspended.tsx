@@ -16,7 +16,7 @@
  * the letter of the rule, not an oversight of it.
  *
  * Scope held deliberately (per the ticket): render the state well, no appeals
- * flow. The only action available is signing out.
+ * flow. Account-data rights remain available through their separate route.
  */
 
 import { Feather } from "@expo/vector-icons";
@@ -72,7 +72,7 @@ export default function SuspendedScreen() {
       eyebrow="ACCOUNT STATUS"
       title="Your account is suspended"
       accentBarColor={palette.danger}
-      scroll={false}
+      scroll
       showBack={false}
     >
       <View style={{ gap: spacing.lg }}>
