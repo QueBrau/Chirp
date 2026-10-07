@@ -96,3 +96,19 @@ async def test_request_status_is_owner_scoped_and_provider_block_is_retryable(
     assert retry.json()["status"] == "blocked"
     # The failed provider preflight leaves the account available for status/retry.
     assert (await client.get("/auth/me", headers=owner.headers)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_export_is_immutable_authenticated_and_explicitly_partial(
+    client: AsyncClient, make_user
+) -> None:
+    owner: ApiUser = await make_user("Export owner")
+    created = await client.post("/me/data-requests", json={"kind": "export"}, headers=owner.headers)
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["status"] == "partially_completed"
+    assert body["download_url"] is None
+    export = await client.get(f"/me/data-requests/{body['id']}/download", headers=owner.headers)
+    assert export.status_code == 200
+    assert export.headers["content-disposition"].startswith("attachment;")
+    assert export.json()["format"] == "chirp-account-export-v1"

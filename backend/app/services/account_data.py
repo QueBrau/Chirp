@@ -138,7 +138,7 @@ async def build_export(session: AsyncSession, user: models.User) -> dict[str, ob
         (models.AlumniProfile, "user_id", "alumni_profile"),
         (models.JobPost, "posted_by", "job_posts"),
         (models.LineageEdge, "big_user_id", "lineage_as_big"),
-        (models.LedgerEntry, "user_id", "ledger_entries"),
+        (models.LedgerEntry, "related_user_id", "ledger_entries"),
         (models.DuesPaymentIntent, "user_id", "payment_intents"),
         (models.DuesPaymentPlan, "user_id", "payment_plans"),
         (models.DuesPaymentPlan, "created_by", "payment_plans_created"),
