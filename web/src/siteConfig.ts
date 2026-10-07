@@ -14,18 +14,20 @@
  * reasoning lives with the account notes in the private infra doc (c185).
  */
 export const CONTACT_EMAIL = "chirp.shared@gmail.com";
+export const LEGAL_OPERATORS = "Jose Perdomo and Braulio Pantoja Esquina";
+export const OPERATING_STATE = "Florida";
 
-/** Shown as the "last updated" line on both legal pages. */
-export const LEGAL_LAST_UPDATED = "September 7, 2026";
+/** Draft revision date; publication is tracked separately in c435. */
+export const LEGAL_LAST_UPDATED = "October 6, 2026";
 
 /**
- * Chirp is launching at UNC Greensboro only, so both legal documents are
- * written for North Carolina rather than hedged across fifty states. Revisit
- * both when the first campus outside NC is onboarded.
+ * The launch campus is a product fact, not the scope of the legal documents.
+ * Florida is the proposed governing law for this unpublished draft, based on
+ * the confirmed operating location. Legal allocation remains subject to c75.
  */
 export const LAUNCH_CAMPUS = "UNC Greensboro";
-export const GOVERNING_STATE = "North Carolina";
-export const GOVERNING_COUNTY = "Guilford County, North Carolina";
+export const LEGAL_AUDIENCE = "U.S. colleges and alumni";
+export const GOVERNING_STATE = "Florida";
 
 /** Minimum age to hold an account. See the note in Terms section 1. */
 export const MIN_AGE = 17;

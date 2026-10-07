@@ -49,7 +49,17 @@ export function Contact() {
               <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
                 For questions about your data, or to make a request under our
                 privacy policy, email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
-                The full policy is at <Link to="/privacy">/privacy</Link>.
+                See <Link to="/data-requests">data and account-deletion requests</Link> for
+                what to include, or read the <Link to="/privacy">privacy policy</Link>.
+              </p>
+            </article>
+
+            <article className="card">
+              <h2 className="title">Safety &amp; removal requests</h2>
+              <p className="copy" style={{ marginTop: "var(--space-2)", lineHeight: "1.6" }}>
+                Report abuse, child exploitation or intimate images shared without consent.
+                Our <Link to="/safety">safety and removal page</Link> explains urgent requests.
+                You do not need a Chirp account. For immediate danger, contact emergency services.
               </p>
             </article>
 

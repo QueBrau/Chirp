@@ -57,6 +57,7 @@ import {
 } from "@/auth";
 import { AppText, Button, Screen, UnderlineField } from "@/components";
 import { MIN_PASSWORD_LENGTH } from "@/lib/passwordPolicy";
+import { openLegalLink, PRIVACY_URL, TERMS_URL } from "@/lib/legalLinks";
 import { canvasActionColor, contrastRatio, radii, spacing, useAppearance, useTheme } from "@/theme";
 
 type EmailAuthMode = "signin" | "signup";
@@ -748,9 +749,31 @@ export default function SignInScreen() {
             rather than letting it float up under the social buttons. */}
         <View style={{ flex: 1, minHeight: spacing.lg }} />
 
-        <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
-          By continuing, you agree to Chirp's Terms of Service and acknowledge our Privacy Policy.
-        </AppText>
+        <View style={{ alignItems: "center", gap: spacing.xs }}>
+          <AppText variant="caption" tone="tertiary" style={{ textAlign: "center" }}>
+            By continuing, you agree to Chirp's Terms of Service and acknowledge our Privacy Policy.
+          </AppText>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: spacing.sm }}>
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel="Terms of Service"
+              hitSlop={spacing.xs}
+              onPress={() => void openLegalLink("Terms of Service", TERMS_URL)}
+              style={{ minHeight: 44, justifyContent: "center" }}
+            >
+              <AppText variant="caption" tone="secondary">Terms of Service</AppText>
+            </Pressable>
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel="Privacy Policy"
+              hitSlop={spacing.xs}
+              onPress={() => void openLegalLink("Privacy Policy", PRIVACY_URL)}
+              style={{ minHeight: 44, justifyContent: "center" }}
+            >
+              <AppText variant="caption" tone="secondary">Privacy Policy</AppText>
+            </Pressable>
+          </View>
+        </View>
       </View>
     </Screen>
   );

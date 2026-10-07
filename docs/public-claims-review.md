@@ -1,3 +1,26 @@
+# Public product claims review — October 6, 2026 (c435)
+
+The current refresh is a draft for 17+ U.S. colleges and alumni, operated by Jose
+Perdomo and Braulio Pantoja Esquina in Florida (not incorporated, user confirmed). See
+[the full source inventory](legal-data-inventory.md) and
+[publication review and operating gates](legal-publication-checklist.md).
+It is not counsel approval or evidence of a new production deployment.
+
+| Current correction | Evidence / limit |
+| --- | --- |
+| National participating-campus audience; actual operators and Florida location | User decisions October 6. Availability still depends on supported campus/feature. Florida governing law is a draft proposal informed by the confirmed location, with no invented county or LLC. |
+| Account/device/org/event/poll/finance and support data | Backend models/routes and mobile Firebase/OS integrations mapped in the inventory. Not every field is public and not every table has a purge. |
+| Selected usage events can be linked to users | `backend/app/core/analytics.py`, `ANALYTICS-VERIFICATION.md`: allowlisted identifiers; Google Logging/BigQuery; no anonymous-analytics or complete-live-delivery claim. |
+| Photo metadata and deletion are separate | `storage_service.py` strips EXIF on final JPEG; temporary uploads may contain it. c414 media reconciliation remains dry-run. Database purge does not erase permanent objects. |
+| Actual providers and local storage | Resend transactional email, Gmail support, Firebase native/browser sessions, Stripe and Google Cloud. External image hosts receive requests. Push registration/delivery remain no-op; SQLite message history is dormant. |
+| Scheduled content deletion has progressed since September | c369/c69 record accepted October 5 apply/safe-repeat proof for eligible 30-day removed content and 7-day prekeys. No inference about account erasure, backups, remaining tables or media. |
+| Support, safety, acceptance and age promises need implementation | c436/c437/c438. Website/mobile links are not account-erasure controls, signed acceptance records, age verification or a staffed urgent queue. c75 counsel review remains separate. |
+
+Historical September review follows unchanged to preserve the evidence boundary
+at that time. Its deployment/retention status is dated, not today's live status.
+
+---
+
 # Public product claims review — September 7, 2026 (c367)
 
 These corrections describe current product behavior. They do not complete the
