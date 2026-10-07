@@ -51,6 +51,7 @@
           "enableGooglePay": false
         }
       ],
+      "./plugins/withStripeSwiftInteropFix",
       [
         "expo-image-picker",
         {
