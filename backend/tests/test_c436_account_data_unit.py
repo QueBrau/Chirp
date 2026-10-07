@@ -70,12 +70,36 @@ async def test_request_status_is_owner_scoped_and_manual_processing_is_idempoten
 
 @pytest.mark.asyncio
 async def test_export_is_immutable_authenticated_and_explicitly_partial(
-    client: AsyncClient, make_user
+    client: AsyncClient, make_user, make_campus
 ) -> None:
     owner: ApiUser = await make_user("Export owner")
     other: ApiUser = await make_user("Other account")
+    now = datetime.now(timezone.utc)
     async with get_session_factory()() as session:
         owner_id, other_id = uuid.UUID(owner.id), uuid.UUID(other.id)
+        chapter = models.Chapter(campus_id=uuid.UUID(await make_campus()), org_name="Authority test")
+        session.add(chapter)
+        await session.flush()
+        owner_membership = models.Membership(user_id=owner_id, chapter_id=chapter.id, role="president", status="active")
+        other_membership = models.Membership(user_id=other_id, chapter_id=chapter.id, role="treasurer", status="active")
+        session.add_all([owner_membership, other_membership])
+        await session.flush()
+        owner_term = models.RoleTerm(membership_id=owner_membership.id, role="president", started_at=now)
+        other_term = models.RoleTerm(membership_id=other_membership.id, role="treasurer", started_at=now)
+        session.add_all([owner_term, other_term])
+        await session.flush()
+        session.add_all([
+            models.OrganizationAuthorityAcceptance(
+                user_id=owner_id, chapter_id=chapter.id, membership_id=owner_membership.id,
+                role_term_id=owner_term.id, role="president", purpose="organization_create",
+                policy_version="2026-10-06", stripe_account_id=None,
+            ),
+            models.OrganizationAuthorityAcceptance(
+                user_id=other_id, chapter_id=chapter.id, membership_id=other_membership.id,
+                role_term_id=other_term.id, role="treasurer", purpose="payment_setup",
+                policy_version="2026-10-06", stripe_account_id="acct_other",
+            ),
+        ])
         owner_device = models.Device(user_id=owner_id, registration_id=1, identity_key=b"o" * 32)
         other_device = models.Device(user_id=other_id, registration_id=2, identity_key=b"t" * 32)
         session.add_all([owner_device, other_device])
@@ -108,6 +132,9 @@ async def test_export_is_immutable_authenticated_and_explicitly_partial(
     assert export.headers["cache-control"] == "private, no-store"
     assert len(export.json()["records"]["message_receipts"]) == 1
     assert len(export.json()["records"]["user_blocks"]) == 1
+    authority = export.json()["records"]["organization_authority_acceptances"]
+    assert len(authority) == 1 and authority[0]["user_id"] == owner.id
+    assert "acct_other" not in export.text and other.id not in export.text
     # A second synthetic account must not bleed into the caller's artifact.
     assert other.id not in export.text
     assert (await client.get(f"/me/data-requests/{body['id']}/download", headers=other.headers)).status_code == 404
@@ -131,7 +158,10 @@ async def test_expired_export_artifact_is_purged(
             expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
         ))
         await session.commit()
-        assert await account_data.purge_expired_export_artifacts(session) == 1
+        report = await run_export_artifact_expiry(
+            session, now=datetime.now(timezone.utc), apply=True,
+        )
+        assert report["deleted"] == 1
         await session.commit()
 
 

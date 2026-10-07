@@ -8,21 +8,11 @@ import base64
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 
-
-async def purge_expired_export_artifacts(session: AsyncSession) -> int:
-    """Delete expired export copies. Scheduling this helper is not yet implemented."""
-    result = await session.execute(
-        delete(models.AccountDataArtifact).where(
-            models.AccountDataArtifact.expires_at.is_not(None),
-            models.AccountDataArtifact.expires_at <= datetime.now(timezone.utc),
-        )
-    )
-    return result.rowcount or 0
 
 EXPORT_SCOPE = [
     "account profile and organization memberships",
