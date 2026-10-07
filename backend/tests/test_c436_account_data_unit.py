@@ -42,3 +42,31 @@ async def test_blocked_deletion_does_not_tombstone_account(monkeypatch: pytest.M
     assert called is False
     assert user.firebase_uid == "live-uid"
     assert user.email == "person@example.test"
+
+
+@pytest.mark.asyncio
+async def test_provider_success_allows_core_executor(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = models.User(
+        id=uuid.uuid4(), firebase_uid="live-uid", email="person@example.test",
+        display_name="Person", account_type="non_greek", pseudonym_seed="seed",
+    )
+    request = models.AccountDataRequest(user_id=user.id, kind="deletion", open_key="open")
+    deleted = False
+
+    class FakeProvider:
+        name = "synthetic_provider"
+
+        async def fulfill_deletion(self, *, firebase_uid: str, email: str) -> bool:
+            assert firebase_uid == "live-uid"
+            assert email == "person@example.test"
+            return True
+
+    async def delete_core(_session, _user):
+        nonlocal deleted
+        deleted = True
+
+    monkeypatch.setattr(account_data, "PROVIDER_ADAPTERS", (FakeProvider(),))
+    monkeypatch.setattr(account_data, "_delete_owned_rows", delete_core)
+    result = await account_data.fulfill_request(object(), request, user)
+    assert result.status == "completed"
+    assert deleted is True
