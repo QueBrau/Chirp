@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.db import get_session
-from app.middleware.auth import get_current_user_for_privacy
+from app.middleware.auth import get_current_user_for_privacy, get_current_user_for_privacy_status
 from app.schemas.data_requests import DataRequestCreate, DataRequestOut
 from app.services.account_data import fulfill_request
 
@@ -57,7 +57,7 @@ async def _owned(
 
 @router.get("/me/data-requests", response_model=list[DataRequestOut])
 async def list_data_requests(
-    user: models.User = Depends(get_current_user_for_privacy),
+    user: models.User = Depends(get_current_user_for_privacy_status),
     session: AsyncSession = Depends(get_session),
 ) -> list[DataRequestOut]:
     rows = (await session.execute(
@@ -99,7 +99,7 @@ async def create_data_request(
 @router.get("/me/data-requests/{request_id}", response_model=DataRequestOut)
 async def get_data_request(
     request_id: uuid.UUID,
-    user: models.User = Depends(get_current_user_for_privacy),
+    user: models.User = Depends(get_current_user_for_privacy_status),
     session: AsyncSession = Depends(get_session),
 ) -> DataRequestOut:
     row, artifact = await _owned(request_id, user, session)

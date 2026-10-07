@@ -146,3 +146,14 @@ async def get_current_user_for_privacy(
     if user is None:
         raise HTTPException(status_code=401, detail="user_not_registered")
     return user
+
+
+async def get_current_user_for_privacy_status(
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Resolve an account for status reads without requiring a fresh reauthentication."""
+    user = await get_user_by_uid(session, uid)
+    if user is None:
+        raise HTTPException(status_code=401, detail="user_not_registered")
+    return user
