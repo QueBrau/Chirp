@@ -209,7 +209,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setStatus(prev => prev === "suspended" || prev === "unregistered" || prev === "signedOut" || prev === "legalRequired" ? prev : "recoverable");
       },
       legalRequired: owner => {
-        if (ownsIdentity(owner)) setStatus("legalRequired");
+        if (!ownsIdentity(owner)) return;
+        // A newer 428 outranks any older /me request that still says ready.
+        genRef.current += 1;
+        loadRef.current?.cancel();
+        setStatus("legalRequired");
       },
     });
     setRealtimeStatus(chirpSocket.getStatus());

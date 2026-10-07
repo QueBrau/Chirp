@@ -271,7 +271,7 @@ export class ChirpSocket {
       this.retire(ws, false);
       if (event.code === WS_AUTH_FAILED || event.code === WS_ACCOUNT_SUSPENDED || event.code === WS_LEGAL_REQUIRED) {
         void this.revalidate(run, owner);
-      } else if (event.code === undefined) {
+      } else if (event.code === undefined || event.code === 1006) {
         void this.probeUncodedFailure(run, owner);
       } else {
         this.setStatus("closed");
@@ -305,7 +305,7 @@ export class ChirpSocket {
     } catch (error) {
       if (error instanceof ApiError && error.status === 403 && error.detail === "account_suspended") denial = "suspended";
       else if (error instanceof ApiError && error.status === 401) denial = "unauthorized";
-      else if (error instanceof ApiError && error.status === 428) denial = "legalRequired";
+      else if (error instanceof ApiError && error.status === 428 && error.detail === "legal_acceptance_required") denial = "legalRequired";
     } finally {
       operation.dispose();
       if (this.authOperation === operation) this.authOperation = null;

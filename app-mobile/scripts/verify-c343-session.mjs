@@ -522,6 +522,31 @@ await test("c438 uncoded handshake HTTP 428 enters legalRequired and pauses", as
   assert.equal(e.sockets.length, 1);
 });
 
+await test("c438 close 1006 probes once and recognizes legalRequired", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  e.fetch = async url => url.endsWith("/auth/campus-verification")
+    ? response(428, { detail: "legal_acceptance_required" })
+    : response(200, { user: account("A"), memberships: [] });
+  closeSocket(e.sockets[0], 1006); await flush();
+  assert.equal(e.hook.value.status, "legalRequired");
+  assert.equal(e.hook.value.realtimeStatus, "paused");
+  assert.equal(e.sockets.length, 1);
+});
+
+await test("c438 transport error plus 1006 does not double-probe", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  e.fetch = async url => url.endsWith("/auth/campus-verification")
+    ? response(428, { detail: "other_future_428" })
+    : response(200, { user: account("A"), memberships: [] });
+  const before = e.calls.filter(([url]) => url.endsWith("/auth/campus-verification")).length;
+  const socket = e.sockets[0];
+  socket.onerror();
+  socket.onclose?.({ code: 1006 });
+  await flush();
+  assert.equal(e.calls.filter(([url]) => url.endsWith("/auth/campus-verification")).length, before + 1);
+  assert.notEqual(e.hook.value.status, "legalRequired");
+});
+
 await test("c346 terminal auth response can resolve unregistered without overwriting it as recoverable", async e => {
   e.emit(e.user("A")); await e.mountProvider(); e.fetch = async () => response(404, { detail: "user_not_registered" });
   closeSocket(e.sockets[0], 4401); await flush();
@@ -584,8 +609,8 @@ await test("c346 onerror without following close releases its socket and cannot 
 
 await test("c346 five stable seconds replenish transient failures but preserve one active owner", async e => {
   e.emit(e.user("A")); await e.mountProvider();
-  closeSocket(e.sockets[0], 1006); await e.timer.tick(1_000);
-  readySocket(e.sockets[1]); await e.timer.tick(5_000); closeSocket(e.sockets[1], 1006);
+  closeSocket(e.sockets[0], 4503); await e.timer.tick(1_000);
+  readySocket(e.sockets[1]); await e.timer.tick(5_000); closeSocket(e.sockets[1], 4503);
   await e.timer.tick(999); assert.equal(e.sockets.length, 2);
   await e.timer.tick(1); assert.equal(e.sockets.length, 3);
   assert.equal(e.sockets.filter(ws => !ws.closed).length, 1);
@@ -603,7 +628,7 @@ await test("c346 paused live-updates button coalesces revalidation and explicitl
   const trying = nodes(e.load("app/(tabs)/_layout.tsx").default()).find(n => n.type === "Button"); assert.equal(trying.props.disabled, true);
   me.resolve(response(200, { user: account("A"), memberships: [] })); await flush();
   assert.equal(e.sockets.length, 8); assert.equal(e.hook.value.realtimeRetrying, false);
-  closeSocket(e.sockets[7], 1006); await e.timer.tick(1_000); assert.equal(e.sockets.length, 9);
+  closeSocket(e.sockets[7], 4503); await e.timer.tick(1_000); assert.equal(e.sockets.length, 9);
 });
 
 await test("c346 logout during auth refresh aborts all owned sockets and ignores late auth completion", async e => {
@@ -640,10 +665,10 @@ await test("c346 account switch during paused retry cannot start another socket 
 
 await test("c346 already-queued A reconnect cannot erase B's timer or prevent its cancellation", async e => {
   e.emit(e.user("A")); await e.mountProvider();
-  readySocket(e.sockets[0]); await e.timer.tick(5_000); closeSocket(e.sockets[0], 1006);
+  readySocket(e.sockets[0]); await e.timer.tick(5_000); closeSocket(e.sockets[0], 4503);
   const retired = e.timer.snapshot().find(task => task.due === 6_000); assert.ok(retired);
   e.emit(e.user("B")); await flush();
-  const b = e.sockets.at(-1); readySocket(b); await e.timer.tick(5_000); closeSocket(b, 1006);
+  const b = e.sockets.at(-1); readySocket(b); await e.timer.tick(5_000); closeSocket(b, 4503);
   const current = e.timer.snapshot().find(task => task.due === 11_000); assert.ok(current);
   // The runtime can already have queued A's callback before clearTimeout retires
   // its timer. Execute that callback after B has scheduled its own reconnect.
@@ -684,9 +709,9 @@ await test("c354 handshake without subscription ACK times out and stale ACK cann
 });
 
 await test("c354 stability begins at ACK rather than native handshake", async e => {
-  e.emit(e.user("A")); await e.mountProvider(); closeSocket(e.sockets[0], 1006);
+  e.emit(e.user("A")); await e.mountProvider(); closeSocket(e.sockets[0], 4503);
   await e.timer.tick(1_000); const next = e.sockets[1]; next.onopen();
-  await e.timer.tick(5_000); next.onmessage({ data: '{"type":"ready"}' }); closeSocket(next, 1006);
+  await e.timer.tick(5_000); next.onmessage({ data: '{"type":"ready"}' }); closeSocket(next, 4503);
   await e.timer.tick(1_999); assert.equal(e.sockets.length, 2);
   await e.timer.tick(1); assert.equal(e.sockets.length, 3);
 });
