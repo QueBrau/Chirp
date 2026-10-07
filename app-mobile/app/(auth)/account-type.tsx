@@ -122,7 +122,7 @@ export default function AccountTypeScreen() {
   const handleContinue = async () => {
     const user = hasFirebaseConfig() ? getFirebaseAuth().currentUser : null;
     if (!user || !user.email) {
-      proceed();
+      router.replace(withInviteCode("/legal-acceptance", inviteCode));
       return;
     }
 
@@ -137,14 +137,14 @@ export default function AccountTypeScreen() {
       // Seed the session from the bootstrap response directly — no second
       // round trip, and navigation can't outrun a failed refresh.
       applyBootstrap(created);
-      proceed();
+      router.replace(withInviteCode("/legal-acceptance", inviteCode));
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         // Already registered (signed back in). Only proceed once the session
         // actually reflects it, or the guards would bounce us straight back.
         const settled = await refresh();
         if (settled) {
-          proceed();
+          router.replace(withInviteCode("/legal-acceptance", inviteCode));
           return;
         }
         setError("We couldn't load your account. Check your connection and try again.");

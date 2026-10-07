@@ -35,6 +35,9 @@ export default function JoinChapterScreen() {
     // account-type first; the code rides along and comes back here after.
     return <Redirect href={withInviteCode("/account-type", linkCode)} />;
   }
+  if (status === "legalRequired") {
+    return <Redirect href={withInviteCode("/legal-acceptance", linkCode)} />;
+  }
 
   /**
    * Pull the new membership into the session. Its OUTCOME NEVER GATES NAVIGATION —
