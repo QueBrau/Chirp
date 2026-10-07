@@ -19,7 +19,9 @@ from tests.conftest import verify_campus
 
 async def test_deployment_auth_and_real_packaged_database_heads(client, make_user, monkeypatch):
     user = await make_user()
-    monkeypatch.setattr(auth_module, "get_settings", lambda: SimpleNamespace(auth_mode="firebase"))
+    monkeypatch.setattr(auth_module, "get_settings", lambda: SimpleNamespace(
+        auth_mode="firebase", legal_enforcement_enabled=False,
+    ))
     monkeypatch.setattr(firebase_admin, "get_app", lambda: object())
 
     def verify(token):
@@ -66,7 +68,9 @@ async def test_deployment_proves_mounted_role_and_authenticated_identity(
     # Falsifies evidence taken from current settings rather than the role that
     # actually mounted this app's routes. The auth configuration is independent.
     monkeypatch.setattr(settings, "service_role", "ws" if role == "all" else "all")
-    monkeypatch.setattr(auth_module, "get_settings", lambda: SimpleNamespace(auth_mode="firebase"))
+    monkeypatch.setattr(auth_module, "get_settings", lambda: SimpleNamespace(
+        auth_mode="firebase", legal_enforcement_enabled=False,
+    ))
     monkeypatch.setattr(firebase_admin, "get_app", lambda: object())
 
     def verify(token):
