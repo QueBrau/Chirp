@@ -26,7 +26,11 @@
       "ENV": "production",
       "AUTH_MODE": "firebase",
       "FIREBASE_PROJECT_ID": "chirps-prod",
-      "DB_POOL_TIMEOUT": "10"
+      "DB_POOL_TIMEOUT": "10",
+      "CORS_ORIGINS": "[\"https://chirps-prod.web.app\",\"http://localhost:8081\"]",
+      "EMAIL_FROM": "Chirp <hello@josedev.app>",
+      "EMAIL_PROVIDER": "resend",
+      "MEDIA_BUCKET_NAME": "chirps-prod-media"
     },
     "secrets": {
       "REDIS_URL": "REDIS_URL:latest"
