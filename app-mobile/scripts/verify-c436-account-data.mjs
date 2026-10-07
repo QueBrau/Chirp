@@ -57,10 +57,21 @@ function harness(status) {
   return { rendered, apiCalls };
 }
 
-const signedOut = harness("signedOut");
-assert.equal(signedOut.rendered.type, "Redirect");
-assert.deepEqual(signedOut.apiCalls, []);
-const suspended = harness("suspended");
-await new Promise(resolve => setTimeout(resolve, 0));
-assert.deepEqual(suspended.apiCalls, ["list"]);
-console.log("verify:c436-account-data — auth guard and suspended access passed");
+for (const [status, type, href] of [
+  ["signedOut", "Redirect", "/sign-in"],
+  ["unregistered", "Redirect", "/account-type"],
+  ["loading", "LoadingScreen", undefined],
+  ["recoverable", "Screen", undefined],
+]) {
+  const result = harness(status);
+  assert.equal(result.rendered.type, type, status);
+  if (href) assert.equal(result.rendered.props.href, href);
+  assert.deepEqual(result.apiCalls, [], status);
+}
+for (const status of ["ready", "suspended", "legalRequired"]) {
+  const result = harness(status);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(result.rendered.type, "Screen", status);
+  assert.deepEqual(result.apiCalls, ["list"], status);
+}
+console.log("verify:c436-account-data — 7 actual screen auth-state cases passed");
