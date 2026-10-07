@@ -202,6 +202,14 @@ async def test_actual_boundary_failures_refuse_success(cohort_data, monkeypatch,
         assert not any(path == "/private" for _, path, _ in boundary.calls)
 
 
+async def test_fixture_allows_migration_seeded_legal_policies(client):
+    """Migration 0040 policy configuration does not make a DB non-empty."""
+    from app.db import get_session_factory
+    async with get_session_factory()() as session:
+        manifest = await create_fixture(session)
+        assert len(manifest["cohorts"]) == 2
+
+
 async def test_fixture_refuses_rootless_application_rows_without_writing_any_cohort(client):
     from app import models
     from app.db import get_session_factory
