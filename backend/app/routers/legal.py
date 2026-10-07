@@ -39,11 +39,11 @@ async def legal_status(user: models.User = Depends(get_current_user_without_lega
 @router.post("/auth/legal-acceptance", response_model=LegalStatusOut)
 async def accept_legal(body: LegalAcceptanceCreate, user: models.User = Depends(get_current_user_without_legal_gate), session: AsyncSession = Depends(get_session)) -> LegalStatusOut:
     current = (await session.execute(select(models.LegalPolicy).where(models.LegalPolicy.is_current.is_(True)))).scalars().all()
+    if {p.policy_key for p in current} != {"terms", "privacy"} or len(current) != 2:
+        raise HTTPException(status_code=503, detail="legal_policy_unavailable")
     versions = {p.policy_key: p.version for p in current}
     if body.terms_version != versions.get("terms") or body.privacy_version != versions.get("privacy"):
         raise HTTPException(status_code=409, detail="legal_policy_changed")
-    if {p.policy_key for p in current} != {"terms", "privacy"} or len(current) != 2:
-        raise HTTPException(status_code=503, detail="legal_policy_unavailable")
     rows = [
         {"user_id": user.id, "policy_id": policy.id, "age_declaration": body.age_declaration,
          "guardian_permission_confirmed": body.guardian_permission_confirmed, "source": body.source}

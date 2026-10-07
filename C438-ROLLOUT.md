@@ -20,12 +20,14 @@ the migration downgrade is available for a reviewed schema rollback and removes 
 the c438 tables.
 
 The Terms/Privacy acknowledgement does not establish chapter officer or payment
-authority. Those remain separate server-owned membership and Stripe-account checks.
+authority. Those remain separate server-owned membership and Stripe-account checks
+and are deferred remaining c438 acceptance work, rather than being inferred from
+legal consent.
 A future authority confirmation must bind an explicit chapter role or connected
 account identity, use a versioned confirmation record, and require re-confirmation
 after role or connected-account changes. c438 deliberately leaves that confirmation
 out rather than treating legal consent as financial authority. WebSocket handshake
 authorization is also unchanged: it continues to use its existing Firebase identity
-and suspension checks, and is not covered by the HTTP enforcement flag. Store review
-and app-store age-rating classification remain release-owner steps after the mobile
-policy screen is reviewed.
+and suspension checks, and is deferred remaining c438 acceptance work rather than
+being covered by the HTTP enforcement flag. Store review and app-store age-rating
+classification remain release-owner steps after the mobile policy screen is reviewed.

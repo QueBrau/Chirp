@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { acceptLegal, getLegalStatus, type LegalPolicyStatus } from "@/api/auth";
+import { ApiError } from "@/api/client";
 import { AppText, Button, Screen } from "@/components";
 import { useSession, withInviteCode } from "@/auth";
 import { spacing, useTheme } from "@/theme";
@@ -50,16 +51,29 @@ export default function LegalAcceptanceScreen() {
       if (!ownsIdentity(owner) || epoch !== loadEpoch.current) return;
       if (settled) router.replace(code ? withInviteCode("/join-chapter", code) : "/(tabs)/feed");
       else setError("Your session changed or could not be refreshed. Sign in again to continue.");
-    } catch {
-      if (ownsIdentity(owner) && epoch === loadEpoch.current) setError("Couldn't save your acceptance. Please try again.");
+    } catch (error) {
+      if (ownsIdentity(owner) && epoch === loadEpoch.current) {
+        if (error instanceof ApiError && error.status === 409) {
+          setStatus(null);
+          setAge(null);
+          setGuardian(false);
+          setError("The policies changed while you were reviewing them. Reload the current versions and review again.");
+        } else {
+          setError("Couldn't save your acceptance. Please try again.");
+        }
+      }
     }
     finally { setSubmitting(false); }
   };
   const decline = async () => {
     const owner = ownerRef.current;
     if (!ownsIdentity(owner)) return;
-    if (hasFirebaseConfig()) await signOutUser();
-    if ((!hasFirebaseConfig() && ownsIdentity(owner)) || currentIdentity().uid === null) router.replace("/sign-in");
+    try {
+      if (hasFirebaseConfig()) await signOutUser();
+      if ((!hasFirebaseConfig() && ownsIdentity(owner)) || currentIdentity().uid === null) router.replace("/sign-in");
+    } catch {
+      if (ownsIdentity(owner)) setError("Couldn't sign out. Check your connection and try again.");
+    }
   };
   const retry = () => {
     const epoch = ++loadEpoch.current;

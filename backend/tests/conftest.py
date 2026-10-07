@@ -450,6 +450,14 @@ async def client(migrated_db: str) -> AsyncIterator[AsyncClient]:
                 "test: TRUNCATE takes an AccessExclusiveLock and the runs block each other. "
                 "Check with `ps aux | grep [p]ytest`. Board card c106."
             ) from exc
+        # c438 policy rows are migration-seeded, but this fixture truncates every
+        # table for isolation. Restore the reviewed current baseline after the
+        # truncate so existing /auth/me tests keep their normal 200 contract;
+        # c438's empty-policy regression explicitly deletes these rows first.
+        await conn.execute(text(
+            "INSERT INTO legal_policies (policy_key, version) "
+            "VALUES ('terms', '2026-10-06'), ('privacy', '2026-10-06')"
+        ))
 
     transport = ASGITransport(app=create_app())
     async with AsyncClient(transport=transport, base_url="http://testserver") as http_client:

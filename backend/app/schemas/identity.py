@@ -83,8 +83,8 @@ class UserCreate(_Schema):
     account_type: AccountType
     # Optional during the compatibility window: old released clients can still
     # bootstrap, then receive legal_required from /auth/me and update in-app.
-    terms_version: str | None = None
-    privacy_version: str | None = None
+    terms_version: str | None = Field(default=None, min_length=1, max_length=40)
+    privacy_version: str | None = Field(default=None, min_length=1, max_length=40)
     age_declaration: Literal[17, 18] | None = None
     guardian_permission_confirmed: bool = False
 

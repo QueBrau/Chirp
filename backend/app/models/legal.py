@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,6 +14,7 @@ class LegalPolicy(Base):
     __table_args__ = (
         UniqueConstraint("policy_key", "version", name="uq_legal_policy_key_version"),
         Index("uq_legal_policy_current_key", "policy_key", unique=True, postgresql_where=text("is_current")),
+        CheckConstraint("policy_key IN ('terms', 'privacy')", name="ck_legal_policy_key"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
     policy_key: Mapped[str] = mapped_column(Text, nullable=False)
@@ -27,6 +28,8 @@ class LegalAcceptance(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "policy_id", name="uq_legal_acceptance_user_policy"),
         Index("ix_legal_acceptances_user", "user_id"),
+        CheckConstraint("age_declaration IN (17, 18)", name="ck_legal_acceptance_age"),
+        CheckConstraint("age_declaration >= 18 OR guardian_permission_confirmed", name="ck_legal_acceptance_guardian"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
