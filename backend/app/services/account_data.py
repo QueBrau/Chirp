@@ -160,8 +160,13 @@ async def build_export(session: AsyncSession, user: models.User) -> dict[str, ob
     legal_acceptance = getattr(models, "LegalAcceptance", None)
     if legal_acceptance is None:
         records["legal_acceptances"] = []
+        records["legal_policies"] = []
     else:
         records["legal_acceptances"] = await _rows(session, legal_acceptance, "user_id", user.id)
+        legal_policy = getattr(models, "LegalPolicy", None)
+        if legal_policy is not None:
+            policy_ids = (await session.execute(select(legal_acceptance.policy_id).where(legal_acceptance.user_id == user.id))).scalars().all()
+            records["legal_policies"] = await _rows_for_ids(session, legal_policy, "id", list(policy_ids)) if policy_ids else []
     # A little's edge is the same personal relationship, so include both directions.
     records["lineage_as_little"] = await _rows(session, models.LineageEdge, "little_user_id", user.id)
     records["content_reports"] = await _rows(session, models.ContentReport, "reporter_id", user.id)
@@ -230,6 +235,15 @@ async def _delete_owned_rows(session: AsyncSession, user: models.User) -> None:
         (models.KyberPrekey, "device_id"),
         (models.Device, "user_id"),
         (models.AlumniProfile, "user_id"),
+        (models.EventInvite, "invited_user_id"),
+        (models.EventRsvp, "user_id"),
+        (models.MeetingAttendance, "user_id"),
+        (models.ConversationMember, "user_id"),
+        (models.PollVote, "user_id"),
+        (models.HouseBallot, "voter_id"),
+        (models.LineageEdge, "big_user_id"),
+        (models.LineageEdge, "little_user_id"),
+        (models.JobPost, "posted_by"),
     ):
         attribute = getattr(model, column, None)
         if attribute is not None:
@@ -247,6 +261,13 @@ async def _delete_owned_rows(session: AsyncSession, user: models.User) -> None:
                     )
                 continue
             await session.execute(delete(model).where(attribute == user.id))
+    # Hosted events are the user's authored shared UGC. Remove dependent access
+    # rows first because the legacy FKs predate ON DELETE CASCADE.
+    event_ids = (await session.execute(select(models.Event.id).where(models.Event.host_id == user.id))).scalars().all()
+    if event_ids:
+        await session.execute(delete(models.EventInvite).where(models.EventInvite.event_id.in_(event_ids)))
+        await session.execute(delete(models.EventRsvp).where(models.EventRsvp.event_id.in_(event_ids)))
+        await session.execute(delete(models.Event).where(models.Event.id.in_(event_ids)))
     now = datetime.now(timezone.utc)
     await session.execute(
         update(models.Post).where(models.Post.author_id == user.id).values(
