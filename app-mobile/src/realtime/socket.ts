@@ -71,9 +71,10 @@ export type SocketStatusListener = (status: SocketStatus) => void;
 
 /** SessionProvider owns the one auth decision; the socket never signs Firebase out. */
 export interface SocketAuthHandlers {
-  revalidate: (owner: AuthIdentity, signal: AbortSignal) => Promise<boolean>;
+  revalidate: (owner: AuthIdentity, signal: AbortSignal) => Promise<boolean | "legalRequired">;
   suspended: (owner: AuthIdentity) => void;
   exhausted: (owner: AuthIdentity) => void;
+  legalRequired?: (owner: AuthIdentity) => void;
 }
 
 const BASE_RECONNECT_DELAY_MS = 1_000;
@@ -85,6 +86,7 @@ const AUTH_REVALIDATION_TIMEOUT_MS = 10_000;
 const STABLE_CONNECTION_MS = 5_000;
 const WS_AUTH_FAILED = 4401;
 const WS_ACCOUNT_SUSPENDED = 4403;
+const WS_LEGAL_REQUIRED = 4428;
 
 /** One owned connection, one bounded retry run, and at most one auth recovery in it. */
 export class ChirpSocket {
@@ -267,7 +269,7 @@ export class ChirpSocket {
     ws.onclose = (event: { code?: number }) => {
       if (!isCurrent()) return;
       this.retire(ws, false);
-      if (event.code === WS_AUTH_FAILED || event.code === WS_ACCOUNT_SUSPENDED) {
+      if (event.code === WS_AUTH_FAILED || event.code === WS_ACCOUNT_SUSPENDED || event.code === WS_LEGAL_REQUIRED) {
         void this.revalidate(run, owner);
       } else if (event.code === undefined) {
         void this.probeUncodedFailure(run, owner);
@@ -297,12 +299,13 @@ export class ChirpSocket {
     this.failureBurstProbed = true;
     const operation = new Operation({ timeoutMs: AUTH_REVALIDATION_TIMEOUT_MS, signal: this.epochAbort.signal }, owner);
     this.authOperation = operation;
-    let denial: "suspended" | "unauthorized" | null = null;
+    let denial: "suspended" | "unauthorized" | "legalRequired" | null = null;
     try {
       await request("/auth/campus-verification", { operation, retryAuth: false });
     } catch (error) {
       if (error instanceof ApiError && error.status === 403 && error.detail === "account_suspended") denial = "suspended";
       else if (error instanceof ApiError && error.status === 401) denial = "unauthorized";
+      else if (error instanceof ApiError && error.status === 428) denial = "legalRequired";
     } finally {
       operation.dispose();
       if (this.authOperation === operation) this.authOperation = null;
@@ -311,6 +314,9 @@ export class ChirpSocket {
     if (denial === "suspended") {
       this.pause();
       this.authHandlers?.suspended(owner);
+    } else if (denial === "legalRequired") {
+      this.pause();
+      this.authHandlers?.legalRequired?.(owner);
     } else if (denial === "unauthorized") {
       await this.revalidate(run, owner);
     } else {
@@ -332,7 +338,7 @@ export class ChirpSocket {
     this.authOperation = operation;
     this.terminalRecovery = terminal;
     this.setStatus("revalidating");
-    let ready = false;
+    let ready: boolean | "legalRequired" = false;
     try { operation.assertCurrent(); ready = await operation.wait(handlers.revalidate(owner, operation.signal)); }
     catch { /* Provider owns the account decision and retry UI. */ }
     finally {
@@ -340,7 +346,10 @@ export class ChirpSocket {
       if (this.authOperation === operation) { this.authOperation = null; this.terminalRecovery = false; }
     }
     if (!this.ownsEpoch(run, owner, epoch)) return;
-    if (ready && !operation.signal.aborted) this.open();
+    if (ready === "legalRequired" && !operation.signal.aborted) {
+      this.pause();
+      if (this.ownsRun(run, owner)) handlers.legalRequired?.(owner);
+    } else if (ready && !operation.signal.aborted) this.open();
     else { this.pause(); if (this.ownsRun(run, owner)) handlers.exhausted(owner); }
   }
 

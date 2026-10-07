@@ -500,6 +500,28 @@ await test("c346 4403 alone does not invent suspension when current /me says rea
   assert.equal(e.hook.value.status, "recoverable"); assert.equal(e.sockets.length, 2); assert.equal(e.signOutCalls, 0);
 });
 
+await test("c438 4428 revalidates and preserves legalRequired without reconnecting", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  e.fetch = async url => url.endsWith("/auth/me")
+    ? response(200, { user: account("A"), memberships: [], legal_required: true })
+    : response(200, { verified: false });
+  closeSocket(e.sockets[0], 4428); await flush();
+  assert.equal(e.hook.value.status, "legalRequired");
+  assert.equal(e.hook.value.realtimeStatus, "paused");
+  assert.equal(e.sockets.length, 1);
+});
+
+await test("c438 uncoded handshake HTTP 428 enters legalRequired and pauses", async e => {
+  e.emit(e.user("A")); await e.mountProvider();
+  e.fetch = async url => url.endsWith("/auth/campus-verification")
+    ? response(428, { detail: "legal_acceptance_required" })
+    : response(200, { user: account("A"), memberships: [] });
+  closeSocket(e.sockets[0], undefined); await flush();
+  assert.equal(e.hook.value.status, "legalRequired");
+  assert.equal(e.hook.value.realtimeStatus, "paused");
+  assert.equal(e.sockets.length, 1);
+});
+
 await test("c346 terminal auth response can resolve unregistered without overwriting it as recoverable", async e => {
   e.emit(e.user("A")); await e.mountProvider(); e.fetch = async () => response(404, { detail: "user_not_registered" });
   closeSocket(e.sockets[0], 4401); await flush();
