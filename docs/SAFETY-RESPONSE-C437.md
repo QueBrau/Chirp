@@ -47,6 +47,9 @@ with a receipt after identified copies have been removed and checked. A failed
 scan or later failed verification blocks closure. Following `reopen`, record
 fresh attempts with new, increasing attempt numbers for every declared surface
 and the copy scan; earlier response evidence cannot close the reopened case.
+New attempt numbers must increase for each surface; an older numbered attempt
+cannot overwrite a later result. A failed verification after closure returns
+the case to the open deadline queue automatically.
 Use `appeal --reference OPAQUE_ID` and
 `report-confirmed-csam --reference OPAQUE_ID` to record an external decision or
 report receipt. These references are stored as hashes; they contain no content.

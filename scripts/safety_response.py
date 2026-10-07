@@ -301,8 +301,19 @@ class SafetyCaseStore:
             if existing["response_generation"] == generation and existing["outcome"] == outcome and existing["verification_ref"] == redacted_ref:
                 return
             raise ValueError("conflicting duplicate attempt")
+        highest = self.db.execute(
+            "SELECT MAX(attempt) FROM attempts WHERE case_ref=? AND surface=?",
+            (case_ref, surface),
+        ).fetchone()[0]
+        if highest is not None and attempt <= highest:
+            raise ValueError("new attempt numbers must increase for each surface")
         self.db.execute("INSERT INTO attempts(case_ref,surface,attempt,occurred_at,outcome,verification_ref,response_generation) VALUES (?,?,?,?,?,?,?)", (case_ref, surface, attempt, iso(when), outcome, redacted_ref, generation))
         self._audit(case_ref, "removal_attempt", actor, {"surface": surface, "attempt": attempt, "outcome": outcome}, when)
+        if row["status"] == "closed" and outcome not in SUCCESS_OUTCOMES:
+            # A failed check is unresolved even if a responder has not separately
+            # entered a reappearance. Keep it in the due-case queue.
+            self.db.execute("UPDATE cases SET status='open' WHERE case_ref=?", (case_ref,))
+            self._audit(case_ref, "verification_reopened", actor, {"surface": surface}, when)
         self.db.commit()
 
     def hold(self, case_ref: str, *, active: bool, actor: str, when: datetime) -> None:

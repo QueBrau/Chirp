@@ -149,6 +149,20 @@ def test_later_failed_verification_invalidates_previous_success(tmp_path):
     store.close()
 
 
+def test_failed_check_returns_closed_case_to_due_queue_and_attempts_increase(tmp_path):
+    store = SafetyCaseStore(tmp_path / "cases.sqlite3")
+    case_ref, when = _ready_case(store)
+    store.close_case(case_ref, actor="Jose", when=when)
+    store.attempt(case_ref, surface="media", attempt=3, outcome="transient_failure", actor="Jose", verification_ref=None, when=when)
+    assert store.snapshot(case_ref)["status"] == "open"
+    assert case_ref in {item["case_ref"] for item in store.list_due(before=when + timedelta(days=3))}
+    with pytest.raises(ValueError, match="must increase"):
+        store.attempt(case_ref, surface="media", attempt=2, outcome="removed", actor="Jose", verification_ref="late-old-receipt", when=when)
+    with pytest.raises(ValueError, match="every controlled surface"):
+        store.close_case(case_ref, actor="Jose", when=when)
+    store.close()
+
+
 def test_invalid_notice_actor_and_raw_action_values_are_rejected(tmp_path):
     store = SafetyCaseStore(tmp_path / "cases.sqlite3")
     case_ref, when = _ready_case(store)
