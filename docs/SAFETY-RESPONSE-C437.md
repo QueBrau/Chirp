@@ -18,7 +18,8 @@ Do not ask for an image attachment or CSAM by email. If a flag is missing, set
 `needs_information`, record the missing flag names, and reply with the case
 reference and the minimum missing information. Do not start the 48-hour removal
 clock until the notice is valid. Once all required elements are present, record
-the UTC received time and the deadline at `received + 48 hours`; assign Jose or
+the first valid-notice time separately from the original intake time and set the
+deadline at `valid_notice + 48 hours`; assign Jose or
 Braulio and acknowledge the case reference.
 
 The operator commands are explicit and metadata-only. For example:
@@ -31,6 +32,8 @@ scripts/safety-case --db /private/tmp/chirp-safety.sqlite3 complete-notice SAF-R
 scripts/safety-case --db /private/tmp/chirp-safety.sqlite3 attempt SAF-REFERENCE \
   --surface post --attempt 1 --outcome removed --verification-ref provider-receipt-1
 scripts/safety-case --db /private/tmp/chirp-safety.sqlite3 status SAF-REFERENCE
+scripts/safety-case --db /private/tmp/chirp-safety.sqlite3 hold SAF-REFERENCE
+scripts/safety-case --db /private/tmp/chirp-safety.sqlite3 release-hold SAF-REFERENCE
 ```
 
 `close` refuses incomplete notices, active preservation holds, unverified

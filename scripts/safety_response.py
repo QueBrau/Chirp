@@ -17,7 +17,15 @@ from typing import Any
 NOTICE_FIELDS = ("signature", "identification", "location", "good_faith", "contact")
 RESPONDERS = ("Jose", "Braulio")
 CONTROLLED_SURFACES = ("post", "comment", "chirp", "media")
+ATTEMPT_SURFACES = CONTROLLED_SURFACES + ("known_copy",)
 ATTEMPT_OUTCOMES = ("transient_failure", "removed", "not_found", "none_found", "verified_absent")
+SUCCESS_OUTCOMES = ("removed", "not_found", "none_found", "verified_absent")
+ACTION_VALUES = {
+    "purpose": ("triage", "removal", "appeal"),
+    "scope": ("case_metadata", "controlled_media", "synthetic_fixture"),
+    "reason": ("synthetic_reappearance", "reported_reappearance", "operator_review"),
+    "route": ("designated_safety_contact", "legal_review"),
+}
 SAFE_ACTIONS = {"access_grant", "access_revoke", "appeal", "reappearance", "child_safety_escalate", "report_confirmed_csam"}
 
 
@@ -84,7 +92,10 @@ class SafetyCaseStore:
                 primary_responder TEXT,
                 backup_responder TEXT,
                 surfaces_json TEXT NOT NULL,
-                active_hold INTEGER NOT NULL DEFAULT 0
+                active_hold INTEGER NOT NULL DEFAULT 0,
+                valid_notice_at TEXT,
+                response_generation INTEGER NOT NULL DEFAULT 0,
+                reopened_at TEXT
             );
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,7 +121,8 @@ class SafetyCaseStore:
                 attempt INTEGER NOT NULL,
                 occurred_at TEXT NOT NULL,
                 outcome TEXT NOT NULL,
-                verification_ref TEXT
+                verification_ref TEXT,
+                response_generation INTEGER NOT NULL DEFAULT 0
             );
             CREATE UNIQUE INDEX IF NOT EXISTS one_attempt
                 ON attempts(case_ref, surface, attempt);
@@ -146,7 +158,7 @@ class SafetyCaseStore:
         case_ref = "SAF-" + uuid.uuid4().hex[:12].upper()
         deadline = received_at + timedelta(hours=48) if notice.complete else None
         self.db.execute(
-            "INSERT INTO cases VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO cases VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 case_ref,
                 iso(received_at),
@@ -158,6 +170,9 @@ class SafetyCaseStore:
                 backup,
                 json.dumps(surfaces),
                 0,
+                iso(received_at) if notice.complete else None,
+                0,
+                None,
             ),
         )
         self._audit(
@@ -195,8 +210,8 @@ class SafetyCaseStore:
         if row["notice_complete"]:
             return notice
         received = parse_time(row["received_at"])
-        deadline = received + timedelta(hours=48)
-        self.db.execute("UPDATE cases SET notice_complete=1, missing_json='[]', status='open', deadline_at=? WHERE case_ref=?", (iso(deadline), case_ref))
+        deadline = when + timedelta(hours=48)
+        self.db.execute("UPDATE cases SET notice_complete=1, missing_json='[]', status='open', valid_notice_at=?, deadline_at=? WHERE case_ref=?", (iso(when), iso(deadline), case_ref))
         self._audit(case_ref, "notice_completed", actor, {"notice_complete": True}, when)
         self.db.commit()
         return notice
@@ -226,12 +241,13 @@ class SafetyCaseStore:
     def action(self, case_ref: str, *, event: str, actor: str, details: dict[str, Any] | None = None, when: datetime) -> None:
         """Append one strict, metadata-only lifecycle event to a case."""
         self._validate_time(when)
+        self._validate_actor(actor)
         if event not in SAFE_ACTIONS:
             raise ValueError(f"unsupported safety action: {event}")
         details = self._validate_action(event, details or {})
         self._audit(case_ref, event, actor, details, when)
         if event == "reappearance":
-            self.db.execute("UPDATE cases SET status='reopened' WHERE case_ref=?", (case_ref,))
+            self.db.execute("UPDATE cases SET status='reopened', response_generation=response_generation+1, reopened_at=? WHERE case_ref=?", (iso(when), case_ref))
         self.db.commit()
 
     @staticmethod
@@ -241,32 +257,43 @@ class SafetyCaseStore:
             "appeal": {"decision_ref"}, "reappearance": {"reason"},
             "child_safety_escalate": {"route"}, "report_confirmed_csam": {"report_ref"},
         }[event]
-        if set(details) != allowed or any(not isinstance(value, str) or not 160 >= len(value) > 0 for value in details.values()):
+        if set(details) != allowed or any(not isinstance(value, str) or value not in ACTION_VALUES.get(key, ()) for key, value in details.items()):
             raise ValueError(f"{event} requires exactly bounded metadata keys: {sorted(allowed)}")
         return details
+
+    @staticmethod
+    def _validate_actor(actor: str) -> None:
+        if actor not in RESPONDERS and actor != "drill-operator":
+            raise ValueError("actor must be a named responder")
 
     def attempt(self, case_ref: str, *, surface: str, attempt: int, outcome: str, actor: str, verification_ref: str | None, when: datetime) -> None:
         """Record an idempotent removal/verification attempt without contacting a provider."""
         self._validate_time(when)
         if attempt < 1:
             raise ValueError("attempt must be positive")
-        if surface not in CONTROLLED_SURFACES or outcome not in ATTEMPT_OUTCOMES:
+        if surface not in ATTEMPT_SURFACES or outcome not in ATTEMPT_OUTCOMES:
             raise ValueError("invalid controlled surface or attempt outcome")
-        if outcome in ("removed", "verified_absent") and not verification_ref:
+        if outcome in SUCCESS_OUTCOMES and not verification_ref:
             raise ValueError("successful attempt requires an opaque verification reference")
+        if surface == "known_copy" and outcome != "none_found":
+            raise ValueError("known-copy review must record none_found")
+        self._validate_actor(actor)
+        row = self._case(case_ref)
+        generation = int(row["response_generation"])
         existing = self.db.execute("SELECT * FROM attempts WHERE case_ref=? AND surface=? AND attempt=?", (case_ref, surface, attempt)).fetchone()
         redacted_ref = opaque_ref(verification_ref) if verification_ref else None
         if existing:
             if existing["outcome"] == outcome and existing["verification_ref"] == redacted_ref:
                 return
             raise ValueError("conflicting duplicate attempt")
-        self.db.execute("INSERT INTO attempts(case_ref,surface,attempt,occurred_at,outcome,verification_ref) VALUES (?,?,?,?,?,?)", (case_ref, surface, attempt, iso(when), outcome, redacted_ref))
+        self.db.execute("INSERT INTO attempts(case_ref,surface,attempt,occurred_at,outcome,verification_ref,response_generation) VALUES (?,?,?,?,?,?,?)", (case_ref, surface, attempt, iso(when), outcome, redacted_ref, generation))
         self._audit(case_ref, "removal_attempt", actor, {"surface": surface, "attempt": attempt, "outcome": outcome}, when)
         self.db.commit()
 
     def hold(self, case_ref: str, *, active: bool, actor: str, when: datetime) -> None:
         """Set a legal or child-safety preservation hold."""
         self._validate_time(when)
+        self._validate_actor(actor)
         self._case(case_ref)
         self.db.execute("UPDATE cases SET active_hold=? WHERE case_ref=?", (int(active), case_ref))
         self._audit(case_ref, "hold_set" if active else "hold_released", actor, {"active": "true" if active else "false"}, when)
@@ -275,17 +302,21 @@ class SafetyCaseStore:
     def close_case(self, case_ref: str, *, actor: str, when: datetime) -> None:
         """Close only after all declared surfaces and known-copy review are verified."""
         self._validate_time(when)
+        self._validate_actor(actor)
         row = self._case(case_ref)
         if not row["notice_complete"]:
             raise ValueError("cannot close incomplete notice")
         if row["active_hold"]:
             raise ValueError("cannot close while a preservation hold is active")
+        if row["status"] == "reopened":
+            raise ValueError("cannot close a reopened case before a fresh response cycle")
         surfaces = set(json.loads(row["surfaces_json"]))
-        attempts = self.db.execute("SELECT surface,outcome FROM attempts WHERE case_ref=?", (case_ref,)).fetchall()
-        verified = {item["surface"] for item in attempts if item["outcome"] in ("removed", "not_found", "verified_absent", "none_found")}
+        generation = int(row["response_generation"])
+        attempts = self.db.execute("SELECT surface,outcome,response_generation FROM attempts WHERE case_ref=?", (case_ref,)).fetchall()
+        verified = {item["surface"] for item in attempts if item["response_generation"] == generation and item["outcome"] in SUCCESS_OUTCOMES}
         if not surfaces.issubset(verified):
             raise ValueError("cannot close until every controlled surface is independently verified")
-        copies = [item for item in attempts if item["surface"] == "media" and item["outcome"] == "none_found"]
+        copies = [item for item in attempts if item["response_generation"] == generation and item["surface"] == "known_copy" and item["outcome"] == "none_found"]
         if not copies:
             raise ValueError("cannot close until known-copy review is recorded")
         self.db.execute("UPDATE cases SET status='closed' WHERE case_ref=?", (case_ref,))
@@ -304,6 +335,8 @@ class SafetyCaseStore:
             "missing": json.loads(row["missing_json"]),
             "status": row["status"],
             "deadline_at": row["deadline_at"],
+            "valid_notice_at": row["valid_notice_at"],
+            "response_generation": row["response_generation"],
             "primary": row["primary_responder"],
             "backup": row["backup_responder"],
             "surfaces": json.loads(row["surfaces_json"]),
@@ -336,14 +369,14 @@ def run_drill(path: str | Path) -> dict[str, Any]:
         complete, notice = store.intake(received_at=start, elements=dict.fromkeys(NOTICE_FIELDS, True), actor="drill-operator")
         incomplete, missing = store.intake(received_at=start, elements={"contact": True}, actor="drill-operator")
         store.add_evidence(complete, external_ref="synthetic-fixture-001", digest=hashlib.sha256(b"harmless-fixture").hexdigest(), media_type="synthetic-placeholder", actor="Jose", when=start)
-        store.action(complete, event="access_grant", actor="Jose", details={"purpose": "triage", "scope": "synthetic fixture"}, when=start)
+        store.action(complete, event="access_grant", actor="Jose", details={"purpose": "triage", "scope": "synthetic_fixture"}, when=start)
         for surface in ("post", "comment", "chirp"):
             store.attempt(complete, surface=surface, attempt=1, outcome="transient_failure", actor="Jose", verification_ref=None, when=start + timedelta(minutes=5))
             store.attempt(complete, surface=surface, attempt=2, outcome="removed", actor="Jose", verification_ref=f"synthetic-verify-{surface}", when=start + timedelta(minutes=9))
-        store.attempt(complete, surface="media", attempt=1, outcome="none_found", actor="Braulio", verification_ref="synthetic-copy-scan-001", when=start + timedelta(minutes=15))
-        store.action(complete, event="access_revoke", actor="Braulio", details={"scope": "synthetic fixture"}, when=start + timedelta(minutes=20))
-        store.action(complete, event="reappearance", actor="Braulio", details={"reason": "synthetic reappearance"}, when=start + timedelta(minutes=30))
-        store.action(complete, event="child_safety_escalate", actor="Jose", details={"route": "designated safety contact; preserve metadata only"}, when=start + timedelta(minutes=31))
+        store.attempt(complete, surface="known_copy", attempt=1, outcome="none_found", actor="Braulio", verification_ref="synthetic-copy-scan-001", when=start + timedelta(minutes=15))
+        store.action(complete, event="access_revoke", actor="Braulio", details={"scope": "synthetic_fixture"}, when=start + timedelta(minutes=20))
+        store.action(complete, event="reappearance", actor="Braulio", details={"reason": "synthetic_reappearance"}, when=start + timedelta(minutes=30))
+        store.action(complete, event="child_safety_escalate", actor="Jose", details={"route": "designated_safety_contact"}, when=start + timedelta(minutes=31))
         # A reappearance is intentionally reopened; close_case is exercised by tests
         # against an independently verified, non-reappeared case.
         return {"complete": store.snapshot(complete), "incomplete": store.snapshot(incomplete), "notice": notice.complete, "missing": missing.missing}
@@ -355,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     """Run the local synthetic drill CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="/private/tmp/chirp-safety-c437.sqlite3")
-    parser.add_argument("command", choices=("drill", "intake", "complete-notice", "assign", "status", "list-due", "attempt", "close", "reopen", "escalate"))
+    parser.add_argument("command", choices=("drill", "intake", "complete-notice", "assign", "status", "list-due", "attempt", "close", "reopen", "escalate", "hold", "release-hold"))
     parser.add_argument("case_ref", nargs="?")
     parser.add_argument("--elements", default=",")
     parser.add_argument("--received-at", default=None)
@@ -399,6 +432,10 @@ def main(argv: list[str] | None = None) -> int:
             store.action(args.case_ref, event="reappearance", actor=args.actor, details={"reason": args.reason}, when=now)
         elif args.command == "escalate":
             store.action(args.case_ref, event="child_safety_escalate", actor=args.actor, details={"route": args.route}, when=now)
+        elif args.command == "hold":
+            store.hold(args.case_ref, active=True, actor=args.actor, when=now)
+        elif args.command == "release-hold":
+            store.hold(args.case_ref, active=False, actor=args.actor, when=now)
     finally:
         store.close()
     return 0

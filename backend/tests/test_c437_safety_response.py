@@ -24,7 +24,7 @@ def test_complete_notice_starts_48_hour_deadline_and_incomplete_does_not(tmp_pat
     assert store.snapshot(complete)["deadline_at"] == "2026-10-08T12:00:00Z"
     assert store.snapshot(incomplete)["deadline_at"] is None
     store.complete_notice(incomplete, elements=dict.fromkeys(NOTICE_FIELDS, True), actor="Jose", when=start + timedelta(minutes=5))
-    assert store.snapshot(incomplete)["deadline_at"] == "2026-10-08T12:00:00Z"
+    assert store.snapshot(incomplete)["deadline_at"] == "2026-10-08T12:05:00Z"
     store.close()
 
 
@@ -94,3 +94,41 @@ def test_drill_exercises_incomplete_case_retries_and_reappearance(tmp_path):
     assert {item["event"] for item in complete["audit"]} >= {
         "access_grant", "access_revoke", "reappearance", "child_safety_escalate"
     }
+
+
+def _ready_case(store: SafetyCaseStore):
+    case_ref, _ = store.intake(
+        received_at=datetime(2026, 10, 6, 12, tzinfo=timezone.utc),
+        elements=dict.fromkeys(NOTICE_FIELDS, True), actor="Jose"
+    )
+    when = datetime(2026, 10, 6, 13, tzinfo=timezone.utc)
+    for surface in ("post", "comment", "chirp", "media"):
+        store.attempt(case_ref, surface=surface, attempt=1, outcome="removed", actor="Jose", verification_ref=f"receipt-{surface}", when=when)
+    store.attempt(case_ref, surface="known_copy", attempt=1, outcome="none_found", actor="Braulio", verification_ref="copy-scan", when=when)
+    return case_ref, when
+
+
+def test_close_requires_current_generation_and_known_copy_proof(tmp_path):
+    store = SafetyCaseStore(tmp_path / "cases.sqlite3")
+    case_ref, when = _ready_case(store)
+    store.close_case(case_ref, actor="Jose", when=when)
+    assert store.snapshot(case_ref)["status"] == "closed"
+    store.close()
+
+    store = SafetyCaseStore(tmp_path / "second.sqlite3")
+    case_ref, when = _ready_case(store)
+    store.action(case_ref, event="reappearance", actor="Braulio", details={"reason": "reported_reappearance"}, when=when)
+    with pytest.raises(ValueError, match="reopened"):
+        store.close_case(case_ref, actor="Jose", when=when + timedelta(minutes=1))
+    store.close()
+
+
+def test_hold_blocks_close_and_success_requires_receipt(tmp_path):
+    store = SafetyCaseStore(tmp_path / "cases.sqlite3")
+    case_ref, when = _ready_case(store)
+    store.hold(case_ref, active=True, actor="Jose", when=when)
+    with pytest.raises(ValueError, match="hold"):
+        store.close_case(case_ref, actor="Jose", when=when)
+    with pytest.raises(ValueError, match="verification"):
+        store.attempt(case_ref, surface="post", attempt=2, outcome="not_found", actor="Jose", verification_ref=None, when=when)
+    store.close()
