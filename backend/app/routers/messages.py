@@ -541,6 +541,12 @@ async def send_message(
         raise forbidden("not_your_device")
     if device.revoked_at is not None:
         raise forbidden("device_revoked")
+    if device.crypto_suite is not None:
+        # c444: a v2 device sends only per-device legs through POST /v2/conversations/
+        # {id}/messages, where the exact-device-set rule applies. Letting it post one
+        # opaque v1 ciphertext here would bypass that rule and store a message nobody
+        # can decrypt. Legacy (suite NULL) devices are unaffected.
+        raise forbidden("device_requires_v2")
 
     recipients_result = await session.execute(
         select(models.ConversationMember.user_id).where(
@@ -633,7 +639,14 @@ async def send_message(
     return MessageOut.model_validate(message)
 
 
-def _visible_message_query(conversation_id: uuid.UUID, reader_id: uuid.UUID):
+def _visible_message_query(
+    conversation_id: uuid.UUID, reader_id: uuid.UUID, *, v2: bool = False
+):
+    # c444: v1 and v2 messages share the table but not the wire shape. A v2 message has
+    # NO message-level ciphertext (its bytes are per-device legs), so MessageOut cannot
+    # represent it and the v1 endpoints must never select one; the v2 history endpoint
+    # (routers/messages_v2.py) asks for exactly the others with v2=True. Everything below
+    # the filter - the c348 named-block rule - applies to both unchanged.
     # c348: hide messages from a sender the READER currently holds a named block
     # against, live at query time (not snapshotted at send time, so an unblock
     # restores visibility with no further action). This is the reverse of
@@ -663,6 +676,9 @@ def _visible_message_query(conversation_id: uuid.UUID, reader_id: uuid.UUID):
         .where(
             models.Message.conversation_id == conversation_id,
             models.UserBlock.blocker_id.is_(None),
+            models.Message.envelope_version.is_not(None)
+            if v2
+            else models.Message.envelope_version.is_(None),
         )
     )
 

@@ -216,6 +216,21 @@ async def dispatch_pending(limit: int | None = None) -> DispatchStats:
                 message = await session.get(models.Message, uuid.UUID(row["payload"]["message_id"]))
                 if message is None:
                     entry["dead"] = True
+                elif message.envelope_version is not None:
+                    # c444: a v2 message has no message-level ciphertext (message.ciphertext
+                    # is NULL; its bytes are per-device legs in message_legs). The event is
+                    # published verbatim to every recipient USER, and each device's leg is
+                    # its own secret, so the hint carries NO ciphertext: the receiving device
+                    # fetches its leg over HTTP (GET /v2/conversations/{id}/messages).
+                    # Same key set as the live event built in routers/messages_v2.py.
+                    entry["event"] = {
+                        "type": "message",
+                        "conversation_id": row["payload"]["conversation_id"],
+                        "message_id": row["payload"]["message_id"],
+                        "sender_device_id": row["payload"]["sender_device_id"],
+                        "envelope_version": message.envelope_version,
+                        "created_at": row["payload"]["created_at"],
+                    }
                 else:
                     entry["event"] = {
                         "type": "message",
