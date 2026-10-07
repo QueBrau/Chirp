@@ -28,6 +28,8 @@ from app.schemas.payments import (
     DuesIntentOut,
 )
 from app.services import stripe_service
+from app.schemas.authority import PaymentAuthorityContext
+from app.services.organization_authority import check_payment_declaration, payment_context, record_authority
 from app.services.settlement_binding import BoundSettlement, bind_settlement
 
 router = APIRouter(tags=["payments"])
@@ -118,6 +120,16 @@ async def _onboarding_chapter(
     return chapter
 
 
+@router.get("/chapters/{chapter_id}/payments/authority", response_model=PaymentAuthorityContext)
+async def get_payment_authority(
+    chapter_id: uuid.UUID,
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    chapter = await _onboarding_chapter(session, user, chapter_id)
+    return await payment_context(session, user, chapter)
+
+
 @router.post("/payments/connect/onboarding-link")
 async def create_connect_onboarding_link(
     body: ConnectOnboardingRequest,
@@ -130,6 +142,12 @@ async def create_connect_onboarding_link(
     who abandons onboarding halfway resumes the same account instead of orphaning it.
     """
     chapter = await _onboarding_chapter(session, user, body.chapter_id)
+    context = await check_payment_declaration(session, user, chapter, body.authority)
+    declaration = body.authority
+    if context is not None:
+        await record_authority(session, user_id=user.id, chapter_id=chapter.id,
+            membership_id=context.membership_id, role_term_id=context.role_term_id,
+            role=context.role, purpose="payment_setup", stripe_account_id=chapter.stripe_account_id)
     uid, chapter_id, org_name = user.firebase_uid, chapter.id, chapter.org_name
     account_id = chapter.stripe_account_id
     return_url, refresh_url = _onboarding_urls()
@@ -143,6 +161,7 @@ async def create_connect_onboarding_link(
             raise _onboarding_provider_failure(exc, chapter_id, "create_account") from None
         user = await get_current_user(uid=uid, session=session)
         chapter = await _onboarding_chapter(session, user, chapter_id)
+        await check_payment_declaration(session, user, chapter, declaration)
         # Never overwrite a competing onboarding winner's account association.
         await session.execute(
             update(models.Chapter).where(
@@ -152,6 +171,13 @@ async def create_connect_onboarding_link(
         account_id = (await session.execute(
             select(models.Chapter.stripe_account_id).where(models.Chapter.id == chapter_id)
         )).scalar_one()
+        if declaration is not None:
+            # The user authorized creation; bind that same declaration to the
+            # resulting provider identity without carrying it to another account.
+            declaration = declaration.model_copy(update={"stripe_account_id": account_id})
+            await record_authority(session, user_id=user.id, chapter_id=chapter.id,
+                membership_id=declaration.membership_id, role_term_id=declaration.role_term_id,
+                role=declaration.role, purpose="payment_setup", stripe_account_id=account_id)
         await session.commit()
         session.expire_all()
 
@@ -163,6 +189,7 @@ async def create_connect_onboarding_link(
     chapter = await _onboarding_chapter(session, user, chapter_id)
     if chapter.stripe_account_id != account_id:
         raise conflict("chapter_not_onboarded")
+    await check_payment_declaration(session, user, chapter, declaration)
     return ConnectOnboardingOut(
         url=link.url,
         expires_at=datetime.fromtimestamp(link.expires_at, tz=timezone.utc),

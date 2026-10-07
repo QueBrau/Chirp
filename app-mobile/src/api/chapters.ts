@@ -1,6 +1,7 @@
 /** Chapters API: CRUD, member management, invites, join-by-code — mirrors routers/chapters.py. */
 
 import { request } from "./client";
+import type { OrganizationAuthority } from "./authority";
 import type { AttendanceWindow } from "./meetings";
 
 export type RoleName =
@@ -23,6 +24,7 @@ export type MembershipStatus = "active" | "inactive" | "removed";
  * nothing here for a client to get right or wrong.
  */
 export interface ChapterCreate {
+  authority?: OrganizationAuthority;
   org_name: string;
   chapter_name?: string | null;
 }

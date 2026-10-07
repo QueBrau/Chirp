@@ -16,7 +16,7 @@
  * the letter of the rule, not an oversight of it.
  *
  * Scope held deliberately (per the ticket): render the state well, no appeals
- * flow. The only action available is signing out.
+ * flow. Account-data rights remain available through their separate route.
  */
 
 import { Feather } from "@expo/vector-icons";
@@ -72,7 +72,7 @@ export default function SuspendedScreen() {
       eyebrow="ACCOUNT STATUS"
       title="Your account is suspended"
       accentBarColor={palette.danger}
-      scroll={false}
+      scroll
       showBack={false}
     >
       <View style={{ gap: spacing.lg }}>
@@ -106,6 +106,17 @@ export default function SuspendedScreen() {
             Think this is a mistake? Reach out to your campus admin through
             the usual channels outside the app.
           </AppText>
+        </Card>
+
+        <Card>
+          <AppText variant="body" tone="secondary">
+            You can still view your account-data requests, request a copy, or request account deletion while access to Chirp is suspended.
+          </AppText>
+          <Button
+            label="Manage account data"
+            variant="neutral"
+            onPress={() => router.push("/profile/account-data")}
+          />
         </Card>
 
         <Button

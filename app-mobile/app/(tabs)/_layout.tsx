@@ -166,6 +166,7 @@ export default function TabsLayout() {
   if (status === "signedOut") return <Redirect href="/sign-in" />;
   if (status === "unregistered") return <Redirect href="/account-type" />;
   if (status === "suspended") return <Redirect href="/suspended" />;
+  if (status === "legalRequired") return <Redirect href="/legal-acceptance" />;
 
   return (
     // Provider sits ABOVE <Tabs> so one visibility value is shared by every tab

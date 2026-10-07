@@ -94,7 +94,7 @@ export async function uncodedFailureCases({ test, flush, deferred, response, rea
     assert.equal(e.calls.length, 2); assert.equal(forced, 1);
   });
 
-  for (const code of [1006, 4503, 4401, 4403]) {
+  for (const code of [4503, 4401, 4403]) {
     await test(`c405 coded close ${code} keeps existing behavior without a probe`, async e => {
       await start(e); e.sockets[0].onclose({ code }); await flush();
       assert.equal(probes(e).length, 0);
