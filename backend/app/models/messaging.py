@@ -10,6 +10,7 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    SmallInteger,
     Text,
     text,
 )
@@ -92,6 +93,13 @@ class ConversationMember(Base):
 
 
 class Message(Base):
+    """One logical message. v1 (envelope_version NULL) carries one ciphertext; v2 does not.
+
+    A v2 message (board c444, migration 0042) has envelope_version set, ciphertext NULL
+    and one `MessageLeg` row per recipient device. ck_messages_* in migration 0042 keep
+    the two kinds from mixing.
+    """
+
     __tablename__ = "messages"
     __table_args__ = (
         Index(
@@ -99,6 +107,26 @@ class Message(Base):
             "conversation_id",
             text("created_at DESC"),
             text("id DESC"),
+        ),
+        CheckConstraint(
+            "envelope_version IS NOT NULL OR ciphertext IS NOT NULL",
+            name="ck_messages_ciphertext_or_envelope",
+        ),
+        CheckConstraint(
+            "envelope_version IS NULL OR ciphertext IS NULL",
+            name="ck_messages_v2_no_ciphertext",
+        ),
+        CheckConstraint(
+            "envelope_version IS NULL OR client_message_id IS NOT NULL",
+            name="ck_messages_v2_client_message_id",
+        ),
+        # The idempotency key for v2 sends: a retry carries the same pair.
+        Index(
+            "uq_messages_sender_device_client_message_id",
+            "sender_device_id",
+            "client_message_id",
+            unique=True,
+            postgresql_where=text("client_message_id IS NOT NULL"),
         ),
     )
 
@@ -111,15 +139,47 @@ class Message(Base):
     sender_device_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("devices.id"), nullable=False
     )
-    # Server NEVER parses this (SPEC §8.1).
-    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    # signal | sender_key_distribution
+    # Server NEVER parses this (SPEC §8.1). NULL on a v2 message: its ciphertext lives
+    # in message_legs, one row per recipient device.
+    ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # signal | sender_key_distribution (v1); "olm" on a v2 message.
     message_type: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'signal'")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
+    # Client-generated logical message id (v2 only); with sender_device_id it is the
+    # idempotency key.
+    client_message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # NULL = legacy (v1) message. 1 = the chirp-e2ee-v1 envelope.
+    envelope_version: Mapped[int | None] = mapped_column(SmallInteger)
+
+
+class MessageLeg(Base):
+    """One ciphertext leg of a v2 message: the bytes for exactly one recipient device.
+
+    The server never parses `ciphertext` (SPEC §8.1); olm_type (0 = prekey, 1 = normal)
+    is the Olm message subtype the receiver needs to pick the decrypt path. Legs go away
+    with their message (ON DELETE CASCADE); recipient_device_id has no cascade because
+    device rows are never deleted.
+    """
+
+    __tablename__ = "message_legs"
+    __table_args__ = (
+        CheckConstraint("olm_type IN (0, 1)", name="ck_message_legs_olm_type"),
+        CheckConstraint("length(ciphertext) > 0", name="ck_message_legs_ciphertext"),
+        Index("idx_message_legs_recipient", "recipient_device_id", "message_id"),
+    )
+
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True
+    )
+    recipient_device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("devices.id"), primary_key=True
+    )
+    olm_type: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
 class MessageReceipt(Base):

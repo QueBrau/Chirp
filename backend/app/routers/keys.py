@@ -289,6 +289,11 @@ async def replenish_prekeys(
     device = await _get_owned_device(session, device_id, user, lock=True)
     if device.revoked_at is not None:
         raise forbidden("device_revoked")
+    if device.crypto_suite is not None:
+        # c444: a v2 device's keys are signed and verified by POST /v2/devices/{id}/keys.
+        # Letting this route add unsigned v1 rows to its pool would put keys in front of
+        # claim_one_time_key that the owning identity never signed.
+        raise forbidden("device_requires_v2")
     await _check_prekey_quota(session, device.id, body)
 
     if body.signed_prekey is not None:

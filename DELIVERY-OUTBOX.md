@@ -58,6 +58,15 @@ exception can carry a transport credential. Reaching `outbox_max_attempts`
 sets `dead_at` instead of retrying again; dead rows are kept, not deleted, for
 visibility, and log one warning naming only the row id.
 
+E2EE v2 messages (board c444, `POST /v2/conversations/{id}/messages`) use the same
+`message` rows and the same sweeper, with one difference in the rebuilt event: a v2
+message has no message-level ciphertext (`messages.ciphertext` is NULL; the bytes are
+per-device rows in `message_legs`), so its event carries `envelope_version` and no
+`ciphertext` key at all. The event goes verbatim to every recipient user and each
+device's leg is its own, so a receiving device fetches its leg over HTTP
+(`GET /v2/conversations/{id}/messages?device_id=...`). `dispatch_pending` branches on
+`messages.envelope_version`; v1 events are byte-identical to before.
+
 A crash between the claim transaction and the outcome transaction leaves the
 row exactly as the lease set it — attempts already bumped, `next_attempt_at`
 in the future. Once that lease expires the row is claimed again: this is an

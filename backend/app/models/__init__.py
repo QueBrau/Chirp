@@ -35,6 +35,7 @@ from app.models.messaging import (
     Conversation,
     ConversationMember,
     Message,
+    MessageLeg,
     MessageReceipt,
 )
 from app.models.moderation import ModerationAction
@@ -79,6 +80,7 @@ __all__ = [
     "PollVote",
     "Membership",
     "Message",
+    "MessageLeg",
     "MessageReceipt",
     "ModerationAction",
     "OneTimePrekey",
