@@ -18,6 +18,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"), sa.UniqueConstraint("policy_key", "version", name="uq_legal_policy_key_version"),
         sa.CheckConstraint("policy_key IN ('terms', 'privacy')", name="ck_legal_policy_key"),
     )
+    op.create_index("uq_legal_policy_current_key", "legal_policies", ["policy_key"], unique=True, postgresql_where=sa.text("is_current"))
     op.create_table(
         "legal_acceptances",
         sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
@@ -36,6 +37,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("uq_legal_policy_current_key", table_name="legal_policies")
     op.drop_index("ix_legal_acceptances_user", table_name="legal_acceptances")
     op.drop_table("legal_acceptances")
     op.drop_table("legal_policies")

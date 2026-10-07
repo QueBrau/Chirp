@@ -11,7 +11,10 @@ from app.db import Base
 
 class LegalPolicy(Base):
     __tablename__ = "legal_policies"
-    __table_args__ = (UniqueConstraint("policy_key", "version", name="uq_legal_policy_key_version"),)
+    __table_args__ = (
+        UniqueConstraint("policy_key", "version", name="uq_legal_policy_key_version"),
+        Index("uq_legal_policy_current_key", "policy_key", unique=True, postgresql_where=text("is_current")),
+    )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
     policy_key: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[str] = mapped_column(Text, nullable=False)
