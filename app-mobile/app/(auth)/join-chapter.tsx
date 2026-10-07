@@ -7,7 +7,7 @@ import { TextInput, View } from "react-native";
 import { joinChapter } from "@/api/chapters";
 import { ApiError } from "@/api/client";
 import { useSession, withInviteCode } from "@/auth";
-import { AppText, Button, Card, Screen } from "@/components";
+import { AppText, Button, Card, LoadingScreen, Screen } from "@/components";
 import { inputField, spacing, useTheme } from "@/theme";
 
 export default function JoinChapterScreen() {
@@ -21,8 +21,9 @@ export default function JoinChapterScreen() {
   const [error, setError] = useState<string | null>(null);
 
   // Hold the form back until the session resolves — rendering during "loading"
-  // would let a fast tap fire a tokenless join on cold start.
-  if (status === "loading") return null;
+  // would let a fast tap fire a tokenless join on cold start. It shows the loading
+  // screen (c434) instead of nothing.
+  if (status === "loading") return <LoadingScreen />;
   // Unguarded deep link fix: a signed-out visitor who opens the invite link goes
   // to sign-in first, with the code carried through so it lands them right back
   // here (or on /account-type -> here) once they're in.

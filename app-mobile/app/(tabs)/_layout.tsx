@@ -15,7 +15,7 @@ import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useSession } from "@/auth";
-import { AppText, Button, EmptyState, Screen } from "@/components";
+import { AppText, Button, EmptyState, LoadingScreen, Screen } from "@/components";
 import { TabBarVisibilityProvider, useTabBarVisibility } from "@/nav/TabBarVisibility";
 import { cardShadow, metrics, radii, spacing, typography, useAppearance, useTheme } from "@/theme";
 
@@ -156,7 +156,7 @@ export default function TabsLayout() {
   const palette = useTheme();
   const insets = useSafeAreaInsets();
 
-  if (status === "loading") return null;
+  if (status === "loading") return <LoadingScreen />;
   if (status === "recoverable") return (
     <Screen showBack={false}>
       <EmptyState title="Can't load your account" message="You're still signed in. Check your connection and try again."

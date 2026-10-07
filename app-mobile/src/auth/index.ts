@@ -24,6 +24,7 @@ export {
 export { withInviteCode, inviteShareUrl, WEB_BASE_URL } from "./inviteLink";
 export { useCampus } from "./useCampus";
 export { useCampusAccess, type CampusAccess } from "./useCampusAccess";
+export { useLastCampus, useRememberCampus, type LastCampus } from "./lastCampus";
 export {
   getSocialAuthStatus,
   socialAuthUnavailableMessage,
