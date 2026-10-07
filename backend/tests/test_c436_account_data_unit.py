@@ -14,6 +14,7 @@ from app.services import account_data
 from app.db import get_session_factory
 from app.jobs.account_data import main as expiry_main
 from app.jobs.account_data import run_export_artifact_expiry
+import app.jobs.account_data as expiry_job
 
 
 def test_unknown_account_edge_does_not_silently_disappear() -> None:
@@ -197,6 +198,32 @@ def test_export_expiry_job_rejects_non_boolean_apply_and_naive_time() -> None:
         asyncio.run(run_export_artifact_expiry(object(), now=datetime(2026, 10, 7)))
     with pytest.raises(SystemExit):
         expiry_main(["--max-rows", "1001"])
+
+
+def test_export_expiry_cli_defaults_to_preview_and_fails_closed(monkeypatch, capsys) -> None:
+    calls = []
+
+    async def fake_run_cli(**kwargs):
+        calls.append(kwargs)
+        return {"mode": "apply" if kwargs["delete_rows"] else "dry_run", "status": "ok"}
+
+    monkeypatch.setattr(expiry_job, "_run_cli", fake_run_cli)
+    expiry_main([])
+    expiry_main(["--delete", "--max-rows", "7", "--timeout-seconds", "9"])
+    assert calls == [
+        {"delete_rows": False, "max_rows": 100, "timeout_seconds": 30},
+        {"delete_rows": True, "max_rows": 7, "timeout_seconds": 9},
+    ]
+    assert '"mode": "dry_run"' in capsys.readouterr().out
+
+    async def timeout_run(**kwargs):
+        raise TimeoutError
+
+    monkeypatch.setattr(expiry_job, "_run_cli", timeout_run)
+    with pytest.raises(SystemExit) as exited:
+        expiry_main([])
+    assert exited.value.code == 2
+    assert '"status": "timed_out"' in capsys.readouterr().out
 
 
 @pytest.mark.asyncio

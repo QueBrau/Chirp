@@ -1,7 +1,7 @@
-"""Bounded maintenance for immutable account-export artifacts.
+"""Bounded maintenance CLI for immutable account-export artifacts.
 
-This module exposes a callable job only. No scheduler is enabled by this change;
-callers must opt into mutation explicitly with ``apply=True``.
+The CLI previews by default. No scheduler is enabled by this change; callers
+must explicitly pass ``--delete`` to mutate artifacts.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 
 MAX_ARTIFACTS_PER_RUN = 1_000
+MAX_TIMEOUT_SECONDS = 300
 
 
 def _positive_int(value: int, name: str) -> int:
@@ -115,10 +116,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--delete", action="store_true", help="delete eligible artifacts")
     parser.add_argument("--max-rows", type=_positive_arg, default=100,
                         help=f"maximum artifacts (cap {MAX_ARTIFACTS_PER_RUN})")
-    parser.add_argument("--timeout-seconds", type=_positive_arg, default=30)
+    parser.add_argument("--timeout-seconds", type=_positive_arg, default=30,
+                        help=f"hard timeout (cap {MAX_TIMEOUT_SECONDS}s)")
     args = parser.parse_args(argv)
     if args.max_rows > MAX_ARTIFACTS_PER_RUN:
         parser.error(f"max-rows cannot exceed {MAX_ARTIFACTS_PER_RUN}")
+    if args.timeout_seconds > MAX_TIMEOUT_SECONDS:
+        parser.error(f"timeout-seconds cannot exceed {MAX_TIMEOUT_SECONDS}")
     try:
         report = asyncio.run(_run_cli(
             delete_rows=args.delete,
@@ -127,6 +131,17 @@ def main(argv: list[str] | None = None) -> None:
         ))
     except TimeoutError:
         report = {"mode": "apply" if args.delete else "dry_run", "status": "timed_out"}
+        print(json.dumps(report, sort_keys=True))
+        raise SystemExit(2)
+    except Exception as exc:
+        # Never serialize database URLs, SQL, provider responses, or exception text.
+        report = {
+            "mode": "apply" if args.delete else "dry_run",
+            "status": "failed",
+            "error_type": type(exc).__name__,
+        }
+        print(json.dumps(report, sort_keys=True))
+        raise SystemExit(2)
     print(json.dumps(report, sort_keys=True))
 
 
