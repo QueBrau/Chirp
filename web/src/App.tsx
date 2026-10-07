@@ -9,6 +9,10 @@ import { About } from "./pages/About";
 import { Contact } from "./pages/Contact";
 import { Privacy } from "./pages/Privacy";
 import { Terms } from "./pages/Terms";
+import { Community } from "./pages/Community";
+import { Payments } from "./pages/Payments";
+import { DataRequests } from "./pages/DataRequests";
+import { Safety } from "./pages/Safety";
 import { NotFound } from "./pages/NotFound";
 import { JoinChapter } from "./pages/JoinChapter";
 import { StripeReturn } from "./pages/StripeReturn";
@@ -40,6 +44,10 @@ export function App() {
         <Route path="/contact" element={<Contact />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/terms" element={<Terms />} />
+        <Route path="/community" element={<Community />} />
+        <Route path="/payments" element={<Payments />} />
+        <Route path="/data-requests" element={<DataRequests />} />
+        <Route path="/safety" element={<Safety />} />
         <Route path="*" element={<NotFound />} />
       </Route>
 

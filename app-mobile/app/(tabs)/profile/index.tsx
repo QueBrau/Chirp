@@ -30,6 +30,7 @@ import { hasFirebaseConfig, signOutUser, useSession } from "@/auth";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
 import { AppText, Card, Chip, EmptyState, GradientAvatar, ListRow, Screen } from "@/components";
 import { ROLE_LABELS } from "@/lib/roleTerms";
+import { openLegalLink, PRIVACY_URL, SUPPORT_URL, TERMS_URL } from "@/lib/legalLinks";
 // mockProfileLayout is a LOCAL UI preference (section order/visibility), not
 // identity data — no backend concept of a saved layout exists yet, so this
 // stays mock-seeded on purpose (see the top-of-file comment).
@@ -670,6 +671,24 @@ export default function ProfileScreen() {
                     subtitle={ACCOUNT_TYPE_LABELS[user.account_type]}
                     left={<SettingsIconWell name="repeat" />}
                     onPress={() => router.push("/profile/account-type")}
+                  />
+                  <ListRow
+                    title="Terms of Service"
+                    subtitle="Read Chirp's terms"
+                    left={<SettingsIconWell name="file-text" />}
+                    onPress={() => void openLegalLink("Terms of Service", TERMS_URL)}
+                  />
+                  <ListRow
+                    title="Privacy Policy"
+                    subtitle="How Chirp handles information"
+                    left={<SettingsIconWell name="lock" />}
+                    onPress={() => void openLegalLink("Privacy Policy", PRIVACY_URL)}
+                  />
+                  <ListRow
+                    title="Contact support"
+                    subtitle="chirp.shared@gmail.com"
+                    left={<SettingsIconWell name="mail" />}
+                    onPress={() => void openLegalLink("support", SUPPORT_URL)}
                   />
                   <ListRow
                     title="Sign out"

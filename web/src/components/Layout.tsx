@@ -10,6 +10,15 @@ const NAV = [
   { to: "/contact", label: "Contact" },
 ];
 
+const LEGAL_NAV = [
+  { to: "/terms", label: "Terms of service" },
+  { to: "/privacy", label: "Privacy policy" },
+  { to: "/community", label: "Community guidelines" },
+  { to: "/payments", label: "Organization & payments" },
+  { to: "/data-requests", label: "Data & account deletion" },
+  { to: "/safety", label: "Safety & removal requests" },
+];
+
 /**
  * Site chrome for the public pages.
  *
@@ -97,8 +106,9 @@ export function Layout() {
               ))}
             </ul>
             <ul className="site-menu__legal">
-              <li><NavLink to="/privacy">Privacy policy</NavLink></li>
-              <li><NavLink to="/terms">Terms of service</NavLink></li>
+              {LEGAL_NAV.map((item) => (
+                <li key={item.to}><NavLink to={item.to}>{item.label}</NavLink></li>
+              ))}
             </ul>
           </nav>
         </div>
@@ -134,8 +144,9 @@ export function Layout() {
             <div className="footer__col">
               <h2>Legal</h2>
               <ul>
-                <li><NavLink to="/privacy">Privacy policy</NavLink></li>
-                <li><NavLink to="/terms">Terms of service</NavLink></li>
+                {LEGAL_NAV.map((item) => (
+                  <li key={item.to}><NavLink to={item.to}>{item.label}</NavLink></li>
+                ))}
               </ul>
             </div>
           </div>
