@@ -1,6 +1,7 @@
 """c438 legal acceptance invariants and focused API behavior."""
 import asyncio
 import pytest
+from sqlalchemy import delete
 from app import models
 from app.db import get_session_factory
 from pydantic import ValidationError
@@ -66,6 +67,9 @@ async def test_empty_policy_configuration_fails_closed_on_me(client) -> None:
     await client.post("/auth/bootstrap", headers=headers, json={
         "email": "empty-c438@example.com", "display_name": "Empty", "account_type": "non_greek",
     })
+    async with get_session_factory()() as session:
+        await session.execute(delete(models.LegalPolicy))
+        await session.commit()
     response = await client.get("/auth/me", headers=headers)
     assert response.status_code == 503 and response.json()["detail"] == "legal_policy_unavailable"
 
