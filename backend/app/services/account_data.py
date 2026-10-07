@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -145,6 +145,7 @@ async def build_export(session: AsyncSession, user: models.User) -> dict[str, ob
         (models.ChapterStripeCustomer, "user_id", "stripe_customer_mapping"),
         (models.Device, "user_id", "devices"),
         (models.CampusVerification, "user_id", "campus_verifications"),
+        (models.ChapterInvite, "created_by", "chapter_invites_created"),
         (models.ConversationMember, "user_id", "conversation_memberships"),
         (models.HouseBallot, "voter_id", "house_ballots"),
         (models.PollVote, "user_id", "poll_votes"),
@@ -268,6 +269,11 @@ async def _delete_owned_rows(session: AsyncSession, user: models.User) -> None:
         await session.execute(delete(models.EventInvite).where(models.EventInvite.event_id.in_(event_ids)))
         await session.execute(delete(models.EventRsvp).where(models.EventRsvp.event_id.in_(event_ids)))
         await session.execute(delete(models.Event).where(models.Event.id.in_(event_ids)))
+    await session.execute(
+        update(models.ChapterInvite).where(models.ChapterInvite.created_by == user.id).values(
+            revoked_at=datetime.now(timezone.utc), code=func.concat("deleted-", models.ChapterInvite.id)
+        )
+    )
     now = datetime.now(timezone.utc)
     await session.execute(
         update(models.Post).where(models.Post.author_id == user.id).values(
