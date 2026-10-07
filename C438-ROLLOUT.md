@@ -19,18 +19,50 @@ the enforcement flag. Rollback disables the flag first, then rolls back the imag
 the migration downgrade is available for a reviewed schema rollback and removes only
 the c438 tables.
 
-The Terms/Privacy acknowledgement does not establish chapter officer or payment
-authority. Those remain separate server-owned membership and Stripe-account checks
-and are deferred remaining c438 acceptance work, rather than being inferred from
-legal consent.
-A future authority confirmation must bind an explicit chapter role or connected
-account identity, use a versioned confirmation record, and require re-confirmation
-after role or connected-account changes. c438 deliberately leaves that confirmation
-out rather than treating legal consent as financial authority. WebSocket handshake
-authorization is also unchanged: it continues to use its existing Firebase identity
-and suspension checks, and is deferred remaining c438 acceptance work rather than
-being covered by the HTTP enforcement flag. Store review and app-store age-rating
-classification remain release-owner steps after the mobile policy screen is reviewed.
+Organization creation and Stripe setup use a separate explicit declaration of
+organization authority. Migration 0040 also creates append-only
+`organization_authority_acceptances`, recording account, chapter, membership,
+role term, role, policy version, time and (for payment setup) the bound Stripe
+account. The current organization/payment policy version is `2026-10-06` and its
+URL is `https://chirpsocials.com/payments`. Increment the server version whenever
+these terms materially change. New mobile actions fetch the current version and
+ask the authorized person to confirm it; they do not infer authority from Terms
+acceptance or grant a role based on the declaration.
+
+For setup, the client confirms a snapshot of the active membership, role term and
+connected account. The API checks it again before and after provider calls.
+A changed role term (including a round trip to the same role) or account binding
+requires another confirmation. The initial authorization to create an account is
+recorded before provider work, then bound to the resulting account. Failed
+provider work does not falsely claim successful onboarding. Stripe obtains its
+own agreement from its authorized representative. These records cover org
+creation and payment setup; existing server permissions still govern all other
+organization operations. Default-off compatibility permits old clients without
+the new declarations; enabling enforcement makes absence a 428.
+
+WebSocket handshakes and the existing bounded authorization poll now use the same
+policy check as HTTP when enforcement is enabled. Unaccepted sessions close with
+4428, malformed policy configuration with 4503. The mobile socket revalidates on
+4428 or an authenticated HTTP428 probe and preserves `legalRequired`, so users
+see the material-change screen. A policy change on an open socket is detected at
+the existing 24-36 second reconciliation interval. A pre-accept close can be
+collapsed to HTTP403 by transport layers; the authenticated client probe handles
+that path. No SQL session is retained while writing to the socket.
+
+Review and apply the following narrowly scoped grants only after migration0040
+exists and the runtime identities are verified; this document applies none:
+
+```sql
+GRANT SELECT ON TABLE legal_policies TO chirp_api, chirp_ws;
+GRANT SELECT, INSERT ON TABLE legal_acceptances TO chirp_api;
+GRANT SELECT ON TABLE legal_acceptances TO chirp_ws;
+GRANT SELECT, INSERT ON TABLE organization_authority_acceptances TO chirp_api;
+```
+
+Neither runtime can activate policies or modify/delete acceptance history with
+these grants. Migration0040 is still undeployed and unmerged, so the authority
+table is included in that reserved migration rather than allocating Q's0042.
+Fresh validation databases must apply the revised0040 from scratch.
 
 Before enabling enforcement, the API deployment role grants must be reviewed and
 present for the operators and runtime identity that apply migration 0040 and set the

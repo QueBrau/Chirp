@@ -8,6 +8,7 @@ from pydantic import Field, field_validator, model_validator
 
 from app.core.invites import INVITE_DEFAULT_MAX_USES, INVITE_MAX_USES_CAP
 from app.core.validation import validate_public_url
+from app.schemas.authority import OrganizationAuthorityInput
 from app.schemas.base import _Schema
 
 # SELF-DECLARED. DISPLAY AND ROUTING ONLY — NEVER AUTHORIZATION (board c242).
@@ -240,6 +241,7 @@ class ChapterCreate(_Schema):
 
     org_name: str = Field(min_length=1)
     chapter_name: str | None = None
+    authority: OrganizationAuthorityInput | None = None
 
 
 class ChapterUpdate(_Schema):

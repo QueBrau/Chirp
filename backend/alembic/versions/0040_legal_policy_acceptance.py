@@ -33,10 +33,28 @@ def upgrade() -> None:
         sa.CheckConstraint("age_declaration >= 18 OR guardian_permission_confirmed", name="ck_legal_acceptance_guardian"),
     )
     op.create_index("ix_legal_acceptances_user", "legal_acceptances", ["user_id"])
+    op.create_table(
+        "organization_authority_acceptances",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("user_id", sa.UUID(), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("chapter_id", sa.UUID(), sa.ForeignKey("chapters.id"), nullable=False),
+        sa.Column("membership_id", sa.UUID(), sa.ForeignKey("memberships.id"), nullable=False),
+        sa.Column("role_term_id", sa.UUID(), sa.ForeignKey("role_terms.id"), nullable=False),
+        sa.Column("role", sa.Text(), nullable=False),
+        sa.Column("purpose", sa.Text(), nullable=False),
+        sa.Column("policy_version", sa.Text(), nullable=False),
+        sa.Column("stripe_account_id", sa.Text(), nullable=True),
+        sa.Column("accepted_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+        sa.CheckConstraint("purpose IN ('organization_create', 'payment_setup')", name="ck_authority_purpose"),
+    )
+    op.create_index("ix_org_authority_user_chapter", "organization_authority_acceptances", ["user_id", "chapter_id"])
     op.execute("INSERT INTO legal_policies (policy_key, version) VALUES ('terms', '2026-10-06'), ('privacy', '2026-10-06')")
 
 
 def downgrade() -> None:
+    op.drop_index("ix_org_authority_user_chapter", table_name="organization_authority_acceptances")
+    op.drop_table("organization_authority_acceptances")
     op.drop_index("uq_legal_policy_current_key", table_name="legal_policies")
     op.drop_index("ix_legal_acceptances_user", table_name="legal_acceptances")
     op.drop_table("legal_acceptances")

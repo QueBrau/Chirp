@@ -38,3 +38,21 @@ class LegalAcceptance(Base):
     age_declaration: Mapped[int] = mapped_column(Integer, nullable=False)
     guardian_permission_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     source: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'mobile'"))
+
+
+class OrganizationAuthorityAcceptance(Base):
+    __tablename__ = "organization_authority_acceptances"
+    __table_args__ = (
+        CheckConstraint("purpose IN ('organization_create', 'payment_setup')", name="ck_authority_purpose"),
+        Index("ix_org_authority_user_chapter", "user_id", "chapter_id"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    chapter_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False)
+    membership_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("memberships.id"), nullable=False)
+    role_term_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("role_terms.id"), nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[str] = mapped_column(Text, nullable=False)
+    stripe_account_id: Mapped[str | None] = mapped_column(Text)
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

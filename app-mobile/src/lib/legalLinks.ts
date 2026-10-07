@@ -2,6 +2,7 @@ import { Linking } from "react-native";
 
 import { showAlert } from "./alert";
 
+export const ORGANIZATION_TERMS_URL = "https://chirpsocials.com/payments";
 export const TERMS_URL = "https://chirpsocials.com/terms";
 export const PRIVACY_URL = "https://chirpsocials.com/privacy";
 export const SUPPORT_URL = "https://chirpsocials.com/contact";
