@@ -31,6 +31,7 @@ EXPORT_SCOPE = [
     "message metadata and device/key-directory records (message ciphertext is not decrypted)",
     "payment and ledger records linked to you, with provider credentials redacted",
     "legal policy versions and your acceptance records",
+    "organization authority declarations made by you, including the linked provider account identifier",
 ]
 EXPORT_EXCLUDED = [
     "provider-held authentication, payment, email, storage, logging, and backup copies",
@@ -42,6 +43,7 @@ RETENTION_REASONS = [
     "shared organization and safety records may need attribution or legal preservation",
     "append-only financial records cannot be deleted without breaking accounting history",
     "provider backups and logs require separate verified expiry or provider fulfillment",
+    "organization authority attestations preserve who accepted payment or organization responsibility",
 ]
 
 # Stable export allowlist. New columns must be reviewed and added deliberately;
@@ -79,6 +81,10 @@ EXPORT_FIELDS: dict[str, tuple[str, ...]] = {
     "chapter_invites": ("id", "chapter_id", "role", "expires_at", "max_uses", "uses", "revoked_at"),
     "legal_acceptances": ("id", "user_id", "policy_id", "accepted_at", "age_declaration", "guardian_permission_confirmed", "source"),
     "legal_policies": ("id", "policy_key", "version", "effective_at", "is_current"),
+    "organization_authority_acceptances": (
+        "id", "user_id", "chapter_id", "membership_id", "role_term_id", "role",
+        "purpose", "policy_version", "stripe_account_id", "accepted_at",
+    ),
 }
 
 
@@ -180,6 +186,9 @@ async def build_export(session: AsyncSession, user: models.User) -> dict[str, ob
     records["legal_acceptances"] = await _rows(session, legal_acceptance, "user_id", user.id)
     policy_ids = (await session.execute(select(legal_acceptance.policy_id).where(legal_acceptance.user_id == user.id))).scalars().all()
     records["legal_policies"] = await _rows_for_ids(session, legal_policy, "id", list(policy_ids)) if policy_ids else []
+    records["organization_authority_acceptances"] = await _rows(
+        session, models.OrganizationAuthorityAcceptance, "user_id", user.id,
+    )
     # A little's edge is the same personal relationship, so include both directions.
     records["lineage_as_little"] = await _rows(session, models.LineageEdge, "little_user_id", user.id)
     records["content_reports"] = await _rows(session, models.ContentReport, "reporter_id", user.id)
