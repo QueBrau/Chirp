@@ -73,7 +73,7 @@ export default function LegalAcceptanceScreen() {
         <Pressable accessibilityRole="link" accessibilityLabel="Read Terms" onPress={() => void openLegalLink("Terms", TERMS_URL)} style={{ minHeight: 44, justifyContent: "center" }}><AppText variant="caption" style={{ color: palette.accent }}>Read Terms</AppText></Pressable>
         <Pressable accessibilityRole="link" accessibilityLabel="Read Privacy Policy" onPress={() => void openLegalLink("Privacy Policy", PRIVACY_URL)} style={{ minHeight: 44, justifyContent: "center" }}><AppText variant="caption" style={{ color: palette.accent }}>Read Privacy Policy</AppText></Pressable>
       </View>
-      {status ? <AppText variant="micro" tone="secondary">Current versions: Terms {status.policies.find(p => p.key === "terms")?.version ?? "unavailable"}; Privacy {status.policies.find(p => p.key === "privacy")?.version ?? "unavailable"}.</AppText> : null}
+      {status ? <AppText variant="micro" tone="secondary">Current versions: Terms {status.policies.find(p => p.key === "terms")?.version ?? "unavailable"}; Privacy {status.policies.find(p => p.key === "privacy")?.version ?? "unavailable"}. Effective dates are shown in the linked policies.</AppText> : null}
       {error ? <AppText variant="caption" style={{ color: palette.danger }}>{error}</AppText> : null}
       {status === null ? <Button label="Retry loading policies" variant="secondary" onPress={retry} disabled={submitting} /> : null}
       <Button label={submitting ? "Saving..." : "I agree to the Terms and acknowledge Privacy"} onPress={() => void submit()} disabled={!status || submitting} />
