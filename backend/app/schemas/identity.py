@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.core.invites import INVITE_DEFAULT_MAX_USES, INVITE_MAX_USES_CAP
 from app.core.validation import validate_public_url
@@ -81,6 +81,21 @@ class UserCreate(_Schema):
     display_name: str = Field(min_length=1)
     avatar_url: str | None = None
     account_type: AccountType
+    # Optional during the compatibility window: old released clients can still
+    # bootstrap, then receive legal_required from /auth/me and update in-app.
+    terms_version: str | None = Field(default=None, min_length=1, max_length=40)
+    privacy_version: str | None = Field(default=None, min_length=1, max_length=40)
+    age_declaration: Literal[17, 18] | None = None
+    guardian_permission_confirmed: bool = False
+
+    @model_validator(mode="after")
+    def validate_optional_legal_fields(self) -> "UserCreate":
+        supplied = (self.terms_version, self.privacy_version, self.age_declaration)
+        if any(value is not None for value in supplied) and not all(value is not None for value in supplied):
+            raise ValueError("legal_acceptance_incomplete")
+        if self.age_declaration == 17 and not self.guardian_permission_confirmed:
+            raise ValueError("guardian_permission_required")
+        return self
 
     # c184 sweep: avatar_url is client-supplied and written straight through to
     # users.avatar_url with no validation (routers/auth.py bootstrap_account),
@@ -320,6 +335,7 @@ class MeOut(_Schema):
 
     user: UserOut
     memberships: list[MembershipOut]
+    legal_required: bool = False
 
 
 # ---- invites ----

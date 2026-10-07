@@ -68,6 +68,7 @@ async def list_data_requests(
         select(models.AccountDataRequest)
         .where(models.AccountDataRequest.user_id == user.id)
         .order_by(models.AccountDataRequest.created_at.desc())
+        .limit(100)
     )).scalars().all()
     artifacts = (await session.execute(
         select(models.AccountDataArtifact.request_id, models.AccountDataArtifact.expires_at).join(

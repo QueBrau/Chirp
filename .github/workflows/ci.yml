@@ -357,6 +357,12 @@ jobs:
         # until the editor sends it too.
         run: npm run verify:c423-alumni-editor
 
+      - name: Legal acceptance and invite ownership state
+        working-directory: app-mobile
+        # c438. Exercises delayed deep-link params, account replacement retirement,
+        # and stale-policy conflict reset in an executable state harness.
+        run: npm run verify:c438-legal-flow
+
       - name: Every verifier actually runs
         working-directory: app-mobile
         # c336's own ratchet. Eight of fourteen guards here were never wired, so they

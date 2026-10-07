@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # dispatch and DEPLOY.md's "Service roles" section for the operational
     # picture, including why this PR does not flip any live service's value.
     service_role: Literal["all", "api", "ws"] = "all"
+    # Compatibility rollout for c438. Keep false until all supported clients can
+    # submit acceptance; when true, authenticated product routes fail closed for
+    # accounts missing the current Terms and Privacy rows.
+    legal_enforcement_enabled: bool = False
     # Diagnostic-only close tracing is opt-in and additionally requires a
     # per-connection probe header; it must never become ambient production log
     # traffic.

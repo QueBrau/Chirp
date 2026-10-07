@@ -14,7 +14,7 @@ import { getFirebaseAuth } from "./firebase";
 import { captureSession, getIdToken, onAuthChanged } from "./session";
 import { currentIdentity, onIdentityChanged, ownsIdentity, replaceIdentity, type AuthIdentity } from "./identity";
 
-export type SessionStatus = "loading" | "recoverable" | "signedOut" | "unregistered" | "suspended" | "ready";
+export type SessionStatus = "loading" | "recoverable" | "signedOut" | "unregistered" | "suspended" | "legalRequired" | "ready";
 
 export interface SessionContextValue {
   status: SessionStatus;
@@ -126,7 +126,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (me.user.firebase_uid !== owner.uid) throw new Error("Account changed. Please try again.");
       setUser(me.user);
       setMemberships(me.memberships);
-      const nextStatus = me.user.suspended_at !== null ? "suspended" : "ready";
+      const nextStatus = me.user.suspended_at !== null ? "suspended" : me.legal_required ? "legalRequired" : "ready";
       setStatus(nextStatus);
       return nextStatus;
     } catch (err) {
@@ -272,7 +272,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     loadRef.current?.cancel();
     setUser(bootstrapped);
     setMemberships([]);
-    setStatus(bootstrapped.suspended_at !== null ? "suspended" : "ready");
+    setStatus(bootstrapped.suspended_at !== null ? "suspended" : "legalRequired");
     void loadMe();
   }, [loadMe, renderOwner]);
 

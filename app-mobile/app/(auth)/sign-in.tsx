@@ -360,6 +360,10 @@ export default function SignInScreen() {
       setSubmittedMode(null);
       setSubmitting(false);
       continueToOnboarding();
+    } else if (status === "legalRequired") {
+      setSubmittedMode(null);
+      setSubmitting(false);
+      router.replace(withInviteCode("/legal-acceptance", inviteCode));
     }
     // routeAfterAuth/continueToOnboarding close over router and inviteCode only,
     // and the mode is passed in explicitly rather than read from state — see

@@ -135,6 +135,31 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="user_not_registered")
     if user.suspended_at is not None:
         raise HTTPException(status_code=403, detail="account_suspended")
+    settings = get_settings()
+    if settings.legal_enforcement_enabled:
+        policies = (await session.execute(
+            select(models.LegalPolicy).where(models.LegalPolicy.is_current.is_(True))
+        )).scalars().all()
+        accepted = set((await session.execute(
+            select(models.LegalAcceptance.policy_id).where(models.LegalAcceptance.user_id == user.id)
+        )).scalars().all())
+        if {policy.policy_key for policy in policies} != {"terms", "privacy"} or len(policies) != 2:
+            raise HTTPException(status_code=503, detail="legal_policy_unavailable")
+        if any(policy.id not in accepted for policy in policies):
+            raise HTTPException(status_code=428, detail="legal_acceptance_required")
+    return user
+
+
+async def get_current_user_without_legal_gate(
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Resolve an account for legal status/acceptance endpoints during rollout."""
+    user = await get_user_by_uid(session, uid)
+    if user is None:
+        raise HTTPException(status_code=401, detail="user_not_registered")
+    if user.suspended_at is not None:
+        raise HTTPException(status_code=403, detail="account_suspended")
     return user
 
 
