@@ -1,5 +1,6 @@
 """Authentication dependencies: verified Firebase uid and registered-user resolution."""
 import time
+import math
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,7 +63,14 @@ async def _verify_identity(
         raise HTTPException(status_code=401, detail="invalid_token")
     if require_fresh:
         auth_time = decoded.get("auth_time")
-        if not isinstance(auth_time, (int, float)) or time.time() - auth_time > get_settings().privacy_reauth_max_age_seconds:
+        now = time.time()
+        if (
+            isinstance(auth_time, bool)
+            or not isinstance(auth_time, (int, float))
+            or not math.isfinite(auth_time)
+            or auth_time > now + 30
+            or now - auth_time > get_settings().privacy_reauth_max_age_seconds
+        ):
             raise HTTPException(status_code=401, detail="recent_authentication_required")
     return uid, decoded.get("email")
 

@@ -51,7 +51,3 @@ export async function getDataRequest(requestId: string): Promise<DataRequestOut>
 export async function downloadDataRequest(requestId: string): Promise<string> {
   return requestText(`/me/data-requests/${encodeURIComponent(requestId)}/download`);
 }
-
-export async function retryDataRequest(requestId: string): Promise<DataRequestOut> {
-  return request<DataRequestOut>(`/me/data-requests/${encodeURIComponent(requestId)}/retry`, { method: "POST" });
-}

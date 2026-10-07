@@ -10,7 +10,6 @@ import {
   type DataRequestKind,
   type DataRequestOut,
   downloadDataRequest,
-  retryDataRequest,
 } from "@/api/dataRequests";
 import { ApiError } from "@/api/client";
 import { AppText, Button, Card, EmptyState, Screen } from "@/components";
@@ -23,7 +22,7 @@ function statusLabel(status: DataRequestOut["status"]): string {
   return status.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function RequestCard({ item, onRefresh, onRetry }: { item: DataRequestOut; onRefresh: () => void; onRetry: () => void }) {
+function RequestCard({ item, onRefresh }: { item: DataRequestOut; onRefresh: () => void }) {
   const palette = useTheme();
   const isExport = item.kind === "export";
   const canDownload = isExport && (item.status === "ready" || item.status === "partially_completed");
@@ -66,7 +65,7 @@ function RequestCard({ item, onRefresh, onRetry }: { item: DataRequestOut; onRef
       ) : null}
       {item.excluded.length > 0 ? (
         <AppText variant="caption" tone="secondary" style={{ marginTop: spacing.sm }}>
-          Needs separate handling: {item.excluded.join(", ")}.
+          Some copies need separate handling: {item.excluded.join(", ")}.
         </AppText>
       ) : null}
       {item.retention_reasons.length > 0 ? (
@@ -76,12 +75,11 @@ function RequestCard({ item, onRefresh, onRetry }: { item: DataRequestOut; onRef
       ) : null}
       {item.failure_code ? (
         <AppText variant="caption" tone="danger" style={{ marginTop: spacing.sm }}>
-          This request needs support review. Reference: {item.id}.
+          Account deletion requests are received and tracked here. A deletion request needs manual provider review before any account record is removed. Reference: {item.id}.
         </AppText>
       ) : null}
       <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
         {canDownload ? <Button label="Download copy" onPress={() => void download()} /> : null}
-        {item.status === "blocked" || item.status === "failed" ? <Button label="Retry fulfillment" variant="neutral" onPress={onRetry} /> : null}
         <Button label="Refresh status" variant="neutral" onPress={onRefresh} />
       </View>
     </Card>
@@ -93,21 +91,26 @@ export default function AccountDataScreen() {
   const ownerId = user?.id ?? null;
   const ownerRef = useRef(ownerId);
   ownerRef.current = ownerId;
+  const generationRef = useRef(0);
   const [items, setItems] = useState<DataRequestOut[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<DataRequestKind | null>(null);
 
   const load = useCallback(async () => {
     const requestedOwner = ownerRef.current;
+    const generation = ++generationRef.current;
+    const current = () => generationRef.current === generation && ownerRef.current === requestedOwner;
     setLoading(true);
     try {
       const result = await listDataRequests();
-      if (ownerRef.current === requestedOwner) setItems(result);
+      if (current()) setItems(result);
     } catch (error) {
-      setItems(null);
-      showApiError(error, "Couldn't load your data requests");
+      if (current()) {
+        setItems(null);
+        showApiError(error, "Couldn't load your data requests");
+      }
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }, []);
 
@@ -126,28 +129,28 @@ export default function AccountDataScreen() {
       confirmLabel: isDeletion ? "Request deletion" : "Request copy",
       destructive: isDeletion,
       onConfirm: () => {
+        const requestedOwner = ownerRef.current;
+        const generation = generationRef.current;
+        const current = () => generationRef.current === generation && ownerRef.current === requestedOwner;
         setSubmitting(kind);
         void createDataRequest(kind)
           .then((created) => {
-            setItems((previous) => [created, ...(previous ?? [])]);
-            showAlert("Request received", "You can return here to check its status. We may contact you to verify the request.");
+            if (current()) {
+              setItems((previous) => [created, ...(previous ?? [])]);
+              showAlert("Request received", "You can return here to check its status. We may contact you to verify the request.");
+            }
           })
           .catch((error) => {
+            if (!current()) return;
             if (error instanceof ApiError && error.detail === "request_already_open") {
               showAlert("Request already open", "A request of this type is already being handled. Refresh status to see it.");
             } else {
               showApiError(error, "Couldn't submit your request");
             }
           })
-          .finally(() => setSubmitting(null));
+          .finally(() => { if (current()) setSubmitting(null); });
       },
     });
-  };
-
-  const retry = (item: DataRequestOut) => {
-    void retryDataRequest(item.id)
-      .then((updated) => setItems((previous) => previous?.map((entry) => entry.id === updated.id ? updated : entry) ?? previous))
-      .catch((error) => showApiError(error, "Couldn't retry your request"));
   };
 
   return (
@@ -167,7 +170,7 @@ export default function AccountDataScreen() {
         {items !== null && items.length === 0 ? (
           <EmptyState title="No requests yet" message="Your request history will appear here." />
         ) : null}
-        {items?.map((item) => <RequestCard key={item.id} item={item} onRefresh={() => void load()} onRetry={() => retry(item)} />)}
+        {items?.map((item) => <RequestCard key={item.id} item={item} onRefresh={() => void load()} />)}
         <Pressable onPress={() => void Linking.openURL("https://chirpsocials.com/data-requests")} accessibilityRole="link">
           <AppText variant="caption" tone="accent" style={{ textAlign: "center" }}>
             Read the data request policy

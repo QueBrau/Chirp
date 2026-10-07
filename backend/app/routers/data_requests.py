@@ -1,15 +1,17 @@
 """Authenticated account export and deletion intake/status routes."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from app import models
+from app.config import get_settings
 from app.db import get_session
 from app.middleware.auth import get_current_user_for_privacy, get_current_user_for_privacy_status
 from app.schemas.data_requests import DataRequestCreate, DataRequestOut
@@ -18,8 +20,8 @@ from app.services.account_data import fulfill_request
 router = APIRouter(tags=["account-data"])
 
 
-def _out(row: models.AccountDataRequest, artifact: models.AccountDataArtifact | None = None) -> DataRequestOut:
-    expires_at = artifact.expires_at if artifact else None
+def _out(row: models.AccountDataRequest, artifact: models.AccountDataArtifact | datetime | None = None) -> DataRequestOut:
+    expires_at = artifact.expires_at if isinstance(artifact, models.AccountDataArtifact) else artifact
     return DataRequestOut(
         id=row.id,
         kind=row.kind,
@@ -50,7 +52,9 @@ async def _owned(
     if row is None:
         raise HTTPException(status_code=404, detail="data_request_not_found")
     artifact = (await session.execute(
-        select(models.AccountDataArtifact).where(models.AccountDataArtifact.request_id == row.id)
+        select(models.AccountDataArtifact)
+        .options(load_only(models.AccountDataArtifact.id, models.AccountDataArtifact.request_id, models.AccountDataArtifact.expires_at))
+        .where(models.AccountDataArtifact.request_id == row.id)
     )).scalar_one_or_none()
     return row, artifact
 
@@ -66,12 +70,12 @@ async def list_data_requests(
         .order_by(models.AccountDataRequest.created_at.desc())
     )).scalars().all()
     artifacts = (await session.execute(
-        select(models.AccountDataArtifact).join(
+        select(models.AccountDataArtifact.request_id, models.AccountDataArtifact.expires_at).join(
             models.AccountDataRequest,
             models.AccountDataArtifact.request_id == models.AccountDataRequest.id,
         ).where(models.AccountDataRequest.user_id == user.id)
-    )).scalars().all()
-    by_request = {artifact.request_id: artifact for artifact in artifacts}
+    )).all()
+    by_request = {request_id: expires_at for request_id, expires_at in artifacts}
     return [_out(row, by_request.get(row.id)) for row in rows]
 
 
@@ -81,13 +85,47 @@ async def create_data_request(
     user: models.User = Depends(get_current_user_for_privacy),
     session: AsyncSession = Depends(get_session),
 ) -> DataRequestOut:
+    # Serialize the caller's request budget and pending-request reuse across tabs/devices.
+    user = (await session.execute(
+        select(models.User).where(models.User.id == user.id).with_for_update()
+    )).scalar_one()
+    existing = (await session.execute(
+        select(models.AccountDataRequest).where(
+            models.AccountDataRequest.user_id == user.id,
+            models.AccountDataRequest.kind == body.kind,
+            models.AccountDataRequest.open_key == "open",
+        ).order_by(models.AccountDataRequest.created_at.desc())
+    )).scalars().first()
+    if existing is not None:
+        artifact = (await session.execute(
+            select(models.AccountDataArtifact).where(models.AccountDataArtifact.request_id == existing.id)
+        )).scalar_one_or_none()
+        return _out(existing, artifact)
+    daily_limit = get_settings().account_data_request_daily_limit
+    recent_count = (await session.execute(
+        select(func.count()).select_from(models.AccountDataRequest).where(
+            models.AccountDataRequest.user_id == user.id,
+            models.AccountDataRequest.created_at >= datetime.now(timezone.utc) - timedelta(days=1),
+        )
+    )).scalar_one()
+    if recent_count >= daily_limit:
+        raise HTTPException(status_code=429, detail="data_request_rate_limited")
     row = models.AccountDataRequest(user_id=user.id, kind=body.kind, open_key="open")
     session.add(row)
     try:
         await session.flush()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="request_already_open")
+        existing = (await session.execute(
+            select(models.AccountDataRequest).where(
+                models.AccountDataRequest.user_id == user.id,
+                models.AccountDataRequest.kind == body.kind,
+                models.AccountDataRequest.open_key == "open",
+            ).order_by(models.AccountDataRequest.created_at.desc())
+        )).scalars().first()
+        if existing is None:
+            raise HTTPException(status_code=409, detail="request_already_open")
+        return _out(existing)
     await fulfill_request(session, row, user)
     await session.commit()
     artifact = (await session.execute(
@@ -112,30 +150,18 @@ async def download_data_request(
     user: models.User = Depends(get_current_user_for_privacy),
     session: AsyncSession = Depends(get_session),
 ) -> JSONResponse:
-    row, artifact = await _owned(request_id, user, session)
+    row, _artifact = await _owned(request_id, user, session)
+    artifact = (await session.execute(
+        select(models.AccountDataArtifact).where(models.AccountDataArtifact.request_id == row.id)
+    )).scalar_one_or_none()
     if row.kind != "export" or row.status not in {"ready", "partially_completed"} or artifact is None:
         raise HTTPException(status_code=409, detail="export_not_ready")
     if artifact.expires_at is not None and artifact.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=410, detail="export_expired")
     return JSONResponse(
         content=artifact.content,
-        headers={"Content-Disposition": f'attachment; filename="chirp-account-export-{row.id}.json"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="chirp-account-export-{row.id}.json"',
+            "Cache-Control": "private, no-store",
+        },
     )
-
-
-@router.post("/me/data-requests/{request_id}/retry", response_model=DataRequestOut)
-async def retry_data_request(
-    request_id: uuid.UUID,
-    user: models.User = Depends(get_current_user_for_privacy),
-    session: AsyncSession = Depends(get_session),
-) -> DataRequestOut:
-    """Retry only a blocked/failed request; ownership and fresh auth are rechecked."""
-    row, _artifact = await _owned(request_id, user, session)
-    if row.status not in {"blocked", "failed"}:
-        raise HTTPException(status_code=409, detail="request_not_retryable")
-    await fulfill_request(session, row, user)
-    await session.commit()
-    artifact = (await session.execute(
-        select(models.AccountDataArtifact).where(models.AccountDataArtifact.request_id == row.id)
-    )).scalar_one_or_none()
-    return _out(row, artifact)

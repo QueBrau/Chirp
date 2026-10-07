@@ -6,40 +6,12 @@ import hashlib
 import json
 import base64
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Protocol
+from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-
-
-class AccountProvider(Protocol):
-    """Provider adapter contract; production adapters must be explicitly configured."""
-
-    name: str
-
-    async def fulfill_deletion(self, *, firebase_uid: str, email: str) -> bool: ...
-
-
-class UnconfiguredProvider:
-    """Fail closed when provider credentials/console integration are unavailable."""
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    async def fulfill_deletion(self, *, firebase_uid: str, email: str) -> bool:
-        return False
-
-
-PROVIDER_ADAPTERS: tuple[AccountProvider, ...] = (
-    UnconfiguredProvider("firebase_auth"),
-    UnconfiguredProvider("stripe_connect"),
-    UnconfiguredProvider("transactional_email"),
-    UnconfiguredProvider("object_storage"),
-    UnconfiguredProvider("logging_and_backups"),
-)
 
 
 async def purge_expired_export_artifacts(session: AsyncSession) -> int:
@@ -63,12 +35,50 @@ EXPORT_SCOPE = [
 EXPORT_EXCLUDED = [
     "provider-held authentication, payment, email, storage, logging, and backup copies",
     "message plaintext that the server never stores",
+    "prekey byte material and dormant client-only SQLite data",
 ]
 RETENTION_REASONS = [
     "shared organization and safety records may need attribution or legal preservation",
     "append-only financial records cannot be deleted without breaking accounting history",
     "provider backups and logs require separate verified expiry or provider fulfillment",
 ]
+
+# Stable export allowlist. New columns must be reviewed and added deliberately;
+# exporting every ORM column would eventually leak a newly-added credential or
+# provider identifier into a personal artifact.
+EXPORT_FIELDS: dict[str, tuple[str, ...]] = {
+    "memberships": ("id", "chapter_id", "role", "status", "pledge_class", "joined_at"),
+    "posts": ("id", "chapter_id", "campus_id", "body", "media_urls", "audience", "post_type", "duration_sec", "created_at", "deleted_at", "removed_reason"),
+    "post_comments": ("id", "post_id", "body", "created_at", "deleted_at", "removed_reason"),
+    "chirps": ("id", "campus_id", "body", "score", "created_at", "removed_at", "removed_reason"),
+    "events": ("id", "chapter_id", "title", "description", "location", "visibility", "starts_at", "ends_at", "created_at", "canceled_at"),
+    "event_invites": ("event_id", "created_at"),
+    "event_rsvps": ("event_id", "status", "created_at"),
+    "meeting_attendance": ("meeting_id", "status"),
+    "alumni_profiles": ("user_id", "grad_year", "company", "title", "industry", "location", "linkedin_url", "open_to_mentoring"),
+    "job_posts": ("id", "chapter_id", "title", "company", "location", "description", "apply_url", "expires_at", "created_at"),
+    "lineage_edges": ("id", "chapter_id", "big_user_id", "little_user_id", "family_id", "pledge_class", "confirmed_by_little", "created_at"),
+    "ledger_entries": ("id", "chapter_id", "entry_type", "amount_cents", "category", "description", "related_user_id", "dues_cycle_id", "corrects_entry_id", "created_at"),
+    "dues_payment_intents": ("id", "chapter_id", "dues_cycle_id", "rail", "status", "amount_cents", "currency", "created_at", "updated_at"),
+    "dues_payment_plans": ("id", "chapter_id", "dues_cycle_id", "total_cents", "installment_count", "status", "note", "created_at"),
+    "chapter_stripe_customers": ("chapter_id", "created_at"),
+    "devices": ("id", "device_label", "registration_id", "identity_key", "created_at", "revoked_at"),
+    "campus_verifications": ("id", "campus_id", "edu_email", "sent_at", "expires_at", "consumed_at", "attempts"),
+    "conversation_members": ("conversation_id", "joined_at", "left_at"),
+    "house_ballots": ("campus_id", "week_start", "touse_chapter_id", "bouse_chapter_id", "created_at", "updated_at"),
+    "poll_votes": ("poll_id", "option_id", "created_at"),
+    "meetings": ("id", "chapter_id", "title", "meeting_date", "minutes_md", "created_at"),
+    "polls": ("id", "chapter_id", "meeting_id", "question", "status", "created_at", "closed_at"),
+    "spend_approvals": ("id", "chapter_id", "amount_cents", "description", "status", "decided_at", "created_at"),
+    "content_reports": ("id", "target_type", "target_id", "reason", "status", "created_at"),
+    "moderation_actions": ("id", "action", "target_type", "target_id", "reason", "created_at"),
+    "post_likes": ("post_id", "created_at"),
+    "chirp_votes": ("chirp_id", "value"),
+    "role_terms": ("id", "membership_id", "role", "started_at", "ended_at"),
+    "chapter_invites": ("id", "chapter_id", "role", "expires_at", "max_uses", "uses", "revoked_at"),
+    "legal_acceptances": ("id", "user_id", "policy_id", "accepted_at", "age_declaration", "guardian_permission_confirmed", "source"),
+    "legal_policies": ("id", "policy_key", "version", "effective_at", "is_current"),
+}
 
 
 def _iso(value: object) -> str | None:
@@ -79,7 +89,7 @@ def _safe_dict(value: object) -> object:
     """Convert ORM values without emitting credential or token-shaped fields."""
     if isinstance(value, uuid.UUID):
         return str(value)
-    if isinstance(value, datetime):
+    if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, (bytes, bytearray)):
         return base64.b64encode(value).decode("ascii")
@@ -92,14 +102,20 @@ async def _rows(session: AsyncSession, model: type, column: str, user_id: uuid.U
         raise RuntimeError(f"unclassified_account_data_edge:{model.__tablename__}.{column}")
     result = await session.execute(select(model).where(attribute == user_id))
     output: list[dict[str, object]] = []
+    fields = EXPORT_FIELDS.get(model.__tablename__)
+    if fields is None:
+        raise RuntimeError(f"unclassified_account_data_table:{model.__tablename__}")
+    for field_name in fields:
+        if getattr(model, field_name, None) is None:
+            raise RuntimeError(f"unclassified_account_data_edge:{model.__tablename__}.{field_name}")
     for row in result.scalars().all():
         record: dict[str, object] = {}
-        for field in model.__table__.columns:
-            name = field.name.lower()
+        for field_name in fields:
+            name = field_name.lower()
             if any(secret in name for secret in ("token", "secret", "password", "private_key", "signature", "hash", "code")):
-                record[field.name] = "[redacted]"
+                record[field_name] = "[redacted]"
             else:
-                record[field.name] = _safe_dict(getattr(row, field.name))
+                record[field_name] = _safe_dict(getattr(row, field_name))
         output.append(record)
     return output
 
@@ -158,16 +174,11 @@ async def build_export(session: AsyncSession, user: models.User) -> dict[str, ob
         (models.LedgerEntry, "created_by", "ledger_created"),
     ):
         records[key] = await _rows(session, model, column, user.id)
-    legal_acceptance = getattr(models, "LegalAcceptance", None)
-    if legal_acceptance is None:
-        records["legal_acceptances"] = []
-        records["legal_policies"] = []
-    else:
-        records["legal_acceptances"] = await _rows(session, legal_acceptance, "user_id", user.id)
-        legal_policy = getattr(models, "LegalPolicy", None)
-        if legal_policy is not None:
-            policy_ids = (await session.execute(select(legal_acceptance.policy_id).where(legal_acceptance.user_id == user.id))).scalars().all()
-            records["legal_policies"] = await _rows_for_ids(session, legal_policy, "id", list(policy_ids)) if policy_ids else []
+    legal_acceptance = models.LegalAcceptance
+    legal_policy = models.LegalPolicy
+    records["legal_acceptances"] = await _rows(session, legal_acceptance, "user_id", user.id)
+    policy_ids = (await session.execute(select(legal_acceptance.policy_id).where(legal_acceptance.user_id == user.id))).scalars().all()
+    records["legal_policies"] = await _rows_for_ids(session, legal_policy, "id", list(policy_ids)) if policy_ids else []
     # A little's edge is the same personal relationship, so include both directions.
     records["lineage_as_little"] = await _rows(session, models.LineageEdge, "little_user_id", user.id)
     records["content_reports"] = await _rows(session, models.ContentReport, "reporter_id", user.id)
@@ -193,7 +204,13 @@ async def build_export(session: AsyncSession, user: models.User) -> dict[str, ob
             }
             for message in messages
         ]
-        records["message_receipts"] = await _rows_for_ids(session, models.MessageReceipt, "message_id", [message.id for message in messages])
+        own_receipts = (await session.execute(
+            select(models.MessageReceipt).where(models.MessageReceipt.device_id.in_(device_ids))
+        )).scalars().all()
+        records["message_receipts"] = [
+            {"message_id": str(receipt.message_id), "delivered_at": _iso(receipt.delivered_at)}
+            for receipt in own_receipts
+        ]
     else:
         records["messages_sent"] = []
         records["message_receipts"] = []
@@ -202,9 +219,7 @@ async def build_export(session: AsyncSession, user: models.User) -> dict[str, ob
 
 async def _safe_block_rows(session: AsyncSession, user_id: uuid.UUID) -> list[dict[str, object]]:
     result = await session.execute(
-        select(models.UserBlock).where(
-            (models.UserBlock.blocker_id == user_id) | (models.UserBlock.blocked_id == user_id)
-        )
+        select(models.UserBlock).where(models.UserBlock.blocker_id == user_id)
     )
     return [{"source": row.source, "created_at": _iso(row.created_at), "relationship": "account block"} for row in result.scalars().all()]
 
@@ -214,100 +229,20 @@ async def _rows_for_ids(session: AsyncSession, model: type, column: str, ids: li
     attribute = getattr(model, column, None)
     if attribute is None:
         raise RuntimeError(f"unclassified_account_data_edge:{model.__tablename__}.{column}")
+    fields = EXPORT_FIELDS.get(model.__tablename__)
+    if fields is None:
+        raise RuntimeError(f"unclassified_account_data_table:{model.__tablename__}")
+    for field_name in fields:
+        if getattr(model, field_name, None) is None:
+            raise RuntimeError(f"unclassified_account_data_edge:{model.__tablename__}.{field_name}")
     result = await session.execute(select(model).where(attribute.in_(ids)))
     output = []
     for row in result.scalars().all():
         output.append({
-            field.name: ("[redacted]" if any(secret in field.name.lower() for secret in ("token", "secret", "password", "private_key", "signature")) else _safe_dict(getattr(row, field.name)))
-            for field in model.__table__.columns
+            field_name: ("[redacted]" if any(secret in field_name.lower() for secret in ("token", "secret", "password", "private_key", "signature", "hash", "code")) else _safe_dict(getattr(row, field_name)))
+            for field_name in fields
         })
     return output
-
-
-async def _delete_owned_rows(session: AsyncSession, user: models.User) -> None:
-    """Remove private edges and redact user-authored UGC while preserving shared rows."""
-    for model, column in (
-        (models.PostLike, "user_id"),
-        (models.ChirpVote, "user_id"),
-        (models.UserBlock, "blocker_id"),
-        (models.UserBlock, "blocked_id"),
-        (models.SignedPrekey, "device_id"),
-        (models.OneTimePrekey, "device_id"),
-        (models.KyberPrekey, "device_id"),
-        (models.Device, "user_id"),
-        (models.AlumniProfile, "user_id"),
-        (models.EventInvite, "invited_user_id"),
-        (models.EventRsvp, "user_id"),
-        (models.MeetingAttendance, "user_id"),
-        (models.ConversationMember, "user_id"),
-        (models.PollVote, "user_id"),
-        (models.HouseBallot, "voter_id"),
-        (models.LineageEdge, "big_user_id"),
-        (models.LineageEdge, "little_user_id"),
-        (models.JobPost, "posted_by"),
-    ):
-        attribute = getattr(model, column, None)
-        if attribute is not None:
-            if model is models.Device:
-                device_ids = (await session.execute(select(models.Device.id).where(models.Device.user_id == user.id))).scalars().all()
-                if device_ids:
-                    message_ids = (await session.execute(select(models.Message.id).where(models.Message.sender_device_id.in_(device_ids)))).scalars().all()
-                    if message_ids:
-                        await session.execute(delete(models.MessageReceipt).where(models.MessageReceipt.message_id.in_(message_ids)))
-                        await session.execute(delete(models.Message).where(models.Message.id.in_(message_ids)))
-                    for key_model in (models.SignedPrekey, models.OneTimePrekey, models.KyberPrekey):
-                        await session.execute(delete(key_model).where(key_model.device_id.in_(device_ids)))
-                    await session.execute(
-                        update(models.Device).where(models.Device.id.in_(device_ids)).values(revoked_at=datetime.now(timezone.utc))
-                    )
-                continue
-            await session.execute(delete(model).where(attribute == user.id))
-    # Hosted events are the user's authored shared UGC. Remove dependent access
-    # rows first because the legacy FKs predate ON DELETE CASCADE.
-    event_ids = (await session.execute(select(models.Event.id).where(models.Event.host_id == user.id))).scalars().all()
-    if event_ids:
-        await session.execute(delete(models.EventInvite).where(models.EventInvite.event_id.in_(event_ids)))
-        await session.execute(delete(models.EventRsvp).where(models.EventRsvp.event_id.in_(event_ids)))
-        await session.execute(delete(models.Event).where(models.Event.id.in_(event_ids)))
-    await session.execute(
-        update(models.ChapterInvite).where(models.ChapterInvite.created_by == user.id).values(
-            revoked_at=datetime.now(timezone.utc), code=func.concat("deleted-", models.ChapterInvite.id)
-        )
-    )
-    now = datetime.now(timezone.utc)
-    await session.execute(
-        update(models.Post).where(models.Post.author_id == user.id).values(
-            body="[deleted]", media_urls=None, deleted_at=now, removed_reason="account_deleted"
-        )
-    )
-    await session.execute(
-        update(models.PostComment).where(models.PostComment.author_id == user.id).values(
-            body="[deleted]", deleted_at=now, removed_reason="account_deleted"
-        )
-    )
-    await session.execute(
-        update(models.Chirp).where(models.Chirp.author_id == user.id).values(
-            body="[deleted]", removed_at=now, removed_reason="account_deleted"
-        )
-    )
-    await session.execute(
-        update(models.Membership).where(models.Membership.user_id == user.id).values(status="removed")
-    )
-    # Keep the row as a referentially safe tombstone. Remove auth linkage and contact
-    # data so a later account cannot be confused with this historical actor.
-    tombstone = str(user.id)
-    await session.execute(
-        update(models.User).where(models.User.id == user.id).values(
-            firebase_uid=f"deleted:{tombstone}",
-            email=f"deleted+{tombstone}@invalid.local",
-            display_name="Deleted account",
-            avatar_url=None,
-            account_type="non_greek",
-            campus_id=None,
-            is_ghost=True,
-            pseudonym_seed=uuid.uuid4().hex,
-        )
-    )
 
 
 async def fulfill_request(session: AsyncSession, request: models.AccountDataRequest, user: models.User) -> models.AccountDataRequest:
@@ -332,29 +267,19 @@ async def fulfill_request(session: AsyncSession, request: models.AccountDataRequ
         request.updated_at = datetime.now(timezone.utc)
         request.completed_at = request.updated_at
         return request
-    original_uid, original_email = user.firebase_uid, user.email
-    provider_failures = []
-    request.provider_steps = {}
-    for provider in PROVIDER_ADAPTERS:
-        ok = await provider.fulfill_deletion(firebase_uid=original_uid, email=original_email)
-        request.provider_steps[provider.name] = "fulfilled" if ok else "blocked_unconfigured"
-        if not ok:
-            provider_failures.append(provider.name)
-    if provider_failures:
-        request.scope = []
-        request.excluded = [f"{name} provider deletion requires configured fulfillment" for name in provider_failures]
-        request.retention_reasons = RETENTION_REASONS
-        request.status = "blocked"
-        request.failure_code = "provider_fulfillment_required"
-        request.updated_at = datetime.now(timezone.utc)
-        return request
-    await _delete_owned_rows(session, user)
-    request.scope = ["account profile linkage and user-authored content redaction", "private reactions, devices, and alumni profile"]
-    request.excluded = [f"{name} provider deletion requires configured fulfillment" for name in provider_failures]
+    # Destructive fulfillment is deliberately disabled at this boundary. Provider
+    # console work, retry journals, and irreversible-step receipts must be durable
+    # before this executor can be enabled; a boolean adapter is insufficient proof.
+    request.provider_steps = {"manual_processing": "required"}
+    request.scope = []
+    request.excluded = [
+        "account deletion requires verified Firebase/Auth provider removal",
+        "Stripe customer and payment-provider deletion requires provider confirmation",
+        "email, object-storage, logging, and backup copies require separate operator steps",
+    ]
     request.retention_reasons = RETENTION_REASONS
-    request.status = "completed"
-    request.failure_code = None
-    request.open_key = None
+    request.status = "blocked"
+    request.failure_code = "manual_processing_required"
     request.updated_at = datetime.now(timezone.utc)
-    request.completed_at = request.updated_at
+    request.completed_at = None
     return request
