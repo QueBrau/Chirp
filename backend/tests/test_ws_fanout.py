@@ -158,6 +158,20 @@ def _make_user(client: TestClient, display_name: str) -> WsUser:
     return WsUser(id=response.json()["id"], headers=headers)
 
 
+def _seed_legal_policies(client: TestClient) -> None:
+    """Restore migration configuration after ws_client's table truncation."""
+    async def _write() -> None:
+        from app import models
+        from app.db import get_session_factory
+        async with get_session_factory()() as session:
+            session.add_all([
+                models.LegalPolicy(policy_key="terms", version="2026-10-06", is_current=True),
+                models.LegalPolicy(policy_key="privacy", version="2026-10-06", is_current=True),
+            ])
+            await session.commit()
+    client.portal.call(_write)
+
+
 def _register_device(client: TestClient, user: WsUser) -> dict[str, Any]:
     body = {
         "device_label": "pytest-ws-device",
@@ -355,6 +369,78 @@ def test_unknown_uid_closes_4401(ws_client: TestClient) -> None:
         ):
             pass
     assert exc_info.value.code == 4401
+
+
+@needs_redis
+def test_legal_enforcement_rejects_then_allows_current_acceptance(ws_client: TestClient, monkeypatch) -> None:
+    client = ws_client
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "legal_enforcement_enabled", True)
+    _seed_legal_policies(client)
+    user = _make_user(client, "Legal WS")
+    with pytest.raises(WebSocketDisconnect) as rejected:
+        with client.websocket_connect("/ws", headers=user.headers):
+            pass
+    assert rejected.value.code == 4428
+    policies = client.get("/legal/policies").json()["policies"]
+    payload = {
+        "terms_version": next(row["version"] for row in policies if row["key"] == "terms"),
+        "privacy_version": next(row["version"] for row in policies if row["key"] == "privacy"),
+        "age_declaration": 18,
+    }
+    assert client.post("/auth/legal-acceptance", headers=user.headers, json=payload).status_code == 200
+    with client.websocket_connect("/ws", headers=user.headers) as socket:
+        assert json.loads(_receive_text_required(socket)) == {"type": "ready"}
+    async def remove_privacy() -> None:
+        from app import models
+        from app.db import get_session_factory
+        from sqlalchemy import delete
+        async with get_session_factory()() as session:
+            await session.execute(delete(models.LegalPolicy).where(models.LegalPolicy.policy_key == "privacy"))
+            await session.commit()
+    client.portal.call(remove_privacy)
+    with pytest.raises(WebSocketDisconnect) as malformed:
+        with client.websocket_connect("/ws", headers=user.headers):
+            pass
+    assert malformed.value.code == 4503
+
+
+@needs_redis
+def test_legal_reconciliation_closes_open_socket_after_acceptance_is_revoked(
+    ws_client: TestClient, monkeypatch
+) -> None:
+    client = ws_client
+    from app import models
+    from app.config import get_settings
+    from app.ws import gateway
+
+    monkeypatch.setattr(get_settings(), "legal_enforcement_enabled", True)
+    monkeypatch.setattr(gateway, "WS_SUSPENSION_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(gateway, "WS_SUSPENSION_POLL_JITTER", 0)
+    _seed_legal_policies(client)
+    user = _make_user(client, "Legal WS reconciliation")
+    policies = client.get("/legal/policies").json()["policies"]
+    payload = {
+        "terms_version": next(row["version"] for row in policies if row["key"] == "terms"),
+        "privacy_version": next(row["version"] for row in policies if row["key"] == "privacy"),
+        "age_declaration": 18,
+    }
+    assert client.post("/auth/legal-acceptance", headers=user.headers, json=payload).status_code == 200
+
+    async def revoke() -> None:
+        from app.db import get_session_factory
+        from sqlalchemy import delete
+        async with get_session_factory()() as session:
+            await session.execute(delete(models.LegalAcceptance).where(models.LegalAcceptance.user_id == user.id))
+            await session.commit()
+
+    with client.websocket_connect("/ws", headers=user.headers) as socket:
+        assert json.loads(_receive_text_required(socket)) == {"type": "ready"}
+        client.portal.call(revoke)
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_text()
+    assert closed.value.code == 4428
 
 
 # ---------------------------------------------------------------------------

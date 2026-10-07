@@ -17,6 +17,7 @@ from app.core.operational_signals import observe
 from app.db import get_session_factory
 from app.middleware.auth import get_user_by_uid
 from app.services.identity_verification import run_verification
+from app.services.legal_enforcement import current_legal_status
 from app.ws.pubsub import get_redis
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,8 @@ WS_REALTIME_UNAVAILABLE = 4503
 # that ever learns to tell these apart should send 4401 to sign-in and this one to
 # a "your account is suspended" screen, not another reconnect attempt.
 WS_ACCOUNT_SUSPENDED = 4403
+# Mirrors HTTP 428: authenticated account must complete current legal acceptance.
+WS_LEGAL_REQUIRED = 4428
 # Keep an already-open session from surviving a moderation suspension indefinitely.
 # This is intentionally coarse; HTTP requests still check suspension on every request.
 WS_SUSPENSION_POLL_SECONDS = 30.0
@@ -219,6 +222,9 @@ async def websocket_gateway(websocket: WebSocket) -> None:
                 user = await get_user_by_uid(session, uid)
                 user_id = user.id if user is not None else None
                 suspended_at = user.suspended_at if user is not None else None
+                legal_status = "accepted"
+                if get_settings().legal_enforcement_enabled and user is not None:
+                    legal_status = await current_legal_status(session, user.id)
     except Exception as exc:
         # exc_info because this handler used to discard the cause entirely, which is
         # how a pool-checkout timeout became indistinguishable from an expired token:
@@ -246,6 +252,11 @@ async def websocket_gateway(websocket: WebSocket) -> None:
         logger.warning("ws reject reason=account_suspended pre_accept=true journey=c405_b")
         observe("ws_connect_suspended_rejected")
         await _bounded_close(websocket, WS_ACCOUNT_SUSPENDED)
+        return
+    if get_settings().legal_enforcement_enabled and legal_status != "accepted":
+        reason = "legal_policy_unavailable" if legal_status == "unavailable" else "legal_acceptance_required"
+        logger.warning("ws reject reason=%s pre_accept=true", reason)
+        await _bounded_close(websocket, WS_REALTIME_UNAVAILABLE if legal_status == "unavailable" else WS_LEGAL_REQUIRED)
         return
 
     channel = f"user:{user_id}"
@@ -306,12 +317,18 @@ async def websocket_gateway(websocket: WebSocket) -> None:
                         select(models.User.suspended_at).where(models.User.id == user_id)
                     )
                     row = result.one_or_none()
+                    legal_status = "accepted"
+                    if get_settings().legal_enforcement_enabled:
+                        legal_status = await current_legal_status(poll_session, user_id)
             # scalar_one_or_none cannot distinguish a missing user from the
             # SQL NULL that means an existing user is not suspended.
             if row is None:
                 raise _EndStream("account_missing", 4401)
             if row[0] is not None:
                 raise _EndStream("account_suspended", WS_ACCOUNT_SUSPENDED)
+            if get_settings().legal_enforcement_enabled and legal_status != "accepted":
+                code = WS_REALTIME_UNAVAILABLE if legal_status == "unavailable" else WS_LEGAL_REQUIRED
+                raise _EndStream("legal_policy_unavailable" if legal_status == "unavailable" else "legal_acceptance_required", code)
 
     try:
         async with asyncio.timeout(WS_SUBSCRIBE_SECONDS):

@@ -149,7 +149,9 @@ async def env(monkeypatch):
 
     monkeypatch.setattr(gateway, "get_user_by_uid", user)
     monkeypatch.setattr(gateway, "get_session_factory", lambda: Session)
-    monkeypatch.setattr(gateway, "get_settings", lambda: SimpleNamespace(auth_mode="emulated"))
+    monkeypatch.setattr(gateway, "get_settings", lambda: SimpleNamespace(
+        auth_mode="emulated", legal_enforcement_enabled=False,
+    ))
     monkeypatch.setattr(gateway, "get_redis", lambda: SimpleNamespace(pubsub=lambda: h))
     for name, value in {
         "WS_SUBSCRIBE_SECONDS": .04, "WS_SEND_SECONDS": .04,
@@ -350,7 +352,9 @@ async def test_firebase_handshake_uses_shared_bounded_workers_without_loop_stall
         time.sleep(.08)
         finished.set()
         return {"uid": "local-ws-user"}
-    monkeypatch.setattr(gateway, "get_settings", lambda: SimpleNamespace(auth_mode="firebase"))
+    monkeypatch.setattr(gateway, "get_settings", lambda: SimpleNamespace(
+        auth_mode="firebase", legal_enforcement_enabled=False,
+    ))
     monkeypatch.setattr(firebase_admin, "get_app", lambda: object())
     monkeypatch.setattr(firebase_auth, "verify_id_token", verify)
     async def heartbeat():
@@ -374,7 +378,9 @@ async def test_firebase_caller_timeout_precedes_sql_and_running_worker_completio
             release.wait(1)
             return {"uid": "local-ws-user"}
         finally: finished.set()
-    monkeypatch.setattr(gateway, "get_settings", lambda: SimpleNamespace(auth_mode="firebase"))
+    monkeypatch.setattr(gateway, "get_settings", lambda: SimpleNamespace(
+        auth_mode="firebase", legal_enforcement_enabled=False,
+    ))
     monkeypatch.setattr(firebase_admin, "get_app", lambda: object())
     monkeypatch.setattr(firebase_auth, "verify_id_token", verify)
     monkeypatch.setattr(gateway, "WS_AUTH_SECONDS", .02)
