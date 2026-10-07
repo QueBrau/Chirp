@@ -122,6 +122,8 @@ async def get_me(
         .order_by(models.Membership.joined_at)
     )
     current_policies = (await session.execute(select(models.LegalPolicy).where(models.LegalPolicy.is_current.is_(True)))).scalars().all()
+    if {policy.policy_key for policy in current_policies} != {"terms", "privacy"} or len(current_policies) != 2:
+        raise HTTPException(status_code=503, detail="legal_policy_unavailable")
     accepted_ids = set((await session.execute(select(models.LegalAcceptance.policy_id).where(models.LegalAcceptance.user_id == user.id))).scalars().all())
     return MeOut(
         user=UserOut.model_validate(user),

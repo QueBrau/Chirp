@@ -36,6 +36,7 @@ export interface UserOut {
 
 export interface LegalPolicyStatus {
   required: boolean;
+  material_change: boolean;
   policies: { key: "terms" | "privacy"; version: string; effective_at: string }[];
   accepted_policy_ids: string[];
 }

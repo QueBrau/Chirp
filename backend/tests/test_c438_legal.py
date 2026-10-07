@@ -1,4 +1,5 @@
-"""c438 legal acceptance invariants that do not require a provider or database."""
+"""c438 legal acceptance invariants and focused API behavior."""
+import asyncio
 import pytest
 from app import models
 from app.db import get_session_factory
@@ -31,8 +32,42 @@ async def test_acceptance_is_server_versioned_idempotent_and_stale_rejected(clie
     assert accepted.status_code == 200 and accepted.json()["required"] is False
     repeated = await client.post("/auth/legal-acceptance", headers=headers, json=payload)
     assert repeated.status_code == 200 and repeated.json()["required"] is False
+    concurrent = await asyncio.gather(*(
+        client.post("/auth/legal-acceptance", headers=headers, json=payload) for _ in range(4)
+    ))
+    assert all(response.status_code == 200 for response in concurrent)
     stale = await client.post("/auth/legal-acceptance", headers=headers, json={**payload, "terms_version": "old"})
     assert stale.status_code == 409 and stale.json()["detail"] == "legal_policy_changed"
+    assert (await client.post("/auth/legal-acceptance", json=payload)).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_enforcement_blocks_product_routes_but_legal_status_remains_available(client, monkeypatch) -> None:
+    headers = {"X-Debug-Firebase-Uid": "c438-enforced"}
+    await client.post("/auth/bootstrap", headers=headers, json={
+        "email": "enforced-c438@example.com", "display_name": "Enforced", "account_type": "non_greek",
+    })
+    async with get_session_factory()() as session:
+        session.add_all([
+            models.LegalPolicy(policy_key="terms", version="2026-10-06"),
+            models.LegalPolicy(policy_key="privacy", version="2026-10-06"),
+        ])
+        await session.commit()
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "legal_enforcement_enabled", True)
+    assert (await client.get("/auth/legal-status", headers=headers)).status_code == 200
+    blocked = await client.get("/alumni/profile", headers=headers)
+    assert blocked.status_code == 428 and blocked.json()["detail"] == "legal_acceptance_required"
+
+
+@pytest.mark.asyncio
+async def test_empty_policy_configuration_fails_closed_on_me(client) -> None:
+    headers = {"X-Debug-Firebase-Uid": "c438-empty-policy"}
+    await client.post("/auth/bootstrap", headers=headers, json={
+        "email": "empty-c438@example.com", "display_name": "Empty", "account_type": "non_greek",
+    })
+    response = await client.get("/auth/me", headers=headers)
+    assert response.status_code == 503 and response.json()["detail"] == "legal_policy_unavailable"
 
 
 @pytest.mark.asyncio
@@ -57,6 +92,11 @@ def test_eighteen_does_not_require_guardian_confirmation() -> None:
 def test_seventeen_with_confirmation_is_valid() -> None:
     value = LegalAcceptanceCreate(terms_version="2026-10-06", privacy_version="2026-10-06", age_declaration=17, guardian_permission_confirmed=True)
     assert value.age_declaration == 17
+
+
+def test_policy_version_length_is_validated_at_request_boundary() -> None:
+    with pytest.raises(ValidationError):
+        LegalAcceptanceCreate(terms_version="x" * 41, privacy_version="2026-10-06", age_declaration=18)
 
 
 def test_migration_0040_downgrade_and_upgrade(migrated_db) -> None:

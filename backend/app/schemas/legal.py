@@ -14,6 +14,7 @@ class PolicyOut(_Schema):
 
 class LegalStatusOut(_Schema):
     required: bool
+    material_change: bool = False
     policies: list[PolicyOut]
     accepted_policy_ids: list[uuid.UUID] = []
 

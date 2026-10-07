@@ -122,7 +122,7 @@ export default function AccountTypeScreen() {
   const handleContinue = async () => {
     const user = hasFirebaseConfig() ? getFirebaseAuth().currentUser : null;
     if (!user || !user.email) {
-      router.replace(withInviteCode("/legal-acceptance", inviteCode));
+      proceed();
       return;
     }
 
@@ -144,7 +144,10 @@ export default function AccountTypeScreen() {
         // actually reflects it, or the guards would bounce us straight back.
         const settled = await refresh();
         if (settled) {
-          router.replace(withInviteCode("/legal-acceptance", inviteCode));
+          // A 409 means the account already exists. Let the normal destination
+          // guard decide whether current policy acceptance is still required;
+          // forcing the legal screen here traps already-accepted returners.
+          proceed();
           return;
         }
         setError("We couldn't load your account. Check your connection and try again.");

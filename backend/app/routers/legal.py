@@ -15,10 +15,15 @@ async def _status(session: AsyncSession, user: models.User | None) -> LegalStatu
     if {p.policy_key for p in policies} != {"terms", "privacy"} or len(policies) != 2:
         raise HTTPException(status_code=503, detail="legal_policy_unavailable")
     accepted: set = set()
+    acceptance_count = 0
     if user is not None:
-        accepted = set((await session.execute(select(models.LegalAcceptance.policy_id).where(models.LegalAcceptance.user_id == user.id))).scalars().all())
+        acceptance_rows = (await session.execute(select(models.LegalAcceptance.policy_id).where(models.LegalAcceptance.user_id == user.id))).scalars().all()
+        accepted = set(acceptance_rows)
+        acceptance_count = len(acceptance_rows)
+    required = any(p.id not in accepted for p in policies)
     return LegalStatusOut(
-        required=any(p.id not in accepted for p in policies),
+        required=required,
+        material_change=required and acceptance_count > 0,
         policies=[PolicyOut(key=p.policy_key, version=p.version, effective_at=p.effective_at) for p in policies],
         accepted_policy_ids=list(accepted),
     )
