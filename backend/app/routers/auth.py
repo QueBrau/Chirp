@@ -26,6 +26,7 @@ from app.schemas.identity import (
     UserCreate,
     UserOut,
 )
+from app.schemas.legal import LegalAcceptanceCreate
 from app.services.storage_service import (
     AVATAR_PREFIX,
     finalize_media_object,
@@ -83,6 +84,17 @@ async def bootstrap_account(
         await session.rollback()
         raise conflict("email_already_registered") from None
     await session.refresh(user)
+    if body.terms_version is not None or body.privacy_version is not None or body.age_declaration is not None:
+        if not body.terms_version or not body.privacy_version or body.age_declaration is None:
+            raise HTTPException(status_code=422, detail="legal_acceptance_incomplete")
+        acceptance = LegalAcceptanceCreate(terms_version=body.terms_version, privacy_version=body.privacy_version, age_declaration=body.age_declaration, guardian_permission_confirmed=body.guardian_permission_confirmed, source="bootstrap")
+        policies = (await session.execute(select(models.LegalPolicy).where(models.LegalPolicy.is_current.is_(True)))).scalars().all()
+        versions = {p.policy_key: p.version for p in policies}
+        if acceptance.terms_version != versions.get("terms") or acceptance.privacy_version != versions.get("privacy"):
+            raise HTTPException(status_code=409, detail="legal_policy_changed")
+        for policy in policies:
+            session.add(models.LegalAcceptance(user_id=user.id, policy_id=policy.id, age_declaration=acceptance.age_declaration, guardian_permission_confirmed=acceptance.guardian_permission_confirmed, source="bootstrap"))
+        await session.flush()
     await session.commit()
     emit("user_signed_up", user_id=user.id, account_type=user.account_type)
     return UserOut.model_validate(user)
@@ -109,9 +121,12 @@ async def get_me(
         .where(models.Membership.user_id == user.id, models.Membership.status == "active")
         .order_by(models.Membership.joined_at)
     )
+    current_policies = (await session.execute(select(models.LegalPolicy).where(models.LegalPolicy.is_current.is_(True)))).scalars().all()
+    accepted_ids = set((await session.execute(select(models.LegalAcceptance.policy_id).where(models.LegalAcceptance.user_id == user.id))).scalars().all())
     return MeOut(
         user=UserOut.model_validate(user),
         memberships=[MembershipOut.model_validate(m) for m in memberships.scalars().all()],
+        legal_required=any(policy.id not in accepted_ids for policy in current_policies),
     )
 
 
