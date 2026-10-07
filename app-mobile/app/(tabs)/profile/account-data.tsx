@@ -1,7 +1,7 @@
 /** Account export and deletion request status. */
 
 import { Feather } from "@expo/vector-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Linking, Pressable, View } from "react-native";
 
 import {
@@ -9,27 +9,30 @@ import {
   listDataRequests,
   type DataRequestKind,
   type DataRequestOut,
+  downloadDataRequest,
+  retryDataRequest,
 } from "@/api/dataRequests";
 import { ApiError } from "@/api/client";
 import { AppText, Button, Card, EmptyState, Screen } from "@/components";
 import { confirmAction, showAlert, showApiError } from "@/lib/alert";
+import { shareJson } from "@/lib/export";
 import { radii, spacing, useTheme } from "@/theme";
+import { useSession } from "@/auth";
 
 function statusLabel(status: DataRequestOut["status"]): string {
   return status.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function RequestCard({ item, onRefresh }: { item: DataRequestOut; onRefresh: () => void }) {
+function RequestCard({ item, onRefresh, onRetry }: { item: DataRequestOut; onRefresh: () => void; onRetry: () => void }) {
   const palette = useTheme();
   const isExport = item.kind === "export";
-  const canDownload = isExport && item.status === "ready" && item.download_url !== null;
+  const canDownload = isExport && (item.status === "ready" || item.status === "partially_completed");
 
   const download = async () => {
-    if (!item.download_url) return;
     try {
-      await Linking.openURL(item.download_url);
+      await shareJson(`chirp-account-export-${item.id}.json`, await downloadDataRequest(item.id));
     } catch {
-      showAlert("Couldn't open export", "Refresh the request and try again, or contact support.");
+      showAlert("Couldn't share export", "Refresh the request and try again, or contact support.");
     }
   };
 
@@ -78,6 +81,7 @@ function RequestCard({ item, onRefresh }: { item: DataRequestOut; onRefresh: () 
       ) : null}
       <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
         {canDownload ? <Button label="Download copy" onPress={() => void download()} /> : null}
+        {item.status === "blocked" || item.status === "failed" ? <Button label="Retry fulfillment" variant="neutral" onPress={onRetry} /> : null}
         <Button label="Refresh status" variant="neutral" onPress={onRefresh} />
       </View>
     </Card>
@@ -85,14 +89,20 @@ function RequestCard({ item, onRefresh }: { item: DataRequestOut; onRefresh: () 
 }
 
 export default function AccountDataScreen() {
+  const { user } = useSession();
+  const ownerId = user?.id ?? null;
+  const ownerRef = useRef(ownerId);
+  ownerRef.current = ownerId;
   const [items, setItems] = useState<DataRequestOut[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<DataRequestKind | null>(null);
 
   const load = useCallback(async () => {
+    const requestedOwner = ownerRef.current;
     setLoading(true);
     try {
-      setItems(await listDataRequests());
+      const result = await listDataRequests();
+      if (ownerRef.current === requestedOwner) setItems(result);
     } catch (error) {
       setItems(null);
       showApiError(error, "Couldn't load your data requests");
@@ -102,8 +112,9 @@ export default function AccountDataScreen() {
   }, []);
 
   useEffect(() => {
+    setItems(null);
     void load();
-  }, [load]);
+  }, [load, ownerId]);
 
   const submit = (kind: DataRequestKind) => {
     const isDeletion = kind === "deletion";
@@ -133,6 +144,12 @@ export default function AccountDataScreen() {
     });
   };
 
+  const retry = (item: DataRequestOut) => {
+    void retryDataRequest(item.id)
+      .then((updated) => setItems((previous) => previous?.map((entry) => entry.id === updated.id ? updated : entry) ?? previous))
+      .catch((error) => showApiError(error, "Couldn't retry your request"));
+  };
+
   return (
     <Screen title="Your data" subtitle="Request a copy or account deletion" onRefresh={load}>
       <View style={{ gap: spacing.lg }}>
@@ -150,7 +167,7 @@ export default function AccountDataScreen() {
         {items !== null && items.length === 0 ? (
           <EmptyState title="No requests yet" message="Your request history will appear here." />
         ) : null}
-        {items?.map((item) => <RequestCard key={item.id} item={item} onRefresh={() => void load()} />)}
+        {items?.map((item) => <RequestCard key={item.id} item={item} onRefresh={() => void load()} onRetry={() => retry(item)} />)}
         <Pressable onPress={() => void Linking.openURL("https://chirpsocials.com/data-requests")} accessibilityRole="link">
           <AppText variant="caption" tone="accent" style={{ textAlign: "center" }}>
             Read the data request policy

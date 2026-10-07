@@ -1,6 +1,6 @@
 /** Authenticated account export and deletion request API. */
 
-import { request } from "./client";
+import { request, requestText } from "./client";
 
 export type DataRequestKind = "export" | "deletion";
 export type DataRequestStatus =
@@ -45,4 +45,13 @@ export async function listDataRequests(): Promise<DataRequestOut[]> {
 
 export async function getDataRequest(requestId: string): Promise<DataRequestOut> {
   return request<DataRequestOut>(`/me/data-requests/${encodeURIComponent(requestId)}`);
+}
+
+/** Fetches through the authenticated client; never follows a bearer download URL. */
+export async function downloadDataRequest(requestId: string): Promise<string> {
+  return requestText(`/me/data-requests/${encodeURIComponent(requestId)}/download`);
+}
+
+export async function retryDataRequest(requestId: string): Promise<DataRequestOut> {
+  return request<DataRequestOut>(`/me/data-requests/${encodeURIComponent(requestId)}/retry`, { method: "POST" });
 }

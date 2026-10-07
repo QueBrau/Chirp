@@ -47,3 +47,21 @@ export async function shareCsv(filename: string, csv: string): Promise<void> {
     UTI: "public.comma-separated-values-text",
   });
 }
+
+/** Share a short-lived account export and remove the temporary cache file afterwards. */
+export async function shareJson(filename: string, json: string): Promise<void> {
+  const available = await Sharing.isAvailableAsync();
+  if (!available) throw new Error("Sharing is not available on this device.");
+  const safeName = sanitizeFilename(filename);
+  const fileName = safeName.toLowerCase().endsWith(".json") ? safeName : `${safeName}.json`;
+  const file = new File(Paths.cache, fileName);
+  try {
+    file.write(json);
+    await Sharing.shareAsync(file.uri, {
+      mimeType: "application/json",
+      UTI: "public.json",
+    });
+  } finally {
+    try { file.delete(); } catch { /* cache cleanup is best effort */ }
+  }
+}

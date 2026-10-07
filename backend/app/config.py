@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     # traffic.
     ws_close_diagnostics: bool = False
     firebase_project_id: str | None = None
+    # Maximum age of a Firebase sign-in accepted for irreversible privacy actions.
+    privacy_reauth_max_age_seconds: int = 900
     stripe_secret_key: str | None = None
     stripe_publishable_key: str | None = None
     stripe_webhook_secret: str | None = None

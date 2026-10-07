@@ -2,6 +2,7 @@
 
 from app.models.alumni import AlumniProfile, JobPost
 from app.models.delivery import DeliveryOutbox
+from app.models.data_requests import AccountDataArtifact, AccountDataRequest
 from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
 from app.models.events import Event, EventInvite, EventRsvp
 from app.models.finance import (
@@ -52,6 +53,8 @@ __all__ = [
     "ConversationMember",
     "NIL_UUID",
     "DeliveryOutbox",
+    "AccountDataArtifact",
+    "AccountDataRequest",
     "Device",
     "DuesCycle",
     "DuesPaymentPlan",

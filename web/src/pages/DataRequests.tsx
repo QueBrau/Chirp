@@ -18,9 +18,8 @@ export function DataRequests() {
       <section className="wrap section--tight">
         <div className="prose">
           <p>
-            If the signed-in app shows the account-data screen, you can submit an authenticated
-            export or deletion request there and check its status. During the staged rollout, or
-            if you cannot sign in, email <a href={`mailto:${CONTACT_EMAIL}?subject=Chirp%20data%20request`}>{CONTACT_EMAIL}</a>
+            If you are signed in, you can submit an authenticated export or deletion request in
+            the account-data screen and check its status. If you cannot sign in, email <a href={`mailto:${CONTACT_EMAIL}?subject=Chirp%20data%20request`}>{CONTACT_EMAIL}</a>
             {" "}with the subject &ldquo;Chirp data request.&rdquo; You do not need to pay or create
             an account to make a request. If you cannot use the email link, copy the address into
             your email app.

@@ -1,4 +1,5 @@
 """Authentication dependencies: verified Firebase uid and registered-user resolution."""
+import time
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from app.services.identity_verification import run_verification
 async def _verify_identity(
     x_debug_firebase_uid: str | None,
     authorization: str | None,
+    require_fresh: bool = False,
 ) -> tuple[str, str | None]:
     """Shared verification logic: returns (uid, verified_email).
 
@@ -58,6 +60,10 @@ async def _verify_identity(
     uid = decoded.get("uid")
     if not uid:
         raise HTTPException(status_code=401, detail="invalid_token")
+    if require_fresh:
+        auth_time = decoded.get("auth_time")
+        if not isinstance(auth_time, (int, float)) or time.time() - auth_time > get_settings().privacy_reauth_max_age_seconds:
+            raise HTTPException(status_code=401, detail="recent_authentication_required")
     return uid, decoded.get("email")
 
 
@@ -72,6 +78,15 @@ async def get_verified_uid(
     dependency stays optional for local dev). See get_verified_identity for uid+email.
     """
     uid, _email = await _verify_identity(x_debug_firebase_uid, authorization)
+    return uid
+
+
+async def get_fresh_verified_uid(
+    x_debug_firebase_uid: str | None = Header(default=None, alias="X-Debug-Firebase-Uid"),
+    authorization: str | None = Header(default=None),
+) -> str:
+    """Return an identity with a recent Firebase authentication timestamp."""
+    uid, _email = await _verify_identity(x_debug_firebase_uid, authorization, require_fresh=True)
     return uid
 
 
@@ -112,4 +127,22 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="user_not_registered")
     if user.suspended_at is not None:
         raise HTTPException(status_code=403, detail="account_suspended")
+    return user
+
+
+async def get_current_user_for_privacy(
+    uid: str = Depends(get_fresh_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Resolve the verified account for privacy rights even while suspended.
+
+    A suspension must not erase the account holder's access to export or deletion
+    rights. Firebase verification still runs for every request; emulated mode keeps
+    the same local test identity contract. Production deployments should add a
+    provider token freshness check at the Firebase gateway before enabling an
+    irreversible deletion executor.
+    """
+    user = await get_user_by_uid(session, uid)
+    if user is None:
+        raise HTTPException(status_code=401, detail="user_not_registered")
     return user
