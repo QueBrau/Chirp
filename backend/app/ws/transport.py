@@ -41,6 +41,7 @@ _DIAGNOSTIC_EVENT = "ws_close_diagnostic"
 # finite ceiling closing an unbounded gap rather than a tuned limit protecting a
 # known use case.
 WS_MAX_CONTINUATION_FRAMES = 64
+WS_PEER_CLOSE_DELAY_SECONDS = 0.1
 
 
 class BoundedFragmentWebSocketsProtocol(WebSocketsSansIOProtocol):
@@ -104,8 +105,35 @@ class BoundedFragmentWebSocketsProtocol(WebSocketsSansIOProtocol):
             return
 
     def handle_close(self, event) -> None:
+        if self._should_delay_peer_close():
+            self._handle_delayed_peer_close()
+            self._emit_close_probe("peer_close")
+            return
         super().handle_close(event)
         self._emit_close_probe("peer_close")
+
+    def _should_delay_peer_close(self) -> bool:
+        """Select only the normal first peer close for the opt-in grace path."""
+        conn = getattr(self, "conn", None)
+        transport = getattr(self, "transport", None)
+        close = getattr(conn, "close_rcvd", None)
+        return (
+            get_settings().ws_peer_close_delay_enabled
+            and not getattr(self, "close_sent", False)
+            and transport is not None
+            and not transport.is_closing()
+            and close is not None
+            and close.code == 1000
+        )
+
+    def _handle_delayed_peer_close(self) -> None:
+        """Write the peer echo, then close after a bounded flush grace period."""
+        close = self.conn.close_rcvd
+        assert close is not None
+        self.queue.put_nowait({"type": "websocket.disconnect", "code": close.code, "reason": close.reason})
+        self.transport.write(b"".join(self.conn.data_to_send()))
+        self.close_sent = True
+        self.close_timer = self.loop.call_later(WS_PEER_CLOSE_DELAY_SECONDS, self.transport.close)
 
     def connection_lost(self, exc) -> None:
         super().connection_lost(exc)
