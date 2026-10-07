@@ -77,6 +77,8 @@ def _validate_api_target(api: str, allow_remote: bool) -> str:
         is_loopback = hostname.lower() == "localhost"
     if not is_loopback and not allow_remote:
         _fail("--api is remote; pass --allow-prod deliberately for any non-loopback target")
+    if not is_loopback and parsed.scheme != "https":
+        _fail("--api must use https for every non-loopback target")
     return api.rstrip("/")
 
 
@@ -114,13 +116,14 @@ def _call(api: str, path: str, token: str, body: dict | None = None, method: str
     try:
         with opener.open(request, timeout=30) as response:
             raw = response.read().decode("utf-8")
-            return response.status, (json.loads(raw) if raw else None)
+            try:
+                payload = json.loads(raw) if raw else None
+            except json.JSONDecodeError:
+                return 0, "invalid_response"
+            return response.status, payload
     except urllib.error.HTTPError as error:
-        raw = error.read().decode("utf-8", "replace")
-        try:
-            return error.code, json.loads(raw)
-        except ValueError:
-            return error.code, raw
+        # Do not echo arbitrary HTML or response bodies that may contain tokens.
+        return error.code, "http_error"
     except (urllib.error.URLError, TimeoutError, OSError):
         # Do not expose a traceback or echo an untrusted URL. The operator only
         # needs a stable failure class; retry/target diagnosis stays local.
