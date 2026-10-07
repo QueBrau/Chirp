@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1791335829818,
+  "updated": 1791335961947,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -416,6 +416,15 @@
     }
   ],
   "cards": [
+    {
+      "id": "c435",
+      "col": "progress",
+      "owner": "J",
+      "tag": "legal",
+      "area": "website",
+      "title": "c435 CLAIMED Oct6 Codex: Astra Ultra legal/data audit and complete public-document refresh for17+ U.S.colleges/alumni; source inventory/drafting underway, no publication.",
+      "detail": "Jose explicitly requested updating Terms, privacy and related agreements using Astra Ultra to cover what Chirp stores. User confirmed no incorporation yet and selected17+, U.S.colleges andalumni, superseding onlyUNCG legal scope. Root owns isolatedjose/c435-legal-refresh-20261006 and scopedweblegalpages/siteConfig/routes/footer/contact plus source-mapped reviewdocs; no concurrentQmobileloading/c434 edits. AstraUltra reviews legalwording/currentprimarysources; existingLunamedium agents independently inventorybackend/clientdata. Actualimplementation/liveboard evidence governs over aspirationalSPEC. Preserve currentcontactchirp.shared@gmail.com and17minimum; do not invententity/agegate/consent/erasure/E2EE/compliance. Add appropriate privacyrequests/safety/payment-use coverage and document incomplete operational/appstore requirements as realblockers. Acceptance: complete data/purpose/audience/provider/retention inventory; coherent consumerlegalcopy/links and currentprimarysources; independentAstrareview, focusedwebbuild/render checks and featurePR. c75counselreview remainsseparate; newmaterialpublicterms require finalconcretereview beforeHostingpublication. No cloud/data/payment/provider mutations inthisclaim."
+    },
     {
       "id": "c434",
       "col": "progress",
@@ -4460,7 +4469,8 @@
     "Oct2 Jose explicitly approved registeringexistingChirpiOSbundleapp.chirps.mobile inFirebaseprojectchirps-prod aftercompleteHTTP200listingproved0iOSapps. Existingusers/providers unchanged; phoneAppleloginretrestrequiredforc425closure.",
     "Oct3 Jose authorized merging the reviewed PRs, including c375 PR328 as a code-only change after the explicit merge question. This supersedes the earlier keep-draft source hold. No live deployment or traffic operation is included; c375 closes only after operational acceptance.",
     "Oct5 20UTC Jose directed \"puck up those next two\" after the explicit combinedc406/c433 test proposal. Root resumes the prepared oneprivate-service/30minute test,2genuineisolatedrejections+16control/16experimentalcloses,existingemailalerts andUIDcleanup. Manifest2b3cc6e5 unchanged. No proddata,secrets,newIAM orproductiontrafficchanges; receiptconfirmationstillrequired andcandidateisnotproductionfix.",
-    "Oct 6 ~21:15 ET / Oct 7 01:15 UTC - Jose approved FOUR production actions in one sitting, each asked individually with its exact command, prod impact, cost, rollback and downstream unblock stated first (chirps-a2 put the questions; the asks were extracted from the cards by six read-only agents, all high confidence). (1) c427: REDEPLOY chirp-api then chirp-ws so the merged 8fb8a18 onboarding diagnostics actually go live - PR333 adds NO migration, so rollback is re-promoting the still-live prior revision; the post-deploy authenticated check is mandatory, since skipping it is what caused the Aug 16 incident. (2) c433: ONE throwaway private Cloud Run service chirp-ws-close-20261005c (no DB/Redis/secrets/VPC, 1CPU/512Mi, ~15 min) for 32 close probes, 16 control and 16 with a 100ms delayed close, then self-delete - a fresh approval because the earlier 32-probe allowance was consumed; results are DIAGNOSIS ONLY. (3) c363: GO recorded, LIFTING THE c226 PARK, for the merged CI-green prod load test during an agreed 02:00-05:00 ET quiet hour, operator running with --confirm-park-lifted; synthetic rows are LOADTEST-marked and removed by the three documented deletes; abortable throughout. (4) c376: Direct VPC egress staging test as a --no-traffic revision, forecast ~$12-18/month connector saving, rollback is simply not promoting it. NOTE for whoever executes: gcloud Cloud Run calls are REFUSED by the permission classifier for Claude sessions (observed twice this session on read-only describe), so approval alone does not make these runnable by an agent - the mutations remain Jose's hands on the keyboard unless a permission rule is added."
+    "Oct 6 ~21:15 ET / Oct 7 01:15 UTC - Jose approved FOUR production actions in one sitting, each asked individually with its exact command, prod impact, cost, rollback and downstream unblock stated first (chirps-a2 put the questions; the asks were extracted from the cards by six read-only agents, all high confidence). (1) c427: REDEPLOY chirp-api then chirp-ws so the merged 8fb8a18 onboarding diagnostics actually go live - PR333 adds NO migration, so rollback is re-promoting the still-live prior revision; the post-deploy authenticated check is mandatory, since skipping it is what caused the Aug 16 incident. (2) c433: ONE throwaway private Cloud Run service chirp-ws-close-20261005c (no DB/Redis/secrets/VPC, 1CPU/512Mi, ~15 min) for 32 close probes, 16 control and 16 with a 100ms delayed close, then self-delete - a fresh approval because the earlier 32-probe allowance was consumed; results are DIAGNOSIS ONLY. (3) c363: GO recorded, LIFTING THE c226 PARK, for the merged CI-green prod load test during an agreed 02:00-05:00 ET quiet hour, operator running with --confirm-park-lifted; synthetic rows are LOADTEST-marked and removed by the three documented deletes; abortable throughout. (4) c376: Direct VPC egress staging test as a --no-traffic revision, forecast ~$12-18/month connector saving, rollback is simply not promoting it. NOTE for whoever executes: gcloud Cloud Run calls are REFUSED by the permission classifier for Claude sessions (observed twice this session on read-only describe), so approval alone does not make these runnable by an agent - the mutations remain Jose's hands on the keyboard unless a permission rule is added.",
+    "Oct6 Jose legalrefresh: Chirp is not incorporated yet; updated documents should cover17+ users at U.S.colleges andalumni. This changes publiclegal scope beyondUNCG, not a claim allcampuses/features are available or that nationwide compliance/counsel review is complete. AstraUltra requested for legalreview; currentpubliccontact retained."
   ]
 }
 </script>
