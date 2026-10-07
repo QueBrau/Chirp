@@ -204,10 +204,22 @@ async def test_actual_boundary_failures_refuse_success(cohort_data, monkeypatch,
 
 async def test_fixture_allows_migration_seeded_legal_policies(client):
     """Migration 0040 policy configuration does not make a DB non-empty."""
+    from sqlalchemy import select
+    from app import models
     from app.db import get_session_factory
     async with get_session_factory()() as session:
+        before = [
+            (row.policy_key, row.version, row.is_current)
+            for row in (await session.execute(select(models.LegalPolicy).order_by(models.LegalPolicy.policy_key))).scalars()
+        ]
+        assert {key for key, _version, _current in before} == {"privacy", "terms"}
         manifest = await create_fixture(session)
         assert len(manifest["cohorts"]) == 2
+        after = [
+            (row.policy_key, row.version, row.is_current)
+            for row in (await session.execute(select(models.LegalPolicy).order_by(models.LegalPolicy.policy_key))).scalars()
+        ]
+        assert after == before
 
 
 async def test_fixture_refuses_rootless_application_rows_without_writing_any_cohort(client):
