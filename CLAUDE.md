@@ -103,7 +103,7 @@ see what is going on. Update it at EVERY step, not just at the end of a task:
   compiles today, so its Xcode is older than 26.4, and on 26.4 the unpatched compile
   error is a free guard against the PaymentSheetLoader.load crash with Stripe iOS
   24.x (stripe-react-native #2364). The real fix is bumping @stripe/stripe-react-native
-  to 0.61.0 - payments-gated, its own card - after which the plugin is deleted.
+  to 0.61.0 - payments-gated, card c446 - after which the plugin is deleted.
 - `expo prebuild` needs a UTF-8 locale (`export LANG=en_US.UTF-8`); without one it
   exits 0 but its `pod install` silently fails (no Podfile.lock, no Pods/).
 - A universal Debug simulator build needs ~8 GB of free disk for DerivedData;
