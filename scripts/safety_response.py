@@ -62,6 +62,8 @@ class Notice:
 
 def assess_notice(elements: dict[str, bool]) -> Notice:
     """Determine whether all required notice elements are present."""
+    if set(elements) - set(NOTICE_FIELDS) or any(type(value) is not bool for value in elements.values()):
+        raise ValueError("notice elements must be named boolean flags")
     missing = tuple(name for name in NOTICE_FIELDS if not elements.get(name, False))
     return Notice(complete=not missing, missing=missing)
 
@@ -152,6 +154,7 @@ class SafetyCaseStore:
     ) -> tuple[str, Notice]:
         """Create a case and start a deadline only for a complete notice."""
         self._validate_time(received_at)
+        self._validate_actor(actor)
         self._validate_responders(primary, backup)
         self._validate_surfaces(surfaces)
         notice = assess_notice(elements)
@@ -203,6 +206,7 @@ class SafetyCaseStore:
     def complete_notice(self, case_ref: str, *, elements: dict[str, bool], actor: str, when: datetime) -> Notice:
         """Complete an existing notice without changing its original receipt time."""
         self._validate_time(when)
+        self._validate_actor(actor)
         row = self._case(case_ref)
         notice = assess_notice(elements)
         if not notice.complete:
@@ -210,6 +214,8 @@ class SafetyCaseStore:
         if row["notice_complete"]:
             return notice
         received = parse_time(row["received_at"])
+        if when < received:
+            raise ValueError("valid notice cannot precede original receipt")
         deadline = when + timedelta(hours=48)
         self.db.execute("UPDATE cases SET notice_complete=1, missing_json='[]', status='open', valid_notice_at=?, deadline_at=? WHERE case_ref=?", (iso(when), iso(deadline), case_ref))
         self._audit(case_ref, "notice_completed", actor, {"notice_complete": True}, when)
@@ -225,6 +231,7 @@ class SafetyCaseStore:
     def add_evidence(self, case_ref: str, *, external_ref: str, digest: str, media_type: str, actor: str, when: datetime) -> str:
         """Record a non-content evidence reference and digest under restricted access."""
         self._validate_time(when)
+        self._validate_actor(actor)
         if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest.lower()):
             raise ValueError("evidence digest must be a SHA-256 hex digest")
         if media_type not in ("synthetic-placeholder", "image-metadata", "video-metadata", "provider-receipt"):
@@ -257,9 +264,19 @@ class SafetyCaseStore:
             "appeal": {"decision_ref"}, "reappearance": {"reason"},
             "child_safety_escalate": {"route"}, "report_confirmed_csam": {"report_ref"},
         }[event]
-        if set(details) != allowed or any(not isinstance(value, str) or value not in ACTION_VALUES.get(key, ()) for key, value in details.items()):
+        if set(details) != allowed:
             raise ValueError(f"{event} requires exactly bounded metadata keys: {sorted(allowed)}")
-        return details
+        normalized = {}
+        for key, value in details.items():
+            if key in {"decision_ref", "report_ref"}:
+                if not isinstance(value, str) or not 1 <= len(value) <= 256:
+                    raise ValueError("reference must be a bounded nonempty identifier")
+                normalized[key] = opaque_ref(value)
+            elif not isinstance(value, str) or value not in ACTION_VALUES.get(key, ()):
+                raise ValueError(f"unsupported value for {key}")
+            else:
+                normalized[key] = value
+        return normalized
 
     @staticmethod
     def _validate_actor(actor: str) -> None:
@@ -275,15 +292,13 @@ class SafetyCaseStore:
             raise ValueError("invalid controlled surface or attempt outcome")
         if outcome in SUCCESS_OUTCOMES and not verification_ref:
             raise ValueError("successful attempt requires an opaque verification reference")
-        if surface == "known_copy" and outcome != "none_found":
-            raise ValueError("known-copy review must record none_found")
         self._validate_actor(actor)
         row = self._case(case_ref)
         generation = int(row["response_generation"])
         existing = self.db.execute("SELECT * FROM attempts WHERE case_ref=? AND surface=? AND attempt=?", (case_ref, surface, attempt)).fetchone()
         redacted_ref = opaque_ref(verification_ref) if verification_ref else None
         if existing:
-            if existing["outcome"] == outcome and existing["verification_ref"] == redacted_ref:
+            if existing["response_generation"] == generation and existing["outcome"] == outcome and existing["verification_ref"] == redacted_ref:
                 return
             raise ValueError("conflicting duplicate attempt")
         self.db.execute("INSERT INTO attempts(case_ref,surface,attempt,occurred_at,outcome,verification_ref,response_generation) VALUES (?,?,?,?,?,?,?)", (case_ref, surface, attempt, iso(when), outcome, redacted_ref, generation))
@@ -308,16 +323,23 @@ class SafetyCaseStore:
             raise ValueError("cannot close incomplete notice")
         if row["active_hold"]:
             raise ValueError("cannot close while a preservation hold is active")
-        if row["status"] == "reopened":
-            raise ValueError("cannot close a reopened case before a fresh response cycle")
         surfaces = set(json.loads(row["surfaces_json"]))
         generation = int(row["response_generation"])
-        attempts = self.db.execute("SELECT surface,outcome,response_generation FROM attempts WHERE case_ref=?", (case_ref,)).fetchall()
-        verified = {item["surface"] for item in attempts if item["response_generation"] == generation and item["outcome"] in SUCCESS_OUTCOMES}
+        attempts = self.db.execute(
+            "SELECT surface,outcome,verification_ref FROM attempts "
+            "WHERE case_ref=? AND response_generation=? ORDER BY attempt,id",
+            (case_ref, generation),
+        ).fetchall()
+        # A later failed verification invalidates an earlier success. Evidence
+        # from before reappearance is excluded by response_generation above.
+        latest = {item["surface"]: item for item in attempts}
+        verified = {
+            surface for surface, item in latest.items()
+            if item["outcome"] in SUCCESS_OUTCOMES and item["verification_ref"]
+        }
         if not surfaces.issubset(verified):
             raise ValueError("cannot close until every controlled surface is independently verified")
-        copies = [item for item in attempts if item["response_generation"] == generation and item["surface"] == "known_copy" and item["outcome"] == "none_found"]
-        if not copies:
+        if "known_copy" not in verified:
             raise ValueError("cannot close until known-copy review is recorded")
         self.db.execute("UPDATE cases SET status='closed' WHERE case_ref=?", (case_ref,))
         self._audit(case_ref, "case_closed", actor, {"verified_surfaces": ",".join(sorted(surfaces))}, when)
@@ -348,6 +370,7 @@ class SafetyCaseStore:
     def assign(self, case_ref: str, *, primary: str, backup: str, actor: str, when: datetime) -> None:
         """Assign the named primary and backup without changing receipt or deadline."""
         self._validate_time(when)
+        self._validate_actor(actor)
         self._validate_responders(primary, backup)
         self._case(case_ref)
         self.db.execute("UPDATE cases SET primary_responder=?, backup_responder=? WHERE case_ref=?", (primary, backup, case_ref))
@@ -385,32 +408,38 @@ def run_drill(path: str | Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the local synthetic drill CLI."""
+    """Run a metadata-only operator command or the isolated synthetic drill."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="/private/tmp/chirp-safety-c437.sqlite3")
-    parser.add_argument("command", choices=("drill", "intake", "complete-notice", "assign", "status", "list-due", "attempt", "close", "reopen", "escalate", "hold", "release-hold"))
+    parser.add_argument("command", choices=("drill", "intake", "complete-notice", "assign", "status", "list-due", "attempt", "close", "reopen", "escalate", "hold", "release-hold", "appeal", "report-confirmed-csam"))
     parser.add_argument("case_ref", nargs="?")
     parser.add_argument("--elements", default=",")
     parser.add_argument("--received-at", default=None)
     parser.add_argument("--primary", default="Jose")
     parser.add_argument("--backup", default="Braulio")
     parser.add_argument("--surfaces", default=",".join(CONTROLLED_SURFACES))
-    parser.add_argument("--actor", default="Jose")
+    parser.add_argument("--actor", choices=RESPONDERS, default="Jose")
     parser.add_argument("--before", default=None)
     parser.add_argument("--surface", default=None)
     parser.add_argument("--attempt", type=int, default=1)
     parser.add_argument("--outcome", default=None)
     parser.add_argument("--verification-ref", default=None)
-    parser.add_argument("--reason", default="operator review")
-    parser.add_argument("--route", default="designated safety contact")
+    parser.add_argument("--reason", choices=ACTION_VALUES["reason"], default="operator_review")
+    parser.add_argument("--route", choices=ACTION_VALUES["route"], default="designated_safety_contact")
+    parser.add_argument("--reference", help="Opaque appeal/report reference; stored only as a digest")
     args = parser.parse_args(argv)
     if args.command == "drill":
         print(json.dumps(run_drill(args.db), indent=2, sort_keys=True))
         return 0
+    if args.command not in {"intake", "list-due"} and not args.case_ref:
+        parser.error("this command requires a case reference")
     store = SafetyCaseStore(args.db)
     try:
         now = parse_time(args.received_at) if args.received_at else utc_now()
-        elements = {field: field in {part for part in args.elements.split(",") if part} for field in NOTICE_FIELDS}
+        supplied_elements = {part for part in args.elements.split(",") if part}
+        if supplied_elements - set(NOTICE_FIELDS):
+            raise ValueError("unrecognized notice element")
+        elements = {field: field in supplied_elements for field in NOTICE_FIELDS}
         if args.command == "intake":
             case_ref, notice = store.intake(received_at=now, elements=elements, actor=args.actor, primary=args.primary, backup=args.backup, surfaces=tuple(args.surfaces.split(",")))
             print(json.dumps({"case_ref": case_ref, "notice_complete": notice.complete, "missing": notice.missing}))
@@ -436,6 +465,11 @@ def main(argv: list[str] | None = None) -> int:
             store.hold(args.case_ref, active=True, actor=args.actor, when=now)
         elif args.command == "release-hold":
             store.hold(args.case_ref, active=False, actor=args.actor, when=now)
+        elif args.command in {"appeal", "report-confirmed-csam"}:
+            if not args.reference:
+                raise ValueError("this command requires an opaque --reference")
+            event, key = ("appeal", "decision_ref") if args.command == "appeal" else ("report_confirmed_csam", "report_ref")
+            store.action(args.case_ref, event=event, actor=args.actor, details={key: args.reference}, when=now)
     finally:
         store.close()
     return 0

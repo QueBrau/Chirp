@@ -41,6 +41,16 @@ controlled surfaces, and missing known-copy review. Exact duplicate attempt
 replays are idempotent; conflicting replays fail. Reopening preserves the
 original receipt time and deadline.
 
+Record `known_copy` separately from the reported `media` surface. Use
+`none_found` with a scan receipt when no copies exist, or `verified_absent`
+with a receipt after identified copies have been removed and checked. A failed
+scan or later failed verification blocks closure. Following `reopen`, record
+fresh attempts with new, increasing attempt numbers for every declared surface
+and the copy scan; earlier response evidence cannot close the reopened case.
+Use `appeal --reference OPAQUE_ID` and
+`report-confirmed-csam --reference OPAQUE_ID` to record an external decision or
+report receipt. These references are stored as hashes; they contain no content.
+
 The 48-hour handling rule is a current legal requirement only if Chirp is a
 covered platform and the request is valid under the TAKE IT DOWN Act. This tool
 records the operational clock while counsel reviews applicability and edge
@@ -50,10 +60,11 @@ cases. It does not make a legal determination.
 
 Use a restricted evidence location approved by the operator. The case register
 records only a digest, media type, opaque evidence reference, observer and time.
-Access is granted to the assigned responder for a stated purpose and revoked
-after review; every grant, removal attempt, verification, appeal and reappearance
-is an audit event. Do not copy content into tickets, logs, email, screenshots or
-test fixtures.
+Operators must grant evidence access outside this tool only to the assigned
+responder and revoke it after review. Recording an access event does not change
+any file or provider permission. Removal attempts, verification, appeals and
+reappearance are audit events. Do not copy content into tickets, logs, email,
+screenshots or test fixtures.
 
 For each Chirp-controlled surface, record a removal attempt and its result:
 
