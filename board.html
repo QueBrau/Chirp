@@ -417,6 +417,15 @@
   ],
   "cards": [
     {
+      "id": "c447",
+      "col": "backlog",
+      "owner": "",
+      "tag": "backend",
+      "area": "messages",
+      "title": "c447 [P2, before E2EE launch, found by c444 Oct 7] Analytics message_sent is NOT emitted for E2EE v2 sends. The analytics allowlist enum only has signal and sender_key_distribution, and c444 deliberately did not widen the analytics schema. Once v2 is the only send path, product send-counts silently drop to zero. Fix: add a v2 message type to the allowlist (read ANALYTICS-VERIFICATION.md for the review rules) and emit on POST /v2/conversations/{id}/messages, counting one logical message, not one per leg.",
+      "detail": ""
+    },
+    {
       "id": "c446",
       "col": "backlog",
       "owner": "",
@@ -440,7 +449,7 @@
       "owner": "Q",
       "tag": "backend",
       "area": "messages",
-      "title": "c444 IN PROGRESS Oct 7 (Q): E2EE M2 - backend v2 per E2EE-DESIGN.md sections 4-5 (PR #341): versioned device directory (suite, Ed25519 identity, binding + approval signatures verified server-side, pending approval), POST /v2/keys/claim separate from directory read, per-device message legs with the exact-device-set rule (409 device_list_mismatch) and (sender_device_id, client_message_id) idempotency. MIGRATION 0042 CLAIMED HERE. Its down_revision is whatever main's head is at merge time: 0040 (c438) and 0041 (c436) are claimed on Jose's branches and not merged yet, so 0042 must be re-pointed if they land first. Not deployed - prod sees v2 only through a normal redeploy after the M6 two-phone proof. Branch q/c444-e2ee-backend-v2.",
+      "title": "c444 BACKEND BUILT Oct 7 (36252d8, branch q/c444-e2ee-backend-v2, not pushed yet): migration 0042 (down 0039, additive, downgrade refuses if v2 data exists), 9 /v2 endpoints, real Ed25519 verification via the already-pinned cryptography 50.0.0. 301 targeted tests pass; full suite 2408 passed, failures are this Mac's venv (no Pillow, no pg_dump) or load-timing flakes that pass alone. CROSS-CHECKED BY HAND: the backend's encoders reproduce all four c443 Rust vectors byte for byte and accept every Rust signature. Design gaps it caught and fixed: the outbox sweeper would have crashed on v2 rows; v1 history would have 500ed on them. IN FLIGHT: gate the directory read and key claim to shared-conversation members (today any account could enumerate identities and drain one-time keys, same as v1) + pin the Rust vectors as a permanent test. Analytics gap filed as c447 | c444 IN PROGRESS Oct 7 (Q): E2EE M2 - backend v2 per E2EE-DESIGN.md sections 4-5 (PR #341): versioned device directory (suite, Ed25519 identity, binding + approval signatures verified server-side, pending approval), POST /v2/keys/claim separate from directory read, per-device message legs with the exact-device-set rule (409 device_list_mismatch) and (sender_device_id, client_message_id) idempotency. MIGRATION 0042 CLAIMED HERE. Its down_revision is whatever main's head is at merge time: 0040 (c438) and 0041 (c436) are claimed on Jose's branches and not merged yet, so 0042 must be re-pointed if they land first. Not deployed - prod sees v2 only through a normal redeploy after the M6 two-phone proof. Branch q/c444-e2ee-backend-v2.",
       "detail": ""
     },
     {
