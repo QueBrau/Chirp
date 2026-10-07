@@ -115,10 +115,10 @@ def _call(api: str, path: str, token: str, body: dict | None = None, method: str
     )
     try:
         with opener.open(request, timeout=30) as response:
-            raw = response.read().decode("utf-8")
             try:
+                raw = response.read().decode("utf-8")
                 payload = json.loads(raw) if raw else None
-            except json.JSONDecodeError:
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 return 0, "invalid_response"
             return response.status, payload
     except urllib.error.HTTPError as error:

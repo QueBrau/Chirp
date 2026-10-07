@@ -23,9 +23,31 @@ class _Handler(BaseHTTPRequestHandler):
     redirect_sink_hits = 0
     redirect = False
     redirect_code = 302
+    response_mode = "normal"
 
     def do_GET(self):
         type(self).requests.append((self.command, self.path))
+        if type(self).response_mode == "invalid_json":
+            body = b"<html>invalid-json sentinel-secret</html>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if type(self).response_mode == "invalid_utf8":
+            body = b"\xff\xfe"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if type(self).response_mode == "http_error":
+            body = b"upstream failure sentinel-secret"
+            self.send_response(500)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/conversations" and type(self).redirect:
             self.send_response(type(self).redirect_code)
             self.send_header("Location", "/redirect-sink")
@@ -50,6 +72,7 @@ def server():
     _Handler.redirect_sink_hits = 0
     _Handler.redirect = False
     _Handler.redirect_code = 302
+    _Handler.response_mode = "normal"
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -101,3 +124,20 @@ def test_network_failure_is_clean_result():
     status, payload = sender._call("http://127.0.0.1:1", "/conversations", "token")
     assert status == 0
     assert payload == "network_error"
+
+
+@pytest.mark.parametrize("response_mode", ["invalid_json", "invalid_utf8"])
+def test_invalid_success_body_is_sanitized(server, response_mode):
+    _Handler.response_mode = response_mode
+    status, payload = sender._call(server, "/conversations", "token")
+    assert status == 0
+    assert payload == "invalid_response"
+    assert "sentinel-secret" not in str(payload)
+
+
+def test_http_error_body_is_sanitized(server):
+    _Handler.response_mode = "http_error"
+    status, payload = sender._call(server, "/conversations", "token")
+    assert status == 500
+    assert payload == "http_error"
+    assert "sentinel-secret" not in str(payload)
