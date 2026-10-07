@@ -18,8 +18,9 @@ export function DataRequests() {
       <section className="wrap section--tight">
         <div className="prose">
           <p>
-            If you are signed in, you can submit an authenticated export or deletion request in
-            the account-data screen and check its status. If you cannot sign in, email <a href={`mailto:${CONTACT_EMAIL}?subject=Chirp%20data%20request`}>{CONTACT_EMAIL}</a>
+            If your app has a &ldquo;Your data&rdquo; screen in profile settings, you can request
+            a copy or account deletion there and check its status. If that screen is unavailable
+            or you cannot sign in, email <a href={`mailto:${CONTACT_EMAIL}?subject=Chirp%20data%20request`}>{CONTACT_EMAIL}</a>
             {" "}with the subject &ldquo;Chirp data request.&rdquo; You do not need to pay or create
             an account to make a request. If you cannot use the email link, copy the address into
             your email app.
@@ -46,7 +47,7 @@ export function DataRequests() {
           </p>
           <h2>Account deletion and retained records</h2>
           <p>
-            The app request starts a scoped review; it does not erase records automatically or
+            Submitting a request starts a review; it does not erase records automatically or
             guarantee that every provider copy, backup, message, shared organization record or
             financial record can be removed. Signing out, uninstalling the app, leaving an
             organization or removing a post does not delete your whole account. Support remains
