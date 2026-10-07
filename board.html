@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1791339717079,
+  "updated": 1791339728290,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -517,11 +517,11 @@
     },
     {
       "id": "c423",
-      "col": "progress",
+      "col": "done",
       "owner": "J",
       "tag": "bug",
       "area": "alumni",
-      "title": "c423 PR332 merged 016f8f9 Oct 3: alumni editor and reviewed save/navigation guards; all four CI checks green. New preview and phone save/reopen remain, blocked by c428 access.",
+      "title": "c423 DONE Oct 6: JOSE CONFIRMED ON DEVICE - \"alumni section is working great\". PR332 merged 016f8f9 (editor + all three rows wired) plus Codex's reviewed save/navigation guards, and c432/PR337 merged 2074cb5 pinning those guards with regression traps. Evidence split, stated honestly: the USER-VISIBLE flow is device-confirmed by Jose; the four narrower acceptance clauses - full-replace preservation of all 7 fields, cancel-writes-nothing, failed-save-preserves-input, and the post-save focus guard - are proven by the 12 computed/positional checks in verify:c423-alumni-editor (green on main, registered in ci.yml) and were NOT each separately exercised by hand on the phone. The full-replace trap was the real hazard: PUT /alumni/profile assigns every column and every field defaults None/False, so a per-field editor would have wiped the rest on each save; check 2 derives the required field set from AlumniProfileUpdate itself so a new API field fails CI until the editor sends it. Falsified four times across the two PRs: restoring origin/main's profile/index.tsx failed exactly checks 6/7/8; dropping industry from the submit failed check 2 naming it; restoring the pre-guard editor failed exactly the 4 new checks with the original 8 passing; and deleting the focus-effect cleanup left the guard line PASSING while check 10 caught it inert. All four CI checks green on both PRs; tsc exit 0, TS 5.9.3.",
       "detail": "Jose reports that selecting Alumni loads the add-class/company section, but neither prompt can be clicked to enter information. Read-only source inspection on origin/main 6e10ed3 confirms app-mobile/app/(tabs)/profile/index.tsx alumni ListRow entries have no onPress. app-mobile/src/api/alumni.ts exports updateAlumniProfile but no mobile screen calls it. c377 fixes the successful-empty versus load-failure display and is accepted separately; this is an unimplemented editing path.\n\nProposed scope: reachable alumni editor using the existing API and existing fields, prefill saved values, allow first-profile creation and subsequent edits, validate input, preserve entered values on failure, and refresh the profile after save. Do not infer privileges from self-declared alumni account type.\n\nAcceptance: actual UI save/reopen for class year/company and supported existing fields; cancel makes no write; network/save failure remains truthful and preserves input; focused verification and reviewed PR; rebuilt preview and phone confirmation. No implementation claim or source edits in this intake. Build/device/OS for reported symptom not supplied.\n\nCODEX REVIEW Oct3 exact862c745: fullreplaceall7fields/loadfailurepreservation/focusrefresh reviewed. Two savingracesconfirmedbyrootandLunamedium: TextInputs/mentoringremaineditableafterpayloadcapture so laterkeystrokeslostonsuccess; globalScreenback/tabgesturecanleavewhilerouter.backstillfiresonlaterresponse. Codexclaimsboundedfixonlyalumni-info.tsx inisolatedjose/c423-review-fix-20261003: freezeinputswhile saving and tiepostsave navigationtoownfocusepoch. Claudespaymentc427unchanged. No mergeuntilnewheadCIgreen.\n\nREVIEW FIX PUSHED: guarded normal push advanced original 862c745 to 9122e17. Actual TSX private runtime harness passes focused save with pending rerender, six input/mentoring locks, leave-only, leave-return and failed-save form preservation. Original reproduced editable-field and stale-navigation failures. Harness models hooks/API/router boundaries, not native gestures. TypeScript 5.9.3 noEmit, existing alumni verifier and a11y checks passed; fresh full CI required.\n\nMERGED Oct 3 04:00:18 UTC: exact reviewed/tested head 9122e17 squashed as 016f8f9 after fresh board/head and four CI successes. Native device acceptance remains; no preview or deployment claimed."
     },
     {
@@ -4515,10 +4515,10 @@
     "Oct 6 c406 email receipt confirmed by Jose: both capacity-rejection and suspended-account-rejection notifications from the Oct5 isolated proof arrived. Root closed c406 using its real event/metric/incident/recovery/cleanup evidence plus this confirmation; no new production action or rerun needed.",
     "Oct 6 22:07 EDT: authorized c435 Florida legal pack published from merged PR340/12e3069 to existing Chirp Hosting only, version d03497cbb206d83b. Both public domains pass36 exact-content HTTP checks and28 legal/contact renders; c435 Done. Installed-app links require next preview. c436-c438 and c75 remain open; Claude c427/c433/c376/c375 work remains separate.",
     "Oct 6 Jose requests c438/c436/c437 in parallel with Luna medium. c438 migration0040 down0039; c436 migration0041 down0040 reserved with ordered integration. Jose confirms17/18+ declaration without birthdate and permission checkbox for17, and safety coverage Jose primary/Braulio backup every day including weekends. Root coordinates shared files; no live deletion, email or cloud rollout included.",
-    "Oct 6 user supplied newest Expo build2386fe09-3303-4964-86a0-a896c5d5c330. Dependency-complete EAS read reached Expo but project authorization was denied; no build metadata or inclusion proof claimed. User chose manual testing instead of granting access. Coding c436-c438 continues; do not assume this build contains unmerged changes."
+    "Oct 6 user supplied newest Expo build2386fe09-3303-4964-86a0-a896c5d5c330. Dependency-complete EAS read reached Expo but project authorization was denied; no build metadata or inclusion proof claimed. User chose manual testing instead of granting access. Coding c436-c438 continues; do not assume this build contains unmerged changes.",
+    "Oct 6 - c423 CLOSED on Jose's device confirmation (\"alumni section is working great\"). Recorded with an explicit evidence split rather than a blanket pass: the user-visible save/reopen flow is device-proven, while cancel-writes-nothing, failed-save-input-preservation, full-replace field preservation and the focus-epoch navigation guard rest on the 12 committed checks plus four falsification runs, not on separate hand tests. Said plainly so nobody later reads this card as meaning every clause was exercised by thumb."
   ]
 }
-
 </script>
 <script>
 (function () {
