@@ -417,6 +417,15 @@
   ],
   "cards": [
     {
+      "id": "c446",
+      "col": "backlog",
+      "owner": "",
+      "tag": "payments",
+      "area": "payments",
+      "title": "c446 [P1, payments-gated, found by c441 Oct 7] Bump @stripe/stripe-react-native 0.50.3 -> 0.61.0 (Stripe iOS 24.19 -> 25.9). TWO reasons: (1) 0.50.3's StripeSwiftInterop.h is a hard compile error on Xcode 26.4+ (c441 patches it for LOCAL builds only); (2) Xcode 26.4 also has a runtime crash in PaymentSheetLoader.load with Stripe iOS 24.x (stripe-react-native #2364), and Stripe's advice is iOS SDK >= 25.9. EAS builds compile today, so the EAS image's Xcode is below 26.4 - the day EAS moves to 26.4+ our iOS build FAILS until this lands. Stay <= 0.77.0 (0.78+ needs SwiftPM + dynamic frameworks). Expo SDK 54 pins 0.50.3, so expo install --check will warn. Payment changelog 0.50.3 -> 0.61.0: iOS 25.x and Android 22-23 majors, Giropay removed, PaymentSheet cornerRadius default follows iOS 26 Liquid Glass. Our JS calls (initStripe, initPaymentSheet with customerSessionClientSecret + allowsDelayedPaymentMethods, presentPaymentSheet) are signature-identical. ACCEPTANCE: full PaymentSheet card + ACH test in Stripe test mode on a device, then delete app-mobile/plugins/withStripeSwiftInteropFix.js and its app.json entry.",
+      "detail": "Evidence in c441's report: 0.50.3 vs 0.61.0 tarball diff shows the header fix identical to the c441 patch (upstream #2355; issues #2357, #2365, #2383). A dummy-key probe on Xcode 26.6 / iOS 26.5 reached the native PaymentSheetLoader.load error path without crashing - not proof for a real PaymentIntent, ACH or Link flow."
+    },
+    {
       "id": "c443",
       "col": "progress",
       "owner": "Q",
@@ -449,7 +458,7 @@
       "owner": "Q",
       "tag": "infra",
       "area": "mobile",
-      "title": "c441 IN PROGRESS Oct 7 (Q): make LOCAL iOS simulator builds work on Q's Mac - E2EE prerequisite (c440). Native crypto work otherwise costs a 7-15 min EAS cloud build plus reinstall per change. Known failure per CLAUDE.md (c267): prebuild + pods succeed, the compile fails in ONE pod - @stripe/stripe-react-native 0.50.3 vs Xcode 26.6 (generated stripe_react_native-Swift.h forward-declares STPPaymentStatus as NSInteger, Stripe iOS SDK declares NSUInteger; xcodebuild exit 65). Scope: reproduce, find the smallest fix (patch vs a Stripe version bump), and report BEFORE changing the Stripe version - payments are the c11 launch gate. ios/ stays gitignored.",
+      "title": "c441 GREEN Oct 7: local iOS simulator build compiles - xcodebuild exit 0 from a clean prebuild (2124s under load 324; ARCHS=arm64 328s), app launches to sign-in with no red screen. Fix 500db39 = Expo config plugin rewriting ONE header line (StripeSwiftInterop.h: NSUInteger -> NSInteger, the type Swift emits); no Stripe version change. CLAUDE.md c267 had the types reversed - being corrected. Being made LOCAL-ONLY (skips on EAS) so EAS keeps failing loudly on Xcode 26.4+, which also carries a Stripe 24.x PaymentSheet crash; the real fix is c446. Gotchas: prebuild needs LANG=en_US.UTF-8; ~8 GB free disk per universal build. LEFT: second commit, PR | c441 IN PROGRESS Oct 7 (Q): make LOCAL iOS simulator builds work on Q's Mac - E2EE prerequisite (c440). Native crypto work otherwise costs a 7-15 min EAS cloud build plus reinstall per change. Known failure per CLAUDE.md (c267): prebuild + pods succeed, the compile fails in ONE pod - @stripe/stripe-react-native 0.50.3 vs Xcode 26.6 (generated stripe_react_native-Swift.h forward-declares STPPaymentStatus as NSInteger, Stripe iOS SDK declares NSUInteger; xcodebuild exit 65). Scope: reproduce, find the smallest fix (patch vs a Stripe version bump), and report BEFORE changing the Stripe version - payments are the c11 launch gate. ios/ stays gitignored.",
       "detail": ""
     },
     {
