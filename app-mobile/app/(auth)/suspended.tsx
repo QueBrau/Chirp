@@ -108,6 +108,17 @@ export default function SuspendedScreen() {
           </AppText>
         </Card>
 
+        <Card>
+          <AppText variant="body" tone="secondary">
+            You can still view your account-data requests, request a copy, or request account deletion while access to Chirp is suspended.
+          </AppText>
+          <Button
+            label="Manage account data"
+            variant="neutral"
+            onPress={() => router.push("/profile/account-data")}
+          />
+        </Card>
+
         <Button
           label={signingOut ? "Signing out…" : "Sign out"}
           onPress={() => void handleSignOut()}

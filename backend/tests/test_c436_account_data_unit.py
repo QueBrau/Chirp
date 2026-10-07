@@ -5,12 +5,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from tests.conftest import ApiUser
 
 from app import models
 from app.services import account_data
 from app.db import get_session_factory
+from app.jobs.account_data import run_export_artifact_expiry
 
 
 def test_unknown_account_edge_does_not_silently_disappear() -> None:
@@ -128,6 +130,53 @@ async def test_expired_export_artifact_is_purged(
         ))
         await session.commit()
         assert await account_data.purge_expired_export_artifacts(session) == 1
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_export_expiry_job_is_dry_run_bounded_owner_safe_and_idempotent(
+    client: AsyncClient, make_user
+) -> None:
+    owner: ApiUser = await make_user("Expiry owner")
+    other: ApiUser = await make_user("Expiry other")
+    now = datetime(2026, 10, 7, tzinfo=timezone.utc)
+    async with get_session_factory()() as session:
+        requests = []
+        for user_id in (uuid.UUID(owner.id), uuid.UUID(other.id)):
+            request = models.AccountDataRequest(user_id=user_id, kind="export", open_key=None, status="partially_completed")
+            session.add(request)
+            await session.flush()
+            requests.append(request)
+            session.add(models.AccountDataArtifact(
+                request_id=request.id, content={"owner": str(user_id)},
+                content_sha256=uuid.uuid4().hex, expires_at=now - timedelta(seconds=1),
+            ))
+        fresh_request = models.AccountDataRequest(
+            user_id=uuid.UUID(owner.id), kind="export", open_key=None, status="partially_completed",
+        )
+        session.add(fresh_request)
+        await session.flush()
+        session.add(models.AccountDataArtifact(
+            request_id=fresh_request.id, content={"owner": owner.id},
+            content_sha256=uuid.uuid4().hex, expires_at=now + timedelta(days=1),
+        ))
+        await session.commit()
+
+        preview = await run_export_artifact_expiry(session, now=now, batch_size=1, max_batches=1)
+        assert preview == {
+            "mode": "dry_run", "cutoff": now.isoformat(), "eligible": 1,
+            "deleted": 0, "capped": True, "budget": 1,
+        }
+        assert (await session.scalar(select(models.AccountDataArtifact.id))) is not None
+
+        applied = await run_export_artifact_expiry(session, now=now, batch_size=1, max_batches=1, apply=True)
+        assert applied["mode"] == "apply" and applied["deleted"] == 1
+        await session.commit()
+        assert (await session.scalar(select(models.AccountDataRequest.id).where(
+            models.AccountDataRequest.id == requests[0].id,
+        ))) == requests[0].id
+        rerun = await run_export_artifact_expiry(session, now=now, apply=True)
+        assert rerun["deleted"] == 1
         await session.commit()
 
 
