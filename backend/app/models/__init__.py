@@ -2,6 +2,7 @@
 
 from app.models.alumni import AlumniProfile, JobPost
 from app.models.delivery import DeliveryOutbox
+from app.models.data_requests import AccountDataArtifact, AccountDataRequest
 from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
 from app.models.events import Event, EventInvite, EventRsvp
 from app.models.finance import (
@@ -25,6 +26,7 @@ from app.models.identity import (
     RoleTerm,
     User,
 )
+from app.models.legal import LegalAcceptance, LegalPolicy, OrganizationAuthorityAcceptance
 from app.models.lineage import Family, LineageEdge
 from app.models.meetings import Meeting, MeetingAttendance
 from app.models.polls import Poll, PollOption, PollVote
@@ -52,6 +54,8 @@ __all__ = [
     "ConversationMember",
     "NIL_UUID",
     "DeliveryOutbox",
+    "AccountDataArtifact",
+    "AccountDataRequest",
     "Device",
     "DuesCycle",
     "DuesPaymentPlan",
@@ -65,6 +69,9 @@ __all__ = [
     "HouseBallot",
     "LedgerEntry",
     "LineageEdge",
+    "LegalAcceptance",
+    "OrganizationAuthorityAcceptance",
+    "LegalPolicy",
     "Meeting",
     "MeetingAttendance",
     "Poll",

@@ -25,9 +25,13 @@
  */
 
 import { useRouter } from "expo-router";
-import { useState } from "react";
-import { TextInput, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Pressable, TextInput, View } from "react-native";
 
+import { getOrganizationPolicy, type OrganizationAuthority } from "@/api/authority";
+import { currentIdentity, ownsIdentity } from "@/auth/identity";
+import { confirmOrganizationAuthority } from "@/lib/confirmOrganizationAuthority";
+import { openLegalLink, ORGANIZATION_TERMS_URL } from "@/lib/legalLinks";
 import { createChapter } from "@/api/chapters";
 import { ApiError } from "@/api/client";
 import { useCampusAccess, useSession } from "@/auth";
@@ -43,6 +47,12 @@ export default function CreateChapterScreen() {
   const [orgName, setOrgName] = useState("");
   const [chapterName, setChapterName] = useState("");
   const [creating, setCreating] = useState(false);
+  const preparingRef = useRef(false);
+  const creatingRef = useRef(false);
+  const formRef = useRef({ orgName, chapterName });
+  formRef.current = { orgName, chapterName };
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [error, setError] = useState<string | null>(null);
   // Set by the submit-time 403 (see the module docstring's "safety net"), not by
   // useCampusAccess directly — that keeps ONE code path deciding when the gate
@@ -74,11 +84,15 @@ export default function CreateChapterScreen() {
     );
   }
 
-  const create = async () => {
+  const create = async (authority: OrganizationAuthority) => {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    const owner = currentIdentity();
     setCreating(true);
     setError(null);
     try {
       await createChapter({
+        authority,
         org_name: orgName.trim(),
         chapter_name: chapterName.trim().length > 0 ? chapterName.trim() : null,
       });
@@ -86,9 +100,12 @@ export default function CreateChapterScreen() {
       // return to already knows about the new membership, but nothing here
       // depends on the refresh itself succeeding — the chapter exists server-side
       // the moment createChapter resolves.
+      if (!ownsIdentity(owner) || !mounted.current) return;
       await refresh().catch(() => undefined);
+      if (!ownsIdentity(owner) || !mounted.current) return;
       router.replace("/chapter");
     } catch (err) {
+      if (!ownsIdentity(owner) || !mounted.current) return;
       if (err instanceof ApiError && err.status === 403 && err.detail === "campus_unverified") {
         // The race useCampusAccess's own docstring warns about: access read "ok"
         // (or was still "loading") and the server disagreed. Switch to the same
@@ -102,7 +119,29 @@ export default function CreateChapterScreen() {
         setError("Something went wrong. Try again.");
       }
     } finally {
-      setCreating(false);
+      creatingRef.current = false;
+      if (ownsIdentity(owner) && mounted.current) setCreating(false);
+    }
+  };
+
+  const confirmCreate = async () => {
+    if (preparingRef.current || creatingRef.current) return;
+    preparingRef.current = true;
+    const owner = currentIdentity();
+    const form = formRef.current;
+    setCreating(true);
+    try {
+      await confirmOrganizationAuthority({
+        load: getOrganizationPolicy,
+        current: () => mounted.current && formRef.current.orgName === form.orgName && formRef.current.chapterName === form.chapterName,
+        describe: (policy) => `I am authorized to create and manage ${form.orgName.trim()}. I accept Chirp's Organization and payment terms (version ${policy.version}), available below.`,
+        act: (policy) => create({ policy_version: policy.version, confirmed: true }),
+      });
+    } catch {
+      if (ownsIdentity(owner) && mounted.current) setError("Couldn't load the organization terms. Please try again.");
+    } finally {
+      preparingRef.current = false;
+      if (ownsIdentity(owner) && mounted.current && !creatingRef.current) setCreating(false);
     }
   };
 
@@ -141,10 +180,13 @@ export default function CreateChapterScreen() {
                 {error}
               </AppText>
             ) : null}
+            <Pressable accessibilityRole="link" onPress={() => void openLegalLink("Organization and payment terms", ORGANIZATION_TERMS_URL)} style={{ minHeight: 44, justifyContent: "center" }}>
+              <AppText variant="caption" style={{ color: palette.ink, textDecorationLine: "underline" }}>Organization and payment terms</AppText>
+            </Pressable>
             <Button
               label={creating ? "Creating..." : "Create org"}
               disabled={orgName.trim().length === 0 || creating}
-              onPress={() => void create()}
+              onPress={() => void confirmCreate()}
             />
           </View>
         </Card>

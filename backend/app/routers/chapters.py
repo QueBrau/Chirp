@@ -69,6 +69,7 @@ from app.schemas.identity import (
     TreasurerOverview,
 )
 from app.services.role_term_service import apply_role_change, open_initial_term
+from app.services.organization_authority import validate_declaration, record_authority
 
 router = APIRouter(tags=["chapters"])
 logger = logging.getLogger(__name__)
@@ -149,6 +150,7 @@ async def create_chapter(
     """
     if not is_campus_verified(user) or user.campus_id is None:
         raise forbidden("campus_unverified")
+    validate_declaration(body.authority)
     chapter = models.Chapter(
         campus_id=user.campus_id,
         org_name=body.org_name,
@@ -164,6 +166,15 @@ async def create_chapter(
     session.add(membership)
     await session.flush()
     await open_initial_term(session, membership=membership)
+    if body.authority is not None:
+        await session.flush()
+        term = (await session.execute(select(models.RoleTerm).where(
+            models.RoleTerm.membership_id == membership.id,
+            models.RoleTerm.ended_at.is_(None),
+        ))).scalar_one()
+        await record_authority(session, user_id=user.id, chapter_id=chapter.id,
+            membership_id=membership.id, role_term_id=term.id, role=membership.role,
+            purpose="organization_create")
     await session.commit()
     await session.refresh(chapter)
     return ChapterOut.model_validate(chapter)

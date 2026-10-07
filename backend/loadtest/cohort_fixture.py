@@ -30,6 +30,12 @@ async def create_fixture(session, cohort_count: int = 2, recipients: int = 2) ->
     # Some application tables (for example webhook dedup records) have no FK
     # to a user/chapter. Root-table emptiness alone is not an empty database.
     for table in Base.metadata.sorted_tables:
+        # Legal policy rows are deployment configuration seeded by migration
+        # 0040, rather than application identities or fixture data.  They are
+        # intentionally allowed in an otherwise empty database.  Acceptance
+        # rows remain application data and still make this guard fail.
+        if table.name == "legal_policies":
+            continue
         if (await session.execute(select(1).select_from(table).limit(1))).first() is not None:
             raise FixtureError("database_contains_application_rows")
     now = datetime.now(timezone.utc)

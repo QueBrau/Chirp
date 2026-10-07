@@ -34,6 +34,21 @@ export interface UserOut {
   created_at: string;
 }
 
+export interface LegalPolicyStatus {
+  required: boolean;
+  material_change: boolean;
+  policies: { key: "terms" | "privacy"; version: string; effective_at: string }[];
+  accepted_policy_ids: string[];
+}
+
+export async function getLegalStatus(): Promise<LegalPolicyStatus> {
+  return request<LegalPolicyStatus>("/auth/legal-status");
+}
+
+export async function acceptLegal(body: { terms_version: string; privacy_version: string; age_declaration: 17 | 18; guardian_permission_confirmed: boolean; source?: "mobile" }): Promise<LegalPolicyStatus> {
+  return request<LegalPolicyStatus>("/auth/legal-acceptance", { method: "POST", body });
+}
+
 /**
  * Body for PATCH /auth/me (c221, c381). Every field optional; omitted means "leave alone".
  *
@@ -86,8 +101,8 @@ export async function getCampus(campusId: string): Promise<CampusOut> {
  */
 export async function fetchMe(
   options: Pick<RequestOptions, "operation" | "signal" | "timeoutMs"> = {},
-): Promise<{ user: UserOut; memberships: MembershipOut[] }> {
-  return request<{ user: UserOut; memberships: MembershipOut[] }>("/auth/me", {
+): Promise<{ user: UserOut; memberships: MembershipOut[]; legal_required?: boolean }> {
+  return request<{ user: UserOut; memberships: MembershipOut[]; legal_required?: boolean }>("/auth/me", {
     method: "GET", operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs,
   });
 }

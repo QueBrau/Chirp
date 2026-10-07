@@ -12,6 +12,7 @@
 
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
+import { requireIdentity, type AuthIdentity } from "../auth/identity";
 
 /**
  * Collapse anything that isn't filename-safe into `_` so a chapter/meeting name
@@ -46,4 +47,28 @@ export async function shareCsv(filename: string, csv: string): Promise<void> {
     mimeType: "text/csv",
     UTI: "public.comma-separated-values-text",
   });
+}
+
+/** Share a short-lived account export and remove the temporary cache file afterwards. */
+export async function shareJson(filename: string, json: string, owner: AuthIdentity): Promise<void> {
+  requireIdentity(owner);
+  const available = await Sharing.isAvailableAsync();
+  requireIdentity(owner);
+  if (!available) throw new Error("Sharing is not available on this device.");
+  const safeName = sanitizeFilename(filename);
+  const fileName = safeName.toLowerCase().endsWith(".json") ? safeName : `${safeName}.json`;
+  const file = new File(Paths.cache, fileName);
+  const cleanup = () => { try { file.delete(); } catch { /* file may already be removed */ } };
+  owner.signal.addEventListener("abort", cleanup, { once: true });
+  try {
+    requireIdentity(owner);
+    file.write(json);
+    await Sharing.shareAsync(file.uri, {
+      mimeType: "application/json",
+      UTI: "public.json",
+    });
+  } finally {
+    owner.signal.removeEventListener("abort", cleanup);
+    cleanup();
+  }
 }

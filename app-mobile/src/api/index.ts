@@ -15,3 +15,4 @@ export * as finance from "./finance";
 export * as meetings from "./meetings";
 export * as alumni from "./alumni";
 export * as payments from "./payments";
+export * as dataRequests from "./dataRequests";

@@ -1,7 +1,7 @@
 /** Join chapter: invite-code entry + explainer; landing for the chirp://join-chapter?code=... deep link. */
 
 import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TextInput, View } from "react-native";
 
 import { joinChapter } from "@/api/chapters";
@@ -17,8 +17,12 @@ export default function JoinChapterScreen() {
   // Deep link `chirp://join-chapter?code=...` (and https app links) prefill the code.
   const { code: linkCode } = useLocalSearchParams<{ code?: string }>();
   const [code, setCode] = useState(linkCode ?? "");
+  const [codeEdited, setCodeEdited] = useState(false);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!codeEdited && linkCode) setCode(linkCode);
+  }, [codeEdited, linkCode]);
 
   // Hold the form back until the session resolves — rendering during "loading"
   // would let a fast tap fire a tokenless join on cold start. It shows the loading
@@ -34,6 +38,9 @@ export default function JoinChapterScreen() {
     // Signed in but never bootstrapped (e.g. app killed mid-onboarding): finish
     // account-type first; the code rides along and comes back here after.
     return <Redirect href={withInviteCode("/account-type", linkCode)} />;
+  }
+  if (status === "legalRequired") {
+    return <Redirect href={withInviteCode("/legal-acceptance", linkCode)} />;
   }
 
   /**
@@ -142,7 +149,7 @@ export default function JoinChapterScreen() {
             <AppText variant="headline">Invite code</AppText>
             <TextInput
               value={code}
-              onChangeText={setCode}
+              onChangeText={value => { setCodeEdited(true); setCode(value); }}
               placeholder="e.g. SIGCHI-EM-F26"
               placeholderTextColor={palette.inkFaint}
               autoCapitalize="characters"
