@@ -32,23 +32,34 @@ and suspension checks, and is deferred remaining c438 acceptance work rather tha
 being covered by the HTTP enforcement flag. Store review and app-store age-rating
 classification remain release-owner steps after the mobile policy screen is reviewed.
 
+Before enabling enforcement, the API deployment role grants must be reviewed and
+present for the operators and runtime identity that apply migration 0040 and set the
+flag. The migration and policy seed are database operations; the mobile client never
+gets authority to create, activate, or supersede a policy version.
+
+The current policy mapping is explicit: Terms `2026-10-06` maps to
+`https://chirpsocials.com/terms`, and Privacy `2026-10-06` maps to
+`https://chirpsocials.com/privacy`, both effective 2026-10-06. A material edit gets
+a new database version and effective date, and clients must re-accept both current
+rows together.
+
 ## Store policy review (2026-10-07)
 
-Google Play’s [Families and social features policy](https://support.google.com/googleplay/android-developer/answer/16302250?hl=en)
-requires minor declarations and related Play Console treatment when a core feature
-enables anonymous communication or random connections; its expansion is dated
+Google Play’s [Age-Restricted Content and Functionality policy](https://support.google.com/googleplay/android-developer/answer/16302250?hl=en)
+requires blocking minors through Play Console tools when a core feature enables
+anonymous communication or random connections; its expansion is dated
 August 26, 2026 in the [distribution policy update](https://developer.android.com/distribute/play-policies).
 Chirp’s campus board deliberately hides authors and assigns daily pseudonyms, so
 campus or organization scope does not establish an exemption. Verified .edu status
 also does not resolve the under-18 classification. The product choice remains
 access from age 17 with guardian permission; this review does not claim Google
-approval. Store classification and any Play Console minor declarations remain
+approval. Store classification and the Play Console blocking configuration remain
 release-owner decisions after policy and safety review.
 
 Apple’s [App Store Review Guidelines 1.2 and 2.3.6](https://developer.apple.com/app-store/review/guidelines/)
 require UGC filtering, reporting, blocking, contact information, and accurate age
-rating, with additional scrutiny for primarily anonymous chat. Chirp has campus
-and org scopes plus named DMs, but those facts alone do not prove that its anonymous
-board is outside the guideline’s concern. This is a reviewed classification issue,
-not a silent age change; the approved 17+ product choice remains pending the
-release owner’s final store submission and age-rating decision.
+rating; primarily anonymous chat apps may not be allowed and may be removed. Chirp
+has campus and org scopes plus named DMs, but those facts alone do not prove that its
+anonymous board is outside the guideline’s concern. This is a reviewed
+classification issue, not a silent age change; the approved 17+ product choice
+remains pending the release owner’s final store submission and age-rating decision.
