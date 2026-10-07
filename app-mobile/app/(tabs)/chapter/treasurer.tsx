@@ -12,10 +12,14 @@
 
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Linking, Pressable, TextInput, View } from "react-native";
 
 import { listMembers, myMemberships, type MyMembershipOut } from "@/api/chapters";
+import { getPaymentAuthority, paymentDeclaration } from "@/api/authority";
+import { currentIdentity, ownsIdentity } from "@/auth/identity";
+import { confirmOrganizationAuthority } from "@/lib/confirmOrganizationAuthority";
+import { openLegalLink, ORGANIZATION_TERMS_URL } from "@/lib/legalLinks";
 import { ApiError } from "@/api/client";
 import { calendarDay } from "@/lib/dates";
 import {
@@ -329,16 +333,42 @@ export default function TreasurerScreen() {
 
   /** Stripe-hosted onboarding: the link is single-use and short-lived, so it's
    * fetched on tap rather than held in state. */
+  const setupPreparing = useRef(false);
+  const setupSubmitting = useRef(false);
+  const authorityChapter = useRef(chapterId);
+  authorityChapter.current = chapterId;
+  const authorityMounted = useRef(true);
+  useEffect(() => { authorityMounted.current = true; return () => { authorityMounted.current = false; }; }, []);
   const openConnectOnboarding = async () => {
-    if (chapterId === null) return;
+    if (chapterId === null || setupPreparing.current || setupSubmitting.current) return;
+    setupPreparing.current = true;
+    const owner = currentIdentity();
+    const current = () => authorityMounted.current && authorityChapter.current === chapterId && ownsIdentity(owner);
     setOpeningOnboarding(true);
     try {
-      const link = await createOnboardingLink(chapterId);
-      await Linking.openURL(link.url);
+      await confirmOrganizationAuthority({
+        load: () => getPaymentAuthority(chapterId), current,
+        describe: (context) => `I am authorized to set up payments for ${context.org_name} as ${context.role}. I accept Chirp's Organization and payment terms (version ${context.policy_version}), available below. Stripe will separately ask its authorized representative to review its terms.`,
+        act: async (context) => {
+          if (!current() || setupSubmitting.current) return;
+          setupSubmitting.current = true;
+          setOpeningOnboarding(true);
+          try {
+            const link = await createOnboardingLink(chapterId, paymentDeclaration(context));
+            if (current()) await Linking.openURL(link.url);
+          } catch (error) {
+            if (current()) showApiError(error, "Couldn't open Stripe setup");
+          } finally {
+            setupSubmitting.current = false;
+            if (current()) setOpeningOnboarding(false);
+          }
+        },
+      });
     } catch (error) {
-      showApiError(error, "Couldn't open Stripe setup");
+      if (current()) showApiError(error, "Couldn't load payment authority");
     } finally {
-      setOpeningOnboarding(false);
+      setupPreparing.current = false;
+      if (current() && !setupSubmitting.current) setOpeningOnboarding(false);
     }
   };
 
@@ -750,6 +780,9 @@ export default function TreasurerScreen() {
                       ? "Stripe is still reviewing the chapter's details. Payments switch on automatically once it clears."
                       : "Finish Stripe setup to collect dues by card or bank transfer."}
                   </AppText>
+                  <Pressable accessibilityRole="link" onPress={() => void openLegalLink("Organization and payment terms", ORGANIZATION_TERMS_URL)} style={{ minHeight: 44, justifyContent: "center" }}>
+                    <AppText variant="caption" style={{ color: palette.ink, textDecorationLine: "underline" }}>Organization and payment terms</AppText>
+                  </Pressable>
                   <Button
                     label={openingOnboarding ? "Opening…" : "Set up payments"}
                     onPress={() => void openConnectOnboarding()}

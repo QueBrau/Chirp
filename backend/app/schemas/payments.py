@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+from app.schemas.authority import PaymentAuthorityInput
 
 # Which rail the member chose. application_fee_amount is immutable once a
 # PaymentIntent exists, so the rail is picked BEFORE the intent is created —
@@ -15,6 +16,7 @@ class ConnectOnboardingRequest(BaseModel):
     """Body for POST /payments/connect/onboarding-link."""
 
     chapter_id: uuid.UUID
+    authority: PaymentAuthorityInput | None = None
 
 
 class ConnectOnboardingOut(BaseModel):

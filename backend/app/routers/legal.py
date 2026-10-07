@@ -52,3 +52,9 @@ async def accept_legal(body: LegalAcceptanceCreate, user: models.User = Depends(
     await session.execute(insert(models.LegalAcceptance).values(rows).on_conflict_do_nothing(constraint="uq_legal_acceptance_user_policy"))
     await session.commit()
     return await _status(session, user)
+
+
+@router.get("/legal/organization-policy")
+async def organization_policy():
+    from app.services.organization_authority import ORGANIZATION_POLICY_VERSION, ORGANIZATION_POLICY_URL
+    return {"version": ORGANIZATION_POLICY_VERSION, "url": ORGANIZATION_POLICY_URL}

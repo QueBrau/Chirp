@@ -193,7 +193,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const unsubscribeStatus = chirpSocket.onStatus(setRealtimeStatus);
     const unsubscribeAuth = chirpSocket.setAuthHandlers({
-      revalidate: async (owner, signal) => await loadMe({ owner, signal, forceToken: true, recoverOnFailure: true }) === "ready",
+      revalidate: async (owner, signal) => {
+        const result = await loadMe({ owner, signal, forceToken: true, recoverOnFailure: true });
+        return result === "ready" ? true : result === "legalRequired" ? "legalRequired" : false;
+      },
       suspended: owner => {
         if (!ownsIdentity(owner)) return;
         // A current authenticated 403 outranks an older /me still in flight.
@@ -203,7 +206,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       },
       exhausted: owner => {
         if (!ownsIdentity(owner)) return;
-        setStatus(prev => prev === "suspended" || prev === "unregistered" || prev === "signedOut" ? prev : "recoverable");
+        setStatus(prev => prev === "suspended" || prev === "unregistered" || prev === "signedOut" || prev === "legalRequired" ? prev : "recoverable");
+      },
+      legalRequired: owner => {
+        if (!ownsIdentity(owner)) return;
+        // A newer 428 outranks any older /me request that still says ready.
+        genRef.current += 1;
+        loadRef.current?.cancel();
+        setStatus("legalRequired");
       },
     });
     setRealtimeStatus(chirpSocket.getStatus());
