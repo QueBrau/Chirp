@@ -417,6 +417,15 @@
   ],
   "cards": [
     {
+      "id": "c449",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "bug",
+      "area": "backend",
+      "title": "c449 IN PROGRESS Oct 7 (Q): MAIN CI IS RED - tests/test_auth_firebase_mode.py::test_privacy_auth_rejects_nonfinite_or_future_auth_time fails on main d6b6af1 (c436 merge) and on PR #350. The parametrize list computes time.time() + 60 and time.time() - 901 at COLLECTION; the full suite runs ~16 minutes, so by the time the case executes the 'future' auth_time is in the past and no longer raises. Timing-dependent, so it passes in short targeted runs. Fix: resolve the relative times inside the test body. Test-only, one file. Branch q/c449-auth-time-flake.",
+      "detail": ""
+    },
+    {
       "id": "c448",
       "col": "progress",
       "owner": "Q",
