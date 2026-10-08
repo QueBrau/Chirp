@@ -226,7 +226,7 @@
 
 <script id="board-data" type="application/json">
 {
-  "updated": 1791422997309,
+  "updated": 1791424706492,
   "alpha": {
     "goal": "ALPHA LIVE — real students, real orgs. Q's old chapter plus a couple more, on real phones, giving real feedback. Not a full rollout: a small, known group we can call when something breaks, so we iterate on what actually annoys people rather than what we imagine will.",
     "shipped": [
@@ -4328,8 +4328,8 @@
       "owner": "J",
       "tag": "P1 release",
       "area": "deploy",
-      "title": "c450 CLAIMED Oct7: staged release source permissions block appuser startup. Fix private build packaging and prove nonroot imports before replacement stage. OldAPI100percent preserved.",
-      "detail": "Discovered during authorizedc427/c433 APIzero-trafficstage: candidatechirp-api-c427-close-d28b99c fails PermissionError reading /srv/app/__init__.py asappuser, beforeappstartup/SQL/HTTPprobes. Immutableimagea7625939 isrejected; originalcodex0913APIrevision remains100percent throughout,WSuntouched. Rootremovedc427-close tag; CLIreportedlatestconfigurationfailure butfreshspec+statustrafficbothconfirmold100/no tags. Claimprivatebuildpackaging/source-mode normalization andnonrootimageimportsmoke; noapplicationcode/dependency/schema change. Acceptance: replacementimmutableimage has exactsame139sourcebytes, explicitreadablefile/directorymodes, image-user smoke passes andstagedservice starts. Parentc427/c433 liveacceptance remainsseparate."
+      "title": "c450 PACKAGING FIX BUILT Oct7: imagebfd3171e passes UID1000 source-read/import/schema0039 smoke; exact139sourcebytes retained. Replacement zero-trafficstage remains.",
+      "detail": "Discovered during authorizedc427/c433 APIzero-trafficstage: candidatechirp-api-c427-close-d28b99c fails PermissionError reading /srv/app/__init__.py asappuser, beforeappstartup/SQL/HTTPprobes. Immutableimagea7625939 isrejected; originalcodex0913APIrevision remains100percent throughout,WSuntouched. Rootremovedc427-close tag; CLIreportedlatestconfigurationfailure butfreshspec+statustrafficbothconfirmold100/no tags. Claimprivatebuildpackaging/source-mode normalization andnonrootimageimportsmoke; noapplicationcode/dependency/schema change. Acceptance: replacementimmutableimage has exactsame139sourcebytes, explicitreadablefile/directorymodes, image-user smoke passes andstagedservice starts. Parentc427/c433 liveacceptance remainsseparate.\n\nCorrectedprivatebuilder sets755directory/644filemodes onlyinextractedsourcecontext, verifiesexact139fileinventory/bytehashes andlockeddeps, andrunsimageBUILDsmoke asunchangedUID1000 readingallPython/importingapp.main+transport/asserting0039. No rootruntime/dependency/schema/codechanges. Independentreviewclear, Cloud Build ddbcf283 SUCCESS01:56:40UTC, imagebfd3171e9a522690d1d130ab124e91f1790353b06e94e1495756f09d0beb00df. Priorfailedimage/revision retainedasaudit; nextcandidateuniquec427b-close-d28b99c, samelegacyall/all preservationcontract. No trafficpromoted."
     }
   ],
   "decisions": [
