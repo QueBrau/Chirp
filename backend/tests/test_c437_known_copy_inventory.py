@@ -44,7 +44,9 @@ class FakeBlob:
 
 
 class FakeProviderError(Exception):
-    def __init__(self, code): self.code = code
+    def __init__(self, code):
+        super().__init__("provider-secret-sentinel")
+        self.code = code
 
 
 class FakeIterator:
@@ -150,10 +152,11 @@ def test_deadline_is_checked_between_download_chunks(monkeypatch):
     target = FakeBlob("posts/u/target.jpg", b"123456", "1", chunks=[b"123", b"456"])
     reader, _ = reader_for(monkeypatch, [target])
     import app.services.known_copy_inventory as inventory
-    clock = iter([0.0, 2.0])
+    clock = iter([0.0, 0.1, 2.0])
     monkeypatch.setattr(inventory.time, "monotonic", lambda: next(clock))
-    with pytest.raises(inventory.InventoryReadError, match="scan_deadline_exceeded"):
+    with pytest.raises(inventory.InventoryReadError, match="scan_deadline_exceeded") as error:
         reader.sha256(target, deadline=1.0, max_bytes=100)
+    assert error.value.bytes_seen == 6
 
 
 def test_deadline_and_provider_errors_are_fixed_and_redacted(monkeypatch):
@@ -184,7 +187,6 @@ def test_aggregate_remaining_budget_caps_dishonest_candidate_and_expired_hash_do
     candidate = FakeBlob("avatars/u/copy.jpg", b"bytes", "2", fail=True)
     reader, _ = reader_for(monkeypatch, [target, candidate])
     result = scan_known_copies(reader, bucket="synthetic-media", target_name=target.name, expected_generation="1")
-    assert "provider_hash_failed" in result.incomplete_reasons
     assert "provider_hash_failed" in result.incomplete_reasons
     assert "provider-secret-sentinel" not in json.dumps(result.to_dict())
 
