@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import struct
 from types import SimpleNamespace
 
 import pytest
@@ -118,7 +119,10 @@ async def test_enabled_normal_peer_close_completes_over_real_loopback(monkeypatc
     @app.websocket("/close")
     async def close(ws: WebSocket):
         await ws.accept()
-        await ws.receive_text()
+        try:
+            await ws.receive_text()
+        except WebSocketDisconnect:
+            pass
 
     async with local_server(app) as (base, _server):
         async with websockets.connect(base + "/close", close_timeout=1, proxy=None) as socket:
@@ -133,7 +137,10 @@ async def test_enabled_non1000_peer_close_uses_stock_path(monkeypatch):
     @app.websocket("/close")
     async def close(ws: WebSocket):
         await ws.accept()
-        await ws.receive_text()
+        try:
+            await ws.receive_text()
+        except WebSocketDisconnect:
+            pass
 
     async with local_server(app) as (base, _server):
         async with websockets.connect(base + "/close", close_timeout=1, proxy=None) as socket:
@@ -174,3 +181,81 @@ async def test_enabled_abrupt_disconnect_uses_stock_path(monkeypatch):
         socket = await websockets.connect(base + "/close", close_timeout=1, proxy=None)
         socket.transport.abort()
         await asyncio.wait_for(disconnected.wait(), 2)
+
+
+async def _raw_handshake(base):
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(base)
+    reader, writer = await asyncio.open_connection(parsed.hostname, parsed.port)
+    writer.write(
+        b"GET /close HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+        b"Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        b"Sec-WebSocket-Version: 13\r\n\r\n"
+    )
+    await writer.drain()
+    response = await reader.readuntil(b"\r\n\r\n")
+    assert b"101 Switching Protocols" in response
+    return reader, writer
+
+
+def _masked_close_frame(code=1000):
+    mask = b"\x01\x02\x03\x04"
+    payload = struct.pack("!H", code)
+    return b"\x88\x82" + mask + bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+
+
+async def test_real_protocol_delay_timer_fires_without_peer_echo(monkeypatch):
+    monkeypatch.setenv("WS_PEER_CLOSE_DELAY_ENABLED", "true")
+    app = FastAPI()
+
+    @app.websocket("/close")
+    async def close(ws: WebSocket):
+        await ws.accept()
+        try:
+            await ws.receive_text()
+        except WebSocketDisconnect:
+            pass
+
+    async with local_server(app) as (base, server):
+        reader, writer = await _raw_handshake(base)
+        protocol = next(iter(server.server_state.connections))
+        writer.write(_masked_close_frame())
+        await writer.drain()
+        async with asyncio.timeout(1):
+            while not protocol.close_sent:
+                await asyncio.sleep(.005)
+        assert protocol.close_timer is not None
+        await asyncio.sleep(.15)
+        assert protocol.transport.is_closing()
+        writer.close()
+        await writer.wait_closed()
+
+
+async def test_real_protocol_peer_echo_cancels_delay_and_removes_connection(monkeypatch):
+    monkeypatch.setenv("WS_PEER_CLOSE_DELAY_ENABLED", "true")
+    app = FastAPI()
+
+    @app.websocket("/close")
+    async def close(ws: WebSocket):
+        await ws.accept()
+        try:
+            await ws.receive_text()
+        except WebSocketDisconnect:
+            pass
+
+    async with local_server(app) as (base, server):
+        reader, writer = await _raw_handshake(base)
+        protocol = next(iter(server.server_state.connections))
+        writer.write(_masked_close_frame())
+        await writer.drain()
+        frame = await reader.readexactly(4)
+        assert frame == b"\x88\x02\x03\xe8"
+        writer.write(_masked_close_frame())
+        await writer.drain()
+        async with asyncio.timeout(1):
+            while protocol in server.server_state.connections:
+                await asyncio.sleep(.005)
+        assert protocol.close_timer is None
+        writer.close()
+        await writer.wait_closed()
