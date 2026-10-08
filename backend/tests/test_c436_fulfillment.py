@@ -17,12 +17,13 @@ from app.services.account_cleanup import cleanup_local_account
 
 
 class ConfirmingProvider:
-    def __init__(self) -> None:
+    def __init__(self, provider_key: str = "synthetic") -> None:
+        self.provider_key = provider_key
         self.keys: list[str] = []
 
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
         self.keys.append(idempotency_key)
-        return {"confirmed": True, "provider": "synthetic", "subject": str(user.id), "scope": ["synthetic"], "readback": True}
+        return {"confirmed": True, "provider": self.provider_key, "subject": str(user.id), "scope": [self.provider_key], "readback": True}
 
 
 class StrictFalseProvider(ConfirmingProvider):
@@ -32,8 +33,8 @@ class StrictFalseProvider(ConfirmingProvider):
 
 
 class FailOnceProvider(ConfirmingProvider):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, provider_key: str = "synthetic") -> None:
+        super().__init__(provider_key)
         self.failed = False
 
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
@@ -41,12 +42,12 @@ class FailOnceProvider(ConfirmingProvider):
         if not self.failed:
             self.failed = True
             raise RuntimeError("secret provider response must not persist")
-        return {"confirmed": True, "provider": "synthetic", "subject": str(user.id), "scope": ["synthetic"], "readback": True}
+        return {"confirmed": True, "provider": self.provider_key, "subject": str(user.id), "scope": [self.provider_key], "readback": True}
 
 
 class GatedProvider(ConfirmingProvider):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, provider_key: str = "synthetic") -> None:
+        super().__init__(provider_key)
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -54,7 +55,11 @@ class GatedProvider(ConfirmingProvider):
         self.keys.append(idempotency_key)
         self.started.set()
         await self.release.wait()
-        return {"confirmed": True}
+        return {"confirmed": True, "provider": self.provider_key, "subject": str(user.id), "scope": [self.provider_key], "readback": True}
+
+
+def provider_set(provider_type=ConfirmingProvider):
+    return {key: provider_type(key) for key in PROVIDER_STEPS}
 
 
 @pytest.mark.asyncio
@@ -79,7 +84,7 @@ async def test_deletion_journal_blocks_without_adapters_then_retries_idempotentl
         await session.refresh(user)
         assert user.firebase_uid == owner.firebase_uid
 
-        providers = {key: ConfirmingProvider() for key in PROVIDER_STEPS}
+        providers = provider_set()
         completed = await run_deletion(session, request.id, user, providers)
         assert completed.status == "completed"
         assert set(completed.completed_steps) == set((*PROVIDER_STEPS, "database_tombstone"))
@@ -93,9 +98,11 @@ async def test_deletion_journal_blocks_without_adapters_then_retries_idempotentl
         )).all()
         assert len(steps) == 5
         assert all(row.status == "succeeded" for row in steps)
+        assert steps[0].provider_ref["provider"] == steps[0].step_key
+        assert steps[0].provider_ref["subject"] == owner.id
         assert all(provider.keys == [f"account-deletion:{request.id}:{key}"] for key, provider in providers.items())
 
-        repeat = await run_deletion(session, request.id, user, {key: StrictFalseProvider() for key in PROVIDER_STEPS})
+        repeat = await run_deletion(session, request.id, user, {key: StrictFalseProvider(key) for key in PROVIDER_STEPS})
         assert repeat.status == "completed"
 
 
@@ -107,7 +114,7 @@ async def test_missing_adapters_are_preflighted_without_provider_calls(client: A
         request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert request is not None and user is not None
-        providers = {key: ConfirmingProvider() for key in PROVIDER_STEPS[:-1]}
+        providers = {key: ConfirmingProvider(key) for key in PROVIDER_STEPS[:-1]}
         result = await run_deletion(session, request.id, user, providers)
         assert result.status == "blocked"
         assert all(not provider.keys for provider in providers.values())
@@ -121,8 +128,8 @@ async def test_failed_prefix_retries_without_replaying_confirmed_steps(client: A
         request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert request is not None and user is not None
-        flaky = {key: ConfirmingProvider() for key in PROVIDER_STEPS}
-        flaky[PROVIDER_STEPS[1]] = FailOnceProvider()
+        flaky = provider_set()
+        flaky[PROVIDER_STEPS[1]] = FailOnceProvider(PROVIDER_STEPS[1])
         first = await run_deletion(session, request.id, user, flaky)
         assert first.status == "blocked"
         second = await run_deletion(session, request.id, user, flaky)
@@ -140,7 +147,7 @@ async def test_canceled_request_is_terminal_and_makes_no_provider_calls(client: 
         user = await session.get(models.User, uuid.UUID(owner.id))
         request.status = "canceled"
         await session.commit()
-        providers = {key: ConfirmingProvider() for key in PROVIDER_STEPS}
+        providers = provider_set()
         result = await run_deletion(session, request.id, user, providers)
         assert result.status == "blocked"
         assert all(not provider.keys for provider in providers.values())
@@ -157,11 +164,16 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(client: As
         foreign_post = models.Post(campus_id=campus, author_id=other_id, body="foreign body", audience="campus", post_type="text")
         session.add_all([owned_post, foreign_post])
         await session.flush()
+        owned_chirp = models.Chirp(campus_id=campus, author_id=owner_id, body="chirp")
         session.add_all([
             models.PostComment(post_id=owned_post.id, author_id=owner_id, body="comment"),
-            models.Chirp(campus_id=campus, author_id=owner_id, body="chirp"),
+            owned_chirp,
             models.JobPost(posted_by=owner_id, title="job", company="company", description="description"),
+            models.PostLike(post_id=foreign_post.id, user_id=owner_id),
+            models.UserBlock(blocker_id=owner_id, blocked_id=uuid.UUID(other.id), source="named"),
         ])
+        await session.flush()
+        session.add(models.ChirpVote(chirp_id=owned_chirp.id, user_id=owner_id, value=1))
         await session.commit()
         result = await cleanup_local_account(session, owner_id)
         await session.commit()
@@ -169,6 +181,9 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(client: As
         await session.refresh(foreign_post)
         assert owned_post.body == "[deleted]" and owned_post.deleted_at is not None
         assert foreign_post.body == "foreign body" and foreign_post.deleted_at is None
+        assert (await session.scalars(select(models.PostLike).where(models.PostLike.user_id == owner_id))).all() == []
+        assert (await session.scalars(select(models.ChirpVote).where(models.ChirpVote.user_id == owner_id))).all() == []
+        assert (await session.scalars(select(models.UserBlock).where(models.UserBlock.blocker_id == owner_id))).all() == []
         assert result["retained"]["financial_history"]
         assert "post_likes" in result["coverage"]["retained"]
         assert "chirp_votes" in result["coverage"]["retained"]
@@ -207,7 +222,7 @@ async def test_two_sessions_have_one_provider_owner(client: AsyncClient, make_us
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
     request_id = uuid.UUID(response.json()["id"])
     gate = GatedProvider()
-    providers = {key: ConfirmingProvider() for key in PROVIDER_STEPS}
+    providers = provider_set()
     providers[PROVIDER_STEPS[0]] = gate
     async with get_session_factory()() as first, get_session_factory()() as second:
         first_user = await first.get(models.User, uuid.UUID(owner.id))
@@ -221,6 +236,30 @@ async def test_two_sessions_have_one_provider_owner(client: AsyncClient, make_us
         second_result = await asyncio.wait_for(second_task, timeout=5)
     assert first_result.status == second_result.status == "blocked"
     assert len(gate.keys) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_provider_call_cannot_tombstone(client: AsyncClient, make_user) -> None:
+    owner: ApiUser = await make_user("Cancellation owner")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(response.json()["id"])
+    gate = GatedProvider(PROVIDER_STEPS[0])
+    providers = provider_set()
+    providers[PROVIDER_STEPS[0]] = gate
+    async with get_session_factory()() as first, get_session_factory()() as second:
+        user = await first.get(models.User, uuid.UUID(owner.id))
+        assert user is not None
+        task = asyncio.create_task(run_deletion(first, request_id, user, providers))
+        await asyncio.wait_for(gate.started.wait(), timeout=5)
+        await second.execute(update(models.AccountDataRequest).where(
+            models.AccountDataRequest.id == request_id,
+        ).values(status="canceled"))
+        await second.commit()
+        gate.release.set()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result.status == "blocked"
+        await first.refresh(user)
+        assert user.firebase_uid == owner.firebase_uid
 
 
 @pytest.mark.asyncio

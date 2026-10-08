@@ -41,14 +41,19 @@ class FirebaseProvider:
     """Firebase Auth deletion with readback; never treats a malformed response as success."""
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
         from firebase_admin import auth
+        async def call(operation, *args):
+            try:
+                return await asyncio.wait_for(asyncio.to_thread(operation, *args), timeout=30)
+            except asyncio.TimeoutError:
+                raise ProviderUnavailable("firebase_delete_failed") from None
         try:
-            await asyncio.to_thread(auth.delete_user, user.firebase_uid)
+            await call(auth.delete_user, user.firebase_uid)
         except auth.UserNotFoundError:
             pass
         except Exception:
             raise ProviderUnavailable("firebase_delete_failed") from None
         try:
-            await asyncio.to_thread(auth.get_user, user.firebase_uid)
+            await call(auth.get_user, user.firebase_uid)
         except auth.UserNotFoundError:
             return {
                 "confirmed": True,
@@ -183,17 +188,38 @@ async def run_deletion(
         await session.commit()
         try:
             result = await provider.delete_account_data(user=user, idempotency_key=step.idempotency_key)
-            if not isinstance(result, dict) or result.get("confirmed") is not True or not isinstance(result.get("provider"), str) or result.get("subject") != str(user.id) or not isinstance(result.get("scope"), list) or result.get("readback") is not True:
+            if (
+                not isinstance(result, dict)
+                or result.get("confirmed") is not True
+                or result.get("provider") != step_key
+                or result.get("subject") != str(user.id)
+                or not isinstance(result.get("scope"), list)
+                or not result["scope"]
+                or not all(isinstance(scope, str) and scope for scope in result["scope"])
+                or result.get("readback") is not True
+            ):
                 raise ProviderUnavailable("provider_confirmation_missing")
         except Exception as exc:
-            step.status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
             code = str(exc) if isinstance(exc, ProviderUnavailable) else "provider_error"
-            step.last_error = code if code in SAFE_PROVIDER_ERRORS else "provider_error"
-            request.status = "blocked"
-            request.failure_code = "provider_step_incomplete"
-            request.fulfillment_lease_token = None
-            request.fulfillment_lease_expires_at = None
-            request.provider_steps = {s.step_key: s.status for s in steps}
+            step_status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
+            safe_error = code if code in SAFE_PROVIDER_ERRORS else "provider_error"
+            failed_step = await session.execute(update(models.AccountFulfillmentStep).where(
+                models.AccountFulfillmentStep.id == step.id,
+                models.AccountFulfillmentStep.status == "running",
+                models.AccountFulfillmentStep.lease_token == token,
+                models.AccountFulfillmentStep.lease_expires_at > _now(),
+            ).values(status=step_status, last_error=safe_error, lease_token=None, lease_expires_at=None))
+            failed_request = await session.execute(update(models.AccountDataRequest).where(
+                models.AccountDataRequest.id == request.id,
+                models.AccountDataRequest.status == "processing",
+                models.AccountDataRequest.fulfillment_lease_token == request_lease,
+                models.AccountDataRequest.fulfillment_lease_expires_at > _now(),
+            ).values(status="blocked", failure_code="provider_step_incomplete",
+                     fulfillment_lease_token=None, fulfillment_lease_expires_at=None,
+                     updated_at=_now()))
+            if failed_step.rowcount != 1 or failed_request.rowcount != 1:
+                await session.rollback()
+                return DeletionRun("blocked", tuple(completed), step_key)
             await session.commit()
             return DeletionRun("blocked", tuple(completed), step_key)
         fenced = await session.execute(update(models.AccountFulfillmentStep).where(
@@ -202,7 +228,9 @@ async def run_deletion(
             models.AccountFulfillmentStep.lease_token == token,
             models.AccountFulfillmentStep.lease_expires_at > _now(),
         ).values(status="succeeded", lease_token=None, lease_expires_at=None,
-                 provider_ref={"confirmed": True}, completed_at=_now()))
+                 provider_ref={"confirmed": True, "provider": result["provider"],
+                               "subject": result["subject"], "scope": result["scope"],
+                               "readback": True}, completed_at=_now()))
         if fenced.rowcount != 1:
             await session.rollback()
             return DeletionRun("blocked", tuple(completed), step_key)
@@ -211,7 +239,9 @@ async def run_deletion(
         await session.commit()
     # Reacquire the request fence before local mutation. A concurrent runner or
     # stale lease cannot clean up after the request has become terminal.
-    request = await session.get(models.AccountDataRequest, request_id, with_for_update=True)
+    request = (await session.scalars(select(models.AccountDataRequest).where(
+        models.AccountDataRequest.id == request_id,
+    ).execution_options(populate_existing=True).with_for_update())).one_or_none()
     if request is None or request.status != "processing" or request.user_id != user.id or request.fulfillment_lease_token != request_lease or request.fulfillment_lease_expires_at is None or request.fulfillment_lease_expires_at <= _now():
         return DeletionRun("blocked", tuple(completed), None)
     # Apply the approved local cleanup boundary; shared/history rows remain.
@@ -225,6 +255,12 @@ async def run_deletion(
     user.display_name = "Deleted account"
     user.avatar_url = None
     user.campus_id = None
+    user.pseudonym_seed = str(uuid.uuid4())
+    user.campus_verified_at = None
+    user.is_platform_admin = False
+    user.suspended_at = None
+    user.suspension_reason = None
+    user.suspended_by = None
     user.is_ghost = True
     tombstone = (await session.scalars(select(models.AccountFulfillmentStep).where(
         models.AccountFulfillmentStep.request_id == request.id,

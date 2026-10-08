@@ -14,7 +14,7 @@ RETENTION_REASONS = {
     "message_history": "encrypted message history remains for other participants; server cannot decrypt it",
     "provider_retention": "provider, backup, log, and unresolved media retention requires provider confirmation",
 }
-PRIVATE_COVERAGE = ("alumni_profiles", "campus_verifications", "account_data_artifacts", "job_posts", "devices_revoke")
+PRIVATE_COVERAGE = ("alumni_profiles", "campus_verifications", "account_data_artifacts", "job_posts", "post_likes", "chirp_votes", "poll_votes", "own_user_blocks", "devices_revoke")
 RETAINED_COVERAGE = (
     "memberships", "role_terms", "lineage_edges", "ledger_entries", "dues_payment_plans",
     "dues_plan_installments", "chapter_stripe_customers", "legal_acceptances",
@@ -42,6 +42,10 @@ async def cleanup_local_account(session: AsyncSession, user_id: uuid.UUID) -> di
     await session.execute(update(models.PostComment).where(models.PostComment.author_id == user_id).values(body="[deleted]", deleted_at=now, removed_reason="account_deleted"))
     await session.execute(update(models.Chirp).where(models.Chirp.author_id == user_id).values(body="[deleted]", removed_at=now, removed_reason="account_deleted"))
     await session.execute(delete(models.JobPost).where(models.JobPost.posted_by == user_id))
+    await session.execute(delete(models.PostLike).where(models.PostLike.user_id == user_id))
+    await session.execute(delete(models.ChirpVote).where(models.ChirpVote.user_id == user_id))
+    await session.execute(delete(models.PollVote).where(models.PollVote.user_id == user_id))
+    await session.execute(delete(models.UserBlock).where(models.UserBlock.blocker_id == user_id))
     if device_ids:
         await session.execute(update(models.Device).where(models.Device.id.in_(device_ids)).values(revoked_at=now))
     return {"deleted_private": list(PRIVATE_COVERAGE), "redacted_authored": ["posts", "post_comments", "chirps"], "revoked": ["devices"], "retained": RETENTION_REASONS, "coverage": {"private": list(PRIVATE_COVERAGE), "retained": list(RETAINED_COVERAGE)}}
