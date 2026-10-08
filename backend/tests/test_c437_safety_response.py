@@ -123,6 +123,8 @@ def _removal_receipt(tmp_path: Path) -> tuple[Path, str]:
         "updated_at": "2026-10-06T13:01:00Z",
         "outcomes": [{"object": {"name": "posts/synthetic/object", "generation": "1", "sha256": "b" * 64}, "status": "removed_verified", "reason": None, "observed_generation": None, "updated_at": "2026-10-06T13:01:00Z"}],
         "complete": True,
+        "verification_complete": True,
+        "verified_at": "2026-10-06T13:02:00Z",
     }
     path = tmp_path / "receipt.json"
     payload["receipt_digest"] = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

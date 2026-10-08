@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -12,8 +13,10 @@ from app.services.known_copy_removal import (
     RemovalObject,
     build_removal_plan,
     execute_removal,
+    main as removal_main,
     receipt_reference,
     verify_removal,
+    write_receipt,
 )
 
 
@@ -53,6 +56,8 @@ def test_plan_requires_complete_inventory_and_scopes_to_reviewed_posts():
     assert plan.allowed_prefixes == ("posts/",)
     assert [item.name for item in plan.objects] == ["posts/u/copy.jpg", "posts/u/target.jpg"]
     assert plan.plan_digest == hashlib.sha256(json.dumps(plan.payload(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    with pytest.raises(RemovalError, match="scope_invalid"):
+        build_removal_plan(_inventory(), allowed_prefixes=("avatars/",))
 
 
 def test_execute_is_generation_bound_durable_and_idempotent(tmp_path):
@@ -62,6 +67,9 @@ def test_execute_is_generation_bound_durable_and_idempotent(tmp_path):
     receipt = execute_removal(plan, provider, receipt_path)
     assert all(item.status == "removed_verified" for item in receipt.outcomes)
     assert receipt_path.stat().st_mode & 0o777 == 0o600
+    receipt = verify_removal(receipt, provider)
+    write_receipt(receipt_path, receipt)
+    assert receipt.verification_complete
     assert receipt_reference(receipt).startswith("c437-removal:")
     deleted = list(provider.deleted)
     again = execute_removal(plan, provider, receipt_path)
@@ -108,6 +116,28 @@ def test_receipt_mismatch_rejects_changed_scope(tmp_path):
     other = build_removal_plan(_inventory(target_generation="99"))
     with pytest.raises(RemovalError, match="receipt_mismatch"):
         execute_removal(other, provider, receipt_path)
+
+
+def test_execution_revalidates_tampered_plan_and_rejects_nan_deadline(tmp_path):
+    plan = build_removal_plan(_inventory())
+    provider = FakeProvider({"posts/u/target.jpg": "11", "posts/u/copy.jpg": "12"})
+    tampered = replace(plan, plan_digest="a" * 64)
+    with pytest.raises(RemovalError, match="receipt_invalid"):
+        execute_removal(tampered, provider, tmp_path / "tampered.json")
+    with pytest.raises(ValueError, match="deadline_seconds_out_of_range"):
+        execute_removal(plan, provider, tmp_path / "nan.json", deadline_seconds=float("nan"))
+    assert provider.deleted == []
+
+
+def test_cli_builds_private_plan_from_inventory_json(tmp_path):
+    inventory = _inventory()
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(json.dumps(inventory.to_dict()), encoding="utf-8")
+    inventory_path.chmod(0o600)
+    plan_path = tmp_path / "plan.json"
+    assert removal_main(["plan", "--inventory", str(inventory_path), "--output", str(plan_path)]) == 0
+    assert plan_path.stat().st_mode & 0o777 == 0o600
+    assert json.loads(plan_path.read_text(encoding="utf-8"))["objects"]
 
 
 def test_gcs_adapter_uses_generation_precondition_and_no_retry(monkeypatch):

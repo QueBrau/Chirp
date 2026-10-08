@@ -138,11 +138,35 @@ again and marks a replacement generation `reappeared`; only a receipt whose ever
 outcome is `removed_verified` or `already_absent` yields the `c437-removal:<digest>`
 reference accepted for a case attempt.
 
+The operator CLI consumes the private inventory JSON directly:
+
+```sh
+python3 -m app.services.known_copy_removal plan \
+  --inventory /private/operator/c437-known-copy-manifest.json \
+  --output /private/operator/c437-removal-plan.json
+python3 -m app.services.known_copy_removal execute \
+  --plan /private/operator/c437-removal-plan.json \
+  --receipt /private/operator/c437-removal-receipt.json \
+  --confirm-plan-digest '<reviewed-plan-digest>' --allow-provider-delete
+python3 -m app.services.known_copy_removal verify \
+  --plan /private/operator/c437-removal-plan.json \
+  --receipt /private/operator/c437-removal-receipt.json
+```
+
+`execute` is an explicit provider mutation and is blocked unless the operator
+supplies both `--allow-provider-delete` and the exact reviewed plan digest. `verify`
+is the required fresh read-only step before a case reference is recorded.
+
 The case register rejects an arbitrary known-copy success reference. After reviewing
 the private receipt, derive its reference with `c437_receipt_reference` and provide
 both the receipt path and the exact `c437-removal:<digest>` value to the
 `known_copy` `verified_absent` attempt command. The register verifies the receipt's
 private mode, complete outcomes and canonical receipt digest before recording it.
+This digest is an integrity check for the operator-supplied receipt, not a
+cryptographic attestation from Google Cloud. Closure still requires a fresh
+read-only provider verification against the exact plan and retention of that
+receipt. The result means the reviewed serving objects were absent at verification
+time; it does not prove historical object-version purge or permanent deletion.
 
 For root review, use a disposable bucket and a harmless non-sensitive fixture under
 `posts/synthetic-c437/`: create two objects with different names and identical
