@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 try:
-    from safety_response import NOTICE_FIELDS, SafetyCaseStore, main, run_drill
+    from safety_response import NOTICE_FIELDS, SafetyCaseStore, c437_receipt_reference, main, run_drill
 finally:
     sys.path.pop(0)
 
@@ -114,6 +114,23 @@ def _ready_case(store: SafetyCaseStore):
     return case_ref, when
 
 
+def _removal_receipt(tmp_path: Path) -> tuple[Path, str]:
+    payload = {
+        "schema_version": 1,
+        "plan_digest": "a" * 64,
+        "bucket": "synthetic",
+        "started_at": "2026-10-06T13:00:00Z",
+        "updated_at": "2026-10-06T13:01:00Z",
+        "outcomes": [{"object": {"name": "posts/synthetic/object", "generation": "1", "sha256": "b" * 64}, "status": "removed_verified", "reason": None, "observed_generation": None, "updated_at": "2026-10-06T13:01:00Z"}],
+        "complete": True,
+    }
+    path = tmp_path / "receipt.json"
+    payload["receipt_digest"] = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.chmod(0o600)
+    return path, c437_receipt_reference(path)
+
+
 def test_close_requires_current_generation_and_known_copy_proof(tmp_path):
     store = SafetyCaseStore(tmp_path / "cases.sqlite3")
     case_ref, when = _ready_case(store)
@@ -126,8 +143,10 @@ def test_close_requires_current_generation_and_known_copy_proof(tmp_path):
     store.action(case_ref, event="reappearance", actor="Braulio", details={"reason": "reported_reappearance"}, when=when)
     with pytest.raises(ValueError, match="every controlled surface"):
         store.close_case(case_ref, actor="Jose", when=when + timedelta(minutes=1))
-    for surface in ("post", "comment", "chirp", "media", "known_copy"):
+    receipt_path, receipt_ref = _removal_receipt(tmp_path)
+    for surface in ("post", "comment", "chirp", "media"):
         store.attempt(case_ref, surface=surface, attempt=2, outcome="verified_absent", actor="Braulio", verification_ref=f"fresh-{surface}", when=when + timedelta(minutes=2))
+    store.attempt(case_ref, surface="known_copy", attempt=2, outcome="verified_absent", actor="Braulio", verification_ref=receipt_ref, known_copy_receipt=receipt_path, when=when + timedelta(minutes=2))
     store.close_case(case_ref, actor="Braulio", when=when + timedelta(minutes=3))
     assert store.snapshot(case_ref)["status"] == "closed"
     store.close()
@@ -143,7 +162,10 @@ def test_later_failed_verification_invalidates_previous_success(tmp_path):
     store.attempt(case_ref, surface="known_copy", attempt=2, outcome="transient_failure", actor="Jose", verification_ref=None, when=when)
     with pytest.raises(ValueError, match="known-copy"):
         store.close_case(case_ref, actor="Jose", when=when)
-    store.attempt(case_ref, surface="known_copy", attempt=3, outcome="verified_absent", actor="Braulio", verification_ref="copies-removed-and-verified", when=when)
+    receipt_path, receipt_ref = _removal_receipt(tmp_path)
+    with pytest.raises(ValueError, match="receipt"):
+        store.attempt(case_ref, surface="known_copy", attempt=3, outcome="verified_absent", actor="Braulio", verification_ref="arbitrary-metadata", known_copy_receipt=receipt_path, when=when)
+    store.attempt(case_ref, surface="known_copy", attempt=3, outcome="verified_absent", actor="Braulio", verification_ref=receipt_ref, known_copy_receipt=receipt_path, when=when)
     store.close_case(case_ref, actor="Braulio", when=when)
     assert store.snapshot(case_ref)["status"] == "closed"
     store.close()

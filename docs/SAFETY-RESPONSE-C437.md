@@ -123,6 +123,38 @@ or run it from an API request. A responder may record its manifest digest as the
 generation-preconditioned deletion, post-delete verification and IAM approval remain
 separate gates.
 
+## Reviewed known-copy removal procedure
+
+`backend/app/services/known_copy_removal.py` is the separate, explicit operator
+step for a reviewed synthetic or production plan. `build_removal_plan` accepts only
+a complete inventory and binds the bucket, target generation, manifest digest,
+`posts/` scope, every object generation and every object SHA-256 into an immutable
+plan digest. It refuses incomplete scans, missing generations, malformed references
+and scope expansion. `GCSRemovalProvider.delete` sends only conditional deletes with
+`if_generation_match`, disabled retries and a bounded deadline; `execute_removal`
+writes a private `0600` receipt after each object and can retry only that exact plan.
+It never deletes a replacement generation. `verify_removal` reads the reviewed names
+again and marks a replacement generation `reappeared`; only a receipt whose every
+outcome is `removed_verified` or `already_absent` yields the `c437-removal:<digest>`
+reference accepted for a case attempt.
+
+The case register rejects an arbitrary known-copy success reference. After reviewing
+the private receipt, derive its reference with `c437_receipt_reference` and provide
+both the receipt path and the exact `c437-removal:<digest>` value to the
+`known_copy` `verified_absent` attempt command. The register verifies the receipt's
+private mode, complete outcomes and canonical receipt digest before recording it.
+
+For root review, use a disposable bucket and a harmless non-sensitive fixture under
+`posts/synthetic-c437/`: create two objects with different names and identical
+synthetic bytes, capture their provider generations, run the bounded inventory with
+the target generation, review the printed manifest digest, build the posts-only plan,
+and execute it with a private receipt path. Read back both names, then recreate one
+name to obtain a new generation and run `verify_removal`; the receipt must become
+`reappeared` and no second delete may be sent. Repeat with a stale generation and a
+forced provider failure to prove conditional refusal and same-plan retry. Root must
+approve the bucket, fixture names, service identity, retention and deletion window
+before any provider call; this worktree performed no such call.
+
 The adapter follows the documented Google Cloud Storage Python APIs for paginated
 listing and `Blob.download_to_file(..., if_generation_match=...)`:
 [Bucket listing](https://docs.cloud.google.com/python/docs/reference/storage/latest/google.cloud.storage.bucket.Bucket),
