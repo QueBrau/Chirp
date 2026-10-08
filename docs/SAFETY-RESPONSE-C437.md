@@ -93,6 +93,42 @@ delete permanent `posts/` objects. Therefore the register and drill prove case
 handling and evidence discipline; they do not prove production GCS deletion,
 provider deletion, or a known-copy detector. Those remain operational gates.
 
+## Bounded known-copy inventory
+
+`backend/app/services/known_copy_inventory.py` is a read-only operator tool for the
+supported permanent media prefixes `posts/` and `avatars/`. It lists both prefixes
+with explicit object-count, per-object-byte, aggregate-byte and wall-clock limits,
+then streams only size/metadata candidates through a bounded SHA-256 hashing sink.
+The manifest binds each matching object to its provider generation, size, provider
+checksums and computed digest. It contains no image bytes; the CLI prints only counts,
+the manifest digest and incomplete reasons. It never deletes or changes a provider
+object. A cap, timeout, target-generation change, missing metadata, provider error or
+unsupported input makes the manifest incomplete and therefore unsuitable for closure.
+The two prefix listings are not an atomic bucket snapshot; concurrent additions or
+replacements make the result incomplete where detected and require a fresh scan.
+
+Example, using a private manifest destination:
+
+```sh
+python3 -m app.services.known_copy_inventory \
+  --bucket "$MEDIA_BUCKET_NAME" \
+  --object 'posts/<opaque-user-id>/<object>.jpg' \
+  --generation '<provider-generation>' \
+  --manifest /private/operator/c437-known-copy-manifest.json
+```
+
+This is a discovery receipt, not deletion authority. Do not add a `--delete` option
+or run it from an API request. A responder may record its manifest digest as the
+`known_copy` verification reference only after independent review. Provider removal,
+generation-preconditioned deletion, post-delete verification and IAM approval remain
+separate gates.
+
+The adapter follows the documented Google Cloud Storage Python APIs for paginated
+listing and `Blob.download_to_file(..., if_generation_match=...)`:
+[Bucket listing](https://docs.cloud.google.com/python/docs/reference/storage/latest/google.cloud.storage.bucket.Bucket),
+[Blob downloads](https://docs.cloud.google.com/python/docs/reference/storage/latest/google.cloud.storage.blob.Blob),
+and [generation preconditions](https://docs.cloud.google.com/python/docs/reference/storage/latest/generation_metageneration).
+
 ## Appeals and reappearance
 
 Record an appeal against the case reference with the appellant's contact and
