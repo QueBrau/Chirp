@@ -27,7 +27,8 @@
       "AUTH_MODE": "firebase",
       "FIREBASE_PROJECT_ID": "chirps-prod",
       "DB_POOL_TIMEOUT": "10",
-      "CORS_ORIGINS": "[\"https://chirps-prod.web.app\",\"http://localhost:8081\"]"
+      "CORS_ORIGINS": "[\"https://chirps-prod.web.app\",\"http://localhost:8081\"]",
+      "WS_PEER_CLOSE_DELAY_ENABLED": "true"
     },
     "secrets": {
       "REDIS_URL": "REDIS_URL:latest"

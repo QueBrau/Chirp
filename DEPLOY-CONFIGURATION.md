@@ -19,6 +19,7 @@ The reviewed intent now selects `SERVICE_ROLE=api` and `SERVICE_ROLE=ws`, with
 and media secret bindings. WS explicitly retires its legacy media binding and
 outbox worker; API retains the worker. Both still share Redis, whose broker ACL
 isolation is outside this change (c372).
+The shared close-delay flag is a literal source setting that preserves the reviewed deployed fix for future API/WS templates; its presence here does not prove that either service has the setting in its live revision or that the selected service roles were rolled out. Those claims still require the staged and canonical runtime evidence.
 
 This is intended configuration, not evidence of a completed rollout. Board c375
 records the current credential/IAM preparation, staged checks and live acceptance.

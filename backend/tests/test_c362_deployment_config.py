@@ -525,10 +525,7 @@ def test_live_undeclared_environment_is_drift(config, snap, release):
 
 def test_peer_close_delay_requires_explicit_reviewed_intent(config, release):
     for step in C.plan(config, release, "gcloud")["steps"]:
-        assert "WS_PEER_CLOSE_DELAY_ENABLED" not in planned_env(shlex.split(step["stage_command"]))
-    config["services"]["ws"]["env"]["WS_PEER_CLOSE_DELAY_ENABLED"] = "true"
-    steps = C.plan(config, release, "gcloud")["steps"]
-    assert planned_env(shlex.split(steps[0]["stage_command"]))["WS_PEER_CLOSE_DELAY_ENABLED"] == "true"
+        assert planned_env(shlex.split(step["stage_command"]))["WS_PEER_CLOSE_DELAY_ENABLED"] == "true"
     snap = fixture(config, release)
     assert run_compare(config, snap, release)["verdict"] == "CONFIG_MATCH"
     rows = snap["revisions"][release["revisions"]["ws"]]["spec"]["containers"][0]["env"]
