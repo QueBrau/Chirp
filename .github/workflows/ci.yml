@@ -237,16 +237,28 @@ jobs:
 
       - name: Messaging encryption claims
         working-directory: app-mobile
-        # Board card c254. The Messages screens claimed "End-to-end encrypted"
-        # while src/crypto/signal.ts was a stub whose every function throws, with
-        # zero callers. Nothing could be sent, so no plaintext was ever at risk -
-        # the app simply told users a security property it does not have. tsc
-        # cannot see a false sentence, and neither can any test that only exercises
-        # code that runs. This guard fails if an encryption claim reappears while
-        # the crypto is still a stub, if the composer is ever enabled while it is,
-        # and - deliberately - when real crypto finally lands, so the cautious copy
-        # gets re-reviewed instead of under-claiming forever.
+        # Board cards c254 and c451. c254: the Messages screens claimed "End-to-end
+        # encrypted" while src/crypto/signal.ts was a stub whose every function throws,
+        # with zero callers - the app told users a security property it did not have, and
+        # tsc cannot see a false sentence. c451 made direct messages really encrypted on
+        # iPhone, so the guard now allows exactly one claim, in exactly one place (the
+        # ready branch of src/messages/DmThread.tsx), and fails if a claim appears
+        # anywhere the crypto does not back (groups, web, Android, a screen that cannot
+        # know this phone's state), if a composer is enabled without the real path behind
+        # it, or if that path stops being real (a stub, a plaintext send, a platform the
+        # native module does not cover). Its --self-test proves it can fail.
         run: npm run verify:e2ee-claims
+
+      - name: Encrypted DM engine
+        working-directory: app-mobile
+        # Board card c451 (E2EE M4). Executes the real src/crypto engine against fakes of
+        # the native core and the v2 API: registration and the stale_generation retry,
+        # pending approval after a reinstall, key top-up, claiming a key only for a
+        # recipient with no session, the one refresh-and-retry on device_list_mismatch,
+        # outbox replay under the same client message id, hard-stop gating of sending (not
+        # receiving), and decrypting in server order. The cryptography itself is the Rust
+        # suite; the native bridge is the two-simulator run.
+        run: npm run verify:e2ee-dm
 
       - name: Lineage a11y list
         working-directory: app-mobile

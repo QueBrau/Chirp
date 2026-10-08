@@ -131,6 +131,20 @@ routes = []
 events = {}
 for path in sorted((ROOT / "backend/app/routers").glob("*.py")):
     module = ast.parse(path.read_text())
+    # c451: a router declared with APIRouter(prefix="/v2") serves every route under that
+    # prefix. Until the v2 E2EE routers there was none, so the decorator path alone WAS the
+    # served path; without this the v2 routes were recorded as unprefixed copies of the v1
+    # ones (POST /devices) and the client's /v2 calls matched nothing.
+    prefix = ""
+    for node in module.body:
+        if (isinstance(node, ast.Assign) and any(name(target) == "router" for target in node.targets)
+                and isinstance(node.value, ast.Call) and name(node.value.func).split(".")[-1] == "APIRouter"):
+            declared = keyword(node.value, "prefix")
+            if declared is not None:
+                value = literal(declared)
+                if not isinstance(value, str):
+                    raise RuntimeError(f"Unresolved router prefix: {path.name}:{node.lineno}")
+                prefix = value
     local_functions = {}
     for node in module.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -160,6 +174,7 @@ for path in sorted((ROOT / "backend/app/routers").glob("*.py")):
             route_path = literal(decorator.args[0]) if decorator.args else literal(keyword(decorator, "path"))
             if not isinstance(route_path, str):
                 raise RuntimeError(f"Unresolved backend route: {path.name}:{node.lineno}")
+            route_path = prefix + route_path
             path_names = set(re.findall(r"\{([^}:]+)(?::[^}]+)?\}", route_path))
             query = route_queries(node, decorator, local_functions, path_names)
             returns = keyword(decorator, "response_model") or node.returns

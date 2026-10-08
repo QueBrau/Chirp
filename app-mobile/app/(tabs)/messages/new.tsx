@@ -10,13 +10,13 @@
  * point instead lives in messages/index.tsx as a header-adjacent ghost pill,
  * the same shape as profile/index.tsx's local EditLayoutToggle.
  *
- * Honest-limit rule: creating a conversation here does NOT unlock sending —
- * src/crypto/signal.ts is still a typed stub (every export throws
- * TODO(milestone-3)), so sendMessage() has nothing that can call it. The
- * thread screen (app/(tabs)/messages/[id].tsx) already discloses this at the
- * composer ("Sending unlocks with E2EE (milestone 4)"); this screen repeats
- * that EXACT line rather than inventing a second, differently-worded claim
- * about encryption or sending (this repo has shipped that mistake twice).
+ * Honest-limit rule (c451 update): a DM can now send (E2EE M4, src/messages/DmThread.tsx)
+ * and a group cannot, so this screen's footnote says which is which in plain words and
+ * makes NO encryption claim of its own. Whether a given phone can actually send is the
+ * thread's business (it knows this device's state; this screen does not), and the only
+ * place allowed to claim encryption is DmThread's ready state, which
+ * `npm run verify:e2ee-claims` enforces. (This repo has shipped the "claim it before it is
+ * true" mistake twice.)
  */
 
 import { useRouter } from "expo-router";
@@ -439,9 +439,11 @@ export default function NewConversationScreen() {
               gap: spacing.xs,
             }}
           >
-            <Feather name="lock" size={typography.caption.fontSize} color={palette.inkFaint} />
+            <Feather name="info" size={typography.caption.fontSize} color={palette.inkFaint} />
             <AppText variant="caption" tone="tertiary">
-              Sending unlocks with E2EE (milestone 4)
+              {selectedUsers.size > 1
+                ? "Group messages aren't available yet."
+                : "Direct messages work in the iPhone app."}
             </AppText>
           </View>
         </View>
