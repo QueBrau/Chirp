@@ -208,6 +208,18 @@ def _masked_close_frame(code=1000):
 async def test_real_protocol_delay_timer_fires_without_peer_echo(monkeypatch):
     monkeypatch.setenv("WS_PEER_CLOSE_DELAY_ENABLED", "true")
     app = FastAPI()
+    scheduled = asyncio.Event()
+    captured = {}
+    original = transport.BoundedFragmentWebSocketsProtocol._handle_delayed_peer_close
+
+    def observe(protocol):
+        before = protocol.loop.time()
+        original(protocol)
+        captured.update(timer=protocol.close_timer, before=before,
+                        immediately_closing=protocol.transport.is_closing())
+        scheduled.set()
+
+    monkeypatch.setattr(transport.BoundedFragmentWebSocketsProtocol, "_handle_delayed_peer_close", observe)
 
     @app.websocket("/close")
     async def close(ws: WebSocket):
@@ -222,19 +234,30 @@ async def test_real_protocol_delay_timer_fires_without_peer_echo(monkeypatch):
         protocol = next(iter(server.server_state.connections))
         writer.write(_masked_close_frame())
         await writer.drain()
-        async with asyncio.timeout(1):
-            while not protocol.close_sent:
-                await asyncio.sleep(.005)
-        assert protocol.close_timer is not None
-        await asyncio.sleep(.15)
+        await asyncio.wait_for(scheduled.wait(), 2)
+        assert captured["immediately_closing"] is False
+        assert captured["timer"].when() - captured["before"] == pytest.approx(0.1, abs=0.02)
+        assert await asyncio.wait_for(reader.readexactly(4), 2) == b"\x88\x02\x03\xe8"
+        assert await asyncio.wait_for(reader.read(), 2) == b""
         assert protocol.transport.is_closing()
         writer.close()
         await writer.wait_closed()
 
 
-async def test_real_protocol_peer_echo_cancels_delay_and_removes_connection(monkeypatch):
+async def test_real_protocol_connection_loss_cancels_delay_and_removes_connection(monkeypatch):
     monkeypatch.setenv("WS_PEER_CLOSE_DELAY_ENABLED", "true")
+    # Use a longer test-only delay to distinguish cancellation from timer expiry,
+    # even on a loaded CI host. The separate real-wire test verifies 100ms.
+    monkeypatch.setattr(transport, "WS_PEER_CLOSE_DELAY_SECONDS", 30)
     app = FastAPI()
+    captured = {}
+    original = transport.BoundedFragmentWebSocketsProtocol._handle_delayed_peer_close
+
+    def observe(protocol):
+        original(protocol)
+        captured["timer"] = protocol.close_timer
+
+    monkeypatch.setattr(transport.BoundedFragmentWebSocketsProtocol, "_handle_delayed_peer_close", observe)
 
     @app.websocket("/close")
     async def close(ws: WebSocket):
@@ -251,11 +274,10 @@ async def test_real_protocol_peer_echo_cancels_delay_and_removes_connection(monk
         await writer.drain()
         frame = await reader.readexactly(4)
         assert frame == b"\x88\x02\x03\xe8"
-        writer.write(_masked_close_frame())
-        await writer.drain()
-        async with asyncio.timeout(1):
+        writer.transport.abort()
+        async with asyncio.timeout(2):
             while protocol in server.server_state.connections:
                 await asyncio.sleep(.005)
+        assert captured["timer"].cancelled()
         assert protocol.close_timer is None
-        writer.close()
         await writer.wait_closed()
