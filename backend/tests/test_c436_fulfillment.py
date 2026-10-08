@@ -27,6 +27,19 @@ class StrictFalseProvider(ConfirmingProvider):
         return {"confirmed": "false"}
 
 
+class FailOnceProvider(ConfirmingProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = False
+
+    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
+        self.keys.append(idempotency_key)
+        if not self.failed:
+            self.failed = True
+            raise RuntimeError("secret provider response must not persist")
+        return {"confirmed": True}
+
+
 @pytest.mark.asyncio
 async def test_deletion_journal_blocks_without_adapters_then_retries_idempotently(
     client: AsyncClient, make_user
@@ -65,6 +78,9 @@ async def test_deletion_journal_blocks_without_adapters_then_retries_idempotentl
         assert all(row.status == "succeeded" for row in steps)
         assert all(provider.keys == [f"account-deletion:{request.id}:{key}"] for key, provider in providers.items())
 
+        repeat = await run_deletion(session, request.id, user, {key: StrictFalseProvider() for key in PROVIDER_STEPS})
+        assert repeat.status == "completed"
+
 
 @pytest.mark.asyncio
 async def test_missing_adapters_are_preflighted_without_provider_calls(client: AsyncClient, make_user) -> None:
@@ -75,6 +91,39 @@ async def test_missing_adapters_are_preflighted_without_provider_calls(client: A
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert request is not None and user is not None
         providers = {key: ConfirmingProvider() for key in PROVIDER_STEPS[:-1]}
+        result = await run_deletion(session, request.id, user, providers)
+        assert result.status == "blocked"
+        assert all(not provider.keys for provider in providers.values())
+
+
+@pytest.mark.asyncio
+async def test_failed_prefix_retries_without_replaying_confirmed_steps(client: AsyncClient, make_user) -> None:
+    owner: ApiUser = await make_user("Retry owner")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert request is not None and user is not None
+        flaky = {key: ConfirmingProvider() for key in PROVIDER_STEPS}
+        flaky[PROVIDER_STEPS[1]] = FailOnceProvider()
+        first = await run_deletion(session, request.id, user, flaky)
+        assert first.status == "blocked"
+        second = await run_deletion(session, request.id, user, flaky)
+        assert second.status == "completed"
+        assert len(flaky[PROVIDER_STEPS[0]].keys) == 1
+        assert "secret provider response" not in (await session.get(models.AccountDataRequest, request.id)).provider_steps
+
+
+@pytest.mark.asyncio
+async def test_canceled_request_is_terminal_and_makes_no_provider_calls(client: AsyncClient, make_user) -> None:
+    owner: ApiUser = await make_user("Canceled owner")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        request.status = "canceled"
+        await session.commit()
+        providers = {key: ConfirmingProvider() for key in PROVIDER_STEPS}
         result = await run_deletion(session, request.id, user, providers)
         assert result.status == "blocked"
         assert all(not provider.keys for provider in providers.values())

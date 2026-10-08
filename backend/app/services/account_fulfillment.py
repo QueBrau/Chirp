@@ -111,6 +111,8 @@ async def run_deletion(
         raise LookupError("deletion_request_not_found")
     if request.status == "completed":
         return DeletionRun("completed", tuple(PROVIDER_STEPS) + ("database_tombstone",))
+    if request.status in {"canceled", "failed"}:
+        return DeletionRun("blocked", (), None)
     steps = await prepare_deletion_plan(session, request)
     missing = [key for key in PROVIDER_STEPS if key not in providers or isinstance(providers[key], UnconfiguredProvider)]
     if missing:
