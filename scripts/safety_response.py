@@ -62,8 +62,10 @@ def c437_receipt_reference(path: Path) -> str:
             raw = json.load(handle)
         digest = raw.pop("receipt_digest")
         outcomes = raw["outcomes"]
-        if raw.get("schema_version") != 1 or raw.get("complete") is not True or not outcomes:
+        verified_at = raw.get("verified_at")
+        if raw.get("schema_version") != 1 or raw.get("complete") is not True or raw.get("verification_complete") is not True or not isinstance(verified_at, str) or not outcomes:
             raise ValueError("known-copy receipt is incomplete")
+        parse_time(verified_at)
         if any(item.get("status") not in _C437_SUCCESS for item in outcomes):
             raise ValueError("known-copy receipt is incomplete")
         expected = hashlib.sha256(json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

@@ -133,6 +133,16 @@ def _removal_receipt(tmp_path: Path) -> tuple[Path, str]:
     return path, c437_receipt_reference(path)
 
 
+def test_old_shaped_receipt_without_fresh_verification_is_rejected(tmp_path):
+    path, _ = _removal_receipt(tmp_path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("verification_complete")
+    raw.pop("verified_at")
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="incomplete"):
+        c437_receipt_reference(path)
+
+
 def test_close_requires_current_generation_and_known_copy_proof(tmp_path):
     store = SafetyCaseStore(tmp_path / "cases.sqlite3")
     case_ref, when = _ready_case(store)

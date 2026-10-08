@@ -5,6 +5,10 @@ import json
 from dataclasses import replace
 
 import pytest
+from google.auth.credentials import AnonymousCredentials
+from google.cloud import storage
+from requests import Request
+from requests import Response
 
 from app.services.known_copy_inventory import KnownCopyInventory, ManifestObject, ObjectMetadata, ScanLimits
 from app.services.known_copy_removal import (
@@ -94,6 +98,22 @@ def test_stale_generation_and_reappearance_are_never_deleted(tmp_path):
         receipt_reference(checked)
 
 
+def test_provider_error_never_produces_fresh_verification_timestamp(tmp_path):
+    plan = build_removal_plan(_inventory())
+    provider = FakeProvider({"posts/u/target.jpg": "11", "posts/u/copy.jpg": "12"})
+    receipt = execute_removal(plan, provider, tmp_path / "receipt.json")
+
+    class FailingRead(FakeProvider):
+        def read(self, name, *, deadline):
+            if name.endswith("copy.jpg"):
+                raise RemovalError("provider_read_failed")
+            return super().read(name, deadline=deadline)
+
+    checked = verify_removal(receipt, FailingRead({}))
+    assert checked.verification_complete is False
+    assert checked.verified_at is None
+
+
 def test_failed_delete_can_retry_same_plan_without_scope_expansion(tmp_path):
     plan = build_removal_plan(_inventory())
     provider = FakeProvider({"posts/u/target.jpg": "11", "posts/u/copy.jpg": "12"})
@@ -173,3 +193,33 @@ def test_gcs_adapter_uses_generation_precondition_and_no_retry(monkeypatch):
     assert bucket.item.calls[0][1]["if_generation_match"] == 7
     assert bucket.item.calls[0][1]["retry"] is None
     assert bucket.item.calls[1][1]["retry"] is None
+
+
+@pytest.mark.parametrize("status, expected", [(204, None), (404, None), (412, "generation_mismatch"), (403, "provider_delete_failed")])
+def test_installed_gcs_delete_contract_uses_controlled_http(monkeypatch, status, expected):
+    class HTTP:
+        is_mtls = False
+
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            response = Response()
+            response.status_code = 200 if method == "GET" else status
+            response.headers = {}
+            response._content = json.dumps({"name": "posts/synthetic/object", "bucket": "synthetic", "generation": "7", "size": "4"}).encode() if method == "GET" else b"{}"
+            response.request = Request(method, url).prepare()
+            return response
+
+    http = HTTP()
+    client = storage.Client(project="synthetic", credentials=AnonymousCredentials(), _http=http)
+    monkeypatch.setattr("app.services.known_copy_removal.storage_service._storage_client", lambda: client)
+    provider = GCSRemovalProvider("synthetic")
+    if expected:
+        with pytest.raises(RemovalError, match=expected):
+            provider.delete("posts/synthetic/object", "7", deadline=10**12)
+    else:
+        provider.delete("posts/synthetic/object", "7", deadline=10**12)
+    delete_call = next(call for call in http.calls if call[0] == "DELETE")
+    assert "ifGenerationMatch=7" in delete_call[1]
