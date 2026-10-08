@@ -1,6 +1,7 @@
 mod common;
 
 mod crash;
+mod ffi;
 mod idempotent;
 mod keys_and_limits;
 mod lifecycle;
