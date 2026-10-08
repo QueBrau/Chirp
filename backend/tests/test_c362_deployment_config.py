@@ -76,6 +76,15 @@ def finding(report, field):
     return any(row["field"] == field for row in report["findings"])
 
 
+def planned_env(command):
+    """Decode gcloud's ^delimiter^KEY=value form without comma splitting JSON."""
+    value = command[command.index("--update-env-vars") + 1]
+    assert value.startswith("^")
+    delimiter = value[1]
+    assert value.startswith("^" + delimiter + "^")
+    return dict(item.split("=", 1) for item in value[3:].split(delimiter))
+
+
 def test_actual_policy_serialized_vs_unconstrained(config):
     C.validate(config)
     envelope = C.pool_envelope(config, C.defaults())
@@ -402,7 +411,7 @@ def test_print_only_plan_derives_both_services_and_verification(config, release,
         assert release["revisions"][role] + "=100" in shlex.split(row["promote_after_review_command"])
         assert config["services"][role].get("service_account", config["shared"]["service_account"]) in cmd
         expected_role = config["services"][role]["env"]["SERVICE_ROLE"]
-        assert "SERVICE_ROLE=" + expected_role in cmd[cmd.index("--update-env-vars")+1].split(",")
+        assert planned_env(cmd)["SERVICE_ROLE"] == expected_role
         assert verification[verification.index("--" + role + "-expected-role")+1] == expected_role
     assert release["schema_head"] in plan["verification_command"] and "--bearer" not in plan["verification_command"]
     assert plan["mode"] == "PRINT_ONLY_NOT_EXECUTED"
@@ -481,9 +490,44 @@ def test_api_public_base_url_missing_or_mismatched_is_drift(config, snap, releas
 
 def test_api_public_base_url_is_in_generated_api_command(config, release):
     steps = {step["service"]: shlex.split(step["stage_command"]) for step in C.plan(config, release, "gcloud")["steps"]}
-    api_env = steps["api"][steps["api"].index("--update-env-vars") + 1].split(",")
-    assert "APP_PUBLIC_BASE_URL=https://chirps-prod.web.app" in api_env
-    assert all("APP_PUBLIC_BASE_URL=" not in value for value in steps["ws"])
+    assert planned_env(steps["api"])["APP_PUBLIC_BASE_URL"] == "https://chirps-prod.web.app"
+    assert "APP_PUBLIC_BASE_URL" not in planned_env(steps["ws"])
+
+
+def test_plan_preserves_current_nonsecret_environment_bytes_for_both_services(config, release):
+    expected = {
+        "CORS_ORIGINS": '["https://chirps-prod.web.app","http://localhost:8081"]',
+    }
+    for step in C.plan(config, release, "gcloud")["steps"]:
+        environment = planned_env(shlex.split(step["stage_command"]))
+        assert {key: environment[key] for key in expected} == expected
+        if step["service"] == "api":
+            assert {environment[key] for key in ("EMAIL_FROM", "EMAIL_PROVIDER", "MEDIA_BUCKET_NAME")} == {
+                "Chirp <hello@josedev.app>", "resend", "chirps-prod-media",
+            }
+        else:
+            assert all(key not in environment for key in ("EMAIL_FROM", "EMAIL_PROVIDER", "MEDIA_BUCKET_NAME"))
+
+
+def test_live_undeclared_environment_is_drift(config, snap, release):
+    for role in ("api", "ws"):
+        snap["services"][role]["spec"]["template"]["spec"]["containers"][0]["env"].append(
+            {"name": "UNDECLARED_RUNTIME_SETTING", "value": "unexpected"}
+        )
+        snap["revisions"][release["revisions"][role]]["spec"]["containers"][0]["env"].append(
+            {"name": "UNDECLARED_RUNTIME_SETTING", "valueFrom": {"secretKeyRef": {"name": "UNDECLARED_SECRET", "key": "latest"}}}
+        )
+    report = run_compare(config, snap, release)
+    assert report["verdict"] == "DRIFT"
+    assert finding(report, "undeclared_environment:UNDECLARED_RUNTIME_SETTING")
+    assert "UNDECLARED_SECRET" not in json.dumps(report)
+
+
+def test_missing_environment_name_projection_is_not_proven(config, snap, release):
+    snap["environment_names"] = {"services": {}, "revisions": {}}
+    report = run_compare(config, snap, release)
+    assert report["verdict"] == "NOT_PROVEN"
+    assert finding(report, "environment_name_projection")
 
 
 def test_plan_rejects_mutable_image_and_unsafe_scale(config, release):
@@ -506,6 +550,10 @@ elif a[:3]==["run","revisions","describe"]:body=s["revisions"][a[3]]
 elif a[:3]==["run","jobs","list"]:body=list(s["jobs"].values())
 elif a[:3]==["sql","instances","describe"]:body=s["database"]
 else:sys.exit(99)
+if any("env[].name" in value for value in a):
+ body={"env":[{"name":row["name"]} for row in body.get("spec",{}).get("template",{}).get("spec",{}).get("containers",[{}])[0].get("env",[])]}
+ if a[:3] == ["run","revisions","describe"]:
+  body={"env":[{"name":row["name"]} for row in s["revisions"][a[3]].get("spec",{}).get("containers",[{}])[0].get("env",[])]}
 print(json.dumps(body))
 '''
 
@@ -526,9 +574,10 @@ def test_actual_cli_explicit_project_reads_and_private_metadata_redaction(config
         body["spec"]["template"]["spec"]["containers"][0]["env"].append({"name": "PRIVATE_TOKEN", "value": SECRET})
         body["metadata"]["annotations"]["private-annotation"] = SECRET
     result, report, path = invoke(tmp_path, snap, release)
-    assert result.returncode == 0 and report["verdict"] == "CONFIG_MATCH"
+    assert result.returncode == 1 and report["verdict"] == "DRIFT"
+    assert finding(report, "undeclared_environment:PRIVATE_TOKEN")
     calls = [json.loads(row) for row in path.read_text().splitlines()]
-    assert len(calls) == 8
+    assert len(calls) == 12
     for call in calls:
         assert call["args"][call["args"].index("--project")+1] == config["project"]
         assert call["args"][call["args"].index("--format")+1].startswith("json(")
@@ -636,7 +685,7 @@ def test_explicit_outbox_ownership_binds_both_plan_and_serving_revision(config, 
     config["services"]["ws"]["env"]["OUTBOX_SWEEPER_ENABLED"] = "false"
     for step in C.plan(config, release, "gcloud")["steps"]:
         command = shlex.split(step["stage_command"])
-        assert "OUTBOX_SWEEPER_ENABLED=" + ("true" if step["service"] == "api" else "false") in command[command.index("--update-env-vars") + 1].split(",")
+        assert planned_env(command)["OUTBOX_SWEEPER_ENABLED"] == ("true" if step["service"] == "api" else "false")
     snap = fixture(config, release)
     assert run_compare(config, snap, release)["verdict"] == "CONFIG_MATCH"
     row = next(row for row in snap["revisions"][release["revisions"]["ws"]]["spec"]["containers"][0]["env"] if row["name"] == "OUTBOX_SWEEPER_ENABLED")
