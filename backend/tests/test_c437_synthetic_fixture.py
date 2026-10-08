@@ -52,7 +52,7 @@ def test_execute_runs_real_inventory_plan_delete_verify_and_replacement_with_fak
             self.md5_hash = None
             self.crc32c = None
 
-        def upload_from_string(self, data, *, content_type, if_generation_match, retry):
+        def upload_from_string(self, data, *, content_type, if_generation_match, retry, timeout=None):
             if if_generation_match == 0 and self.data is not None:
                 raise ProviderError(412)
             self.data = data

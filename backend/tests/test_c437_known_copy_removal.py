@@ -170,6 +170,27 @@ def test_cli_builds_private_plan_from_inventory_json(tmp_path):
     assert json.loads(plan_path.read_text(encoding="utf-8"))["objects"]
 
 
+def test_cli_can_explicitly_select_complete_posts_and_avatar_scope(tmp_path):
+    inventory = _inventory()
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(json.dumps(inventory.to_dict()), encoding="utf-8")
+    inventory_path.chmod(0o600)
+    plan_path = tmp_path / "plan.json"
+    assert removal_main(["plan", "--inventory", str(inventory_path), "--output", str(plan_path), "--prefix", "posts/", "--prefix", "avatars/"]) == 0
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert plan["scope_complete"] is True
+    assert any(item["name"].startswith("avatars/") for item in plan["objects"])
+
+
+def test_verify_rejects_provider_for_wrong_bucket(tmp_path):
+    plan = build_removal_plan(_inventory())
+    provider = FakeProvider({"posts/u/target.jpg": "11", "posts/u/copy.jpg": "12"})
+    receipt = execute_removal(plan, provider, tmp_path / "receipt.json")
+    provider.bucket_name = "other-media"
+    with pytest.raises(RemovalError, match="scope_invalid"):
+        verify_removal(receipt, provider)
+
+
 def test_gcs_adapter_uses_generation_precondition_and_no_retry(monkeypatch):
     class Blob:
         name = "posts/synthetic/object"

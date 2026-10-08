@@ -450,6 +450,10 @@ def _execute_removal(plan: RemovalPlan, provider: RemovalProvider, receipt_path:
 
 def verify_removal(receipt: RemovalReceipt, provider: RemovalProvider, *, deadline_seconds: float = 60.0) -> RemovalReceipt:
     """Read only the reviewed names and flag any replacement generation."""
+    if not receipt.outcomes or _digest(receipt.payload()) != receipt.receipt_digest:
+        raise RemovalError("receipt_invalid")
+    if getattr(provider, "bucket_name", None) != receipt.bucket:
+        raise RemovalError("scope_invalid")
     if not math.isfinite(deadline_seconds) or deadline_seconds <= 0 or deadline_seconds > 900:
         raise ValueError("deadline_seconds_out_of_range")
     deadline = time.monotonic() + deadline_seconds
@@ -508,6 +512,7 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser = sub.add_parser("plan")
     plan_parser.add_argument("--inventory", type=Path, required=True)
     plan_parser.add_argument("--output", type=Path, required=True)
+    plan_parser.add_argument("--prefix", action="append", dest="prefixes", help="Reviewed prefix; repeat for complete posts+avatars scope")
     execute_parser = sub.add_parser("execute")
     execute_parser.add_argument("--plan", type=Path, required=True)
     execute_parser.add_argument("--receipt", type=Path, required=True)
@@ -521,7 +526,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
-            plan = build_removal_plan(load_inventory(args.inventory))
+            inventory = load_inventory(args.inventory)
+            plan = build_removal_plan(inventory, allowed_prefixes=tuple(args.prefixes) if args.prefixes else REVIEWED_PREFIXES)
             _write_plan(args.output, plan)
             print(json.dumps({"plan_digest": plan.plan_digest, "objects": len(plan.objects), "mode": "review_only"}, sort_keys=True))
             return 0

@@ -119,18 +119,18 @@ def execute(args: argparse.Namespace, prefix: str) -> dict[str, object]:
         copy_name = prefix + "copy.bin"
         for name in (target_name, copy_name):
             blob = bucket.blob(name)
-            blob.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None)
-            blob.reload(timeout=10, retry=None)
+            blob.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None, timeout=10)
             created.append((name, str(blob.generation)))
+            blob.reload(timeout=10, retry=None)
         target_generation = created[0][1]
         reader = GCSReader(args.bucket)
         inventory = scan_known_copies(reader, bucket=args.bucket, target_name=target_name, expected_generation=target_generation, prefixes=(prefix,), limits=ScanLimits(max_objects=MAX_OBJECTS, max_object_bytes=MAX_BYTES, max_download_bytes=2 * MAX_BYTES, deadline_seconds=30))
         plan = build_removal_plan(inventory, allowed_prefixes=(prefix,))
         receipt = execute_removal(plan, GCSRemovalProvider(args.bucket), args.receipt, deadline_seconds=30)
         replacement = bucket.blob(copy_name)
-        replacement.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None)
-        replacement.reload(timeout=10, retry=None)
+        replacement.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None, timeout=10)
         created.append((copy_name, str(replacement.generation)))
+        replacement.reload(timeout=10, retry=None)
         checked = verify_removal(receipt, GCSRemovalProvider(args.bucket), deadline_seconds=30)
         write_receipt(args.receipt, checked)
         result = {"plan_digest": plan.plan_digest, "receipt_digest": checked.receipt_digest, "verification_complete": checked.verification_complete, "replacement_generation": str(replacement.generation), "created_generations": created, "cleanup_required": not args.cleanup}
