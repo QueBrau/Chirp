@@ -192,7 +192,7 @@ def build_removal_plan(inventory: KnownCopyInventory, *, allowed_prefixes: tuple
     """Create an immutable plan only from a complete reviewed inventory."""
     if not inventory.complete:
         raise RemovalError("inventory_incomplete")
-    if allowed_prefixes != REVIEWED_PREFIXES or any(prefix not in inventory.scope for prefix in allowed_prefixes):
+    if not allowed_prefixes or any(not prefix.startswith("posts/") or prefix not in inventory.scope for prefix in allowed_prefixes):
         raise RemovalError("scope_invalid")
     target = inventory.target
     generation = _generation(inventory.requested_generation)
@@ -264,7 +264,7 @@ def validate_plan(plan: RemovalPlan) -> None:
     """Revalidate all reviewed bindings before every provider mutation."""
     if not isinstance(plan.bucket, str) or not plan.bucket or "/" in plan.bucket:
         raise RemovalError("scope_invalid")
-    if plan.allowed_prefixes != REVIEWED_PREFIXES or not isinstance(plan.target_name, str) or not plan.target_name.startswith("posts/"):
+    if not plan.allowed_prefixes or any(not prefix.startswith("posts/") for prefix in plan.allowed_prefixes) or not isinstance(plan.target_name, str) or not any(plan.target_name.startswith(prefix) for prefix in plan.allowed_prefixes):
         raise RemovalError("scope_invalid")
     if _generation(plan.target_generation) != plan.target_generation or not _is_hex_digest(plan.manifest_digest):
         raise RemovalError("object_invalid")
@@ -272,7 +272,7 @@ def validate_plan(plan: RemovalPlan) -> None:
         raise RemovalError("object_invalid")
     target = None
     for item in plan.objects:
-        if not isinstance(item.name, str) or not item.name.startswith("posts/") or len(item.name) > 512 or _generation(item.generation) != item.generation or not _is_hex_digest(item.sha256):
+        if not isinstance(item.name, str) or not any(item.name.startswith(prefix) for prefix in plan.allowed_prefixes) or len(item.name) > 512 or _generation(item.generation) != item.generation or not _is_hex_digest(item.sha256):
             raise RemovalError("object_invalid")
         if (item.name, item.generation) == (plan.target_name, plan.target_generation):
             target = item

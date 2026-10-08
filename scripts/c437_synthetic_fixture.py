@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Print or explicitly run a tiny, test-owned c437 GCS fixture procedure."""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import secrets
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+APPROVAL = "I_UNDERSTAND_SYNTHETIC_ONLY"
+NONCE_RE = re.compile(r"^[a-z0-9]{8,32}$")
+MAX_OBJECTS = 3
+MAX_BYTES = 1024 * 1024
+
+
+def _args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--project", required=True)
+    parser.add_argument("--bucket", required=True)
+    parser.add_argument("--nonce", default=None)
+    parser.add_argument("--receipt", type=Path, default=None)
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--approval", default=None)
+    parser.add_argument("--cleanup", action="store_true")
+    return parser.parse_args(argv)
+
+
+def _validate(args: argparse.Namespace) -> tuple[str, str]:
+    nonce = args.nonce or secrets.token_hex(8)
+    if not NONCE_RE.fullmatch(nonce):
+        raise ValueError("nonce must be 8-32 lowercase alphanumeric characters")
+    if not args.project or not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", args.project):
+        raise ValueError("project is invalid")
+    if not args.bucket or "/" in args.bucket or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]", args.bucket):
+        raise ValueError("bucket is invalid")
+    prefix = f"posts/c437-test-{datetime.now(timezone.utc):%Y%m%d}-{nonce}/"
+    return nonce, prefix
+
+
+def _packet(args: argparse.Namespace, nonce: str, prefix: str) -> dict[str, object]:
+    names = [prefix + "target.bin", prefix + "copy.bin", prefix + "replacement.bin"]
+    return {
+        "mode": "EXECUTE" if args.execute else "PRINT_ONLY_NOT_EXECUTED",
+        "project": args.project,
+        "bucket": args.bucket,
+        "prefix": prefix,
+        "nonce": nonce,
+        "max_objects": MAX_OBJECTS,
+        "max_bytes_per_object": MAX_BYTES,
+        "synthetic_objects": names,
+        "receipt": str(args.receipt) if args.receipt else None,
+        "actions": [
+            "upload at most two identical public synthetic byte strings with create-only generation preconditions",
+            "inventory only the exact posts prefix and review generation-bound manifest",
+            "delete only reviewed generations with explicit conditional delete and journal receipt",
+            "recreate one name to prove replacement generation is reported and not deleted",
+            "cleanup only fixture generations after review; never scan or delete outside the prefix",
+        ],
+    }
+
+
+def execute(args: argparse.Namespace, prefix: str) -> dict[str, object]:
+    if args.approval != APPROVAL or args.receipt is None:
+        raise ValueError("execute requires --approval and --receipt")
+    from google.cloud import storage
+    from app.services import storage_service
+    from app.services.known_copy_inventory import GCSReader, ScanLimits, scan_known_copies
+    from app.services.known_copy_removal import GCSRemovalProvider, build_removal_plan, execute_removal, verify_removal, write_receipt
+
+    client = storage.Client(project=args.project)
+    storage_service._client = client
+    bucket = client.bucket(args.bucket)
+    body = b"CHIRP-C437-SYNTHETIC-PUBLIC-FIXTURE\n"
+    target_name = prefix + "target.bin"
+    copy_name = prefix + "copy.bin"
+    created: list[tuple[str, str]] = []
+    for name in (target_name, copy_name):
+        blob = bucket.blob(name)
+        blob.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None)
+        blob.reload(timeout=10, retry=None)
+        created.append((name, str(blob.generation)))
+    target_generation = created[0][1]
+    reader = GCSReader(args.bucket)
+    inventory = scan_known_copies(reader, bucket=args.bucket, target_name=target_name, expected_generation=target_generation, prefixes=(prefix,), limits=ScanLimits(max_objects=MAX_OBJECTS, max_object_bytes=MAX_BYTES, max_download_bytes=2 * MAX_BYTES, deadline_seconds=30))
+    plan = build_removal_plan(inventory, allowed_prefixes=(prefix,))
+    receipt = execute_removal(plan, GCSRemovalProvider(args.bucket), args.receipt, deadline_seconds=30)
+    replacement = bucket.blob(copy_name)
+    replacement.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None)
+    checked = verify_removal(receipt, GCSRemovalProvider(args.bucket), deadline_seconds=30)
+    write_receipt(args.receipt, checked)
+    result = {"plan_digest": plan.plan_digest, "receipt_digest": checked.receipt_digest, "verification_complete": checked.verification_complete, "replacement_generation": str(replacement.generation), "created_generations": created, "cleanup_required": not args.cleanup}
+    if args.cleanup:
+        cleanup_provider = GCSRemovalProvider(args.bucket)
+        cleanup_provider.delete(copy_name, str(replacement.generation), deadline=time.monotonic() + 30)
+        result["cleanup_replacement_generation"] = str(replacement.generation)
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = _args(argv)
+        nonce, prefix = _validate(args)
+        packet = _packet(args, nonce, prefix)
+        if args.execute:
+            packet["result"] = execute(args, prefix)
+        print(json.dumps(packet, sort_keys=True))
+        return 0
+    except Exception:
+        print(json.dumps({"mode": "ERROR", "error": "invalid_or_unavailable_synthetic_fixture"}))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

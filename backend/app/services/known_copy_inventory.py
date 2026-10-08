@@ -269,16 +269,16 @@ def _generation(value: str | None) -> str | None:
     return str(value)
 
 
-def _result(*, bucket: str, target_name: str, requested_generation: str | None, target: ManifestObject | None, matches: tuple[ManifestObject, ...], limits: ScanLimits, started_at: str, finished_at: str, scanned: int, downloaded: int, reasons: set[str]) -> KnownCopyInventory:
+def _result(*, bucket: str, target_name: str, requested_generation: str | None, target: ManifestObject | None, matches: tuple[ManifestObject, ...], limits: ScanLimits, started_at: str, finished_at: str, scanned: int, downloaded: int, reasons: set[str], scope: tuple[str, ...]) -> KnownCopyInventory:
     clean = tuple(sorted(reason for reason in reasons if reason in _REASONS))
-    result = KnownCopyInventory(SCHEMA_VERSION, bucket, target_name, requested_generation, target, matches, SUPPORTED_PREFIXES, "per-prefix provider listing; not an atomic bucket snapshot", limits, started_at, finished_at, scanned, downloaded, not clean, clean, False, "")
+    result = KnownCopyInventory(SCHEMA_VERSION, bucket, target_name, requested_generation, target, matches, scope, "per-prefix provider listing; not an atomic bucket snapshot", limits, started_at, finished_at, scanned, downloaded, not clean, clean, False, "")
     return replace(result, manifest_digest=_digest(result.payload()))
 
 
-def scan_known_copies(reader: Reader, *, bucket: str, target_name: str, expected_generation: str | None = None, limits: ScanLimits | None = None) -> KnownCopyInventory:
+def scan_known_copies(reader: Reader, *, bucket: str, target_name: str, expected_generation: str | None = None, limits: ScanLimits | None = None, prefixes: tuple[str, ...] = SUPPORTED_PREFIXES) -> KnownCopyInventory:
     limits = limits or ScanLimits()
     limits.validate()
-    if not _valid_target(target_name):
+    if not _valid_target(target_name) or not prefixes or any(not prefix.startswith("posts/") and not prefix.startswith("avatars/") for prefix in prefixes) or any("?" in prefix or "#" in prefix or len(prefix) > 512 for prefix in prefixes) or not any(target_name.startswith(prefix) for prefix in prefixes):
         raise ValueError("target_name_invalid")
     requested_generation = _generation(expected_generation)
     started = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -289,7 +289,7 @@ def scan_known_copies(reader: Reader, *, bucket: str, target_name: str, expected
     if requested_generation is None:
         reasons.add("generation_required")
         finished = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        return _result(bucket=bucket, target_name=target_name, requested_generation=expected_generation, target=None, matches=(), limits=limits, started_at=started, finished_at=finished, scanned=0, downloaded=0, reasons=reasons)
+        return _result(bucket=bucket, target_name=target_name, requested_generation=expected_generation, target=None, matches=(), limits=limits, started_at=started, finished_at=finished, scanned=0, downloaded=0, reasons=reasons, scope=prefixes)
     try:
         blob = reader.get(target_name, deadline=deadline, expected_generation=requested_generation)
         meta = reader.metadata(blob)
@@ -317,11 +317,11 @@ def scan_known_copies(reader: Reader, *, bucket: str, target_name: str, expected
         reasons.add("target_read_failed")
     if target is None:
         finished = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        return _result(bucket=bucket, target_name=target_name, requested_generation=requested_generation, target=None, matches=(), limits=limits, started_at=started, finished_at=finished, scanned=0, downloaded=downloaded, reasons=reasons)
+        return _result(bucket=bucket, target_name=target_name, requested_generation=requested_generation, target=None, matches=(), limits=limits, started_at=started, finished_at=finished, scanned=0, downloaded=downloaded, reasons=reasons, scope=prefixes)
 
     matches: dict[tuple[str, str], ManifestObject] = {}
     scanned = 0
-    for prefix in SUPPORTED_PREFIXES:
+    for prefix in prefixes:
         if time.monotonic() >= deadline:
             reasons.add("scan_deadline_exceeded")
             break
@@ -391,7 +391,7 @@ def scan_known_copies(reader: Reader, *, bucket: str, target_name: str, expected
         reasons.add("target_recheck_failed")
     finished = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     ordered = tuple(sorted(matches.values(), key=lambda item: (item.metadata.name, item.metadata.generation or "")))
-    return _result(bucket=bucket, target_name=target_name, requested_generation=requested_generation, target=target, matches=ordered, limits=limits, started_at=started, finished_at=finished, scanned=scanned, downloaded=downloaded, reasons=reasons)
+    return _result(bucket=bucket, target_name=target_name, requested_generation=requested_generation, target=target, matches=ordered, limits=limits, started_at=started, finished_at=finished, scanned=scanned, downloaded=downloaded, reasons=reasons, scope=prefixes)
 
 
 def write_manifest(path: Path, result: KnownCopyInventory) -> None:
