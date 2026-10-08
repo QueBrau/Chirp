@@ -92,6 +92,8 @@ def _cleanup_created_generations(provider: object, bucket: str, prefix: str, pat
     for name, generation in created:
         try:
             provider.delete(name, generation, deadline=time.monotonic() + 30)
+            if provider.read(name, deadline=time.monotonic() + 30) is not None:
+                raise RuntimeError("cleanup_readback_failed")
             outcomes.append({"name": name, "generation": generation, "status": "deleted"})
         except Exception:
             outcomes.append({"name": name, "generation": generation, "status": "failed", "reason": "cleanup_failed"})
@@ -104,8 +106,8 @@ def execute(args: argparse.Namespace, prefix: str) -> dict[str, object]:
         raise ValueError("execute requires --approval and --receipt")
     from google.cloud import storage
     from app.services import storage_service
-    from app.services.known_copy_inventory import GCSReader, ScanLimits, scan_known_copies
-    from app.services.known_copy_removal import GCSRemovalProvider, build_removal_plan, execute_removal, verify_removal, write_receipt
+    from app.services.known_copy_inventory import GCSReader, ScanLimits, scan_known_copies, write_manifest
+    from app.services.known_copy_removal import GCSRemovalProvider, build_removal_plan, execute_removal, verify_removal, write_receipt, _write_plan
 
     created: list[tuple[str, str]] = []
     cleanup_path = Path(f"{args.receipt}.cleanup.json")
@@ -125,18 +127,30 @@ def execute(args: argparse.Namespace, prefix: str) -> dict[str, object]:
         target_generation = created[0][1]
         reader = GCSReader(args.bucket)
         inventory = scan_known_copies(reader, bucket=args.bucket, target_name=target_name, expected_generation=target_generation, prefixes=(prefix,), limits=ScanLimits(max_objects=MAX_OBJECTS, max_object_bytes=MAX_BYTES, max_download_bytes=2 * MAX_BYTES, deadline_seconds=30))
+        inventory_path = args.receipt.with_name(args.receipt.name + ".inventory.json")
+        write_manifest(inventory_path, inventory)
         plan = build_removal_plan(inventory, allowed_prefixes=(prefix,))
+        plan_path = args.receipt.with_name(args.receipt.name + ".plan.json")
+        _write_plan(plan_path, plan)
         receipt = execute_removal(plan, GCSRemovalProvider(args.bucket), args.receipt, deadline_seconds=30)
+        if not all(item.status in {"removed_verified", "already_absent"} for item in receipt.outcomes):
+            raise RuntimeError("original_removal_incomplete")
+        absence = verify_removal(receipt, GCSRemovalProvider(args.bucket), deadline_seconds=30)
+        if not absence.verification_complete:
+            raise RuntimeError("original_absence_unverified")
         replacement = bucket.blob(copy_name)
         replacement.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None, timeout=10)
         created.append((copy_name, str(replacement.generation)))
         replacement.reload(timeout=10, retry=None)
         checked = verify_removal(receipt, GCSRemovalProvider(args.bucket), deadline_seconds=30)
+        copy_outcome = next(item for item in checked.outcomes if item.object.name == copy_name)
+        if copy_outcome.status != "reappeared" or copy_outcome.observed_generation != str(replacement.generation):
+            raise RuntimeError("replacement_reappearance_unverified")
         write_receipt(args.receipt, checked)
         result = {"plan_digest": plan.plan_digest, "receipt_digest": checked.receipt_digest, "verification_complete": checked.verification_complete, "replacement_generation": str(replacement.generation), "created_generations": created, "cleanup_required": not args.cleanup}
         if args.cleanup:
             cleanup_provider = GCSRemovalProvider(args.bucket)
-            cleanup_provider.delete(copy_name, str(replacement.generation), deadline=time.monotonic() + 30)
+            _cleanup_created_generations(cleanup_provider, args.bucket, prefix, cleanup_path, [(copy_name, str(replacement.generation))])
             result["cleanup_replacement_generation"] = str(replacement.generation)
         return result
     except Exception:

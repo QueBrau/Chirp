@@ -117,6 +117,8 @@ def test_execute_runs_real_inventory_plan_delete_verify_and_replacement_with_fak
     assert (replacement_name, "2") not in fake_client.media.deleted
     raw = json.loads(receipt.read_text(encoding="utf-8"))
     assert any(item["status"] == "reappeared" for item in raw["outcomes"])
+    assert (tmp_path / "receipt.json.inventory.json").stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "receipt.json.plan.json").stat().st_mode & 0o777 == 0o600
 
 
 def test_failure_cleanup_is_exact_generation_bound_and_journaled(tmp_path):
@@ -128,6 +130,9 @@ def test_failure_cleanup_is_exact_generation_bound_and_journaled(tmp_path):
             self.calls.append((name, generation))
             if name.endswith("copy.bin"):
                 raise RuntimeError("provider detail must not enter evidence")
+
+        def read(self, name, *, deadline):
+            return None
 
     provider = Provider()
     created = [("posts/c437-test-nonce/target.bin", "11"), ("posts/c437-test-nonce/copy.bin", "12")]
