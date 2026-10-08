@@ -9,6 +9,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.add_column("account_data_requests", sa.Column("fulfillment_lease_token", sa.UUID()))
+    op.add_column("account_data_requests", sa.Column("fulfillment_lease_expires_at", sa.DateTime(timezone=True)))
     op.create_table(
         "account_fulfillment_steps",
         sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
@@ -34,3 +36,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_account_fulfillment_steps_request", table_name="account_fulfillment_steps")
     op.drop_table("account_fulfillment_steps")
+    op.drop_column("account_data_requests", "fulfillment_lease_expires_at")
+    op.drop_column("account_data_requests", "fulfillment_lease_token")

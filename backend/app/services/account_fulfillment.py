@@ -39,18 +39,25 @@ class UnconfiguredProvider:
 
 class FirebaseProvider:
     """Firebase Auth deletion with readback; never treats a malformed response as success."""
-    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, bool]:
+    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
         from firebase_admin import auth
         try:
             await asyncio.to_thread(auth.delete_user, user.firebase_uid)
-        except Exception as exc:
-            if type(exc).__name__ not in {"UserNotFoundError"}:
-                raise ProviderUnavailable("firebase_delete_failed") from None
+        except auth.UserNotFoundError:
+            pass
+        except Exception:
+            raise ProviderUnavailable("firebase_delete_failed") from None
         try:
             await asyncio.to_thread(auth.get_user, user.firebase_uid)
-        except Exception as exc:
-            if type(exc).__name__ == "UserNotFoundError":
-                return {"confirmed": True}
+        except auth.UserNotFoundError:
+            return {
+                "confirmed": True,
+                "provider": "firebase_auth",
+                "subject": str(user.id),
+                "scope": ["firebase_auth_user"],
+                "readback": True,
+            }
+        except Exception:
             raise ProviderUnavailable("firebase_readback_failed") from None
         raise ProviderUnavailable("firebase_delete_not_confirmed")
 
@@ -122,9 +129,29 @@ async def run_deletion(
         request.provider_steps = {step.step_key: step.status for step in steps}
         await session.commit()
         return DeletionRun("blocked", (), missing[0])
+    request_lease = uuid.uuid4()
+    lease_until = _now() + timedelta(minutes=5)
+    claimed_request = await session.execute(update(models.AccountDataRequest).where(
+        models.AccountDataRequest.id == request.id,
+        models.AccountDataRequest.status == "processing",
+        or_(models.AccountDataRequest.fulfillment_lease_token.is_(None),
+            models.AccountDataRequest.fulfillment_lease_expires_at < _now()),
+    ).values(fulfillment_lease_token=request_lease, fulfillment_lease_expires_at=lease_until))
+    if claimed_request.rowcount != 1:
+        await session.rollback()
+        return DeletionRun("blocked", (), None)
     await session.commit()
     completed: list[str] = []
     for step_key in PROVIDER_STEPS:
+        request_fence = await session.execute(update(models.AccountDataRequest).where(
+            models.AccountDataRequest.id == request.id,
+            models.AccountDataRequest.status == "processing",
+            models.AccountDataRequest.fulfillment_lease_token == request_lease,
+            models.AccountDataRequest.fulfillment_lease_expires_at > _now(),
+        ).values(updated_at=_now()))
+        if request_fence.rowcount != 1:
+            await session.rollback()
+            return DeletionRun("blocked", tuple(completed), step_key)
         step = (await session.scalars(select(models.AccountFulfillmentStep).where(
             models.AccountFulfillmentStep.request_id == request.id,
             models.AccountFulfillmentStep.step_key == step_key,
@@ -156,7 +183,7 @@ async def run_deletion(
         await session.commit()
         try:
             result = await provider.delete_account_data(user=user, idempotency_key=step.idempotency_key)
-            if not isinstance(result, dict) or result.get("confirmed") is not True:
+            if not isinstance(result, dict) or result.get("confirmed") is not True or not isinstance(result.get("provider"), str) or result.get("subject") != str(user.id) or not isinstance(result.get("scope"), list) or result.get("readback") is not True:
                 raise ProviderUnavailable("provider_confirmation_missing")
         except Exception as exc:
             step.status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
@@ -164,6 +191,8 @@ async def run_deletion(
             step.last_error = code if code in SAFE_PROVIDER_ERRORS else "provider_error"
             request.status = "blocked"
             request.failure_code = "provider_step_incomplete"
+            request.fulfillment_lease_token = None
+            request.fulfillment_lease_expires_at = None
             request.provider_steps = {s.step_key: s.status for s in steps}
             await session.commit()
             return DeletionRun("blocked", tuple(completed), step_key)
@@ -180,6 +209,11 @@ async def run_deletion(
         completed.append(step_key)
         request.provider_steps = {s.step_key: s.status for s in steps}
         await session.commit()
+    # Reacquire the request fence before local mutation. A concurrent runner or
+    # stale lease cannot clean up after the request has become terminal.
+    request = await session.get(models.AccountDataRequest, request_id, with_for_update=True)
+    if request is None or request.status != "processing" or request.user_id != user.id or request.fulfillment_lease_token != request_lease or request.fulfillment_lease_expires_at is None or request.fulfillment_lease_expires_at <= _now():
+        return DeletionRun("blocked", tuple(completed), None)
     # Apply the approved local cleanup boundary; shared/history rows remain.
     cleanup = await cleanup_local_account(session, user.id)
     request.retention_reasons = list(cleanup["retained"].values())
@@ -206,5 +240,7 @@ async def run_deletion(
     request.completed_at = _now()
     request.updated_at = request.completed_at
     request.open_key = None
+    request.fulfillment_lease_token = None
+    request.fulfillment_lease_expires_at = None
     await session.commit()
     return DeletionRun("completed", tuple(completed) + ("database_tombstone",))

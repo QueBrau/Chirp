@@ -39,6 +39,8 @@ class AccountDataRequest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fulfillment_lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    fulfillment_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AccountDataArtifact(Base):

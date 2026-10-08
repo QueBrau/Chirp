@@ -12,7 +12,7 @@ from sqlalchemy import update
 from tests.conftest import ApiUser
 from app import models
 from app.db import get_session_factory
-from app.services.account_fulfillment import PROVIDER_STEPS, run_deletion
+from app.services.account_fulfillment import FirebaseProvider, PROVIDER_STEPS, run_deletion
 from app.services.account_cleanup import cleanup_local_account
 
 
@@ -22,7 +22,7 @@ class ConfirmingProvider:
 
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
         self.keys.append(idempotency_key)
-        return {"confirmed": True}
+        return {"confirmed": True, "provider": "synthetic", "subject": str(user.id), "scope": ["synthetic"], "readback": True}
 
 
 class StrictFalseProvider(ConfirmingProvider):
@@ -41,7 +41,7 @@ class FailOnceProvider(ConfirmingProvider):
         if not self.failed:
             self.failed = True
             raise RuntimeError("secret provider response must not persist")
-        return {"confirmed": True}
+        return {"confirmed": True, "provider": "synthetic", "subject": str(user.id), "scope": ["synthetic"], "readback": True}
 
 
 class GatedProvider(ConfirmingProvider):
@@ -170,6 +170,35 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(client: As
         assert owned_post.body == "[deleted]" and owned_post.deleted_at is not None
         assert foreign_post.body == "foreign body" and foreign_post.deleted_at is None
         assert result["retained"]["financial_history"]
+        assert "post_likes" in result["coverage"]["retained"]
+        assert "chirp_votes" in result["coverage"]["retained"]
+        assert "user_blocks" in result["coverage"]["retained"]
+
+
+@pytest.mark.asyncio
+async def test_firebase_adapter_requires_delete_readback_and_returns_bound_receipt(make_user, monkeypatch) -> None:
+    from firebase_admin import auth
+
+    owner: ApiUser = await make_user("Firebase owner")
+    deleted: list[str] = []
+    monkeypatch.setattr(auth, "delete_user", lambda uid: deleted.append(uid))
+
+    def missing(uid: str) -> object:
+        raise auth.UserNotFoundError("missing")
+
+    monkeypatch.setattr(auth, "get_user", missing)
+    async with get_session_factory()() as session:
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert user is not None
+        receipt = await FirebaseProvider().delete_account_data(user=user, idempotency_key="firebase-test")
+    assert deleted == [owner.firebase_uid]
+    assert receipt == {
+        "confirmed": True,
+        "provider": "firebase_auth",
+        "subject": owner.id,
+        "scope": ["firebase_auth_user"],
+        "readback": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -190,8 +219,7 @@ async def test_two_sessions_have_one_provider_owner(client: AsyncClient, make_us
         gate.release.set()
         first_result = await asyncio.wait_for(first_task, timeout=5)
         second_result = await asyncio.wait_for(second_task, timeout=5)
-    assert second_result.status == "blocked"
-    assert first_result.status == "completed"
+    assert first_result.status == second_result.status == "blocked"
     assert len(gate.keys) == 1
 
 
