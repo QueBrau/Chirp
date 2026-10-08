@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 APPROVAL = "I_UNDERSTAND_SYNTHETIC_ONLY"
+AUTHORIZED_BUCKET = "chirps-prod-media"
 NONCE_RE = re.compile(r"^[a-z0-9]{8,32}$")
 MAX_OBJECTS = 3
 MAX_BYTES = 1024 * 1024
@@ -35,8 +36,8 @@ def _validate(args: argparse.Namespace) -> tuple[str, str]:
         raise ValueError("nonce must be 8-32 lowercase alphanumeric characters")
     if not args.project or not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", args.project):
         raise ValueError("project is invalid")
-    if not args.bucket or "/" in args.bucket or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]", args.bucket):
-        raise ValueError("bucket is invalid")
+    if args.bucket != AUTHORIZED_BUCKET:
+        raise ValueError("bucket is not the authorized synthetic fixture bucket")
     prefix = f"posts/c437-test-{datetime.now(timezone.utc):%Y%m%d}-{nonce}/"
     return nonce, prefix
 
