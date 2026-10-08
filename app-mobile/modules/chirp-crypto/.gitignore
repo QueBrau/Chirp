@@ -1,0 +1,4 @@
+# Build artifacts of scripts/build-ios.sh (board c448). Never committed: the xcframework
+# is a binary and the Swift file is generated from the Rust crate by uniffi.
+/ios/Frameworks/
+/ios/Generated/

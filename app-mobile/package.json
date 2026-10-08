@@ -31,7 +31,9 @@
     "verify:c423-alumni-editor": "node scripts/verify-c423-alumni-editor.mjs",
     "verify:c438-legal-flow": "node scripts/verify-c438-legal-flow.mjs",
     "verify:c438-authority": "node scripts/verify-c438-authority.mjs",
-    "verify:c436-account-data": "node scripts/verify-c436-account-data.mjs"
+    "verify:c436-account-data": "node scripts/verify-c436-account-data.mjs",
+    "build:chirp-crypto-ios": "bash modules/chirp-crypto/scripts/build-ios.sh",
+    "eas-build-pre-install": "bash modules/chirp-crypto/scripts/eas-build-pre-install.sh"
   },
   "dependencies": {
     "@expo-google-fonts/muli": "^0.1.0",
