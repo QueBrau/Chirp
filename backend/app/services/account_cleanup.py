@@ -14,13 +14,12 @@ RETENTION_REASONS = {
     "message_history": "encrypted message history remains for other participants; server cannot decrypt it",
     "provider_retention": "provider, backup, log, and unresolved media retention requires provider confirmation",
 }
-PRIVATE_COVERAGE = ("alumni_profiles", "campus_verifications", "account_data_artifacts", "job_posts", "post_likes", "chirp_votes", "poll_votes", "own_user_blocks", "devices_revoke")
+PRIVATE_COVERAGE = ("alumni_profiles", "campus_verifications", "account_data_artifacts", "job_posts", "post_likes", "chirp_votes", "poll_votes", "own_user_blocks", "conversation_memberships_left", "devices_revoke")
 RETAINED_COVERAGE = (
     "memberships", "role_terms", "lineage_edges", "ledger_entries", "dues_payment_plans",
     "dues_plan_installments", "chapter_stripe_customers", "legal_acceptances",
     "organization_authority_acceptances", "moderation_actions", "content_reports",
-    "messages_and_conversation_memberships", "post_likes", "chirp_votes", "poll_votes",
-    "user_blocks", "provider_backups_logs",
+    "messages_and_conversation_history", "incoming_user_blocks", "provider_backups_logs",
 )
 
 
@@ -46,6 +45,10 @@ async def cleanup_local_account(session: AsyncSession, user_id: uuid.UUID) -> di
     await session.execute(delete(models.ChirpVote).where(models.ChirpVote.user_id == user_id))
     await session.execute(delete(models.PollVote).where(models.PollVote.user_id == user_id))
     await session.execute(delete(models.UserBlock).where(models.UserBlock.blocker_id == user_id))
+    await session.execute(update(models.ConversationMember).where(
+        models.ConversationMember.user_id == user_id,
+        models.ConversationMember.left_at.is_(None),
+    ).values(left_at=now))
     if device_ids:
         await session.execute(update(models.Device).where(models.Device.id.in_(device_ids)).values(revoked_at=now))
     return {"deleted_private": list(PRIVATE_COVERAGE), "redacted_authored": ["posts", "post_comments", "chirps"], "revoked": ["devices"], "retained": RETENTION_REASONS, "coverage": {"private": list(PRIVATE_COVERAGE), "retained": list(RETAINED_COVERAGE)}}

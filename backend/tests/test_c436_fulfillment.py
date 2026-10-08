@@ -165,15 +165,18 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(client: As
         session.add_all([owned_post, foreign_post])
         await session.flush()
         owned_chirp = models.Chirp(campus_id=campus, author_id=owner_id, body="chirp")
+        conversation = models.Conversation(kind="dm", chapter_id=None)
         session.add_all([
             models.PostComment(post_id=owned_post.id, author_id=owner_id, body="comment"),
             owned_chirp,
             models.JobPost(posted_by=owner_id, title="job", company="company", description="description"),
             models.PostLike(post_id=foreign_post.id, user_id=owner_id),
             models.UserBlock(blocker_id=owner_id, blocked_id=uuid.UUID(other.id), source="named"),
+            conversation,
         ])
         await session.flush()
         session.add(models.ChirpVote(chirp_id=owned_chirp.id, user_id=owner_id, value=1))
+        session.add(models.ConversationMember(conversation_id=conversation.id, user_id=owner_id))
         await session.commit()
         result = await cleanup_local_account(session, owner_id)
         await session.commit()
@@ -184,10 +187,15 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(client: As
         assert (await session.scalars(select(models.PostLike).where(models.PostLike.user_id == owner_id))).all() == []
         assert (await session.scalars(select(models.ChirpVote).where(models.ChirpVote.user_id == owner_id))).all() == []
         assert (await session.scalars(select(models.UserBlock).where(models.UserBlock.blocker_id == owner_id))).all() == []
+        membership = (await session.scalars(select(models.ConversationMember).where(
+            models.ConversationMember.conversation_id == conversation.id,
+            models.ConversationMember.user_id == owner_id,
+        ))).one()
+        assert membership.left_at is not None
         assert result["retained"]["financial_history"]
-        assert "post_likes" in result["coverage"]["retained"]
-        assert "chirp_votes" in result["coverage"]["retained"]
-        assert "user_blocks" in result["coverage"]["retained"]
+        assert "post_likes" in result["coverage"]["private"]
+        assert "chirp_votes" in result["coverage"]["private"]
+        assert "incoming_user_blocks" in result["coverage"]["retained"]
 
 
 @pytest.mark.asyncio
