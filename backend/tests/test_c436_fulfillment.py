@@ -1,10 +1,13 @@
 """Real-DB deletion journal tests; providers are explicit synthetic fakes."""
 
 import uuid
+import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy import update
 
 from tests.conftest import ApiUser
 from app import models
@@ -37,6 +40,19 @@ class FailOnceProvider(ConfirmingProvider):
         if not self.failed:
             self.failed = True
             raise RuntimeError("secret provider response must not persist")
+        return {"confirmed": True}
+
+
+class GatedProvider(ConfirmingProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
+        self.keys.append(idempotency_key)
+        self.started.set()
+        await self.release.wait()
         return {"confirmed": True}
 
 
@@ -127,3 +143,56 @@ async def test_canceled_request_is_terminal_and_makes_no_provider_calls(client: 
         result = await run_deletion(session, request.id, user, providers)
         assert result.status == "blocked"
         assert all(not provider.keys for provider in providers.values())
+
+
+@pytest.mark.asyncio
+async def test_two_sessions_have_one_provider_owner(client: AsyncClient, make_user) -> None:
+    owner: ApiUser = await make_user("Race owner")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(response.json()["id"])
+    gate = GatedProvider()
+    providers = {key: ConfirmingProvider() for key in PROVIDER_STEPS}
+    providers[PROVIDER_STEPS[0]] = gate
+    async with get_session_factory()() as first, get_session_factory()() as second:
+        first_user = await first.get(models.User, uuid.UUID(owner.id))
+        second_user = await second.get(models.User, uuid.UUID(owner.id))
+        assert first_user is not None and second_user is not None
+        first_task = asyncio.create_task(run_deletion(first, request_id, first_user, providers))
+        await asyncio.wait_for(gate.started.wait(), timeout=5)
+        second_task = asyncio.create_task(run_deletion(second, request_id, second_user, providers))
+        gate.release.set()
+        first_result = await asyncio.wait_for(first_task, timeout=5)
+        second_result = await asyncio.wait_for(second_task, timeout=5)
+    assert second_result.status == "blocked"
+    assert first_result.status == "completed"
+    assert len(gate.keys) == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_lease_cannot_be_overwritten_by_stale_owner(client: AsyncClient, make_user) -> None:
+    owner: ApiUser = await make_user("Lease owner")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(response.json()["id"])
+    async with get_session_factory()() as session:
+        step = (await session.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request_id,
+            models.AccountFulfillmentStep.step_key == PROVIDER_STEPS[0],
+        ))).one()
+        old_token = uuid.uuid4()
+        step.status = "running"
+        step.lease_token = old_token
+        step.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        await session.commit()
+        new_token = uuid.uuid4()
+        claimed = await session.execute(update(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.id == step.id,
+            models.AccountFulfillmentStep.status == "running",
+            models.AccountFulfillmentStep.lease_expires_at < datetime.now(timezone.utc),
+        ).values(lease_token=new_token, lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5)))
+        assert claimed.rowcount == 1
+        stale = await session.execute(update(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.id == step.id,
+            models.AccountFulfillmentStep.status == "running",
+            models.AccountFulfillmentStep.lease_token == old_token,
+        ).values(status="succeeded"))
+        assert stale.rowcount == 0
