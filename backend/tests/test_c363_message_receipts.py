@@ -51,6 +51,7 @@ class Peer:
         self.post_starts = []
         self.response_finished_at = []
         self.phase_complete = None
+        self.http_mix_active = None
         self.posted = asyncio.Event()
         self.closed = 0
         self.writers = set()
@@ -123,6 +124,13 @@ class Peer:
             elif method == "POST" and path.endswith("/messages"):
                 self.post_starts.append(time.monotonic())
                 self.posted.set()
+                if self.http_mix_active is not None:
+                    # The producer is released by the first mix response, so a
+                    # busy event loop can otherwise let this synthetic POST
+                    # reach the peer just as the short HTTP phase is winding
+                    # down. Wait for the real recorder transition rather than
+                    # sleeping or changing the production budget.
+                    await self.http_mix_active.wait()
                 body = json.loads(data)
                 self.payloads.append(body["ciphertext_b64"])
                 result = {"id": str(uuid4()), "conversation_id": self.raw["message_workload"]["conversation_id"],
@@ -195,9 +203,24 @@ async def run_peer(tmp_path, mode="normal", **options):
         config = config_for(tmp_path, peer.http_port, peer.ws_port)
         if mode == "late":
             config = replace(config, duration_seconds=1)
+        elif mode == "normal":
+            # The synchronization below waits for the real recorder transition;
+            # give that event and the synthetic POST a finite test-only window;
+            # this changes no production setting or harness implementation.
+            config = replace(config, duration_seconds=1)
         peer.observation = workload.Observation(config,
                                                parse_manifest(json.dumps(raw)),
                                                options.get("messages", 1), options.get("interval_seconds", 4), .1)
+        active = asyncio.Event()
+        peer.http_mix_active = active
+        original_active = peer.observation.recorder.set_http_mix_active
+        def observe_mix_active(value):
+            original_active(value)
+            if value:
+                active.set()
+            else:
+                active.clear()
+        peer.observation.recorder.set_http_mix_active = observe_mix_active
         peer.arrival_bounds = []
         original_receive = peer.observation.receive
         def observed_receive(index, frame):

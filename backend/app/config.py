@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # per-connection probe header; it must never become ambient production log
     # traffic.
     ws_close_diagnostics: bool = False
+    # Experimental opt-in for a bounded transport-close grace period. This only
+    # applies to a normal peer-initiated 1000 close; all other close paths keep
+    # the installed Uvicorn behavior. Leave disabled until a reviewed rollout.
+    ws_peer_close_delay_enabled: bool = False
     firebase_project_id: str | None = None
     # Maximum age of a Firebase sign-in accepted for irreversible privacy actions.
     privacy_reauth_max_age_seconds: int = 900

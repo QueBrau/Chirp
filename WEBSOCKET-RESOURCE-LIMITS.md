@@ -103,6 +103,15 @@ configuration option, and switching to the legacy adapter was rejected after an
 actual-library proof showed its close coroutine suppressing cancellation and
 outliving the proposed close-attempt budget.
 
+The transport also contains an experimental `WS_PEER_CLOSE_DELAY_ENABLED` opt-in.
+When enabled, it applies a 100ms bounded grace period only to the first normal
+peer-initiated close with code 1000: the server writes its close echo, marks the
+close as sent, and defers `transport.close()`. The default is false. Non-1000
+peer closes, server-initiated closes, abrupt disconnects, authentication paths,
+fragment-limit 1009 closes, and diagnostic behavior retain the stock path. The
+timer is canceled by the adapter's existing `connection_lost` cleanup. This is
+an experiment pending focused rollout evidence, not a general close guarantee.
+
 The stock adapter retains each nonfinal fragment in a Python list with only a
 joined-byte-total check that runs after FIN, so a sender that starts a message
 (fin=False) and never sends FIN can grow that list without limit while every

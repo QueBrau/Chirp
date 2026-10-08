@@ -523,6 +523,26 @@ def test_live_undeclared_environment_is_drift(config, snap, release):
     assert "UNDECLARED_SECRET" not in json.dumps(report)
 
 
+def test_peer_close_delay_requires_explicit_reviewed_intent(config, release):
+    for step in C.plan(config, release, "gcloud")["steps"]:
+        assert "WS_PEER_CLOSE_DELAY_ENABLED" not in planned_env(shlex.split(step["stage_command"]))
+    config["services"]["ws"]["env"]["WS_PEER_CLOSE_DELAY_ENABLED"] = "true"
+    steps = C.plan(config, release, "gcloud")["steps"]
+    assert planned_env(shlex.split(steps[0]["stage_command"]))["WS_PEER_CLOSE_DELAY_ENABLED"] == "true"
+    snap = fixture(config, release)
+    assert run_compare(config, snap, release)["verdict"] == "CONFIG_MATCH"
+    rows = snap["revisions"][release["revisions"]["ws"]]["spec"]["containers"][0]["env"]
+    next(row for row in rows if row["name"] == "WS_PEER_CLOSE_DELAY_ENABLED")["value"] = "false"
+    assert finding(run_compare(config, snap, release), "WS_PEER_CLOSE_DELAY_ENABLED")
+
+
+@pytest.mark.parametrize("value", ["TRUE", "1", "100"])
+def test_peer_close_delay_rejects_ambiguous_release_values(config, value):
+    config["services"]["ws"]["env"]["WS_PEER_CLOSE_DELAY_ENABLED"] = value
+    with pytest.raises(C.ConfigError, match="invalid_peer_close_delay_setting"):
+        C.validate(config)
+
+
 def test_missing_environment_name_projection_is_not_proven(config, snap, release):
     snap["environment_names"] = {"services": {}, "revisions": {}}
     report = run_compare(config, snap, release)

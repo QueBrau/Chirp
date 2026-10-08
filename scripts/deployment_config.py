@@ -20,7 +20,7 @@ from deploy_verify import ready_and_observed
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "infra/deployment.json"
 MAX_BYTES = 1024 * 1024
-ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE", "OUTBOX_SWEEPER_ENABLED", "APP_PUBLIC_BASE_URL", "CORS_ORIGINS", "EMAIL_FROM", "EMAIL_PROVIDER", "MEDIA_BUCKET_NAME")
+ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE", "OUTBOX_SWEEPER_ENABLED", "APP_PUBLIC_BASE_URL", "CORS_ORIGINS", "EMAIL_FROM", "EMAIL_PROVIDER", "MEDIA_BUCKET_NAME", "WS_PEER_CLOSE_DELAY_ENABLED")
 POOL_NAMES = {"DB_POOL_SIZE": "size", "DB_MAX_OVERFLOW": "max_overflow"}
 JOB_POOL_EVIDENCE_SCOPE = "operator_inspected_immutable_image_pool"
 JOB_POOL_EVIDENCE_MAX_AGE_HOURS = 24
@@ -203,6 +203,8 @@ def validate(config: dict) -> None:
         for env in [shared["env"], *[s["env"] for s in config["services"].values()]]:
             if "OUTBOX_SWEEPER_ENABLED" in env and env["OUTBOX_SWEEPER_ENABLED"] not in ("true", "false"):
                 raise ConfigError("invalid_outbox_sweeper_setting")
+            if "WS_PEER_CLOSE_DELAY_ENABLED" in env and env["WS_PEER_CLOSE_DELAY_ENABLED"] not in ("true", "false"):
+                raise ConfigError("invalid_peer_close_delay_setting")
         for key, value in (shared["secrets"] | {k: v for service in config["services"].values() for k, v in service.get("secrets", {}).items()}).items():
             if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key) or not re.fullmatch(r"[A-Za-z0-9_-]+:(?:latest|[1-9][0-9]*)", value):
                 raise ConfigError("invalid_secret_reference")
