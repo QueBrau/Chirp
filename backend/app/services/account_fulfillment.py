@@ -15,6 +15,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.services.account_cleanup import cleanup_local_account
 
 PROVIDER_STEPS = ("payment_provider", "media_storage", "email_logs_backups", "firebase_auth")
 SAFE_PROVIDER_ERRORS = frozenset({
@@ -179,8 +180,12 @@ async def run_deletion(
         completed.append(step_key)
         request.provider_steps = {s.step_key: s.status for s in steps}
         await session.commit()
-    # Keep shared organization, authored message, legal, safety, and append-only
-    # financial rows. Remove provider linkage and direct identity credentials only.
+    # Apply the approved local cleanup boundary; shared/history rows remain.
+    cleanup = await cleanup_local_account(session, user.id)
+    request.retention_reasons = list(cleanup["retained"].values())
+    await session.flush()
+    # Keep shared organization, authored encrypted message, legal, safety, and
+    # append-only financial rows. Remove direct identity credentials only.
     user.firebase_uid = f"deleted:{user.id}"
     user.email = f"deleted+{user.id}@invalid.chirp"
     user.display_name = "Deleted account"

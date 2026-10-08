@@ -13,6 +13,7 @@ from tests.conftest import ApiUser
 from app import models
 from app.db import get_session_factory
 from app.services.account_fulfillment import PROVIDER_STEPS, run_deletion
+from app.services.account_cleanup import cleanup_local_account
 
 
 class ConfirmingProvider:
@@ -143,6 +144,32 @@ async def test_canceled_request_is_terminal_and_makes_no_provider_calls(client: 
         result = await run_deletion(session, request.id, user, providers)
         assert result.status == "blocked"
         assert all(not provider.keys for provider in providers.values())
+
+
+@pytest.mark.asyncio
+async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(client: AsyncClient, make_user, make_campus) -> None:
+    owner: ApiUser = await make_user("Cleanup owner")
+    other: ApiUser = await make_user("Cleanup other")
+    async with get_session_factory()() as session:
+        campus = uuid.UUID(await make_campus())
+        owner_id, other_id = uuid.UUID(owner.id), uuid.UUID(other.id)
+        owned_post = models.Post(campus_id=campus, author_id=owner_id, body="owner body", audience="campus", post_type="text")
+        foreign_post = models.Post(campus_id=campus, author_id=other_id, body="foreign body", audience="campus", post_type="text")
+        session.add_all([owned_post, foreign_post])
+        await session.flush()
+        session.add_all([
+            models.PostComment(post_id=owned_post.id, author_id=owner_id, body="comment"),
+            models.Chirp(campus_id=campus, author_id=owner_id, body="chirp"),
+            models.JobPost(posted_by=owner_id, title="job", company="company", description="description"),
+        ])
+        await session.commit()
+        result = await cleanup_local_account(session, owner_id)
+        await session.commit()
+        await session.refresh(owned_post)
+        await session.refresh(foreign_post)
+        assert owned_post.body == "[deleted]" and owned_post.deleted_at is not None
+        assert foreign_post.body == "foreign body" and foreign_post.deleted_at is None
+        assert result["retained"]["financial_history"]
 
 
 @pytest.mark.asyncio
