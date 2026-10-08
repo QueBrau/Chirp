@@ -201,6 +201,14 @@ impl Core {
         self.run(|r| r.key_status())
     }
 
+    /// Whether any session (outbound or inbound) exists with the peer device that has this
+    /// Curve25519 identity. `encrypt` needs a claimed key only for a recipient where this
+    /// is false, and claiming burns a one-time key on the server, so the platform layer asks
+    /// before it claims. Read-only: it unpickles nothing and writes nothing.
+    pub fn has_session(&self, peer_curve25519: &PublicKey32) -> Result<bool> {
+        self.run(|r| r.has_session(peer_curve25519))
+    }
+
     /// One ciphertext leg per recipient device. See `Ready::encrypt`.
     pub fn encrypt(
         &self,
@@ -663,6 +671,14 @@ impl Ready {
             published_one_time: count(KeyKind::OneTime, KeyState::Published),
             has_fallback: keymap.entries.iter().any(|e| e.kind == KeyKind::Fallback),
         })
+    }
+
+    fn has_session(&mut self, peer_curve25519: &PublicKey32) -> Result<bool> {
+        self.require_device()?;
+        Ok(!self
+            .store
+            .get_tagged(T_SESSION, &self.peer_tag(peer_curve25519))?
+            .is_empty())
     }
 
     // ---- trust --------------------------------------------------------------------

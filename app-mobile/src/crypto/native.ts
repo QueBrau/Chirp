@@ -237,6 +237,7 @@ interface ChirpCryptoNative {
   pendingKeys(handle: string): Promise<SignedKey[]>;
   rotateFallbackKey(handle: string): Promise<SignedKey>;
   keyStatus(handle: string): Promise<KeyStatus>;
+  hasSession(handle: string, peerCurve25519: string): Promise<boolean>;
   publicIdentity(handle: string): Promise<PublicIdentity | null>;
   observeDirectory(handle: string, userId: string, devices: NativeDirectoryDevice[]): Promise<TrustState>;
   trustState(handle: string, peerUserId: string): Promise<TrustState>;
@@ -414,6 +415,15 @@ export const chirpCrypto = {
 
   keyStatus(handle: CryptoHandle): Promise<KeyStatus> {
     return call((n) => n.keyStatus(handle));
+  },
+
+  /**
+   * Whether a session already exists with the peer device that has this Curve25519
+   * identity (c451). Only a recipient where this is false needs a claimed key for
+   * `encrypt`; claiming one for a recipient that has a session wastes a server key.
+   */
+  hasSession(handle: CryptoHandle, peerCurve25519: Base64): Promise<boolean> {
+    return call((n) => n.hasSession(handle, peerCurve25519));
   },
 
   /** This device's public identity, or null if no device has been created. */

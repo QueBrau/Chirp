@@ -723,6 +723,13 @@ impl CryptoCore {
         Ok(self.core.key_status()?.into())
     }
 
+    /// Whether a session already exists with the peer device that has this Curve25519
+    /// identity (base64). A recipient with no session needs a claimed key for `encrypt`;
+    /// one with a session must NOT have one claimed, because a claim burns a server key.
+    pub fn has_session(&self, peer_curve25519: String) -> Res<bool> {
+        Ok(self.core.has_session(&fixed(&peer_curve25519)?)?)
+    }
+
     pub fn encrypt(
         &self,
         conversation_id: String,
