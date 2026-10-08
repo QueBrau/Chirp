@@ -150,7 +150,9 @@ def execute(args: argparse.Namespace, prefix: str) -> dict[str, object]:
         result = {"plan_digest": plan.plan_digest, "receipt_digest": checked.receipt_digest, "verification_complete": checked.verification_complete, "replacement_generation": str(replacement.generation), "created_generations": created, "cleanup_required": not args.cleanup}
         if args.cleanup:
             cleanup_provider = GCSRemovalProvider(args.bucket)
-            _cleanup_created_generations(cleanup_provider, args.bucket, prefix, cleanup_path, [(copy_name, str(replacement.generation))])
+            cleanup_outcomes = _cleanup_created_generations(cleanup_provider, args.bucket, prefix, cleanup_path, [(copy_name, str(replacement.generation))])
+            if not cleanup_outcomes or not all(item["status"] == "deleted" for item in cleanup_outcomes):
+                raise RuntimeError("cleanup_incomplete")
             result["cleanup_replacement_generation"] = str(replacement.generation)
         return result
     except Exception:
