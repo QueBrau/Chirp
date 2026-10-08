@@ -193,16 +193,61 @@ async def build_export(session: AsyncSession, user: models.User) -> dict[str, ob
     device_ids = (await session.execute(select(models.Device.id).where(models.Device.user_id == user.id))).scalars().all()
     if device_ids:
         messages = (await session.execute(select(models.Message).where(models.Message.sender_device_id.in_(device_ids)))).scalars().all()
-        records["messages_sent"] = [
-            {
+        sent_records: list[dict[str, object]] = []
+        for message in messages:
+            # Legacy rows keep their historical shape. E2EE v2 stores no parent
+            # ciphertext; its caller-owned recipient legs are exported below.
+            if message.ciphertext is not None:
+                sent_records.append({
+                    "id": str(message.id),
+                    "conversation_id": str(message.conversation_id),
+                    "sender_device_id": str(message.sender_device_id),
+                    "ciphertext": base64.b64encode(message.ciphertext).decode("ascii"),
+                    "message_type": message.message_type,
+                    "created_at": _iso(message.created_at),
+                })
+        v2_sent = [message for message in messages if message.ciphertext is None]
+        own_legs = (await session.execute(
+            select(models.MessageLeg).where(models.MessageLeg.recipient_device_id.in_(device_ids))
+        )).scalars().all()
+        legs_by_message: dict[uuid.UUID, list[dict[str, object]]] = {}
+        for leg in own_legs:
+            legs_by_message.setdefault(leg.message_id, []).append({
+                "recipient_device_id": str(leg.recipient_device_id),
+                "olm_type": leg.olm_type,
+                "ciphertext": base64.b64encode(leg.ciphertext).decode("ascii"),
+            })
+        for message in v2_sent:
+            sent_records.append({
                 "id": str(message.id),
                 "conversation_id": str(message.conversation_id),
                 "sender_device_id": str(message.sender_device_id),
-                "ciphertext": base64.b64encode(message.ciphertext).decode("ascii"),
                 "message_type": message.message_type,
+                "client_message_id": _safe_dict(message.client_message_id),
+                "envelope_version": message.envelope_version,
                 "created_at": _iso(message.created_at),
+                "legs": legs_by_message.get(message.id, []),
+            })
+        records["messages_sent"] = sent_records
+        received_v2 = (await session.execute(
+            select(models.Message).join(
+                models.MessageLeg, models.MessageLeg.message_id == models.Message.id,
+            ).where(
+                models.MessageLeg.recipient_device_id.in_(device_ids),
+                ~models.Message.sender_device_id.in_(device_ids),
+            ).distinct()
+        )).scalars().all()
+        records["messages_received"] = [
+            {
+                "id": str(message.id),
+                "conversation_id": str(message.conversation_id),
+                "message_type": message.message_type,
+                "client_message_id": _safe_dict(message.client_message_id),
+                "envelope_version": message.envelope_version,
+                "created_at": _iso(message.created_at),
+                "legs": legs_by_message.get(message.id, []),
             }
-            for message in messages
+            for message in received_v2
         ]
         own_receipts = (await session.execute(
             select(models.MessageReceipt).where(models.MessageReceipt.device_id.in_(device_ids))
@@ -213,6 +258,7 @@ async def build_export(session: AsyncSession, user: models.User) -> dict[str, ob
         ]
     else:
         records["messages_sent"] = []
+        records["messages_received"] = []
         records["message_receipts"] = []
     return data
 

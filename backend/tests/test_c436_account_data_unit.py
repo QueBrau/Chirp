@@ -102,20 +102,56 @@ async def test_export_is_immutable_authenticated_and_explicitly_partial(
         ])
         owner_device = models.Device(user_id=owner_id, registration_id=1, identity_key=b"o" * 32)
         other_device = models.Device(user_id=other_id, registration_id=2, identity_key=b"t" * 32)
-        session.add_all([owner_device, other_device])
+        owner_v2 = models.Device(
+            user_id=owner_id, identity_key=b"u" * 32, crypto_suite="vodozemac-olm-v1",
+            identity_ed25519=b"e" * 32, generation=1, binding_signature=b"s" * 64,
+            approved_at=now,
+        )
+        other_v2 = models.Device(
+            user_id=other_id, identity_key=b"v" * 32, crypto_suite="vodozemac-olm-v1",
+            identity_ed25519=b"f" * 32, generation=1, binding_signature=b"t" * 64,
+            approved_at=now,
+        )
+        session.add_all([owner_device, other_device, owner_v2, other_v2])
         await session.flush()
         conversation = models.Conversation(kind="dm", title=None)
         session.add(conversation)
         await session.flush()
+        legacy_owned = models.Message(
+            conversation_id=conversation.id, sender_device_id=owner_device.id,
+            ciphertext=b"legacy-owned", message_type="signal",
+        )
         message = models.Message(
             conversation_id=conversation.id, sender_device_id=other_device.id,
             ciphertext=b"opaque", message_type="signal",
         )
-        session.add(message)
+        received_v2 = models.Message(
+            conversation_id=conversation.id, sender_device_id=other_v2.id,
+            client_message_id=uuid.uuid4(), envelope_version=1, message_type="olm",
+        )
+        sent_v2 = models.Message(
+            conversation_id=conversation.id, sender_device_id=owner_v2.id,
+            client_message_id=uuid.uuid4(), envelope_version=1, message_type="olm",
+        )
+        sent_v2_foreign_only = models.Message(
+            conversation_id=conversation.id, sender_device_id=owner_v2.id,
+            client_message_id=uuid.uuid4(), envelope_version=1, message_type="olm",
+        )
+        foreign_only_received = models.Message(
+            conversation_id=conversation.id, sender_device_id=other_v2.id,
+            client_message_id=uuid.uuid4(), envelope_version=1, message_type="olm",
+        )
+        session.add_all([legacy_owned, message, received_v2, sent_v2, sent_v2_foreign_only, foreign_only_received])
         await session.flush()
         session.add_all([
             models.MessageReceipt(message_id=message.id, device_id=owner_device.id),
             models.MessageReceipt(message_id=message.id, device_id=other_device.id),
+            models.MessageLeg(message_id=received_v2.id, recipient_device_id=owner_v2.id, olm_type=0, ciphertext=b"own-received-leg"),
+            models.MessageLeg(message_id=received_v2.id, recipient_device_id=other_v2.id, olm_type=1, ciphertext=b"other-received-leg"),
+            models.MessageLeg(message_id=sent_v2.id, recipient_device_id=owner_device.id, olm_type=0, ciphertext=b"own-sent-leg"),
+            models.MessageLeg(message_id=sent_v2.id, recipient_device_id=other_v2.id, olm_type=1, ciphertext=b"other-sent-leg"),
+            models.MessageLeg(message_id=sent_v2_foreign_only.id, recipient_device_id=other_v2.id, olm_type=1, ciphertext=b"foreign-only-sent-leg"),
+            models.MessageLeg(message_id=foreign_only_received.id, recipient_device_id=other_v2.id, olm_type=1, ciphertext=b"foreign-only-received-leg"),
             models.UserBlock(blocker_id=owner_id, blocked_id=other_id, source="named"),
             models.UserBlock(blocker_id=other_id, blocked_id=owner_id, source="named"),
         ])
@@ -131,10 +167,32 @@ async def test_export_is_immutable_authenticated_and_explicitly_partial(
     assert export.json()["format"] == "chirp-account-export-v1"
     assert export.headers["cache-control"] == "private, no-store"
     assert len(export.json()["records"]["message_receipts"]) == 1
+    sent = export.json()["records"]["messages_sent"]
+    legacy_rows = [row for row in sent if "envelope_version" not in row]
+    assert len(legacy_rows) == 1
+    assert set(legacy_rows[0]) == {"id", "conversation_id", "sender_device_id", "ciphertext", "message_type", "created_at"}
+    assert legacy_rows[0]["ciphertext"] == "bGVnYWN5LW93bmVk"
+    sent_v2_rows = [row for row in sent if row.get("envelope_version") == 1]
+    assert len(sent_v2_rows) == 2
+    sent_v2_by_id = {row["id"]: row for row in sent_v2_rows}
+    assert [leg["ciphertext"] for leg in sent_v2_by_id[str(sent_v2.id)]["legs"]] == ["b3duLXNlbnQtbGVn"]
+    assert sent_v2_by_id[str(sent_v2_foreign_only.id)]["legs"] == []
+    received = export.json()["records"]["messages_received"]
+    assert len(received) == 1 and len(received[0]["legs"]) == 1
+    assert received[0]["legs"][0]["ciphertext"] == "b3duLXJlY2VpdmVkLWxlZw=="
+    assert "sender_device_id" not in received[0]
     assert len(export.json()["records"]["user_blocks"]) == 1
     authority = export.json()["records"]["organization_authority_acceptances"]
     assert len(authority) == 1 and authority[0]["user_id"] == owner.id
     assert "acct_other" not in export.text and other.id not in export.text
+    assert "b3RoZXItcmVjZWl2ZWQtbGVn" not in export.text
+    assert "b3RoZXItc2VudC1sZWc=" not in export.text
+    assert "Zm9yZWlnbi1vbmx5LXNlbnQtbGVn" not in export.text
+    assert "Zm9yZWlnbi1vbmx5LXJlY2VpdmVkLWxlZw==" not in export.text
+    assert str(sent_v2_foreign_only.client_message_id) in export.text
+    assert str(foreign_only_received.id) not in export.text
+    assert str(foreign_only_received.client_message_id) not in export.text
+    assert str(other_v2.id) not in export.text
     # A second synthetic account must not bleed into the caller's artifact.
     assert other.id not in export.text
     assert (await client.get(f"/me/data-requests/{body['id']}/download", headers=other.headers)).status_code == 404
