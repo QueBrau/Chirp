@@ -16,9 +16,15 @@ class ConfirmingProvider:
     def __init__(self) -> None:
         self.keys: list[str] = []
 
+    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
+        self.keys.append(idempotency_key)
+        return {"confirmed": True}
+
+
+class StrictFalseProvider(ConfirmingProvider):
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, str]:
         self.keys.append(idempotency_key)
-        return {"confirmed": "true"}
+        return {"confirmed": "false"}
 
 
 @pytest.mark.asyncio
@@ -58,3 +64,17 @@ async def test_deletion_journal_blocks_without_adapters_then_retries_idempotentl
         assert len(steps) == 5
         assert all(row.status == "succeeded" for row in steps)
         assert all(provider.keys == [f"account-deletion:{request.id}:{key}"] for key, provider in providers.items())
+
+
+@pytest.mark.asyncio
+async def test_missing_adapters_are_preflighted_without_provider_calls(client: AsyncClient, make_user) -> None:
+    owner: ApiUser = await make_user("Preflight owner")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert request is not None and user is not None
+        providers = {key: ConfirmingProvider() for key in PROVIDER_STEPS[:-1]}
+        result = await run_deletion(session, request.id, user, providers)
+        assert result.status == "blocked"
+        assert all(not provider.keys for provider in providers.values())

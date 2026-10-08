@@ -16,7 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 
-PROVIDER_STEPS = ("firebase_auth", "payment_provider", "media_storage", "email_logs_backups")
+PROVIDER_STEPS = ("payment_provider", "media_storage", "email_logs_backups", "firebase_auth")
+SAFE_PROVIDER_ERRORS = frozenset({
+    "provider_not_configured", "provider_confirmation_missing", "provider_error",
+    "firebase_delete_failed", "firebase_readback_failed", "firebase_delete_not_confirmed",
+})
 
 
 class ProviderUnavailable(RuntimeError):
@@ -105,7 +109,16 @@ async def run_deletion(
     request = await session.get(models.AccountDataRequest, request_id, with_for_update=True)
     if request is None or request.user_id != user.id or request.kind != "deletion":
         raise LookupError("deletion_request_not_found")
+    if request.status == "completed":
+        return DeletionRun("completed", tuple(PROVIDER_STEPS) + ("database_tombstone",))
     steps = await prepare_deletion_plan(session, request)
+    missing = [key for key in PROVIDER_STEPS if key not in providers or isinstance(providers[key], UnconfiguredProvider)]
+    if missing:
+        request.status = "blocked"
+        request.failure_code = "provider_not_configured"
+        request.provider_steps = {step.step_key: step.status for step in steps}
+        await session.commit()
+        return DeletionRun("blocked", (), missing[0])
     await session.commit()
     completed: list[str] = []
     for step_key in PROVIDER_STEPS:
@@ -130,7 +143,7 @@ async def run_deletion(
         claimed = await session.execute(update(models.AccountFulfillmentStep).where(
             models.AccountFulfillmentStep.id == step.id,
             or_(models.AccountFulfillmentStep.status.in_(["pending", "failed", "manual_review"]),
-                models.AccountFulfillmentStep.lease_expires_at < _now()),
+                and_(models.AccountFulfillmentStep.status == "running", models.AccountFulfillmentStep.lease_expires_at < _now())),
         ).values(status="running", lease_token=token, lease_expires_at=lease_until,
                  attempt_count=models.AccountFulfillmentStep.attempt_count + 1,
                  started_at=_now()))
@@ -144,17 +157,23 @@ async def run_deletion(
                 raise ProviderUnavailable("provider_confirmation_missing")
         except Exception as exc:
             step.status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
-            step.last_error = str(exc) if isinstance(exc, ProviderUnavailable) else "provider_error"
+            code = str(exc) if isinstance(exc, ProviderUnavailable) else "provider_error"
+            step.last_error = code if code in SAFE_PROVIDER_ERRORS else "provider_error"
             request.status = "blocked"
             request.failure_code = "provider_step_incomplete"
             request.provider_steps = {s.step_key: s.status for s in steps}
             await session.commit()
             return DeletionRun("blocked", tuple(completed), step_key)
-        step.status = "succeeded"
-        step.lease_token = None
-        step.lease_expires_at = None
-        step.provider_ref = {"confirmed": "true"}
-        step.completed_at = _now()
+        fenced = await session.execute(update(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.id == step.id,
+            models.AccountFulfillmentStep.status == "running",
+            models.AccountFulfillmentStep.lease_token == token,
+            models.AccountFulfillmentStep.lease_expires_at > _now(),
+        ).values(status="succeeded", lease_token=None, lease_expires_at=None,
+                 provider_ref={"confirmed": True}, completed_at=_now()))
+        if fenced.rowcount != 1:
+            await session.rollback()
+            return DeletionRun("blocked", tuple(completed), step_key)
         completed.append(step_key)
         request.provider_steps = {s.step_key: s.status for s in steps}
         await session.commit()
