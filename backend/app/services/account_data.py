@@ -316,7 +316,10 @@ async def fulfill_request(session: AsyncSession, request: models.AccountDataRequ
     # Destructive fulfillment is deliberately disabled at this boundary. Provider
     # console work, retry journals, and irreversible-step receipts must be durable
     # before this executor can be enabled; a boolean adapter is insufficient proof.
-    request.provider_steps = {"manual_processing": "required"}
+    # The authenticated intake route creates the durable plan before calling this
+    # state transition. Direct callers must use run_deletion/prepare_deletion_plan.
+    if not request.provider_steps:
+        request.provider_steps = {"manual_processing": "required"}
     request.scope = []
     request.excluded = [
         "account deletion requires verified Firebase/Auth provider removal",

@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     JSON,
+    UniqueConstraint,
     Text,
     text,
 )
@@ -48,3 +49,22 @@ class AccountDataArtifact(Base):
     content_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+class AccountFulfillmentStep(Base):
+    __tablename__ = "account_fulfillment_steps"
+    __table_args__ = (
+        Index("ix_account_fulfillment_steps_request", "request_id", "step_key"),
+        UniqueConstraint("request_id", "step_key", name="uq_account_fulfillment_step"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("account_data_requests.id"), nullable=False)
+    step_key: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    attempt_count: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_ref: Mapped[dict | None] = mapped_column(JSON)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
