@@ -35,6 +35,7 @@ def _inventory(*, complete=True, target_generation="11"):
 
 class FakeProvider:
     def __init__(self, generations):
+        self.bucket_name = "synthetic-media"
         self.generations = dict(generations)
         self.deleted = []
         self.fail_delete = set()
@@ -74,7 +75,8 @@ def test_execute_is_generation_bound_durable_and_idempotent(tmp_path):
     receipt = verify_removal(receipt, provider)
     write_receipt(receipt_path, receipt)
     assert receipt.verification_complete
-    assert receipt_reference(receipt).startswith("c437-removal:")
+    with pytest.raises(RemovalError, match="receipt_invalid"):
+        receipt_reference(receipt)
     deleted = list(provider.deleted)
     again = execute_removal(plan, provider, receipt_path)
     assert again.receipt_digest == receipt.receipt_digest
@@ -96,6 +98,14 @@ def test_stale_generation_and_reappearance_are_never_deleted(tmp_path):
     assert copy.observed_generation == "77"
     with pytest.raises(RemovalError, match="receipt_invalid"):
         receipt_reference(checked)
+
+
+def test_provider_bucket_identity_is_bound_to_reviewed_plan(tmp_path):
+    plan = build_removal_plan(_inventory())
+    provider = FakeProvider({"posts/u/target.jpg": "11", "posts/u/copy.jpg": "12"})
+    provider.bucket_name = "other-media"
+    with pytest.raises(RemovalError, match="scope_invalid"):
+        execute_removal(plan, provider, tmp_path / "receipt.json")
 
 
 def test_provider_error_never_produces_fresh_verification_timestamp(tmp_path):

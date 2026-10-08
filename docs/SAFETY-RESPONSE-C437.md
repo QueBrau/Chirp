@@ -168,6 +168,13 @@ read-only provider verification against the exact plan and retention of that
 receipt. The result means the reviewed serving objects were absent at verification
 time; it does not prove historical object-version purge or permanent deletion.
 
+An exact-prefix or posts-only inventory is explicitly partial: its receipt cannot
+close a global known-copy case because avatar and other supported surfaces were not
+scanned. Only a complete inventory covering every supported prefix can produce a
+case closure reference. The synthetic fixture also writes a private cleanup sidecar
+on failure; that evidence lists only generations created by that run and records
+failed cleanup without exposing provider exception details.
+
 For root review, use a disposable bucket and a harmless non-sensitive fixture under
 `posts/synthetic-c437/`: create two objects with different names and identical
 synthetic bytes, capture their provider generations, run the bounded inventory with

@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from app.services.known_copy_inventory import KnownCopyInventory, ManifestObject, ObjectMetadata, ScanLimits
+from app.services.known_copy_inventory import KnownCopyInventory, ManifestObject, ObjectMetadata, ScanLimits, SUPPORTED_PREFIXES
 from app.services import storage_service
 
 SCHEMA_VERSION = 1
@@ -73,6 +73,7 @@ class RemovalPlan:
     allowed_prefixes: tuple[str, ...]
     objects: tuple[RemovalObject, ...]
     created_at: str
+    scope_complete: bool
     plan_digest: str
 
     def payload(self) -> dict[str, Any]:
@@ -85,6 +86,7 @@ class RemovalPlan:
             "allowed_prefixes": list(self.allowed_prefixes),
             "objects": [item.payload() for item in self.objects],
             "created_at": self.created_at,
+            "scope_complete": self.scope_complete,
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -116,6 +118,7 @@ class RemovalReceipt:
     started_at: str
     updated_at: str
     outcomes: tuple[RemovalOutcome, ...]
+    scope_complete: bool
     verification_complete: bool
     verified_at: str | None
     receipt_digest: str
@@ -128,6 +131,7 @@ class RemovalReceipt:
             "started_at": self.started_at,
             "updated_at": self.updated_at,
             "outcomes": [item.payload() for item in self.outcomes],
+            "scope_complete": self.scope_complete,
             "complete": all(item.status in {"removed_verified", "already_absent"} for item in self.outcomes),
             "verification_complete": self.verification_complete,
             "verified_at": self.verified_at,
@@ -148,6 +152,7 @@ class GCSRemovalProvider:
     def __init__(self, bucket: str):
         if not bucket or "/" in bucket:
             raise ValueError("bucket_invalid")
+        self.bucket_name = bucket
         self._bucket = storage_service._storage_client().bucket(bucket)
 
     @staticmethod
@@ -192,7 +197,7 @@ def build_removal_plan(inventory: KnownCopyInventory, *, allowed_prefixes: tuple
     """Create an immutable plan only from a complete reviewed inventory."""
     if not inventory.complete:
         raise RemovalError("inventory_incomplete")
-    if not allowed_prefixes or any(not prefix.startswith("posts/") or prefix not in inventory.scope for prefix in allowed_prefixes):
+    if not allowed_prefixes or any(not prefix.startswith(SUPPORTED_PREFIXES) or prefix not in inventory.scope for prefix in allowed_prefixes):
         raise RemovalError("scope_invalid")
     target = inventory.target
     generation = _generation(inventory.requested_generation)
@@ -212,7 +217,8 @@ def build_removal_plan(inventory: KnownCopyInventory, *, allowed_prefixes: tuple
     if target_key not in objects:
         raise RemovalError("object_invalid")
     created = _now()
-    draft = RemovalPlan(inventory.bucket, inventory.requested_target_name, generation, inventory.manifest_digest, tuple(allowed_prefixes), tuple(sorted(objects.values(), key=lambda item: (item.name, item.generation))), created, "")
+    scope_complete = tuple(sorted(allowed_prefixes)) == tuple(sorted(SUPPORTED_PREFIXES)) and tuple(sorted(inventory.scope)) == tuple(sorted(SUPPORTED_PREFIXES))
+    draft = RemovalPlan(inventory.bucket, inventory.requested_target_name, generation, inventory.manifest_digest, tuple(allowed_prefixes), tuple(sorted(objects.values(), key=lambda item: (item.name, item.generation))), created, scope_complete, "")
     return replace(draft, plan_digest=_digest(draft.payload()))
 
 
@@ -247,7 +253,7 @@ def load_plan(path: Path) -> RemovalPlan:
             raise RemovalError("receipt_invalid")
         with path.open(encoding="utf-8") as handle:
             raw = json.load(handle)
-        plan = RemovalPlan(raw["bucket"], raw["target_name"], raw["target_generation"], raw["manifest_digest"], tuple(raw["allowed_prefixes"]), tuple(RemovalObject(**item) for item in raw["objects"]), raw["created_at"], raw["plan_digest"])
+        plan = RemovalPlan(raw["bucket"], raw["target_name"], raw["target_generation"], raw["manifest_digest"], tuple(raw["allowed_prefixes"]), tuple(RemovalObject(**item) for item in raw["objects"]), raw["created_at"], bool(raw.get("scope_complete", False)), raw["plan_digest"])
         validate_plan(plan)
         return plan
     except RemovalError:
@@ -264,7 +270,10 @@ def validate_plan(plan: RemovalPlan) -> None:
     """Revalidate all reviewed bindings before every provider mutation."""
     if not isinstance(plan.bucket, str) or not plan.bucket or "/" in plan.bucket:
         raise RemovalError("scope_invalid")
-    if not plan.allowed_prefixes or any(not prefix.startswith("posts/") for prefix in plan.allowed_prefixes) or not isinstance(plan.target_name, str) or not any(plan.target_name.startswith(prefix) for prefix in plan.allowed_prefixes):
+    if not plan.allowed_prefixes or len(set(plan.allowed_prefixes)) != len(plan.allowed_prefixes) or any(not isinstance(prefix, str) or not prefix.startswith(SUPPORTED_PREFIXES) for prefix in plan.allowed_prefixes) or not isinstance(plan.target_name, str) or not any(plan.target_name.startswith(prefix) for prefix in plan.allowed_prefixes):
+        raise RemovalError("scope_invalid")
+    expected_complete = tuple(sorted(plan.allowed_prefixes)) == tuple(sorted(SUPPORTED_PREFIXES))
+    if plan.scope_complete != expected_complete:
         raise RemovalError("scope_invalid")
     if _generation(plan.target_generation) != plan.target_generation or not _is_hex_digest(plan.manifest_digest):
         raise RemovalError("object_invalid")
@@ -289,7 +298,7 @@ def _receipt_from_payload(raw: dict[str, Any]) -> RemovalReceipt:
             raise RemovalError("receipt_invalid")
         if any(item.status not in {"pending", "removed_verified", "already_absent", "failed", "reappeared"} for item in outcomes):
             raise RemovalError("receipt_invalid")
-        receipt = RemovalReceipt(raw["plan_digest"], raw["bucket"], raw["started_at"], raw["updated_at"], outcomes, bool(raw.get("verification_complete", False)), raw.get("verified_at"), raw["receipt_digest"])
+        receipt = RemovalReceipt(raw["plan_digest"], raw["bucket"], raw["started_at"], raw["updated_at"], outcomes, bool(raw.get("scope_complete", False)), bool(raw.get("verification_complete", False)), raw.get("verified_at"), raw["receipt_digest"])
         if _digest(receipt.payload()) != receipt.receipt_digest:
             raise RemovalError("receipt_invalid")
         return receipt
@@ -379,7 +388,7 @@ def _load_receipt(path: Path) -> RemovalReceipt | None:
 
 
 def _new_receipt(plan: RemovalPlan) -> RemovalReceipt:
-    receipt = RemovalReceipt(plan.plan_digest, plan.bucket, _now(), _now(), tuple(RemovalOutcome(item, "pending", None, None, _now()) for item in plan.objects), False, None, "")
+    receipt = RemovalReceipt(plan.plan_digest, plan.bucket, _now(), _now(), tuple(RemovalOutcome(item, "pending", None, None, _now()) for item in plan.objects), plan.scope_complete, False, None, "")
     return replace(receipt, receipt_digest=_digest(receipt.payload()))
 
 
@@ -398,6 +407,8 @@ def execute_removal(plan: RemovalPlan, provider: RemovalProvider, receipt_path: 
 def _execute_removal(plan: RemovalPlan, provider: RemovalProvider, receipt_path: Path, *, deadline_seconds: float = 60.0) -> RemovalReceipt:
     """Delete only reviewed generations and persist each outcome before continuing."""
     validate_plan(plan)
+    if getattr(provider, "bucket_name", None) != plan.bucket:
+        raise RemovalError("scope_invalid")
     if not math.isfinite(deadline_seconds) or deadline_seconds <= 0 or deadline_seconds > 900:
         raise ValueError("deadline_seconds_out_of_range")
     receipt = _load_receipt(receipt_path)
@@ -457,7 +468,7 @@ def verify_removal(receipt: RemovalReceipt, provider: RemovalProvider, *, deadli
 
 def receipt_reference(receipt: RemovalReceipt) -> str:
     """Return the only case-tool reference accepted for a complete removal receipt."""
-    if not receipt.verification_complete or not receipt.verified_at or not receipt.outcomes or _digest(receipt.payload()) != receipt.receipt_digest or not all(item.status in {"removed_verified", "already_absent"} for item in receipt.outcomes):
+    if not receipt.scope_complete or not receipt.verification_complete or not receipt.verified_at or not receipt.outcomes or _digest(receipt.payload()) != receipt.receipt_digest or not all(item.status in {"removed_verified", "already_absent"} for item in receipt.outcomes):
         raise RemovalError("receipt_invalid")
     return f"c437-removal:{receipt.receipt_digest}"
 

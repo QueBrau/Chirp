@@ -8,6 +8,7 @@ import re
 import secrets
 import sys
 import time
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +65,40 @@ def _packet(args: argparse.Namespace, nonce: str, prefix: str) -> dict[str, obje
     }
 
 
+def _write_cleanup_evidence(path: Path, bucket: str, prefix: str, created: list[tuple[str, str]], outcomes: list[dict[str, object]]) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    payload = {"schema_version": 1, "mode": "fixture_cleanup", "bucket": bucket,
+               "prefix": prefix, "created_generations": [{"name": n, "generation": g} for n, g in created],
+               "outcomes": outcomes, "complete": all(item["status"] == "deleted" for item in outcomes)}
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+
+
+def _cleanup_created_generations(provider: object, bucket: str, prefix: str, path: Path, created: list[tuple[str, str]]) -> list[dict[str, object]]:
+    """Best-effort cleanup restricted to exact generations known to this run."""
+    outcomes: list[dict[str, object]] = []
+    for name, generation in created:
+        try:
+            provider.delete(name, generation, deadline=time.monotonic() + 30)
+            outcomes.append({"name": name, "generation": generation, "status": "deleted"})
+        except Exception:
+            outcomes.append({"name": name, "generation": generation, "status": "failed", "reason": "cleanup_failed"})
+    _write_cleanup_evidence(path, bucket, prefix, created, outcomes)
+    return outcomes
+
+
 def execute(args: argparse.Namespace, prefix: str) -> dict[str, object]:
     if args.approval != APPROVAL or args.receipt is None:
         raise ValueError("execute requires --approval and --receipt")
@@ -72,33 +107,48 @@ def execute(args: argparse.Namespace, prefix: str) -> dict[str, object]:
     from app.services.known_copy_inventory import GCSReader, ScanLimits, scan_known_copies
     from app.services.known_copy_removal import GCSRemovalProvider, build_removal_plan, execute_removal, verify_removal, write_receipt
 
-    client = storage.Client(project=args.project)
-    storage_service._client = client
-    bucket = client.bucket(args.bucket)
-    body = b"CHIRP-C437-SYNTHETIC-PUBLIC-FIXTURE\n"
-    target_name = prefix + "target.bin"
-    copy_name = prefix + "copy.bin"
     created: list[tuple[str, str]] = []
-    for name in (target_name, copy_name):
-        blob = bucket.blob(name)
-        blob.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None)
-        blob.reload(timeout=10, retry=None)
-        created.append((name, str(blob.generation)))
-    target_generation = created[0][1]
-    reader = GCSReader(args.bucket)
-    inventory = scan_known_copies(reader, bucket=args.bucket, target_name=target_name, expected_generation=target_generation, prefixes=(prefix,), limits=ScanLimits(max_objects=MAX_OBJECTS, max_object_bytes=MAX_BYTES, max_download_bytes=2 * MAX_BYTES, deadline_seconds=30))
-    plan = build_removal_plan(inventory, allowed_prefixes=(prefix,))
-    receipt = execute_removal(plan, GCSRemovalProvider(args.bucket), args.receipt, deadline_seconds=30)
-    replacement = bucket.blob(copy_name)
-    replacement.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None)
-    checked = verify_removal(receipt, GCSRemovalProvider(args.bucket), deadline_seconds=30)
-    write_receipt(args.receipt, checked)
-    result = {"plan_digest": plan.plan_digest, "receipt_digest": checked.receipt_digest, "verification_complete": checked.verification_complete, "replacement_generation": str(replacement.generation), "created_generations": created, "cleanup_required": not args.cleanup}
-    if args.cleanup:
-        cleanup_provider = GCSRemovalProvider(args.bucket)
-        cleanup_provider.delete(copy_name, str(replacement.generation), deadline=time.monotonic() + 30)
-        result["cleanup_replacement_generation"] = str(replacement.generation)
-    return result
+    cleanup_path = Path(f"{args.receipt}.cleanup.json")
+
+    try:
+        client = storage.Client(project=args.project)
+        storage_service._client = client
+        bucket = client.bucket(args.bucket)
+        body = b"CHIRP-C437-SYNTHETIC-PUBLIC-FIXTURE\n"
+        target_name = prefix + "target.bin"
+        copy_name = prefix + "copy.bin"
+        for name in (target_name, copy_name):
+            blob = bucket.blob(name)
+            blob.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None)
+            blob.reload(timeout=10, retry=None)
+            created.append((name, str(blob.generation)))
+        target_generation = created[0][1]
+        reader = GCSReader(args.bucket)
+        inventory = scan_known_copies(reader, bucket=args.bucket, target_name=target_name, expected_generation=target_generation, prefixes=(prefix,), limits=ScanLimits(max_objects=MAX_OBJECTS, max_object_bytes=MAX_BYTES, max_download_bytes=2 * MAX_BYTES, deadline_seconds=30))
+        plan = build_removal_plan(inventory, allowed_prefixes=(prefix,))
+        receipt = execute_removal(plan, GCSRemovalProvider(args.bucket), args.receipt, deadline_seconds=30)
+        replacement = bucket.blob(copy_name)
+        replacement.upload_from_string(body, content_type="application/octet-stream", if_generation_match=0, retry=None)
+        replacement.reload(timeout=10, retry=None)
+        created.append((copy_name, str(replacement.generation)))
+        checked = verify_removal(receipt, GCSRemovalProvider(args.bucket), deadline_seconds=30)
+        write_receipt(args.receipt, checked)
+        result = {"plan_digest": plan.plan_digest, "receipt_digest": checked.receipt_digest, "verification_complete": checked.verification_complete, "replacement_generation": str(replacement.generation), "created_generations": created, "cleanup_required": not args.cleanup}
+        if args.cleanup:
+            cleanup_provider = GCSRemovalProvider(args.bucket)
+            cleanup_provider.delete(copy_name, str(replacement.generation), deadline=time.monotonic() + 30)
+            result["cleanup_replacement_generation"] = str(replacement.generation)
+        return result
+    except Exception:
+        try:
+            from app.services.known_copy_removal import GCSRemovalProvider
+            cleanup_provider = GCSRemovalProvider(args.bucket)
+            _cleanup_created_generations(cleanup_provider, args.bucket, prefix, cleanup_path, created)
+        except Exception:
+            outcomes: list[dict[str, object]] = []
+            outcomes.extend({"name": name, "generation": generation, "status": "failed", "reason": "cleanup_failed"} for name, generation in created)
+            _write_cleanup_evidence(cleanup_path, args.bucket, prefix, created, outcomes)
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:

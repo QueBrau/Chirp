@@ -122,6 +122,7 @@ def _removal_receipt(tmp_path: Path) -> tuple[Path, str]:
         "started_at": "2026-10-06T13:00:00Z",
         "updated_at": "2026-10-06T13:01:00Z",
         "outcomes": [{"object": {"name": "posts/synthetic/object", "generation": "1", "sha256": "b" * 64}, "status": "removed_verified", "reason": None, "observed_generation": None, "updated_at": "2026-10-06T13:01:00Z"}],
+        "scope_complete": True,
         "complete": True,
         "verification_complete": True,
         "verified_at": "2026-10-06T13:02:00Z",

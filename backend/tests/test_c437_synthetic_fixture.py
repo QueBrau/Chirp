@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 try:
-    from c437_synthetic_fixture import main
+    from c437_synthetic_fixture import _cleanup_created_generations, main
 finally:
     sys.path.pop(0)
 
@@ -117,3 +117,29 @@ def test_execute_runs_real_inventory_plan_delete_verify_and_replacement_with_fak
     assert (replacement_name, "2") not in fake_client.media.deleted
     raw = json.loads(receipt.read_text(encoding="utf-8"))
     assert any(item["status"] == "reappeared" for item in raw["outcomes"])
+
+
+def test_failure_cleanup_is_exact_generation_bound_and_journaled(tmp_path):
+    class Provider:
+        def __init__(self):
+            self.calls = []
+
+        def delete(self, name, generation, *, deadline):
+            self.calls.append((name, generation))
+            if name.endswith("copy.bin"):
+                raise RuntimeError("provider detail must not enter evidence")
+
+    provider = Provider()
+    created = [("posts/c437-test-nonce/target.bin", "11"), ("posts/c437-test-nonce/copy.bin", "12")]
+    evidence = tmp_path / "private" / "receipt.cleanup.json"
+    outcomes = _cleanup_created_generations(provider, "chirps-prod-media", "posts/c437-test-nonce/", evidence, created)
+    assert provider.calls == created
+    assert outcomes == [
+        {"name": created[0][0], "generation": "11", "status": "deleted"},
+        {"name": created[1][0], "generation": "12", "status": "failed", "reason": "cleanup_failed"},
+    ]
+    raw = json.loads(evidence.read_text(encoding="utf-8"))
+    assert raw["complete"] is False
+    assert raw["created_generations"] == [{"name": n, "generation": g} for n, g in created]
+    assert "provider detail" not in evidence.read_text(encoding="utf-8")
+    assert evidence.stat().st_mode & 0o777 == 0o600
