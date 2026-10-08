@@ -6,11 +6,12 @@ adapters and durable confirmation; the default adapter raises and cannot erase d
 from __future__ import annotations
 
 import uuid
+import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -29,6 +30,24 @@ class DeletionProvider(Protocol):
 class UnconfiguredProvider:
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, str]:
         raise ProviderUnavailable("provider_not_configured")
+
+
+class FirebaseProvider:
+    """Firebase Auth deletion with readback; never treats a malformed response as success."""
+    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, bool]:
+        from firebase_admin import auth
+        try:
+            await asyncio.to_thread(auth.delete_user, user.firebase_uid)
+        except Exception as exc:
+            if type(exc).__name__ not in {"UserNotFoundError"}:
+                raise ProviderUnavailable("firebase_delete_failed") from None
+        try:
+            await asyncio.to_thread(auth.get_user, user.firebase_uid)
+        except Exception as exc:
+            if type(exc).__name__ == "UserNotFoundError":
+                return {"confirmed": True}
+            raise ProviderUnavailable("firebase_readback_failed") from None
+        raise ProviderUnavailable("firebase_delete_not_confirmed")
 
 
 @dataclass(frozen=True)
@@ -62,7 +81,8 @@ async def prepare_deletion_plan(session: AsyncSession, request: models.AccountDa
             )
             session.add(step)
             steps.append(step)
-    request.provider_steps = {step_key: "pending" for step_key in (*PROVIDER_STEPS, "database_tombstone")}
+    if not request.provider_steps:
+        request.provider_steps = {step_key: "pending" for step_key in (*PROVIDER_STEPS, "database_tombstone")}
     request.status = "processing"
     request.failure_code = None
     request.updated_at = _now()
@@ -105,23 +125,34 @@ async def run_deletion(
             request.provider_steps = {s.step_key: s.status for s in steps}
             await session.commit()
             return DeletionRun("blocked", tuple(completed), step_key)
-        step.status = "running"
-        step.attempt_count += 1
-        step.started_at = _now()
+        token = uuid.uuid4()
+        lease_until = _now() + timedelta(minutes=5)
+        claimed = await session.execute(update(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.id == step.id,
+            or_(models.AccountFulfillmentStep.status.in_(["pending", "failed", "manual_review"]),
+                models.AccountFulfillmentStep.lease_expires_at < _now()),
+        ).values(status="running", lease_token=token, lease_expires_at=lease_until,
+                 attempt_count=models.AccountFulfillmentStep.attempt_count + 1,
+                 started_at=_now()))
+        if claimed.rowcount != 1:
+            return DeletionRun("blocked", tuple(completed), step_key)
+        await session.refresh(step)
         await session.commit()
         try:
             result = await provider.delete_account_data(user=user, idempotency_key=step.idempotency_key)
-            if not isinstance(result, dict) or not result.get("confirmed"):
+            if not isinstance(result, dict) or result.get("confirmed") is not True:
                 raise ProviderUnavailable("provider_confirmation_missing")
         except Exception as exc:
             step.status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
-            step.last_error = type(exc).__name__ if not isinstance(exc, ProviderUnavailable) else str(exc)
+            step.last_error = str(exc) if isinstance(exc, ProviderUnavailable) else "provider_error"
             request.status = "blocked"
             request.failure_code = "provider_step_incomplete"
             request.provider_steps = {s.step_key: s.status for s in steps}
             await session.commit()
             return DeletionRun("blocked", tuple(completed), step_key)
         step.status = "succeeded"
+        step.lease_token = None
+        step.lease_expires_at = None
         step.provider_ref = {"confirmed": "true"}
         step.completed_at = _now()
         completed.append(step_key)

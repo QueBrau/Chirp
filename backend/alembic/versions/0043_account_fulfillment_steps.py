@@ -21,6 +21,8 @@ def upgrade() -> None:
         sa.Column("last_error", sa.Text()),
         sa.Column("started_at", sa.DateTime(timezone=True)),
         sa.Column("completed_at", sa.DateTime(timezone=True)),
+        sa.Column("lease_token", sa.UUID()),
+        sa.Column("lease_expires_at", sa.DateTime(timezone=True)),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("request_id", "step_key", name="uq_account_fulfillment_step"),
