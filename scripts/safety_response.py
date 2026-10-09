@@ -27,6 +27,7 @@ ACTION_VALUES = {
     "route": ("designated_safety_contact", "legal_review"),
 }
 SAFE_ACTIONS = {"access_grant", "access_revoke", "appeal", "reappearance", "child_safety_escalate", "report_confirmed_csam"}
+_C437_SUCCESS = {"removed_verified", "already_absent"}
 
 
 def utc_now() -> datetime:
@@ -50,6 +51,31 @@ def parse_time(value: str) -> datetime:
 def opaque_ref(value: str) -> str:
     """Hash a supplied identifier so case records contain no target or person data."""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
+
+
+def c437_receipt_reference(path: Path) -> str:
+    """Validate a private c437 receipt before it can prove known-copy absence."""
+    if path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o077 or path.stat().st_size > 1024 * 1024:
+        raise ValueError("known-copy receipt must be a private regular file")
+    try:
+        with path.open(encoding="utf-8") as handle:
+            raw = json.load(handle)
+        digest = raw.pop("receipt_digest")
+        outcomes = raw["outcomes"]
+        verified_at = raw.get("verified_at")
+        if raw.get("schema_version") != 1 or raw.get("complete") is not True or raw.get("scope_complete") is not True or raw.get("verification_complete") is not True or not isinstance(verified_at, str) or not outcomes:
+            raise ValueError("known-copy receipt is incomplete")
+        parse_time(verified_at)
+        if any(item.get("status") not in _C437_SUCCESS for item in outcomes):
+            raise ValueError("known-copy receipt is incomplete")
+        expected = hashlib.sha256(json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if digest != expected:
+            raise ValueError("known-copy receipt digest mismatch")
+        return f"c437-removal:{digest}"
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError("invalid known-copy receipt") from None
 
 
 @dataclass(frozen=True)
@@ -283,7 +309,7 @@ class SafetyCaseStore:
         if actor not in RESPONDERS and actor != "drill-operator":
             raise ValueError("actor must be a named responder")
 
-    def attempt(self, case_ref: str, *, surface: str, attempt: int, outcome: str, actor: str, verification_ref: str | None, when: datetime) -> None:
+    def attempt(self, case_ref: str, *, surface: str, attempt: int, outcome: str, actor: str, verification_ref: str | None, when: datetime, known_copy_receipt: Path | None = None) -> None:
         """Record an idempotent removal/verification attempt without contacting a provider."""
         self._validate_time(when)
         if attempt < 1:
@@ -292,6 +318,12 @@ class SafetyCaseStore:
             raise ValueError("invalid controlled surface or attempt outcome")
         if outcome in SUCCESS_OUTCOMES and not verification_ref:
             raise ValueError("successful attempt requires an opaque verification reference")
+        if surface == "known_copy" and outcome in {"removed", "verified_absent"}:
+            if known_copy_receipt is None:
+                raise ValueError("known-copy removal success requires --known-copy-receipt")
+            expected_ref = c437_receipt_reference(known_copy_receipt)
+            if verification_ref != expected_ref:
+                raise ValueError("verification reference does not match known-copy receipt")
         self._validate_actor(actor)
         row = self._case(case_ref)
         generation = int(row["response_generation"])
@@ -435,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attempt", type=int, default=1)
     parser.add_argument("--outcome", default=None)
     parser.add_argument("--verification-ref", default=None)
+    parser.add_argument("--known-copy-receipt", type=Path, default=None)
     parser.add_argument("--reason", choices=ACTION_VALUES["reason"], default="operator_review")
     parser.add_argument("--route", choices=ACTION_VALUES["route"], default="designated_safety_contact")
     parser.add_argument("--reference", help="Opaque appeal/report reference; stored only as a digest")
@@ -465,7 +498,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "attempt":
             if not args.surface or not args.outcome:
                 raise ValueError("attempt requires --surface and --outcome")
-            store.attempt(args.case_ref, surface=args.surface, attempt=args.attempt, outcome=args.outcome, actor=args.actor, verification_ref=args.verification_ref, when=now)
+            store.attempt(args.case_ref, surface=args.surface, attempt=args.attempt, outcome=args.outcome, actor=args.actor, verification_ref=args.verification_ref, when=now, known_copy_receipt=args.known_copy_receipt)
         elif args.command == "close":
             store.close_case(args.case_ref, actor=args.actor, when=now)
         elif args.command == "reopen":

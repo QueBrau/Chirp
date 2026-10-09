@@ -101,6 +101,20 @@ def test_real_adapter_hashes_same_bytes_across_paginated_prefixes(monkeypatch):
     assert result.deletion_authorized is False
 
 
+def test_exact_synthetic_prefix_scope_never_lists_other_posts(monkeypatch):
+    data = b"synthetic image bytes\x00"
+    prefix = "posts/c437-test-20261008-nonce/"
+    target = FakeBlob(prefix + "target.jpg", data, "11")
+    copy = FakeBlob(prefix + "copy.jpg", data, "12")
+    unrelated = FakeBlob("posts/other-user/private.jpg", data, "13")
+    reader, bucket = reader_for(monkeypatch, [target, copy, unrelated], pages=2)
+    result = scan_known_copies(reader, bucket="synthetic-media", target_name=target.name, expected_generation="11", prefixes=(prefix,))
+    assert result.complete is True
+    assert result.scope == (prefix,)
+    assert [item.metadata.name for item in result.matches] == sorted((target.name, copy.name))
+    assert not any(call[0] == "download" for call in bucket.blobs[unrelated.name].calls)
+
+
 def test_equal_size_different_bytes_are_not_matches(monkeypatch):
     target = FakeBlob("posts/u/target.jpg", b"123456", "1")
     different = FakeBlob("avatars/u/different.jpg", b"654321", "2")
