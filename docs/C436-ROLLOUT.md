@@ -11,8 +11,8 @@ Deletion requests are accepted and tracked, but remain `blocked` with `manual_pr
 Rollout order:
 
 1. Apply migration 0041 only after the c438 migration 0040 parent is present. Grant the authenticated application role access to the request/artifact tables through the backend only; grant no client role direct table access.
-2. Deploy backend models, migrations, auth freshness dependency, request/status/download routes, export service, and focused database tests before shipping either client screen.
-3. Verify suspended users can still read their own request status while sensitive creation/download remains fresh-auth protected; verify owner isolation and rate limits.
+2. Deploy backend models, migrations, auth freshness dependency, request/status/download routes, export service, and focused database tests before shipping either client screen. Before accepting an export request, run the read-only c454 privilege preflight against the actual API database connection with `--expected-role chirp_api`; it verifies the inherited export column ACLs (including column-level grants), real zero-row ORM selects, and request/artifact write privileges. See `docs/C454-ROLLOUT.md`.
+3. Verify suspended users can still read their own request status while sensitive creation/download remains fresh-auth protected; verify owner isolation and rate limits. Re-run the same preflight after any schema, role, or deployment-template change; a missing column grant must block release rather than surface as an export-route 500.
 4. Ship the mobile settings screen and web support fallback after backend behavior is observable.
 5. Treat deletion as manual processing until each provider step has a durable journal, an idempotent retry contract, and provider-specific confirmation.
 
