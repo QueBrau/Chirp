@@ -10,10 +10,9 @@ python -m app.jobs.account_data --preflight-export-privileges \
 
 The command starts a read-only transaction, verifies the live database identity,
 checks `SELECT` on every ORM column used by the account export, and executes a
-zero-row `SELECT` for each relation. It also checks the `SELECT`/`INSERT`/`UPDATE`
-table privileges required by the account-data request and artifact routes. The
-read checks use column privileges; request/artifact `INSERT` and `UPDATE` checks
-use table privileges because those routes write rows. Column grants are accepted,
+zero-row `SELECT` for each relation. It also checks the `INSERT` and `UPDATE`
+table privileges required by the account-data request and artifact routes.
+Read checks use column privileges. Column grants are accepted,
 so a least-privilege grant such as
 `chapter_stripe_customers(created_at)` is reported correctly without requiring a
 table-wide `SELECT` grant.

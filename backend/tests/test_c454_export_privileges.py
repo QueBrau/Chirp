@@ -19,6 +19,7 @@ from app.jobs.account_data import (
     run_export_privilege_preflight,
 )
 from app.services import account_data
+from tests.test_c369_purge_privileges import _local_rehearsal_url
 
 
 def _all_models() -> tuple[type, ...]:
@@ -38,6 +39,7 @@ def _from_tables(from_clause: object) -> set[str]:
 
 @pytest.fixture
 async def restricted_export_engine(migrated_db: str) -> AsyncEngine:
+    _local_rehearsal_url(migrated_db)
     owner = get_engine()
     role = f"c454_export_{os.getpid()}_{uuid.uuid4().hex[:10]}"
     engine: AsyncEngine | None = None
@@ -55,7 +57,6 @@ async def restricted_export_engine(migrated_db: str) -> AsyncEngine:
                 f"CREATE ROLE {role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
                 "NOINHERIT NOREPLICATION NOBYPASSRLS"
             ))
-            created = True
             dbname = connection.dialect.identifier_preparer.quote(connection.engine.url.database)
             await connection.execute(text(f"GRANT CONNECT ON DATABASE {dbname} TO {role}"))
             await connection.execute(text(f"GRANT USAGE ON SCHEMA public TO {role}"))
@@ -73,6 +74,7 @@ async def restricted_export_engine(migrated_db: str) -> AsyncEngine:
                     await connection.execute(text(
                         f"GRANT {privilege} ON TABLE public.{model.__tablename__} TO {role}"
                     ))
+        created = True
         engine = create_async_engine(
             migrated_db,
             pool_size=1,
