@@ -36,6 +36,69 @@ RETENTION_REASONS = [
     "organization authority attestations preserve who accepted payment or organization responsibility",
 ]
 
+# The maintenance preflight imports these specifications, so its read checks
+# follow the export's actual ORM query surface instead of a second hand-written
+# table list. New ownership queries belong here and in ``build_export``.
+EXPORT_QUERY_SPECS: tuple[tuple[type, str, str], ...] = (
+    (models.Membership, "user_id", "memberships"),
+    (models.Post, "author_id", "posts"),
+    (models.PostComment, "author_id", "comments"),
+    (models.Chirp, "author_id", "chirps"),
+    (models.Event, "host_id", "events_hosted"),
+    (models.EventInvite, "invited_user_id", "event_invites"),
+    (models.EventInvite, "invited_by", "event_invites_created"),
+    (models.EventRsvp, "user_id", "event_rsvps"),
+    (models.MeetingAttendance, "user_id", "meeting_attendance"),
+    (models.AlumniProfile, "user_id", "alumni_profile"),
+    (models.JobPost, "posted_by", "job_posts"),
+    (models.LineageEdge, "big_user_id", "lineage_as_big"),
+    (models.LedgerEntry, "related_user_id", "ledger_entries"),
+    (models.DuesPaymentIntent, "user_id", "payment_intents"),
+    (models.DuesPaymentPlan, "user_id", "payment_plans"),
+    (models.DuesPaymentPlan, "created_by", "payment_plans_created"),
+    (models.ChapterStripeCustomer, "user_id", "stripe_customer_mapping"),
+    (models.Device, "user_id", "devices"),
+    (models.CampusVerification, "user_id", "campus_verifications"),
+    (models.ChapterInvite, "created_by", "chapter_invites_created"),
+    (models.ConversationMember, "user_id", "conversation_memberships"),
+    (models.HouseBallot, "voter_id", "house_ballots"),
+    (models.PollVote, "user_id", "poll_votes"),
+    (models.Meeting, "created_by", "meetings_created"),
+    (models.Poll, "created_by", "polls_created"),
+    (models.SpendApproval, "requested_by", "spend_approvals_requested"),
+    (models.SpendApproval, "decided_by", "spend_approvals_decided"),
+    (models.LineageEdge, "created_by", "lineage_created"),
+    (models.LedgerEntry, "related_user_id", "ledger_related"),
+    (models.LedgerEntry, "created_by", "ledger_created"),
+)
+
+EXPORT_ADDITIONAL_MODELS: tuple[type, ...] = (
+    models.LegalAcceptance,
+    models.LegalPolicy,
+    models.OrganizationAuthorityAcceptance,
+    models.ContentReport,
+    models.ModerationAction,
+    models.PostLike,
+    models.ChirpVote,
+    models.UserBlock,
+    models.RoleTerm,
+    models.Message,
+    models.MessageLeg,
+    models.MessageReceipt,
+)
+
+
+def export_relation_models() -> tuple[type, ...]:
+    """Return each relation selected by the export exactly once."""
+    result: list[type] = []
+    for model, _column, _key in EXPORT_QUERY_SPECS:
+        if model not in result:
+            result.append(model)
+    for model in EXPORT_ADDITIONAL_MODELS:
+        if model not in result:
+            result.append(model)
+    return tuple(result)
+
 # Stable export allowlist. New columns must be reviewed and added deliberately;
 # exporting every ORM column would eventually leak a newly-added credential or
 # provider identifier into a personal artifact.
@@ -138,38 +201,7 @@ async def build_export(session: AsyncSession, user: models.User) -> dict[str, ob
     }
     records = data["records"]
     assert isinstance(records, dict)
-    for model, column, key in (
-        (models.Membership, "user_id", "memberships"),
-        (models.Post, "author_id", "posts"),
-        (models.PostComment, "author_id", "comments"),
-        (models.Chirp, "author_id", "chirps"),
-        (models.Event, "host_id", "events_hosted"),
-        (models.EventInvite, "invited_user_id", "event_invites"),
-        (models.EventInvite, "invited_by", "event_invites_created"),
-        (models.EventRsvp, "user_id", "event_rsvps"),
-        (models.MeetingAttendance, "user_id", "meeting_attendance"),
-        (models.AlumniProfile, "user_id", "alumni_profile"),
-        (models.JobPost, "posted_by", "job_posts"),
-        (models.LineageEdge, "big_user_id", "lineage_as_big"),
-        (models.LedgerEntry, "related_user_id", "ledger_entries"),
-        (models.DuesPaymentIntent, "user_id", "payment_intents"),
-        (models.DuesPaymentPlan, "user_id", "payment_plans"),
-        (models.DuesPaymentPlan, "created_by", "payment_plans_created"),
-        (models.ChapterStripeCustomer, "user_id", "stripe_customer_mapping"),
-        (models.Device, "user_id", "devices"),
-        (models.CampusVerification, "user_id", "campus_verifications"),
-        (models.ChapterInvite, "created_by", "chapter_invites_created"),
-        (models.ConversationMember, "user_id", "conversation_memberships"),
-        (models.HouseBallot, "voter_id", "house_ballots"),
-        (models.PollVote, "user_id", "poll_votes"),
-        (models.Meeting, "created_by", "meetings_created"),
-        (models.Poll, "created_by", "polls_created"),
-        (models.SpendApproval, "requested_by", "spend_approvals_requested"),
-        (models.SpendApproval, "decided_by", "spend_approvals_decided"),
-        (models.LineageEdge, "created_by", "lineage_created"),
-        (models.LedgerEntry, "related_user_id", "ledger_related"),
-        (models.LedgerEntry, "created_by", "ledger_created"),
-    ):
+    for model, column, key in EXPORT_QUERY_SPECS:
         records[key] = await _rows(session, model, column, user.id)
     legal_acceptance = models.LegalAcceptance
     legal_policy = models.LegalPolicy
