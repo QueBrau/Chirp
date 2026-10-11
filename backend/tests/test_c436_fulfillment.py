@@ -132,6 +132,11 @@ async def test_failed_prefix_retries_without_replaying_confirmed_steps(client: A
         flaky[PROVIDER_STEPS[1]] = FailOnceProvider(PROVIDER_STEPS[1])
         first = await run_deletion(session, request.id, user, flaky)
         assert first.status == "blocked"
+        failed_request = await session.get(models.AccountDataRequest, request.id)
+        assert failed_request is not None
+        assert failed_request.provider_steps[PROVIDER_STEPS[0]] == "succeeded"
+        assert failed_request.provider_steps[PROVIDER_STEPS[1]] == "failed"
+        assert failed_request.provider_steps[PROVIDER_STEPS[2]] == "pending"
         second = await run_deletion(session, request.id, user, flaky)
         assert second.status == "completed"
         assert len(flaky[PROVIDER_STEPS[0]].keys) == 1
@@ -154,12 +159,24 @@ async def test_canceled_request_is_terminal_and_makes_no_provider_calls(client: 
 
 
 @pytest.mark.asyncio
-async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(client: AsyncClient, make_user, make_campus) -> None:
+async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(
+    client: AsyncClient, make_user, make_campus, register_device
+) -> None:
     owner: ApiUser = await make_user("Cleanup owner")
     other: ApiUser = await make_user("Cleanup other")
+    owner_device = await register_device(owner, one_time_prekey_count=1)
+    other_device = await register_device(other, one_time_prekey_count=1, registration_id=4343)
     async with get_session_factory()() as session:
         campus = uuid.UUID(await make_campus())
         owner_id, other_id = uuid.UUID(owner.id), uuid.UUID(other.id)
+        session.add(models.KyberPrekey(
+            device_id=uuid.UUID(owner_device["id"]), key_id=1,
+            public_key=b"k" * 32, signature=b"s" * 64, is_last_resort=False,
+        ))
+        session.add(models.KyberPrekey(
+            device_id=uuid.UUID(other_device["id"]), key_id=1,
+            public_key=b"f" * 32, signature=b"t" * 64, is_last_resort=False,
+        ))
         owned_post = models.Post(campus_id=campus, author_id=owner_id, body="owner body", audience="campus", post_type="text")
         foreign_post = models.Post(campus_id=campus, author_id=other_id, body="foreign body", audience="campus", post_type="text")
         session.add_all([owned_post, foreign_post])
@@ -187,6 +204,22 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(client: As
         assert (await session.scalars(select(models.PostLike).where(models.PostLike.user_id == owner_id))).all() == []
         assert (await session.scalars(select(models.ChirpVote).where(models.ChirpVote.user_id == owner_id))).all() == []
         assert (await session.scalars(select(models.UserBlock).where(models.UserBlock.blocker_id == owner_id))).all() == []
+        assert (await session.scalars(select(models.SignedPrekey).where(
+            models.SignedPrekey.device_id == uuid.UUID(owner_device["id"])
+        ))).all() == []
+        assert (await session.scalars(select(models.OneTimePrekey).where(
+            models.OneTimePrekey.device_id == uuid.UUID(owner_device["id"])
+        ))).all() == []
+        assert (await session.scalars(select(models.KyberPrekey).where(
+            models.KyberPrekey.device_id == uuid.UUID(owner_device["id"])
+        ))).all() == []
+        assert (await session.scalars(select(models.KyberPrekey).where(
+            models.KyberPrekey.device_id == uuid.UUID(other_device["id"])
+        ))).all()
+        owner_device_row = await session.get(models.Device, uuid.UUID(owner_device["id"]))
+        foreign_device_row = await session.get(models.Device, uuid.UUID(other_device["id"]))
+        assert owner_device_row is not None and owner_device_row.revoked_at is not None
+        assert foreign_device_row is not None and foreign_device_row.revoked_at is None
         membership = (await session.scalars(select(models.ConversationMember).where(
             models.ConversationMember.conversation_id == conversation.id,
             models.ConversationMember.user_id == owner_id,
@@ -195,6 +228,9 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(client: As
         assert result["retained"]["financial_history"]
         assert "post_likes" in result["coverage"]["private"]
         assert "chirp_votes" in result["coverage"]["private"]
+        assert "signed_prekeys" in result["coverage"]["private"]
+        assert "one_time_prekeys" in result["coverage"]["private"]
+        assert "kyber_prekeys" in result["coverage"]["private"]
         assert "incoming_user_blocks" in result["coverage"]["retained"]
 
 

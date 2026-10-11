@@ -209,12 +209,19 @@ async def run_deletion(
                 models.AccountFulfillmentStep.lease_token == token,
                 models.AccountFulfillmentStep.lease_expires_at > _now(),
             ).values(status=step_status, last_error=safe_error, lease_token=None, lease_expires_at=None))
+            # Publish the step outcome only in the same lease-fenced transaction
+            # as the request transition.  A stale runner must roll back both
+            # writes, otherwise status can claim ``pending`` while the journal
+            # is already in manual review.
+            provider_steps = dict(request.provider_steps or {})
+            provider_steps[step_key] = step_status
             failed_request = await session.execute(update(models.AccountDataRequest).where(
                 models.AccountDataRequest.id == request.id,
                 models.AccountDataRequest.status == "processing",
                 models.AccountDataRequest.fulfillment_lease_token == request_lease,
                 models.AccountDataRequest.fulfillment_lease_expires_at > _now(),
             ).values(status="blocked", failure_code="provider_step_incomplete",
+                     provider_steps=provider_steps,
                      fulfillment_lease_token=None, fulfillment_lease_expires_at=None,
                      updated_at=_now()))
             if failed_step.rowcount != 1 or failed_request.rowcount != 1:
