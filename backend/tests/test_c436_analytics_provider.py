@@ -76,13 +76,19 @@ async def test_streaming_buffer_presence_blocks_even_empty():
 
 @pytest.mark.asyncio
 async def test_foreign_poll_reference_and_malformed_query_rows_fail():
+ calls=[]
  async def h(req):
-  x=capture_handler(req)
+  calls.append(req)
   if req.url.path.endswith('/jobs'):
-   b=json.loads(req.content); x= httpx.Response(200,json={'jobReference':{'projectId':'foreign','location':'US','jobId':b['jobReference']['jobId']},'configuration':b['configuration'],'status':{'state':'DONE'}})
-  return x
+   b=json.loads(req.content)
+   return httpx.Response(200,json={'jobReference':b['jobReference'],'configuration':b['configuration'],'status':{'state':'PENDING'}})
+  if '/jobs/' in req.url.path and '/queries/' not in req.url.path:
+   jid=req.url.path.rsplit('/',1)[-1]
+   return httpx.Response(200,json={'jobReference':{'projectId':'foreign','location':'US','jobId':jid},'configuration':{'dryRun':False},'status':{'state':'DONE'}})
+  return capture_handler(req)
  with pytest.raises(AnalyticsProviderUnavailable,match='job_binding_invalid'):
   await make_provider(h).delete_account_data(user_id=USER,idempotency_key=KEY)
+ assert any(r.method == 'GET' and '/jobs/' in r.url.path for r in calls)
 
 @pytest.mark.asyncio
 async def test_changed_delete_count_never_confirms():
@@ -102,15 +108,19 @@ async def test_query_result_malformed_cells_fail_closed():
 
 @pytest.mark.asyncio
 async def test_poll_location_mismatch_fails_closed():
+ calls=[]
  async def h(req):
+  calls.append(req)
   if req.url.path.endswith('/jobs'):
-   b=json.loads(req.content); return httpx.Response(200,json={'jobReference':{'projectId':PROJECT,'location':'EU','jobId':b['jobReference']['jobId']},'configuration':b['configuration'],'status':{'state':'DONE'}})
+   b=json.loads(req.content)
+   return httpx.Response(200,json={'jobReference':b['jobReference'],'configuration':b['configuration'],'status':{'state':'PENDING'}})
   if '/jobs/' in req.url.path and '/queries/' not in req.url.path:
    jid=req.url.path.rsplit('/',1)[-1]
    return httpx.Response(200,json={'jobReference':{'projectId':PROJECT,'location':'EU','jobId':jid},'configuration':{'dryRun':False},'status':{'state':'DONE'}})
   return capture_handler(req)
  with pytest.raises(AnalyticsProviderUnavailable,match='job_binding_invalid'):
   await make_provider(h).delete_account_data(user_id=USER,idempotency_key=KEY)
+ assert any(r.method == 'GET' and '/jobs/' in r.url.path for r in calls)
 
 @pytest.mark.asyncio
 async def test_redirect_is_rejected_without_following():
@@ -120,17 +130,19 @@ async def test_redirect_is_rejected_without_following():
 
 @pytest.mark.asyncio
 async def test_lost_post_conflict_resolves_same_stable_plan_and_delete_ids():
- calls=[]; posted=[]
+ calls=[]; posted=[]; bodies={}
  async def h(req):
   calls.append(req)
   if req.method=='POST':
-   b=json.loads(req.content); posted.append(b['jobReference']['jobId']); return httpx.Response(409,json={'error':{}})
+   b=json.loads(req.content); posted.append(b['jobReference']['jobId']); bodies[b['jobReference']['jobId']]=b
+   if len(posted) == 1: raise httpx.ReadTimeout('lost response')
+   return httpx.Response(200,json={'jobReference':b['jobReference'],'configuration':b['configuration'],'status':{'state':'DONE'},'statistics':{'query':{'numDmlAffectedRows':'2'}}})
   if '/jobs/' in req.url.path and '/queries/' not in req.url.path:
-   jid=req.url.path.rsplit('/',1)[-1]; return httpx.Response(200,json={'jobReference':{'projectId':PROJECT,'location':'US','jobId':jid},'configuration':{'dryRun':False,'query':{'query':'x','useLegacySql':False}},'status':{'state':'DONE'},'statistics':{'query':{'numDmlAffectedRows':'2'}}})
+   jid=req.url.path.rsplit('/',1)[-1]; b=bodies[jid]; return httpx.Response(200,json={'jobReference':b['jobReference'],'configuration':b['configuration'],'status':{'state':'DONE'},'statistics':{'query':{'numDmlAffectedRows':'2'}}})
   return capture_handler(req)
- with pytest.raises(AnalyticsProviderUnavailable):
-  await make_provider(h).delete_account_data(user_id=USER,idempotency_key=KEY)
- assert len(posted)==1
+ result=await make_provider(h).delete_account_data(user_id=USER,idempotency_key=KEY)
+ assert result['confirmed']
+ assert any(r.method == 'GET' and posted[0] in r.url.path for r in calls)
 
 @pytest.mark.parametrize('bad',[-1,1.0,True])
 def test_snapshot_row_budget_types_rejected(bad):
@@ -141,5 +153,7 @@ def test_snapshot_row_budget_types_rejected(bad):
 
 @pytest.mark.asyncio
 async def test_subject_credentials_and_request_binding_fail_closed():
+ actual=snap()
  with pytest.raises(AnalyticsProviderUnavailable): await make_provider(lambda r:httpx.Response(500)).delete_account_data(user_id=USER,idempotency_key='other:'+RID)
- with pytest.raises(AnalyticsProviderUnavailable): BigQueryAnalyticsProvider(token='bad\n',project=PROJECT,dataset=DATASET,snapshot=snap(),freeze=fr(),reviewed_snapshot_digest=snap().snapshot_digest,transport=httpx.MockTransport(lambda r:httpx.Response(500)))
+ with pytest.raises(AnalyticsProviderUnavailable,match='credentials_invalid'):
+  BigQueryAnalyticsProvider(token='bad\n',project=PROJECT,dataset=DATASET,snapshot=actual,freeze=fr(),reviewed_snapshot_digest=actual.snapshot_digest,transport=httpx.MockTransport(lambda r:httpx.Response(500)))
