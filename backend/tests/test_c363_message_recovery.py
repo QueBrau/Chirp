@@ -458,12 +458,13 @@ async def test_cancellation_during_history_is_bounded_and_cleans_both_generation
         observation = recovery.RecoveryObservation(recovery_config(tmp_path, peer),
                                                    parse_manifest(json.dumps(raw)), 4, .2)
         original_reconnect = observation.reconnect
+        setup_started = time.monotonic()
 
         async def delayed_reconnect():
-            # Keep this finite scheduler delay in the test so the old eight-second
-            # phase wait is exercised without making the HTTP request itself exceed
-            # the production client timeout.
-            await asyncio.sleep(8.25)
+            # Resume beyond the old eight-second setup deadline without adding
+            # eight more seconds to whatever setup the runner already needed.
+            # Preserve headroom in the HTTP window and the cancellation budget.
+            await asyncio.sleep(max(0, setup_started + 8.25 - time.monotonic()))
             await original_reconnect()
 
         observation.reconnect = delayed_reconnect
