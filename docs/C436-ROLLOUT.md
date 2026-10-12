@@ -21,6 +21,18 @@ recent authentication. Verify the API identity can read Firebase account status
 before release; existing certificate-only token verification does not prove that
 permission. No new cloud permission is granted by this code change.
 
+Firebase SDK calls run in a worker thread with a fixed timeout. Timeout or caller
+cancellation drains that worker before the provider result is returned. This can
+extend beyond the nominal 30-second SDK timeout, and it cannot prevent the
+separate five-minute orchestration lease from expiring if the SDK itself hangs.
+The outcome remains sanitized and uncertain until the next idempotent retry and
+readback; the step lease is not intentionally released while the worker is
+running. If a later runner inherits a still-running Firebase step, it records
+`firebase_outcome_unknown` and blocks without invoking Firebase again. Resolving
+that marker requires a separately reviewed operator procedure that verifies
+provider state and confirms the prior worker has stopped. This patch provides
+no recovery command, blind clear, or automatic retry for that state.
+
 ## Stripe customer adapter boundary
 
 The Stripe customer adapter is a dormant operator component. It is not imported
@@ -40,6 +52,9 @@ ID/type, timeout, or lost response is a blocked provider result rather than a
 success. Stripe's retained deleted-customer shell and local ledger, payment
 intent, plan, installment, and chapter mapping history remain retained; this
 adapter does not claim whole-provider or financial-record erasure.
+After confirming mapped customer deletion/readback, it returns the fixed
+`stripe_deleted_customer_history` retention code to the journal. An empty local
+mapping returns an empty list, without claiming an observed retained customer.
 
 Provider adapters may also return a `retained_with_reason` list containing only
 the fixed code allowed for that provider step: `stripe_deleted_customer_history`,

@@ -36,6 +36,7 @@ PROVIDER_RETENTION_CODES = {
     "firebase_auth": frozenset(),
 }
 MAX_RETENTION_RECEIPT_CODES = 3
+FIREBASE_CALL_TIMEOUT_SECONDS = 30.0
 
 
 class ProviderUnavailable(RuntimeError):
@@ -55,10 +56,32 @@ class FirebaseProvider:
     """Firebase Auth deletion with readback; never treats a malformed response as success."""
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
         from firebase_admin import auth
+
+        async def drain(worker: asyncio.Task[object]) -> None:
+            """Wait for a cancelled SDK thread before releasing its deletion lease."""
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if worker.done() and not worker.cancelled():
+                try:
+                    worker.result()
+                except Exception:
+                    pass
+
         async def call(operation, *args):
+            worker = asyncio.create_task(asyncio.to_thread(operation, *args))
             try:
-                return await asyncio.wait_for(asyncio.to_thread(operation, *args), timeout=30)
-            except asyncio.TimeoutError:
+                return await asyncio.wait_for(
+                    asyncio.shield(worker), timeout=FIREBASE_CALL_TIMEOUT_SECONDS
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError) as original:
+                await drain(worker)
+                if isinstance(original, asyncio.CancelledError):
+                    raise
                 raise ProviderUnavailable("firebase_delete_failed") from None
         try:
             await call(auth.delete_user, user.firebase_uid)
@@ -209,6 +232,26 @@ async def run_deletion(
                 return DeletionRun("blocked", tuple(completed), step_key)
             completed.append(step_key)
             continue
+        if step_key == "firebase_auth" and (
+            step.status == "running"
+            or (step.status == "manual_review" and step.last_error == "firebase_outcome_unknown")
+        ):
+            # A previous Firebase worker may still be finishing after its
+            # request and step leases expired. Do not invoke Firebase again;
+            # persist the uncertain outcome before releasing this runner.
+            step.status = "manual_review"
+            step.last_error = "firebase_outcome_unknown"
+            provider_steps = dict(request.provider_steps or {})
+            provider_steps[step_key] = "manual_review"
+            request.status = "blocked"
+            request.failure_code = "provider_step_incomplete"
+            request.provider_steps = provider_steps
+            request.fulfillment_lease_token = None
+            request.fulfillment_lease_expires_at = None
+            step.lease_token = None
+            step.lease_expires_at = None
+            await session.commit()
+            return DeletionRun("blocked", tuple(completed), step_key)
         provider = providers.get(step_key)
         if provider is None:
             step.status = "manual_review"
