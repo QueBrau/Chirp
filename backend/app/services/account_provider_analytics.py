@@ -13,6 +13,10 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, replace
 from functools import wraps
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.models import User
 
 import httpx
 
@@ -481,9 +485,14 @@ class BigQueryAnalyticsProvider:
             raise _fail('snapshot_drift')
 
     @_bounded
-    async def delete_account_data(self, *, user=None, user_id=None, idempotency_key):
+    async def delete_account_data(
+        self, *, user: User | None = None, user_id: uuid.UUID | str | None = None,
+        idempotency_key: str,
+    ) -> dict[str, object]:
         s, rest = self.snapshot, self.rest
         if user is not None:
+            if user_id is not None and _uuid(user_id) != str(user.id):
+                raise _fail('subject_or_request_mismatch')
             user_id = user.id
         if user_id is None or _uuid(user_id) != s.user_id or idempotency_key != 'account-deletion:' + s.request_id + ':analytics':
             raise _fail('subject_or_request_mismatch')

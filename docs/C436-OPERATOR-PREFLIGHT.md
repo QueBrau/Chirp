@@ -15,7 +15,8 @@ transaction back and closes the engine on every path. It binds the request to
 the expected user and deletion kind, reports the request and journal statuses,
 detects active or malformed leases and Firebase unknown-outcome markers, and
 validates succeeded provider receipts without printing their subject or scope
-values.
+values. Analytics receipts must also match the exact request UUID and carry
+the bounded scope, snapshot-digest and retention metadata required by the executor.
 
 The timeout bounds the database connection and inspection work. Cancellation
 still waits for transaction rollback and connection cleanup before returning, so

@@ -66,10 +66,10 @@ def _lease_state(token: object, expires_at: datetime | None, now: datetime) -> s
     return "active" if expires_at > now else "expired"
 
 
-def _receipt(step_key: str, value: object, expected_user_id: uuid.UUID) -> tuple[bool, dict[str, object], str | None]:
+def _receipt(step_key: str, value: object, expected_user_id: uuid.UUID, request_id: uuid.UUID) -> tuple[bool, dict[str, object], str | None]:
     """Validate a receipt while returning only structural, non-sensitive facts."""
     try:
-        retained = validate_provider_receipt(step_key, expected_user_id, value)
+        retained = validate_provider_receipt(step_key, expected_user_id, value, expected_request_id=request_id)
     except (ProviderUnavailable, TypeError, ValueError):
         return False, {"present": isinstance(value, dict)}, "provider_confirmation_invalid"
     scope = value.get("scope") if isinstance(value, dict) else None
@@ -122,7 +122,7 @@ async def inspect_request(
         step = by_key.get(key)
         if step is None or step.status != "succeeded":
             continue
-        valid, structural, error = _receipt(key, step.provider_ref, expected_user_id)
+        valid, structural, error = _receipt(key, step.provider_ref, expected_user_id, request_id)
         receipt_report[key] = {"status": step.status if step.status in ALLOWED_STEP_STATUSES else "unrecognized", **structural}
         if not valid and error:
             receipt_errors.append(f"{key}:{error}")
@@ -156,6 +156,8 @@ async def inspect_request(
     step_leases: dict[str, str] = {}
     for key in REQUIRED_STEPS:
         step = by_key.get(key)
+        if step is not None and step.idempotency_key != f"account-deletion:{request_id}:{key}":
+            blockers.append(f"{key}_idempotency_key_invalid")
         state = _lease_state(
             step.lease_token if step is not None else None,
             step.lease_expires_at if step is not None else None,

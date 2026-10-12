@@ -141,7 +141,10 @@ def _retention_receipt(step_key: str, result: dict[str, object]) -> list[str]:
     return list(raw)
 
 
-def validate_provider_receipt(step_key: str, subject: uuid.UUID, result: object, *, expected_request_id: uuid.UUID | None = None, expected_snapshot_digest: str | None = None) -> list[str]:
+def validate_provider_receipt(
+    step_key: str, subject: uuid.UUID, result: object, *,
+    expected_request_id: uuid.UUID | None = None,
+) -> list[str]:
     """Validate fresh and durable confirmation against the exact account and step.
 
     Scope labels are descriptive adapter output, not independent proof of a
@@ -170,9 +173,8 @@ def validate_provider_receipt(step_key: str, subject: uuid.UUID, result: object,
             parsed_request_id = None
         if parsed_request_id is None or not isinstance(snapshot_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", snapshot_digest):
             raise ProviderUnavailable("provider_confirmation_missing")
-        if expected_request_id is not None and parsed_request_id != expected_request_id:
-            raise ProviderUnavailable("provider_confirmation_missing")
-        if expected_snapshot_digest is not None and snapshot_digest != expected_snapshot_digest:
+        if (expected_request_id is None or parsed_request_id != expected_request_id
+                or request_id != str(expected_request_id)):
             raise ProviderUnavailable("provider_confirmation_missing")
         excluded = result.get("excluded_scope")
         if (not isinstance(excluded, list) or len(excluded) > 1
@@ -191,7 +193,8 @@ def validate_provider_receipt(step_key: str, subject: uuid.UUID, result: object,
     ):
         raise ProviderUnavailable("provider_confirmation_missing")
     if step_key == "analytics":
-        if any(not re.fullmatch(r"run_googleapis_com_stdout_[0-9]{8}", item) for item in scope):
+        if (scope != sorted(scope) or len(scope) + len(excluded) > MAX_ANALYTICS_SCOPES
+                or any(not re.fullmatch(r"run_googleapis_com_stdout_[0-9]{8}", item) for item in scope)):
             raise ProviderUnavailable("provider_confirmation_missing")
         if result.get("retained_with_reason") != ["bigquery_time_travel", "bigquery_fail_safe"]:
             raise ProviderUnavailable("provider_confirmation_missing")
@@ -214,10 +217,9 @@ async def prepare_deletion_plan(session: AsyncSession, request: models.AccountDa
             )
             session.add(step)
             steps.append(step)
-    current_steps = dict(request.provider_steps or {})
-    for step_key in (*PROVIDER_STEPS, "database_tombstone"):
-        current_steps.setdefault(step_key, by_key.get(step_key).status if by_key.get(step_key) else "pending")
-    request.provider_steps = current_steps
+    request.provider_steps = {
+        step.step_key: step.status or "pending" for step in steps
+    }
     request.status = "processing"
     request.failure_code = None
     request.updated_at = _now()
@@ -237,12 +239,16 @@ async def run_deletion(
     adapter, exception, or ambiguous result leaves the account and remaining steps
     intact for retry/manual review.
     """
-    request = await session.get(models.AccountDataRequest, request_id, with_for_update=True)
+    request = await session.get(
+        models.AccountDataRequest, request_id, with_for_update=True, populate_existing=True,
+    )
     if request is None or request.user_id != user.id or request.kind != "deletion":
         raise LookupError("deletion_request_not_found")
     if request.status == "completed":
         durable = list((await session.scalars(select(models.AccountFulfillmentStep).where(
-            models.AccountFulfillmentStep.request_id == request.id))).all())
+            models.AccountFulfillmentStep.request_id == request.id)
+            .execution_options(populate_existing=True).with_for_update())).all())
+        await session.refresh(user)
         required = set((*PROVIDER_STEPS, "database_tombstone"))
         if {step.step_key for step in durable} != required:
             # A historical terminal request must remain an immutable record. Do
@@ -250,7 +256,11 @@ async def run_deletion(
             await session.rollback()
             return DeletionRun("blocked", (), "analytics")
         tombstone = next(step for step in durable if step.step_key == "database_tombstone")
-        valid_terminal = (tombstone.status == "succeeded" and tombstone.completed_at is not None
+        valid_terminal = (request.completed_at is not None
+                          and request.fulfillment_lease_token is None
+                          and request.fulfillment_lease_expires_at is None
+                          and all(step.lease_token is None and step.lease_expires_at is None for step in durable)
+                          and tombstone.status == "succeeded" and tombstone.completed_at is not None
                           and tombstone.idempotency_key == _key(request.id, "database_tombstone")
                           and user.is_ghost is True
                           and user.firebase_uid == f"deleted:{user.id}"
@@ -308,6 +318,8 @@ async def run_deletion(
             # A legacy or manually altered receipt must not silently authorize
             # continuation. Validate it before invoking any later provider.
             try:
+                if step.completed_at is None or step.idempotency_key != _key(request.id, step_key):
+                    raise ProviderUnavailable("provider_confirmation_missing")
                 validate_provider_receipt(step_key, user.id, step.provider_ref, expected_request_id=request.id)
             except ProviderUnavailable:
                 step.status = "manual_review"
@@ -368,12 +380,6 @@ async def run_deletion(
         try:
             result = await provider.delete_account_data(user=user, idempotency_key=step.idempotency_key)
             retained_with_reason = validate_provider_receipt(step_key, user.id, result, expected_request_id=request.id)
-            if step_key == "analytics" and (
-                    type(result.get("time_travel_hours")) is not int
-                    or type(result.get("fail_safe_days")) is not int
-                    or not isinstance(result.get("excluded_scope"), list)
-                    or any(not isinstance(v, str) or len(v) > MAX_RECEIPT_SCOPE_LENGTH for v in result["excluded_scope"])):
-                raise ProviderUnavailable("provider_confirmation_missing")
         except Exception as exc:
             code = str(exc) if isinstance(exc, ProviderUnavailable) else "provider_error"
             step_status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
@@ -448,10 +454,12 @@ async def run_deletion(
         if durable_step.step_key == "database_tombstone":
             continue
         try:
-            if durable_step.status != "succeeded":
+            if (durable_step.status != "succeeded" or durable_step.completed_at is None
+                    or durable_step.idempotency_key != _key(request.id, durable_step.step_key)):
                 raise ProviderUnavailable("provider_confirmation_missing")
             provider_retention_codes[durable_step.step_key] = validate_provider_receipt(
                 durable_step.step_key, user.id, durable_step.provider_ref,
+                expected_request_id=request.id,
             )
         except ProviderUnavailable:
             request.status = "blocked"

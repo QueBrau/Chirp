@@ -2,7 +2,7 @@
 
 `account_provider_analytics.py` is a dormant operator adapter. Jose approved
 removing a deleting account's identifiable analytics events on October 12.
-This code does not discover credentials, register with the application executor,
+This code does not discover credentials, automatically register with the application executor,
 run on import, or authorize a production query or cleanup.
 
 ## Scope and preparation
@@ -43,7 +43,7 @@ block capture or completion.
 2. Review and durably preserve the exact returned snapshot, counts and digest.
    After separate concrete cleanup approval, construct the adapter with
    `reviewed_snapshot_digest` and call `delete_account_data` using the exact
-   `c436:<request_uuid>` key. Reuse that same snapshot on an uncertain retry;
+   `account-deletion:<request_uuid>:analytics` key. Reuse that same snapshot on an uncertain retry;
    never manufacture a new request to bypass a conflict.
 
 Every real query includes `maximumBytesBilled`; the default is 50,000,000 bytes
@@ -93,7 +93,8 @@ It explicitly retains `bigquery_time_travel` and `bigquery_fail_safe`, reports
 the verified dataset time-travel hours and seven-day fail-safe period, and names
 any excluded probe. It does not claim permanent byte erasure, removal of source
 Cloud Logging events, email, database backups or complete account fulfillment.
-These retention codes are part of the five-step deletion journal and are validated before Firebase or local cleanup;
+These retention codes are required by the five-provider journal (six steps
+including the local tombstone) and are validated before Firebase or local cleanup;
 a later reviewed integration must combine the remaining provider evidence.
 
 All current tests use offline HTTP fixtures. Actual cloud authorization, query
@@ -105,3 +106,20 @@ Contracts: [Job REST resource](https://docs.cloud.google.com/bigquery/docs/refer
 [DML semantics](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax),
 [retry guidance](https://docs.cloud.google.com/bigquery/docs/reliability-intro),
 [time travel and fail-safe](https://docs.cloud.google.com/bigquery/docs/time-travel).
+
+## Journal integration
+
+The injected executor now requires `analytics` before Firebase and local cleanup.
+It stores the exact request UUID, snapshot digest, target/excluded scopes and
+bounded retention metadata in the successful receipt. Fresh, resumed, final and
+read-only preflight validation all bind that receipt to the request and account.
+The digest is a recorded identifier, not independent provider evidence. The
+operator still must preserve the reviewed snapshot; BigQuery's stable plan/job
+bindings reject a different snapshot after submission. No credential discovery
+or production adapter registry is enabled.
+
+Existing nonterminal five-step plans acquire a pending analytics step; missing
+adapters stop the run before any provider call. Historical completed requests
+with missing or invalid evidence return blocked without changing their journal
+or retrying providers against a tombstoned identity. Such cases require separate
+operator investigation, not automatic cleanup or a new completion claim.

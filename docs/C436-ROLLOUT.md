@@ -76,3 +76,17 @@ The adapter follows Stripe's documented Customer deletion and retrieval behavior
 and connected-account scoping: [delete a Customer](https://docs.stripe.com/api/customers/delete),
 [retrieve a Customer](https://docs.stripe.com/api/customers/retrieve), and
 [Connect authentication](https://docs.stripe.com/connect/authentication).
+
+## Durable hold primitive (migration 0044)
+
+Migration 0044 adds the dormant account-deletion hold primitive after 0043.
+See `docs/C436-DELETION-HOLD.md`. It grants no permissions and is not called by
+HTTP, WebSocket, outbox or the executor. A complete release must enroll every
+writer and drain provider operations, uploads, exports and analytics ingestion
+before an operator uses provider cleanup. This source change does not establish
+that quiescence or authorize running the migration or deletion in production.
+
+The journal now requires five providers, including account-linked analytics,
+and a sixth local tombstone step. Successful analytics receipts preserve the
+request UUID, snapshot digest and BigQuery retention metadata. Those fields do
+not replace the operator's immutable reviewed snapshot or external readback.
