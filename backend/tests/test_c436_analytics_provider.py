@@ -22,6 +22,7 @@ USER = "12345678-1234-4234-8234-123456789abc"
 PROJECT = "chirps-prod"
 DATASET = "chirps_analytics"
 TABLE = "run_googleapis_com_stdout_20261012"
+STEP = "step:11111111-1111-4111-8111-111111111111"
 
 
 def schema() -> dict:
@@ -69,9 +70,13 @@ async def test_delete_binds_parameter_and_uses_no_redirects():
     async def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         if "/tables/" in request.url.path:
-            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "schema": schema()})
+            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "type": "TABLE", "schema": schema()})
+        if "/queries/" in request.url.path:
+            job_id = request.url.path.rsplit("/", 1)[-1]
+            return httpx.Response(200, json={"jobReference": {"projectId": PROJECT, "jobId": job_id, "location": "US"}, "jobComplete": True, "totalRows": "1", "schema": {"fields": [{"name": "remaining", "type": "INTEGER"}]}, "rows": [{"f": [{"v": "0"}]}]})
         if request.method == "POST":
             body = json.loads(request.content)
+            assert body["configuration"]["dryRun"] is False
             assert body["configuration"]["query"]["useLegacySql"] is False
             assert body["configuration"]["query"]["useQueryCache"] is False
             assert body["configuration"]["query"]["queryParameters"][0]["parameterValue"]["value"] == USER
@@ -79,20 +84,47 @@ async def test_delete_binds_parameter_and_uses_no_redirects():
             job_id = body["jobReference"]["jobId"]
             return job_response(job_id, rows=[{"f": [{"v": "0"}]}] if body["configuration"]["query"]["query"].startswith("SELECT") else None, configuration=body["configuration"])
         return job_response(request.url.path.rsplit("/", 1)[-1])
-    result = await provider(handler).delete_account_data(user_id=USER, idempotency_key="step")
+    result = await provider(handler).delete_account_data(user_id=USER, idempotency_key=STEP)
     assert result["confirmed"] is True
     assert result["readback"] is True
-    assert len(calls) == 3
+    assert len(calls) == 4
     assert all(call.url.host == "bigquery.googleapis.com" for call in calls)
 
 
 def test_preview_is_dry_run_and_probe_requires_explicit_scope():
     p = provider(lambda _: httpx.Response(500), tables=(TABLE,))
     body = p.preview_requests()[0]
-    assert body["configuration"]["query"]["dryRun"] is True
+    assert body["configuration"]["dryRun"] is True
     assert "DELETE" not in body["configuration"]["query"]["query"]
     with pytest.raises(AnalyticsProviderUnavailable, match="analytics_table_scope_invalid"):
         provider(lambda _: httpx.Response(500), tables=("chirps_analytics_probe_20260908",))
+
+
+@pytest.mark.asyncio
+async def test_capture_preview_inventory_and_query_result_envelope():
+    async def handler(request):
+        path = request.url.path
+        if path.endswith(f"/datasets/{DATASET}"):
+            return httpx.Response(200, json={"location": "US"})
+        if path.endswith("/tables"):
+            return httpx.Response(200, json={"tables": [{"type": "TABLE", "tableReference": {"tableId": TABLE}}]})
+        if "/tables/" in path:
+            return httpx.Response(200, json={"type": "TABLE", "tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "schema": schema()})
+        if path.endswith("/jobs"):
+            body = json.loads(request.content)
+            return httpx.Response(200, json={"jobReference": body["jobReference"], "configuration": body["configuration"], "status": {"state": "DONE"}, "statistics": {"query": {"totalBytesProcessed": "10"}}})
+        if "/queries/" in path:
+            job_id = path.rsplit("/", 1)[-1]
+            return httpx.Response(200, json={"jobReference": {"projectId": PROJECT, "location": "US", "jobId": job_id}, "jobComplete": True, "totalRows": "1", "schema": {"fields": [{"name": "remaining", "type": "INTEGER"}]}, "rows": [{"f": [{"v": "2"}]}]})
+        return httpx.Response(500)
+    captured = await BigQueryAnalyticsProvider.capture_preview_snapshot(
+        token="operator-token", project=PROJECT, dataset=DATASET,
+        request_id="11111111-1111-4111-8111-111111111111", user_id=USER,
+        freeze=freeze(), reviewed_tables=(TABLE,), transport=httpx.MockTransport(handler), timeout_seconds=5,
+    )
+    assert captured.tables[0].preview_count == 2
+    assert captured.tables[0].max_bytes_billed == 10
+    assert captured.excluded_tables == ()
 
 
 def test_snapshot_binding_and_freeze_are_strict_before_transport():
@@ -109,12 +141,12 @@ def test_snapshot_binding_and_freeze_are_strict_before_transport():
 @pytest.mark.asyncio
 async def test_metadata_requires_exact_table_binding_and_reviewed_schema():
     async def wrong(request):
-        return httpx.Response(200, json={"tableReference": {"projectId": "other", "datasetId": DATASET, "tableId": TABLE}, "schema": schema()})
+        return httpx.Response(200, json={"tableReference": {"projectId": "other", "datasetId": DATASET, "tableId": TABLE}, "type": "TABLE", "schema": schema()})
     with pytest.raises(AnalyticsProviderUnavailable, match="analytics_table_binding_invalid"):
         await provider(wrong).capture_snapshot()
 
     async def unknown_schema(request):
-        return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "schema": {"fields": []}})
+        return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "type": "TABLE", "schema": {"fields": []}})
     with pytest.raises(AnalyticsProviderUnavailable, match="analytics_schema_invalid"):
         await provider(unknown_schema).capture_snapshot()
 
@@ -122,7 +154,7 @@ async def test_metadata_requires_exact_table_binding_and_reviewed_schema():
 @pytest.mark.asyncio
 async def test_streaming_buffer_blocks_snapshot():
     async def handler(request):
-        return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "schema": schema(), "streamingBuffer": {"estimatedRows": "1"}})
+        return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "type": "TABLE", "schema": schema(), "streamingBuffer": {"estimatedRows": "1"}})
     with pytest.raises(AnalyticsProviderUnavailable, match="analytics_streaming_buffer_present"):
         await provider(handler).capture_snapshot()
 
@@ -134,7 +166,10 @@ async def test_lost_insert_response_resolves_same_job_without_new_job_id():
     async def handler(request):
         calls.append(request)
         if "/tables/" in request.url.path:
-            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "schema": schema()})
+            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "type": "TABLE", "schema": schema()})
+        if "/queries/" in request.url.path:
+            job_id = request.url.path.rsplit("/", 1)[-1]
+            return httpx.Response(200, json={"jobReference": {"projectId": PROJECT, "jobId": job_id, "location": "US"}, "jobComplete": True, "totalRows": "1", "schema": {"fields": [{"name": "remaining", "type": "INTEGER"}]}, "rows": [{"f": [{"v": "0"}]}]})
         if request.method == "POST":
             saved["configuration"] = json.loads(request.content)["configuration"]
             return httpx.Response(409, json={"error": {"message": "already exists"}})
@@ -143,7 +178,7 @@ async def test_lost_insert_response_resolves_same_job_without_new_job_id():
             request.url.path.rsplit("/", 1)[-1], configuration=saved["configuration"],
             rows=[{"f": [{"v": "0"}]}] if is_readback else None,
         )
-    result = await provider(handler).delete_account_data(user_id=USER, idempotency_key="step")
+    result = await provider(handler).delete_account_data(user_id=USER, idempotency_key=STEP)
     assert result["affected_rows"] == 1
     assert calls[0].method == "GET"
     assert calls[1].method == "POST"
@@ -155,42 +190,51 @@ async def test_lost_insert_response_resolves_same_job_without_new_job_id():
 async def test_foreign_job_reference_and_bad_count_fail_closed():
     async def foreign(request):
         if "/tables/" in request.url.path:
-            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "schema": schema()})
+            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "type": "TABLE", "schema": schema()})
+        if "/queries/" in request.url.path:
+            job_id = request.url.path.rsplit("/", 1)[-1]
+            return httpx.Response(200, json={"jobReference": {"projectId": PROJECT, "jobId": job_id, "location": "US"}, "jobComplete": True, "totalRows": "1", "schema": {"fields": [{"name": "remaining", "type": "INTEGER"}]}, "rows": [{"f": [{"v": "0"}]}]})
         if request.method == "POST":
             body = json.loads(request.content)
             return httpx.Response(200, json={"jobReference": {"projectId": PROJECT, "jobId": "foreign"}, "configuration": body["configuration"], "status": {"state": "DONE"}})
         return httpx.Response(500)
     with pytest.raises(AnalyticsProviderUnavailable, match="analytics_job_binding_invalid"):
-        await provider(foreign).delete_account_data(user_id=USER, idempotency_key="step")
+        await provider(foreign).delete_account_data(user_id=USER, idempotency_key=STEP)
 
     async def bad_count(request):
         if "/tables/" in request.url.path:
-            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "schema": schema()})
+            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "type": "TABLE", "schema": schema()})
+        if "/queries/" in request.url.path:
+            job_id = request.url.path.rsplit("/", 1)[-1]
+            return httpx.Response(200, json={"jobReference": {"projectId": PROJECT, "jobId": job_id, "location": "US"}, "jobComplete": True, "totalRows": "1", "schema": {"fields": [{"name": "remaining", "type": "INTEGER"}]}, "rows": [{"f": [{"v": "1"}]}]})
         if request.method == "POST":
             body = json.loads(request.content)
             return job_response(body["jobReference"]["jobId"], deleted="not-a-count", configuration=body["configuration"])
         return httpx.Response(500)
     with pytest.raises(AnalyticsProviderUnavailable, match="analytics_affected_count_invalid"):
-        await provider(bad_count).delete_account_data(user_id=USER, idempotency_key="step")
+        await provider(bad_count).delete_account_data(user_id=USER, idempotency_key=STEP)
 
 
 @pytest.mark.asyncio
 async def test_readback_nonzero_redirect_and_oversized_response_fail_closed():
     async def nonzero(request):
         if "/tables/" in request.url.path:
-            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "schema": schema()})
+            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "type": "TABLE", "schema": schema()})
+        if "/queries/" in request.url.path:
+            job_id = request.url.path.rsplit("/", 1)[-1]
+            return httpx.Response(200, json={"jobReference": {"projectId": PROJECT, "jobId": job_id, "location": "US"}, "jobComplete": True, "totalRows": "1", "schema": {"fields": [{"name": "remaining", "type": "INTEGER"}]}, "rows": [{"f": [{"v": "1"}]}]})
         if request.method == "POST":
             body = json.loads(request.content)
             query = body["configuration"]["query"]["query"]
             return job_response(body["jobReference"]["jobId"], rows=[{"f": [{"v": "1"}]}] if query.startswith("SELECT") else None, configuration=body["configuration"])
         return httpx.Response(500)
     with pytest.raises(AnalyticsProviderUnavailable, match="analytics_readback_nonzero"):
-        await provider(nonzero).delete_account_data(user_id=USER, idempotency_key="step")
+        await provider(nonzero).delete_account_data(user_id=USER, idempotency_key=STEP)
 
     async def redirect(request):
         return httpx.Response(302, headers={"location": "https://evil.invalid"})
     with pytest.raises(AnalyticsProviderUnavailable, match="analytics_redirect_rejected"):
-        await provider(redirect).delete_account_data(user_id=USER, idempotency_key="step")
+        await provider(redirect).delete_account_data(user_id=USER, idempotency_key=STEP)
 
 
 @pytest.mark.asyncio
@@ -200,13 +244,13 @@ async def test_uncertain_job_state_and_subject_are_not_retried():
         nonlocal calls
         calls += 1
         if "/tables/" in request.url.path:
-            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "schema": schema()})
+            return httpx.Response(200, json={"tableReference": {"projectId": PROJECT, "datasetId": DATASET, "tableId": TABLE}, "type": "TABLE", "schema": schema()})
         if request.method == "POST":
             body = json.loads(request.content)
             return httpx.Response(200, json={"jobReference": {"projectId": PROJECT, "jobId": body["jobReference"]["jobId"]}, "configuration": body["configuration"], "status": {"state": "PENDING"}})
         return httpx.Response(200, json={"jobReference": {"projectId": PROJECT, "jobId": request.url.path.rsplit("/", 1)[-1]}, "status": {"state": "PENDING"}})
     with pytest.raises(AnalyticsProviderUnavailable, match="analytics_job_timeout"):
-        await provider(pending).delete_account_data(user_id=USER, idempotency_key="step")
+        await provider(pending).delete_account_data(user_id=USER, idempotency_key=STEP)
     assert calls == 62
     with pytest.raises(AnalyticsProviderUnavailable, match="analytics_subject_mismatch"):
-        await provider(lambda _: httpx.Response(500)).delete_account_data(user_id=str(uuid.uuid4()), idempotency_key="step")
+        await provider(lambda _: httpx.Response(500)).delete_account_data(user_id=str(uuid.uuid4()), idempotency_key=STEP)
