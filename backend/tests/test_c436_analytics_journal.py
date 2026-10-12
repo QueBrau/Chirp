@@ -7,7 +7,13 @@ import pytest
 from sqlalchemy import delete, select
 from app import models
 from app.db import get_session_factory
-from app.services.account_fulfillment import PROVIDER_STEPS, run_deletion
+from app.services.account_fulfillment import (
+    PROVIDER_STEPS,
+    ProviderUnavailable,
+    validate_provider_receipt,
+    run_deletion,
+)
+from app.jobs.account_deletion_preflight import inspect_request
 from app.services.account_provider_analytics import (
  AnalyticsFreezeReceipt, AnalyticsSnapshot, AnalyticsTable,
  BigQueryAnalyticsProvider, _digest,
@@ -115,3 +121,132 @@ async def test_successful_actual_analytics_receipt_survives_reload(client, make_
         assert step.provider_ref["snapshot_digest"] == snapshot.snapshot_digest
         assert step.provider_ref["retained_with_reason"] == ["bigquery_time_travel", "bigquery_fail_safe"]
         assert (await run_deletion(session, request_id, user, {key: ConfirmingProvider(key) for key in PROVIDER_STEPS})).status == "completed"
+        step.provider_ref = {**step.provider_ref, "request_id": str(uuid.uuid4())}
+        await session.commit()
+        before = (request_id, user.firebase_uid, user.email)
+        invalid = await run_deletion(session, request_id, user, {key: ConfirmingProvider(key) for key in PROVIDER_STEPS})
+        await session.refresh(user)
+        assert invalid.status == "blocked"
+        assert (request_id, user.firebase_uid, user.email) == before
+
+@pytest.mark.asyncio
+async def test_missing_analytics_adapter_calls_no_other_provider(client, make_user):
+    owner = await make_user("Missing analytics owner")
+    created = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(created.json()["id"])
+    calls: list[str] = []
+
+    class CountingProvider(ConfirmingProvider):
+        async def delete_account_data(self, *, user, idempotency_key):
+            calls.append(self.provider_key)
+            return await super().delete_account_data(user=user, idempotency_key=idempotency_key)
+
+    providers = {key: CountingProvider(key) for key in PROVIDER_STEPS if key != "analytics"}
+    async with get_session_factory()() as session:
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert user is not None
+        result = await run_deletion(session, request_id, user, providers)
+    assert result.status == "blocked" and result.failed_step == "analytics"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_five_step_plan_grows_then_blocks_before_provider_calls(client, make_user):
+    owner = await make_user("Legacy five-step owner")
+    created = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(created.json()["id"])
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, request_id)
+        assert request is not None
+        await session.execute(delete(models.AccountFulfillmentStep).where(models.AccountFulfillmentStep.request_id == request_id, models.AccountFulfillmentStep.step_key == "analytics"))
+        request.provider_steps = {key: "pending" for key in (*PROVIDER_STEPS[:3], "firebase_auth", "database_tombstone")}
+        await session.commit()
+        calls: list[str] = []
+        providers = {key: ConfirmingProvider(key) for key in PROVIDER_STEPS if key != "analytics"}
+        for provider in providers.values():
+            provider.keys = calls
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert user is not None
+        result = await run_deletion(session, request_id, user, providers)
+        await session.refresh(request)
+        assert result.status == "blocked" and result.failed_step == "analytics"
+        assert "analytics" in request.provider_steps
+        assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_analytics_success_is_reused_after_firebase_failure(client, make_user):
+    owner = await make_user("Analytics resume owner")
+    created = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(created.json()["id"])
+    analytics = ConfirmingProvider("analytics")
+
+    class FailFirebase(ConfirmingProvider):
+        def __init__(self):
+            super().__init__("firebase_auth")
+            self.failed = False
+        async def delete_account_data(self, *, user, idempotency_key):
+            self.keys.append(idempotency_key)
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("simulated provider outage")
+            return await super().delete_account_data(user=user, idempotency_key=idempotency_key)
+
+    providers = {key: ConfirmingProvider(key) for key in PROVIDER_STEPS}
+    providers["analytics"] = analytics
+    firebase = FailFirebase()
+    providers["firebase_auth"] = firebase
+    async with get_session_factory()() as session:
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert user is not None
+        first = await run_deletion(session, request_id, user, providers)
+        assert first.status == "blocked" and analytics.keys
+        first_count = len(analytics.keys)
+        providers["analytics"] = type("NoRetry", (), {"delete_account_data": lambda self, **kwargs: (_ for _ in ()).throw(AssertionError("analytics retried"))})()
+        second = await run_deletion(session, request_id, user, providers)
+        assert second.status == "completed"
+        assert len(analytics.keys) == first_count
+        step = await session.scalar(select(models.AccountFulfillmentStep).where(models.AccountFulfillmentStep.request_id == request_id, models.AccountFulfillmentStep.step_key == "analytics"))
+        request = await session.get(models.AccountDataRequest, request_id)
+        assert step is not None and step.status == "succeeded"
+        assert request is not None and request.provider_steps["analytics"] == "succeeded"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda result: result.update(request_id=str(uuid.uuid4())),
+        lambda result: result.update(snapshot_digest="not-a-digest"),
+        lambda result: result.update(fail_safe_days=7.0),
+        lambda result: result.update(retained_with_reason=[]),
+    ],
+)
+def test_analytics_receipt_damage_is_rejected(change):
+    result = {
+        "confirmed": True,
+        "provider": "analytics",
+        "subject": "12345678-1234-4234-8234-123456789abc",
+        "scope": ["run_googleapis_com_stdout_20261012"],
+        "readback": True,
+        "request_id": "11111111-1111-4111-8111-111111111111",
+        "snapshot_digest": "0" * 64,
+        "time_travel_hours": 168,
+        "fail_safe_days": 7,
+        "excluded_scope": [],
+        "retained_with_reason": ["bigquery_time_travel", "bigquery_fail_safe"],
+    }
+    change(result)
+    with pytest.raises(ProviderUnavailable):
+        validate_provider_receipt("analytics", uuid.UUID(result["subject"]), result, expected_request_id=uuid.UUID("11111111-1111-4111-8111-111111111111"))
+
+
+@pytest.mark.asyncio
+async def test_preflight_foreign_request_cannot_claim_completion(client, make_user):
+    owner = await make_user("Preflight owner")
+    other = await make_user("Preflight other")
+    created = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(created.json()["id"])
+    async with get_session_factory()() as session:
+        report = await inspect_request(session, request_id=request_id, expected_user_id=uuid.UUID(other.id))
+    assert report["request_found"] is False
+    assert report["status"] == "not_found_or_owner_mismatch"
