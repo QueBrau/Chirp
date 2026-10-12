@@ -31,4 +31,5 @@ class DataRequestOut(_Schema):
     scope: list[str]
     excluded: list[str]
     retention_reasons: list[str]
+    provider_steps: dict[str, str]
     failure_code: str | None = None

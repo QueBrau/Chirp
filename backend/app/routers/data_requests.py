@@ -16,6 +16,7 @@ from app.db import get_session
 from app.middleware.auth import get_current_user_for_privacy, get_current_user_for_privacy_status
 from app.schemas.data_requests import DataRequestCreate, DataRequestOut
 from app.services.account_data import fulfill_request
+from app.services.account_fulfillment import prepare_deletion_plan
 
 router = APIRouter(tags=["account-data"])
 
@@ -36,6 +37,7 @@ def _out(row: models.AccountDataRequest, artifact: models.AccountDataArtifact | 
         scope=row.scope or [],
         excluded=row.excluded or [],
         retention_reasons=row.retention_reasons or [],
+        provider_steps=row.provider_steps or {},
         failure_code=row.failure_code,
     )
 
@@ -127,6 +129,8 @@ async def create_data_request(
         if existing is None:
             raise HTTPException(status_code=409, detail="request_already_open")
         return _out(existing)
+    if row.kind == "deletion":
+        await prepare_deletion_plan(session, row)
     await fulfill_request(session, row, user)
     await session.commit()
     artifact = (await session.execute(

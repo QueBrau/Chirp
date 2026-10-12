@@ -30,6 +30,7 @@ from tests.test_c363_message_receipts import config_for, manifest_data
 # a relaxed runtime deadline or receipt threshold. Leave cleanup outer headroom.
 PEER_HTTP_SECONDS = 16
 PEER_RUN_TIMEOUT_SECONDS = 22
+HISTORY_SETUP_TIMEOUT_SECONDS = PEER_RUN_TIMEOUT_SECONDS - 5
 
 
 class RecoveryPeer:
@@ -456,10 +457,38 @@ async def test_cancellation_during_history_is_bounded_and_cleans_both_generation
     async with recovery_peers(raw, "history_hangs") as peer:
         observation = recovery.RecoveryObservation(recovery_config(tmp_path, peer),
                                                    parse_manifest(json.dumps(raw)), 4, .2)
+        original_reconnect = observation.reconnect
+        setup_started = time.monotonic()
+
+        async def delayed_reconnect():
+            # Resume beyond the old eight-second setup deadline without adding
+            # eight more seconds to whatever setup the runner already needed.
+            # Preserve headroom in the HTTP window and the cancellation budget.
+            await asyncio.sleep(max(0, setup_started + 8.25 - time.monotonic()))
+            await original_reconnect()
+
+        observation.reconnect = delayed_reconnect
         task = asyncio.create_task(observation.run())
-        await asyncio.wait_for(peer.history_started.wait(), 8)
-        task.cancel()
-        result = await asyncio.wait_for(task, 5)
+        history_wait = asyncio.create_task(peer.history_started.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {history_wait, task},
+                timeout=HISTORY_SETUP_TIMEOUT_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if history_wait not in done:
+                if task in done:
+                    task.result()
+                    pytest.fail("recovery completed before entering history phase")
+                pytest.fail("history phase did not start within the fixture envelope")
+            task.cancel()
+            result = await asyncio.wait_for(task, 5)
+        finally:
+            history_wait.cancel()
+            task.cancel()
+            await asyncio.wait_for(
+                asyncio.gather(history_wait, task, return_exceptions=True), 5
+            )
     assert result["status"] == "NOT_PROVEN" and "run_cancelled" in result["errors"]
     assert result["history_recovery"]["expected"] == result["history_recovery"]["missing"] == 2
     assert all(task.done() for task in observation.tasks)
