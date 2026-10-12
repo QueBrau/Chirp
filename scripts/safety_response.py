@@ -454,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
     """Run a metadata-only operator command or the isolated synthetic drill."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="/private/tmp/chirp-safety-c437.sqlite3")
-    parser.add_argument("command", choices=("drill", "intake", "complete-notice", "assign", "status", "list-due", "attempt", "close", "reopen", "escalate", "hold", "release-hold", "appeal", "report-confirmed-csam"))
+    parser.add_argument("command", choices=("drill", "receipt-reference", "intake", "complete-notice", "assign", "status", "list-due", "attempt", "close", "reopen", "escalate", "hold", "release-hold", "appeal", "report-confirmed-csam"))
     parser.add_argument("case_ref", nargs="?")
     parser.add_argument("--elements", default=",")
     parser.add_argument("--received-at", default=None)
@@ -474,6 +474,25 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "drill":
         print(json.dumps(run_drill(args.db), indent=2, sort_keys=True))
+        return 0
+    if args.command == "receipt-reference":
+        if args.known_copy_receipt is None:
+            parser.error("receipt-reference requires --known-copy-receipt")
+        try:
+            reference = c437_receipt_reference(args.known_copy_receipt)
+        except ValueError as error:
+            safe_errors = {
+                "known-copy receipt must be a private regular file",
+                "known-copy receipt is incomplete",
+                "known-copy receipt digest mismatch",
+            }
+            message = str(error) if str(error) in safe_errors else "invalid known-copy receipt"
+            print(json.dumps({"complete": False, "error": message}, sort_keys=True))
+            return 2
+        except Exception:
+            print(json.dumps({"complete": False, "error": "invalid known-copy receipt"}, sort_keys=True))
+            return 2
+        print(json.dumps({"verification_ref": reference}, sort_keys=True))
         return 0
     if args.command not in {"intake", "list-due"} and not args.case_ref:
         parser.error("this command requires a case reference")

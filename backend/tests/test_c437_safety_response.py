@@ -144,6 +144,80 @@ def test_old_shaped_receipt_without_fresh_verification_is_rejected(tmp_path):
         c437_receipt_reference(path)
 
 
+def test_receipt_reference_cli_validates_without_opening_database(tmp_path, capsys):
+    receipt_path, expected = _removal_receipt(tmp_path)
+    db_path = tmp_path / "must-not-be-created.sqlite3"
+
+    assert main([
+        "--db", str(db_path), "receipt-reference",
+        "--known-copy-receipt", str(receipt_path),
+    ]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output == {"verification_ref": expected}
+    assert not db_path.exists()
+    assert str(receipt_path) not in json.dumps(output)
+
+
+@pytest.mark.parametrize("mutation, expected", [
+    ("incomplete", "known-copy receipt is incomplete"),
+    ("digest", "known-copy receipt digest mismatch"),
+    ("mode", "known-copy receipt must be a private regular file"),
+    ("symlink", "known-copy receipt must be a private regular file"),
+])
+def test_receipt_reference_cli_rejects_unusable_private_receipts(tmp_path, capsys, mutation, expected):
+    receipt_path, _ = _removal_receipt(tmp_path)
+    if mutation == "incomplete":
+        raw = json.loads(receipt_path.read_text(encoding="utf-8"))
+        raw["verification_complete"] = False
+        receipt_path.write_text(json.dumps(raw), encoding="utf-8")
+        receipt_path.chmod(0o600)
+    elif mutation == "digest":
+        raw = json.loads(receipt_path.read_text(encoding="utf-8"))
+        raw["receipt_digest"] = "0" * 64
+        receipt_path.write_text(json.dumps(raw), encoding="utf-8")
+        receipt_path.chmod(0o600)
+    elif mutation == "mode":
+        receipt_path.chmod(0o644)
+    else:
+        link = tmp_path / "receipt-link.json"
+        link.symlink_to(receipt_path)
+        receipt_path = link
+
+    assert main(["receipt-reference", "--known-copy-receipt", str(receipt_path)]) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output == {"complete": False, "error": expected}
+    assert str(receipt_path) not in json.dumps(output)
+
+
+@pytest.mark.parametrize("raw_text", [
+    '{"receipt_digest":"provider-secret-sentinel',
+    None,
+])
+def test_receipt_reference_cli_redacts_parser_and_timestamp_errors(tmp_path, capsys, raw_text):
+    receipt_path, _ = _removal_receipt(tmp_path)
+    if raw_text is None:
+        raw = json.loads(receipt_path.read_text(encoding="utf-8"))
+        raw["verified_at"] = "provider-secret-sentinel"
+        raw["receipt_digest"] = hashlib.sha256(
+            json.dumps({key: value for key, value in raw.items() if key != "receipt_digest"}, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        receipt_path.write_text(json.dumps(raw), encoding="utf-8")
+    else:
+        receipt_path.write_text(raw_text, encoding="utf-8")
+    receipt_path.chmod(0o600)
+    db_path = tmp_path / "must-not-be-created.sqlite3"
+
+    assert main([
+        "--db", str(db_path), "receipt-reference",
+        "--known-copy-receipt", str(receipt_path),
+    ]) == 2
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"complete": False, "error": "invalid known-copy receipt"}
+    assert "provider-secret-sentinel" not in captured.out + captured.err
+    assert str(receipt_path) not in captured.out + captured.err
+    assert not db_path.exists()
+
+
 def test_close_requires_current_generation_and_known_copy_proof(tmp_path):
     store = SafetyCaseStore(tmp_path / "cases.sqlite3")
     case_ref, when = _ready_case(store)
