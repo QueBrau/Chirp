@@ -93,7 +93,7 @@ It explicitly retains `bigquery_time_travel` and `bigquery_fail_safe`, reports
 the verified dataset time-travel hours and seven-day fail-safe period, and names
 any excluded probe. It does not claim permanent byte erasure, removal of source
 Cloud Logging events, email, database backups or complete account fulfillment.
-These new retention codes are not added to the existing four-provider executor;
+These retention codes are part of the five-step deletion journal and are validated before Firebase or local cleanup;
 a later reviewed integration must combine the remaining provider evidence.
 
 All current tests use offline HTTP fixtures. Actual cloud authorization, query

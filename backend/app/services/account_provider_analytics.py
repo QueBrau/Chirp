@@ -481,9 +481,11 @@ class BigQueryAnalyticsProvider:
             raise _fail('snapshot_drift')
 
     @_bounded
-    async def delete_account_data(self, *, user_id, idempotency_key):
+    async def delete_account_data(self, *, user=None, user_id=None, idempotency_key):
         s, rest = self.snapshot, self.rest
-        if _uuid(user_id) != s.user_id or idempotency_key != 'c436:' + s.request_id:
+        if user is not None:
+            user_id = user.id
+        if user_id is None or _uuid(user_id) != s.user_id or idempotency_key != 'account-deletion:' + s.request_id + ':analytics':
             raise _fail('subject_or_request_mismatch')
         s.validate()
         self.freeze.validate(s.user_id)
