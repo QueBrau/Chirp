@@ -207,9 +207,15 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(
         assert (await session.scalars(select(models.SignedPrekey).where(
             models.SignedPrekey.device_id == uuid.UUID(owner_device["id"])
         ))).all() == []
+        assert (await session.scalars(select(models.SignedPrekey).where(
+            models.SignedPrekey.device_id == uuid.UUID(other_device["id"])
+        ))).all()
         assert (await session.scalars(select(models.OneTimePrekey).where(
             models.OneTimePrekey.device_id == uuid.UUID(owner_device["id"])
         ))).all() == []
+        assert (await session.scalars(select(models.OneTimePrekey).where(
+            models.OneTimePrekey.device_id == uuid.UUID(other_device["id"])
+        ))).all()
         assert (await session.scalars(select(models.KyberPrekey).where(
             models.KyberPrekey.device_id == uuid.UUID(owner_device["id"])
         ))).all() == []

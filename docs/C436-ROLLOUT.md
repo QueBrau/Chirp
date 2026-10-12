@@ -10,7 +10,7 @@ Deletion requests are accepted and tracked with a durable provider-step plan (mi
 
 Rollout order:
 
-1. Apply migration 0043 only after the c438 migrations 0040–0042 are present. Review the API role's request/artifact SELECT/INSERT grants and the operator role's narrowly scoped fulfillment-step and owned-prekey DELETE grants; grant no client role direct table access and do not broaden API grants to enable cleanup.
+1. Apply migration 0043 only after the c438 migrations 0040–0042 are present. Review the API role's request/artifact and `account_fulfillment_steps` SELECT/INSERT grants needed to create and report a blocked plan. Review the separate operator workflow role for narrowly scoped request/step lease updates and owned-prekey DELETE grants; grant no API cleanup DELETE permission and no client role direct table access.
 2. Deploy backend models, migrations, auth freshness dependency, request/status/download routes, export service, and focused database tests before shipping either client screen. Before accepting an export request, run the read-only c454 privilege preflight against the actual API database connection with `--expected-role chirp_api`; it verifies the inherited export column ACLs (including column-level grants), real zero-row ORM selects, and request/artifact write privileges. See `docs/C454-ROLLOUT.md`.
 3. Verify suspended users can still read their own request status while sensitive creation/download remains fresh-auth protected; verify owner isolation and rate limits. Re-run the same preflight after any schema, role, or deployment-template change; a missing column grant must block release rather than surface as an export-route 500.
 4. Ship the mobile settings screen and web support fallback after backend behavior is observable.
