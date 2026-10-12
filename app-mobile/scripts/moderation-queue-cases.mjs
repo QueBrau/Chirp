@@ -13,6 +13,9 @@ import vm from "node:vm";
 import ts from "typescript";
 
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
+class ApiError extends Error {
+  constructor(status, detail) { super(`API ${status}: ${detail}`); this.status = status; this.detail = detail; }
+}
 const time = n => new Date(Date.UTC(2026, 8, 1, 0, 0, n)).toISOString();
 /** Odd n = chirp (removable via doRemove); even n = comment (dismiss-only via doDismiss) —
  * exercises both close paths across every test that drains a page. */
@@ -32,6 +35,28 @@ const page1 = page(120, 50); // n=120..71 (the page that seeds the initial curso
 const page2 = page(70, 50); // n=70..21
 const page3 = page(20, 20); // n=20..1, SHORT — the page that flips `more` to false
 const freshPage = page(1020, 50); // disjoint id space: proves a refresh replaced, not merged
+
+async function runModerationApiCases() {
+  const source = readFileSync(new URL("../src/api/moderation.ts", import.meta.url), "utf8");
+  const output = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls = [];
+  const module = { exports: {} };
+  const context = vm.createContext({ console, Promise });
+  vm.runInContext(`(function(require,module,exports){${output}\n})`, context)(name => {
+    assert.equal(name, "./client");
+    return { request: async (path, options) => { calls.push({ path, options }); return undefined; } };
+  }, module, module.exports);
+  await module.exports.removeContent("post", "post-1", "unsafe");
+  assert.equal(JSON.stringify(calls[0]), JSON.stringify({
+    path: "/moderation/content/remove",
+    options: { method: "POST", body: { target_type: "post", target_id: "post-1", reason: "unsafe" } },
+  }));
+  await assert.rejects(() => module.exports.removeContent("user", "user-1", "unsafe"), /unsupported removal target/);
+  await assert.rejects(() => module.exports.removeContent("comment", "", "unsafe"), /target and reason are required/);
+  console.log("PASS c456 moderation API payload and target validation");
+}
 
 /** Drain every row currently displayed, one at a time via the real close path, settling
  * after each so pagination/refill effects run exactly as they would on device. */
@@ -71,9 +96,11 @@ function environment(options = {}) {
   const implementations = {
     listReports: async query => (query?.before !== undefined ? [] : page1),
     removeChirp: async () => ({}),
+    removeContent: async () => ({}),
     resolveReport: async (id, status, reason) => ({ id, status, reason }),
   };
   const env = { apiCalls, alerts, api: implementations };
+  env.ApiError = ApiError;
   const api = new Proxy({}, { get: (_, name) => (...args) => { apiCalls.push({ name, args }); return implementations[name](...args); } });
   const primitive = new Proxy({}, { get: (_, name) => String(name) });
   const context = vm.createContext({ console, Date, Set, Map, Symbol,
@@ -84,6 +111,7 @@ function environment(options = {}) {
     "react/jsx-runtime": { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
     "react-native": primitive,
     "@/api/moderation": api,
+    "@/api/client": { ApiError },
     "@/org/OwnChapterProvider": { useOwnChapter: () => ({
       membership: { chapter_id: "chapter-A", role: "secretary" },
       roleMeta: { eboard: ["secretary", "president", "treasurer", "vice_president", "historian"] },
@@ -146,7 +174,49 @@ async function run(cases, options) {
 }
 
 export async function runModerationQueueCases(options = {}) {
-  return run([
+  await runModerationApiCases();
+  const passed = await run([
+    ["post and comment removals send typed target payloads and resolve only after success", async e => {
+      await e.mount();
+      const post = { ...report(2), id: "post-report", target_type: "post", target_id: "post-2" };
+      const comment = { ...report(4), id: "comment-report", target_type: "comment", target_id: "comment-4" };
+      await e.value().doRemove(post, { type: "post", id: post.target_id });
+      await e.value().doRemove(comment, { type: "comment", id: comment.target_id });
+      const removals = e.apiCalls.filter(c => c.name === "removeContent");
+      assert.deepEqual(removals.map(c => c.args), [["post", "post-2", "Reason 2"], ["comment", "comment-4", "Reason 4"]]);
+      assert.equal(e.apiCalls.filter(c => c.name === "resolveReport").length, 2);
+    }],
+    ["unsupported reports stay manual-review only", async e => {
+      await e.mount();
+      const unsupported = { ...report(6), id: "message-report", target_type: "message_forward", target_id: "message-6" };
+      await e.value().doDismiss(unsupported);
+      assert.equal(e.apiCalls.filter(c => c.name === "removeContent" || c.name === "removeChirp").length, 0);
+    }],
+    ["a removal authorization failure does not resolve the report", async e => {
+      await e.mount();
+      e.api.removeContent = async () => { throw new ApiError(403, "insufficient_role"); };
+      const post = { ...report(2), id: "forbidden-post", target_type: "post", target_id: "post-2" };
+      await e.value().doRemove(post, { type: "post", id: post.target_id });
+      assert.equal(e.apiCalls.filter(c => c.name === "resolveReport").length, 0);
+      assert.equal(e.alerts.length, 1);
+    }],
+    ["already-removed content still resolves the report", async e => {
+      await e.mount();
+      e.api.removeContent = async () => { throw new ApiError(409, "already_removed"); };
+      const post = { ...report(2), id: "already-removed-post", target_type: "post", target_id: "post-2" };
+      await e.value().doRemove(post, { type: "post", id: post.target_id });
+      assert.equal(e.apiCalls.filter(c => c.name === "resolveReport").length, 1);
+      assert.equal(e.alerts.length, 0);
+    }],
+    ["resolve failure leaves a removable report retryable", async e => {
+      const post = { ...report(2), id: "resolve-conflict-post", target_type: "post", target_id: "post-2" };
+      e.api.listReports = async query => (query.before === undefined ? [post] : []);
+      await e.mount();
+      e.api.resolveReport = async () => { throw new ApiError(409, "report_already_resolved"); };
+      await e.value().doRemove(post, { type: "post", id: post.target_id });
+      assert.equal(e.alerts.length, 1);
+      assert.equal(e.value().reports.some(r => r.id === post.id), true);
+    }],
     ["initial load derives the stored cursor from row 50, not the display array", async e => {
       await e.mount();
       const request = e.apiCalls.filter(c => c.name === "listReports").at(0);
@@ -329,4 +399,5 @@ export async function runModerationQueueCases(options = {}) {
       assert.equal(e.value().reports.some(r => page2.some(p => p.id === r.id)), false);
     }],
   ], options);
+  return passed;
 }
