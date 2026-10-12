@@ -15,20 +15,7 @@ from app.db import get_session_factory
 from app.services import account_fulfillment as fulfillment
 from app.services.account_fulfillment import FirebaseProvider, PROVIDER_STEPS, ProviderUnavailable, run_deletion
 from tests.conftest import ApiUser
-
-
-class ImmediateProvider:
-    def __init__(self, key: str) -> None:
-        self.key = key
-
-    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
-        return {
-            "confirmed": True,
-            "provider": self.key,
-            "subject": str(user.id),
-            "scope": [self.key],
-            "readback": True,
-        }
+from tests.test_c436_fulfillment import ConfirmingProvider
 
 
 def firebase_user() -> object:
@@ -189,7 +176,7 @@ async def test_real_deletion_lease_remains_until_firebase_worker_drains(
     monkeypatch.setattr(auth, "delete_user", delete_user)
     monkeypatch.setattr(auth, "get_user", get_user)
     monkeypatch.setattr(fulfillment, "FIREBASE_CALL_TIMEOUT_SECONDS", 0.05)
-    providers = {key: ImmediateProvider(key) for key in PROVIDER_STEPS}
+    providers = {key: ConfirmingProvider(key) for key in PROVIDER_STEPS}
     providers["firebase_auth"] = FirebaseProvider()
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
@@ -264,7 +251,7 @@ async def test_expired_firebase_attempt_is_manual_review_and_never_reinvoked(
     monkeypatch.setattr(auth, "delete_user", delete_user)
     monkeypatch.setattr(auth, "get_user", get_user)
     monkeypatch.setattr(fulfillment, "FIREBASE_CALL_TIMEOUT_SECONDS", 0.05)
-    providers = {key: ImmediateProvider(key) for key in PROVIDER_STEPS}
+    providers = {key: ConfirmingProvider(key) for key in PROVIDER_STEPS}
     providers["firebase_auth"] = FirebaseProvider()
     first_task: asyncio.Task[object] | None = None
     try:
