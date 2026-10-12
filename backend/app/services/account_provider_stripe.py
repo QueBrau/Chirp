@@ -273,6 +273,7 @@ class StripeCustomerProvider:
                 else "stripe_customer_records:none_locally_mapped"
             ],
             "readback": True,
+            "retained_with_reason": ["stripe_deleted_customer_history"] if self._references else [],
         }
 
 

@@ -217,6 +217,53 @@ safe; record the reason and reviewer.
 
 ## Child-safety escalation
 
+### Operator setup (prepared October 12, 2026)
+
+Jose confirmed the reporting route is not established and requested these setup
+steps. Jose is the primary responder and Braulio the backup, with daily coverage
+including weekends already agreed. The steps below are preparation, not evidence
+of registration or an operational reporting process.
+
+1. Jose starts provider onboarding at the official
+   [NCMEC ESP registration portal](https://esp.ncmec.org/registration). If guidance
+   is needed, NCMEC lists `espteam@ncmec.org` as its provider registration contact
+   on its [ESP reporting page](https://ncmec.org/theissues/csam). Use Chirp's actual
+   current operators, Jose Perdomo and Braulio Pantoja Esquina, and Florida as the
+   operating location; do not describe an LLC or corporation that does not exist.
+   Use the existing monitored `chirp.shared@gmail.com` contact unless the team
+   explicitly changes it. Complete the information requested by the official
+   registration process; this runbook does not submit it.
+2. Confirm the provider registration/access outcome and how both responders can
+   reach the reporting process and receive replies. Ask the provider team for
+   current reporting, urgent-escalation and secure evidence-handling guidance.
+   Keep credentials, access tokens and sensitive evidence out of the repository
+   and ordinary email. Record only readiness dates, responsible people and a
+   private reference to the confirmed procedure.
+3. Complete the reporting/preservation review required below, including the
+   route for an urgent incident and who makes the escalation decision. Store
+   the reviewed procedure where both responders can access it. A registration
+   confirmation alone does not establish every reporting or preservation duty.
+4. Run the existing harmless local tabletop with Jose handling intake and
+   Braulio taking over a case. Verify access, deadline tracking, escalation and
+   the handoff against the confirmed procedure. Do not file a fabricated external
+   report or send test imagery. Actual content removal, identical-copy coverage,
+   provider retention and release checks retain their separate evidence gates.
+
+Optional inquiry for Jose to review and send himself, if onboarding is unclear:
+
+> Subject: Chirp provider registration and reporting-process guidance
+>
+> Hello NCMEC ESP team. We operate Chirp, a U.S. college and alumni social app
+> for ages 17 and older. We are an unincorporated team operating from Florida.
+> Please advise on provider registration, reporting access, urgent escalation
+> and secure evidence/preservation guidance. Jose Perdomo is our primary
+> responder and Braulio Pantoja Esquina is our backup. Our monitored contact is
+> chirp.shared@gmail.com. This is an onboarding inquiry, not an incident report.
+
+No registration, inquiry, incident report or private evidence was sent while
+preparing this section. c437 remains open until its operational acceptance is
+supported by actual evidence.
+
 Do not request or transmit suspected CSAM through `chirp.shared@gmail.com`, the
 case register, or test fixtures. Restrict access, preserve only necessary
 metadata and the minimum lawful evidence under the approved process, and

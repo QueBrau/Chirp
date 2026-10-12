@@ -52,6 +52,9 @@ ID/type, timeout, or lost response is a blocked provider result rather than a
 success. Stripe's retained deleted-customer shell and local ledger, payment
 intent, plan, installment, and chapter mapping history remain retained; this
 adapter does not claim whole-provider or financial-record erasure.
+After confirming mapped customer deletion/readback, it returns the fixed
+`stripe_deleted_customer_history` retention code to the journal. An empty local
+mapping returns an empty list, without claiming an observed retained customer.
 
 Provider adapters may also return a `retained_with_reason` list containing only
 the fixed code allowed for that provider step: `stripe_deleted_customer_history`,

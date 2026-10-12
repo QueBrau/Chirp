@@ -172,7 +172,7 @@ async def test_provider_deletes_exact_refs_and_repeat_is_readback_idempotent(mak
     service = provider(user, customer)
     first = await service.delete_account_data(user=user, idempotency_key="stable-step")
     second = await service.delete_account_data(user=user, idempotency_key="stable-step")
-    assert first == second == {"confirmed": True, "provider": "payment_provider", "subject": user.id, "scope": ["stripe_customer_records"], "readback": True}
+    assert first == second == {"confirmed": True, "provider": "payment_provider", "subject": user.id, "scope": ["stripe_customer_records"], "readback": True, "retained_with_reason": ["stripe_deleted_customer_history"]}
     assert [call[0] for call in customer.calls] == ["retrieve", "retrieve", "delete", "retrieve", "retrieve", "retrieve"]
     assert all(call[2]["stripe_account"] == "acct_owner" for call in customer.calls)
 
@@ -194,6 +194,7 @@ async def test_empty_mapping_is_explicit_and_makes_no_provider_call(make_user):
     customer = FakeCustomer()
     result = await StripeCustomerProvider([], expected_user_id=user.id, stripe_module=fake_stripe(customer), api_key="sk_test_fake").delete_account_data(user=user, idempotency_key="stable-step")
     assert result["scope"] == ["stripe_customer_records:none_locally_mapped"]
+    assert result["retained_with_reason"] == []
     assert customer.calls == []
 
 
@@ -368,3 +369,32 @@ def test_reference_validation_is_fail_closed():
         StripeCustomerProvider([StripeCustomerReference("acct_é", "cus_same")], expected_user_id=uuid.uuid4())
     with pytest.raises(ProviderUnavailable, match="stripe_customer_mapping_ambiguous"):
         StripeCustomerProvider([StripeCustomerReference("acct_owner", "cus_same"), StripeCustomerReference("acct_other", "cus_same")], expected_user_id=uuid.uuid4())
+
+
+@pytest.mark.asyncio
+async def test_real_stripe_adapter_receipt_reaches_durable_fulfillment_result(client, make_user):
+    from sqlalchemy import select
+    from app.services.account_fulfillment import PROVIDER_RETENTION_REASONS, run_deletion
+    from tests.test_c436_fulfillment import provider_set
+
+    owner = await make_user("Stripe retention integration")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    assert response.status_code == 201
+    request_id = uuid.UUID(response.json()["id"])
+    providers = provider_set()
+    customer = FakeCustomer()
+    providers["payment_provider"] = provider(owner, customer)
+    async with get_session_factory()() as session:
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        result = await run_deletion(session, request_id, user, providers)
+        assert result.status == "completed"
+    async with get_session_factory()() as observer:
+        request = await observer.get(models.AccountDataRequest, request_id)
+        step = (await observer.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request_id,
+            models.AccountFulfillmentStep.step_key == "payment_provider",
+        ))).one()
+        assert step.provider_ref["retained_with_reason"] == ["stripe_deleted_customer_history"]
+        assert PROVIDER_RETENTION_REASONS["stripe_deleted_customer_history"] in request.retention_reasons
+        assert request.status == "completed"
+    assert [call[0] for call in customer.calls].count("delete") == 1
