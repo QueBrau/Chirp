@@ -1,6 +1,7 @@
 """Payments: Stripe Connect onboarding, dues PaymentIntents, and the webhook sink."""
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -60,24 +61,66 @@ _INTENT_NOT_AWAITING_PAYMENT = {"processing", "succeeded"}
 # diagnosed. Proven uncaught before this change by tests/test_c427_onboarding_provider_errors.py.
 ONBOARDING_PROVIDER_DETAIL = "onboarding_unavailable"
 
+_STRIPE_REQUEST_ID_RE = re.compile(r"req_[A-Za-z0-9]{1,64}\Z")
+_STRIPE_CODE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
+_STRIPE_PARAM_RE = re.compile(
+    r"[A-Za-z][A-Za-z0-9_.]*(?:\[[A-Za-z0-9_.-]+\])*\Z"
+)
+_STRIPE_SECRET_PREFIXES = ("sk_", "rk_", "pk_", "whsec_")
+
+
+def _safe_stripe_request_id(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) > 68:
+        return None
+    return value if _STRIPE_REQUEST_ID_RE.fullmatch(value) else None
+
+
+def _safe_stripe_code(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    if value.lower().startswith(_STRIPE_SECRET_PREFIXES):
+        return None
+    return value if _STRIPE_CODE_RE.fullmatch(value) else None
+
+
+def _safe_stripe_param(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) > 128:
+        return None
+    components = (part for part in re.split(r"[.\[\]]+", value) if part)
+    if any(part.lower().startswith(_STRIPE_SECRET_PREFIXES) for part in components):
+        return None
+    return value if _STRIPE_PARAM_RE.fullmatch(value) else None
+
+
+def _safe_stripe_http_status(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 100 <= value <= 599 else None
+
 
 def _onboarding_provider_failure(
     exc: stripe.StripeError, chapter_id: uuid.UUID, step: str,
 ) -> HTTPException:
     """A clean 503 for a Stripe-side onboarding failure, mirroring the dues path.
 
-    Logs the exception CLASS and Stripe's own error code, never str(exc) and never
-    any part of a key: Stripe's messages can quote the credential prefix they were
-    called with, and this line goes to Cloud Logging where the board's rule is that
-    credential material never lands.
+    Logs only bounded provider correlation fields, never str(exc), the body, headers,
+    or request data. Stripe's message and response body can contain credential
+    material, so each optional field is allowlisted before it reaches Cloud Logging.
 
     No session.rollback() here, unlike the dues path: both call sites below have
     already committed and expired their session, so there is no in-flight money row
     for a Stripe failure to leave half-written.
     """
     logger.warning(
-        "c427: Connect onboarding stopped chapter=%s step=%s error=%s code=%s",
-        chapter_id, step, type(exc).__name__, getattr(exc, "code", None),
+        "c427: Connect onboarding stopped chapter=%s step=%s error=%s code=%s "
+        "request_id=%s http_status=%s param=%s",
+        chapter_id,
+        step,
+        type(exc).__name__,
+        _safe_stripe_code(getattr(exc, "code", None)),
+        _safe_stripe_request_id(getattr(exc, "request_id", None)),
+        _safe_stripe_http_status(getattr(exc, "http_status", None)),
+        _safe_stripe_param(getattr(exc, "param", None)),
     )
     return HTTPException(status_code=503, detail=ONBOARDING_PROVIDER_DETAIL)
 
