@@ -79,6 +79,10 @@ class AnalyticsTable:
     preview_count: int = 0
     max_bytes_billed: int = 0
 
+    def validate(self) -> None:
+        if type(self.preview_count) is not int or self.preview_count < 0 or type(self.max_bytes_billed) is not int or self.max_bytes_billed < 10_000_000:
+            raise _fail("analytics_snapshot_budget_invalid")
+
 
 @dataclass(frozen=True)
 class AnalyticsSnapshot:
@@ -175,6 +179,8 @@ class BigQueryAnalyticsProvider:
         self.snapshot, self.freeze, self.reviewed_tables = snapshot, freeze, reviewed_tables
         if sum(t.preview_count for t in snapshot.tables) > MAX_ROWS:
             raise _fail("analytics_snapshot_row_budget_exceeded")
+        for table in snapshot.tables:
+            table.validate()
         self.transport, self.timeout_seconds = transport, min(timeout_seconds, 120.0)
 
     def _query(self, table: str, *, count: bool, reviewed_count: int | None = None) -> str:
@@ -275,7 +281,7 @@ class BigQueryAnalyticsProvider:
                 tables.append(AnalyticsTable(name, _digest(ref["schema"]), False))
             # Build a valid metadata-only instance solely to execute bounded,
             # read-only COUNT previews. It is never returned as the snapshot.
-            provisional = AnalyticsSnapshot(request_id, actual, project, dataset, tuple(tables), freeze.freeze_id, "", datetime.now(timezone.utc).isoformat(), tuple(excluded_tables))
+            provisional = AnalyticsSnapshot(request_id, actual, project, dataset, tuple(AnalyticsTable(t.name, t.schema_digest, False, 0, 10_000_000) for t in tables), freeze.freeze_id, "", datetime.now(timezone.utc).isoformat(), tuple(excluded_tables))
             provisional = AnalyticsSnapshot(**{**provisional.__dict__, "snapshot_digest": _digest(provisional.payload())})
             previewer = cls(token=token, project=project, dataset=dataset, snapshot=provisional,
                             freeze=freeze, reviewed_tables=tuple(reviewed_tables), transport=transport,
@@ -429,7 +435,7 @@ class BigQueryAnalyticsProvider:
             raise _fail("analytics_subject_mismatch")
         self.freeze.validate(actual)
         async with asyncio.timeout(min(120.0, self.timeout_seconds * (2 * len(self.reviewed_tables) + 1))):
-            if not isinstance(idempotency_key, str) or self.snapshot.request_id not in idempotency_key:
+            if idempotency_key != f"c436:{self.snapshot.request_id}":
                 raise _fail("analytics_idempotency_key_invalid")
             async with httpx.AsyncClient(base_url=ORIGIN, headers={"Authorization": f"Bearer {self._token}"},
                                          timeout=self.timeout_seconds, follow_redirects=False, trust_env=False,
@@ -439,7 +445,7 @@ class BigQueryAnalyticsProvider:
                 for table in self.reviewed_tables:
                     self.freeze.validate(actual)
                     expected_count = next(t.preview_count for t in self.snapshot.tables if t.name == table)
-                    job = await self._job(client, table, "delete", self._query(table, count=False, reviewed_count=expected_count), dry_run=False, reviewed_count=expected_count)
+                    job = await self._job(client, table, "delete", self._query(table, count=False, reviewed_count=expected_count), dry_run=False, reviewed_count=expected_count, max_bytes_billed=next(t.max_bytes_billed for t in self.snapshot.tables if t.name == table))
                     stats = job.get("statistics", {}).get("query", {}).get("dmlStats", {})
                     raw = stats.get("deletedRowCount") if isinstance(stats, dict) else None
                     if not isinstance(raw, str) or not raw.isdigit() or int(raw) > MAX_ROWS:
@@ -459,6 +465,6 @@ class BigQueryAnalyticsProvider:
                         raise _fail("analytics_readback_nonzero")
                 return {"confirmed": True, "provider": "analytics", "subject": actual,
                         "scope": list(self.reviewed_tables), "readback": True,
-                        "retained_with_reason": [], "retention_disclosure": "bigquery_time_travel_and_fail_safe_retention",
+                        "retention_disclosure": "bigquery_time_travel_and_fail_safe_retention; analytics scope is not permanent byte erasure",
                         "affected_rows": affected,
                         "snapshot_digest": self.snapshot.snapshot_digest}

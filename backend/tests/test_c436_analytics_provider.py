@@ -22,7 +22,7 @@ USER = "12345678-1234-4234-8234-123456789abc"
 PROJECT = "chirps-prod"
 DATASET = "chirps_analytics"
 TABLE = "run_googleapis_com_stdout_20261012"
-STEP = "step:11111111-1111-4111-8111-111111111111"
+STEP = "c436:11111111-1111-4111-8111-111111111111"
 
 
 def schema() -> dict:
@@ -39,7 +39,7 @@ def freeze() -> AnalyticsFreezeReceipt:
 def snapshot(table: str = TABLE, *, digest: str | None = None) -> AnalyticsSnapshot:
     current = AnalyticsSnapshot(
         "11111111-1111-4111-8111-111111111111", USER, PROJECT, DATASET,
-        (AnalyticsTable(table, _digest(schema()), False),), "freeze-c436", "", "2026-10-12T00:00:00+00:00",
+        (AnalyticsTable(table, _digest(schema()), False, 0, 10_000_000),), "freeze-c436", "", "2026-10-12T00:00:00+00:00",
     )
     return AnalyticsSnapshot(**{**current.__dict__, "snapshot_digest": digest or _digest(current.payload())})
 
