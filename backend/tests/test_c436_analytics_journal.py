@@ -3,7 +3,7 @@ from __future__ import annotations
 import time, uuid
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from app import models
 from app.db import get_session_factory
 from app.services.account_fulfillment import PROVIDER_STEPS, run_deletion
@@ -40,3 +40,32 @@ async def test_actual_analytics_provider_is_journaled_with_exact_request_key(cli
   step = await session.scalar(select(models.AccountFulfillmentStep).where(models.AccountFulfillmentStep.request_id == request_id, models.AccountFulfillmentStep.step_key == 'analytics'))
   assert step is not None and step.idempotency_key == f'account-deletion:{request_id}:analytics'
   assert step.status in {'failed','manual_review'}
+
+@pytest.mark.asyncio
+async def test_completed_legacy_request_is_immutable_and_never_retried(client, make_user):
+ owner = await make_user('Legacy completed owner')
+ created = await client.post('/me/data-requests', json={'kind':'deletion'}, headers=owner.headers)
+ assert created.status_code == 201, created.text
+ request_id = uuid.UUID(created.json()['id'])
+ calls = []
+ class NeverProvider(ConfirmingProvider):
+  async def delete_account_data(self, *, user, idempotency_key):
+   calls.append(idempotency_key)
+   raise AssertionError('legacy terminal request invoked provider')
+ async with get_session_factory()() as session:
+  request = await session.get(models.AccountDataRequest, request_id)
+  user = await session.get(models.User, uuid.UUID(owner.id))
+  assert request is not None and user is not None
+  request.status = 'completed'
+  request.failure_code = None
+  await session.execute(delete(models.AccountFulfillmentStep).where(models.AccountFulfillmentStep.request_id == request_id, models.AccountFulfillmentStep.step_key == 'analytics'))
+  await session.commit()
+  before = (request.status, request.provider_steps, request.completed_at)
+  providers = {key: NeverProvider(key) for key in PROVIDER_STEPS}
+  assert (await run_deletion(session, request_id, user, providers)).status == 'blocked'
+  after = await session.get(models.AccountDataRequest, request_id)
+  assert after is not None and (after.status, after.provider_steps, after.completed_at) == before
+  user = await session.get(models.User, uuid.UUID(owner.id))
+  assert user is not None
+  assert (await run_deletion(session, request_id, user, providers)).status == 'blocked'
+  assert calls == []

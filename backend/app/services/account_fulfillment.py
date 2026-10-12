@@ -222,9 +222,22 @@ async def run_deletion(
             models.AccountFulfillmentStep.request_id == request.id))).all())
         required = set((*PROVIDER_STEPS, "database_tombstone"))
         if {step.step_key for step in durable} != required:
-            request.status = "blocked"
-            request.failure_code = "provider_step_incomplete"
-            await session.commit()
+            # A historical terminal request must remain an immutable record. Do
+            # not grow a new plan or retry providers against its tombstoned user.
+            await session.rollback()
+            return DeletionRun("blocked", (), "analytics")
+        tombstone = next(step for step in durable if step.step_key == "database_tombstone")
+        valid_terminal = (tombstone.status == "succeeded" and tombstone.completed_at is not None)
+        for step in durable:
+            if step.step_key == "database_tombstone":
+                continue
+            try:
+                validate_provider_receipt(step.step_key, user.id, step.provider_ref)
+                valid_terminal = valid_terminal and step.status == "succeeded" and step.completed_at is not None
+            except ProviderUnavailable:
+                valid_terminal = False
+        if not valid_terminal:
+            await session.rollback()
             return DeletionRun("blocked", (), "analytics")
         return DeletionRun("completed", tuple(PROVIDER_STEPS) + ("database_tombstone",))
     if request.status in {"canceled", "failed"}:
