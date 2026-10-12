@@ -17,6 +17,7 @@ async def _verify_identity(
     x_debug_firebase_uid: str | None,
     authorization: str | None,
     require_fresh: bool = False,
+    check_revoked: bool = False,
 ) -> tuple[str, str | None]:
     """Shared verification logic: returns (uid, verified_email).
 
@@ -59,7 +60,7 @@ async def _verify_identity(
     try:
         verifier = (
             partial(firebase_auth.verify_id_token, check_revoked=True)
-            if require_fresh else firebase_auth.verify_id_token
+            if require_fresh or check_revoked else firebase_auth.verify_id_token
         )
         decoded = await run_verification(verifier, token)
     except Exception:  # invalid/expired token
@@ -113,6 +114,14 @@ async def get_verified_identity(
     authoritative in firebase mode.
     """
     return await _verify_identity(x_debug_firebase_uid, authorization)
+
+
+async def get_bootstrap_verified_identity(
+    x_debug_firebase_uid: str | None = Header(default=None, alias="X-Debug-Firebase-Uid"),
+    authorization: str | None = Header(default=None),
+) -> tuple[str, str | None]:
+    """Verify bootstrap identity against Firebase's current user/revocation state."""
+    return await _verify_identity(x_debug_firebase_uid, authorization, check_revoked=True)
 
 
 async def get_user_by_uid(session: AsyncSession, uid: str) -> models.User | None:
