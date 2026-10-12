@@ -521,6 +521,7 @@ class BigQueryAnalyticsProvider:
             s.validate()
             self.freeze.validate(s.user_id)
         return {'confirmed': True, 'provider': 'analytics', 'subject': s.user_id,
+                'request_id': s.request_id,
                 'scope': [t.name for t in s.tables], 'readback': True,
                 'retained_with_reason': ['bigquery_time_travel', 'bigquery_fail_safe'],
                 'time_travel_hours': s.time_travel_hours, 'fail_safe_days': 7,

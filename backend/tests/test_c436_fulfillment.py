@@ -28,6 +28,8 @@ class ConfirmingProvider:
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
         self.keys.append(idempotency_key)
         result = {"confirmed": True, "provider": self.provider_key, "subject": str(user.id), "scope": [self.provider_key], "readback": True}
+        if self.provider_key == "analytics":
+            result.update({"time_travel_hours": 168, "fail_safe_days": 7, "excluded_scope": [], "request_id": idempotency_key.split(":")[1], "snapshot_digest": "0" * 64, "scope": ["run_googleapis_com_stdout_20261012"], "retained_with_reason": ["bigquery_time_travel", "bigquery_fail_safe"]})
         if self.retained_with_reason is not _UNSET:
             result["retained_with_reason"] = self.retained_with_reason
         return result
@@ -49,7 +51,10 @@ class FailOnceProvider(ConfirmingProvider):
         if not self.failed:
             self.failed = True
             raise RuntimeError("secret provider response must not persist")
-        return {"confirmed": True, "provider": self.provider_key, "subject": str(user.id), "scope": [self.provider_key], "readback": True}
+        result = {"confirmed": True, "provider": self.provider_key, "subject": str(user.id), "scope": [self.provider_key], "readback": True}
+        if self.provider_key == "analytics":
+            result.update({"time_travel_hours": 168, "fail_safe_days": 7, "excluded_scope": [], "request_id": idempotency_key.split(":")[1], "snapshot_digest": "0" * 64, "scope": ["run_googleapis_com_stdout_20261012"], "retained_with_reason": ["bigquery_time_travel", "bigquery_fail_safe"]})
+        return result
 
 
 class GatedProvider(ConfirmingProvider):
@@ -103,7 +108,7 @@ async def test_deletion_journal_blocks_without_adapters_then_retries_idempotentl
                 models.AccountFulfillmentStep.request_id == request.id
             )
         )).all()
-        assert len(steps) == 5
+        assert len(steps) == len((*PROVIDER_STEPS, "database_tombstone"))
         assert all(row.status == "succeeded" for row in steps)
         assert steps[0].provider_ref["provider"] == steps[0].step_key
         assert steps[0].provider_ref["subject"] == owner.id
