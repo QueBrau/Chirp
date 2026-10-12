@@ -343,3 +343,19 @@ def test_preflight_cli_sanitizes_connection_errors(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out.strip() == '{"error_type": "RuntimeError", "status": "failed"}'
     assert captured.err == ""
+
+
+@pytest.mark.parametrize("extra", [
+    ["--timeout-seconds", "private-sentinel"],
+    ["--unknown", "private-sentinel"],
+    ["--request", "private-sentinel"],
+])
+def test_preflight_argument_errors_never_echo_values(extra, capsys):
+    with pytest.raises(SystemExit) as failed:
+        preflight.main([
+            "--request-id", str(uuid.uuid4()), "--expected-user-id", str(uuid.uuid4()), *extra,
+        ])
+    assert failed.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == '{"error_type": "invalid_arguments", "status": "failed"}'

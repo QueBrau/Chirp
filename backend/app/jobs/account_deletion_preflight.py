@@ -37,6 +37,13 @@ ALLOWED_REQUEST_STATUSES = frozenset({"completed", "blocked", "processing", "rec
 ALLOWED_STEP_STATUSES = frozenset({"pending", "running", "succeeded", "failed", "manual_review"})
 
 
+class SafeParser(argparse.ArgumentParser):
+    """Reject invalid arguments without echoing potentially private values."""
+
+    def error(self, message: str) -> None:
+        self.exit(2, '{"error_type": "invalid_arguments", "status": "failed"}\n')
+
+
 def _parse_uuid(value: str, name: str) -> uuid.UUID:
     try:
         parsed = uuid.UUID(value)
@@ -244,7 +251,7 @@ async def run_preflight(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = SafeParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--request-id", required=True)
     parser.add_argument("--expected-user-id", required=True)
     parser.add_argument("--timeout-seconds", type=float, default=10.0)
