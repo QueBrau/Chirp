@@ -4,19 +4,43 @@ import uuid
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app import models
 from app.services.account_deletion_hold import (
     DeletionHoldActive,
     DeletionHoldInvalid,
+    DeletionHoldView,
     activate_deletion_hold,
     admit_user_write,
     inspect_deletion_hold,
 )
 
 
-async def _seed(url, *, users=1):
+async def _observe_blocked(
+    task: asyncio.Task[DeletionHoldView], engine: AsyncEngine, waiting_pid: int, blocking_pid: int,
+) -> None:
+    """Require PostgreSQL to observe the lock wait, not just a slow coroutine."""
+    try:
+        async with asyncio.timeout(5):
+            async with engine.connect() as observer:
+                while True:
+                    assert not task.done(), "activation did not wait for the admitted transaction"
+                    blockers = await observer.scalar(
+                        text("SELECT pg_blocking_pids(:pid)"), {"pid": waiting_pid},
+                    )
+                    if blocking_pid in blockers:
+                        return
+                    await asyncio.sleep(0.01)
+    except BaseException:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
+
+
+async def _seed(
+    url: str, *, users: int = 1,
+) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession], list[uuid.UUID], list[uuid.UUID]]:
     engine = create_async_engine(url)
     factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
     ids = [uuid.uuid4() for _ in range(users)]
@@ -37,7 +61,7 @@ async def _seed(url, *, users=1):
 
 
 @pytest.mark.asyncio
-async def test_activation_is_provisional_idempotent_and_rejects_foreign_request(migrated_db):
+async def test_activation_is_provisional_idempotent_and_rejects_foreign_request(migrated_db: str) -> None:
     engine, factory, ids, request_ids = await _seed(migrated_db)
     try:
         async with factory() as session:
@@ -64,23 +88,19 @@ async def test_activation_is_provisional_idempotent_and_rejects_foreign_request(
 
 
 @pytest.mark.asyncio
-async def test_admitted_writer_blocks_activation_until_commit_then_new_writer_is_denied(migrated_db):
+async def test_admitted_writer_blocks_activation_until_commit_then_new_writer_is_denied(migrated_db: str) -> None:
     engine, factory, ids, request_ids = await _seed(migrated_db)
     try:
         writer = factory()
         activator = factory()
         try:
             await admit_user_write(writer, ids[0])
-            started = asyncio.Event()
-
-            async def activate():
-                started.set()
-                return await activate_deletion_hold(activator, user_id=ids[0], request_id=request_ids[0])
-
-            task = asyncio.create_task(activate())
-            await started.wait()
-            with pytest.raises(asyncio.TimeoutError):
-                await asyncio.wait_for(asyncio.shield(task), timeout=0.15)
+            writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+            activator_pid = await activator.scalar(text("SELECT pg_backend_pid()"))
+            task = asyncio.create_task(
+                activate_deletion_hold(activator, user_id=ids[0], request_id=request_ids[0])
+            )
+            await _observe_blocked(task, engine, activator_pid, writer_pid)
             await writer.commit()
             hold = await asyncio.wait_for(task, timeout=2)
             assert hold.request_id == request_ids[0]
@@ -97,17 +117,18 @@ async def test_admitted_writer_blocks_activation_until_commit_then_new_writer_is
 
 
 @pytest.mark.asyncio
-async def test_canceled_activation_rolls_back_without_persisting_hold(migrated_db):
+async def test_canceled_activation_rolls_back_without_persisting_hold(migrated_db: str) -> None:
     engine, factory, ids, request_ids = await _seed(migrated_db)
     writer = factory()
     activator = factory()
     try:
         await admit_user_write(writer, ids[0])
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        activator_pid = await activator.scalar(text("SELECT pg_backend_pid()"))
         task = asyncio.create_task(
             activate_deletion_hold(activator, user_id=ids[0], request_id=request_ids[0])
         )
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
+        await _observe_blocked(task, engine, activator_pid, writer_pid)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -123,7 +144,7 @@ async def test_canceled_activation_rolls_back_without_persisting_hold(migrated_d
 
 
 @pytest.mark.asyncio
-async def test_activation_rejects_shared_lock_upgrade(migrated_db):
+async def test_activation_rejects_shared_lock_upgrade(migrated_db: str) -> None:
     engine, factory, ids, request_ids = await _seed(migrated_db)
     try:
         async with factory() as session:
@@ -136,7 +157,7 @@ async def test_activation_rejects_shared_lock_upgrade(migrated_db):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_same_account_activation_serializes_requests(migrated_db):
+async def test_concurrent_same_account_activation_serializes_requests(migrated_db: str) -> None:
     engine, factory, ids, request_ids = await _seed(migrated_db)
     second_request = uuid.uuid4()
     try:
@@ -149,11 +170,12 @@ async def test_concurrent_same_account_activation_serializes_requests(migrated_d
         second = factory()
         try:
             first_hold = await activate_deletion_hold(first, user_id=ids[0], request_id=request_ids[0])
+            first_pid = await first.scalar(text("SELECT pg_backend_pid()"))
+            second_pid = await second.scalar(text("SELECT pg_backend_pid()"))
             blocked = asyncio.create_task(
                 activate_deletion_hold(second, user_id=ids[0], request_id=second_request)
             )
-            with pytest.raises(asyncio.TimeoutError):
-                await asyncio.wait_for(asyncio.shield(blocked), timeout=0.1)
+            await _observe_blocked(blocked, engine, second_pid, first_pid)
             await first.commit()
             with pytest.raises(DeletionHoldActive, match="different_deletion_hold_active"):
                 await asyncio.wait_for(blocked, timeout=2)
@@ -167,7 +189,7 @@ async def test_concurrent_same_account_activation_serializes_requests(migrated_d
 
 
 @pytest.mark.asyncio
-async def test_pending_transaction_gets_fresh_hold_and_rollback_releases_lock(migrated_db):
+async def test_pending_transaction_gets_fresh_hold_and_rollback_releases_lock(migrated_db: str) -> None:
     engine, factory, ids, request_ids = await _seed(migrated_db, users=2)
     try:
         async with factory() as pending:
@@ -189,7 +211,7 @@ async def test_pending_transaction_gets_fresh_hold_and_rollback_releases_lock(mi
 
 
 @pytest.mark.asyncio
-async def test_different_accounts_do_not_block_and_isolation_fails_closed(migrated_db):
+async def test_different_accounts_do_not_block_and_isolation_fails_closed(migrated_db: str) -> None:
     engine, factory, ids, request_ids = await _seed(migrated_db, users=2)
     try:
         async with factory() as first:
@@ -204,5 +226,65 @@ async def test_different_accounts_do_not_block_and_isolation_fails_closed(migrat
                 with pytest.raises(DeletionHoldInvalid, match="read_committed_required"):
                     await admit_user_write(repeatable, ids[1])
                 await repeatable.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_foreign_owner_and_wrong_kind_cannot_acquire_hold(migrated_db: str) -> None:
+    engine, factory, ids, requests = await _seed(migrated_db, users=2)
+    try:
+        async with factory() as session:
+            with pytest.raises(DeletionHoldInvalid, match="deletion_request_invalid"):
+                await activate_deletion_hold(session, user_id=ids[0], request_id=requests[1])
+            await session.rollback()
+            request = await session.get(models.AccountDataRequest, requests[0])
+            request.kind = "export"
+            await session.commit()
+            with pytest.raises(DeletionHoldInvalid, match="deletion_request_invalid"):
+                await activate_deletion_hold(session, user_id=ids[0], request_id=requests[0])
+            await session.rollback()
+            assert await inspect_deletion_hold(session, user_id=ids[0]) is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["canceled", "failed", "completed"])
+async def test_idempotent_activation_rechecks_cached_request_state(migrated_db: str, status: str) -> None:
+    engine, factory, ids, requests = await _seed(migrated_db)
+    try:
+        async with factory() as session:
+            await activate_deletion_hold(session, user_id=ids[0], request_id=requests[0])
+            await session.commit()
+            cached = await session.get(models.AccountDataRequest, requests[0])
+            assert cached.status == "processing"
+            async with factory() as other:
+                request = await other.get(models.AccountDataRequest, requests[0])
+                request.status = status
+                await other.commit()
+            assert cached.status == "processing"
+            with pytest.raises(DeletionHoldInvalid, match="deletion_request_invalid"):
+                await activate_deletion_hold(session, user_id=ids[0], request_id=requests[0])
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pending_changes_rejected_and_gate_recovers_after_rollback(migrated_db: str) -> None:
+    engine, factory, ids, requests = await _seed(migrated_db)
+    try:
+        async with factory() as session:
+            request = await session.get(models.AccountDataRequest, requests[0])
+            request.failure_code = "pending_change"
+            with pytest.raises(DeletionHoldInvalid, match="hold_gate_must_be_first_operation"):
+                await admit_user_write(session, ids[0])
+            await session.rollback()
+            await admit_user_write(session, ids[0])
+            await session.rollback()
+            # The transaction-local upgrade guard must disappear after rollback.
+            await activate_deletion_hold(session, user_id=ids[0], request_id=requests[0])
+            await session.commit()
     finally:
         await engine.dispose()

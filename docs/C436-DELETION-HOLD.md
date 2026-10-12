@@ -38,6 +38,6 @@ row lock to avoid advisory/row-lock cycles.
 The primitive does not attest ingestion quiescence, provider deletion, Redis
 delivery, active WebSocket closure, or complete write-path coverage. Those are
 explicit follow-up integration gates. Tests in `backend/tests/test_c436_deletion_hold.py`
-use real PostgreSQL and coordinate an admitted writer, an activation blocked behind
+use real PostgreSQL, observe actual blocking PIDs, and coordinate an admitted writer, an activation blocked behind
 its shared lock, a fresh post-activation writer, rollback, isolation rejection, and
 independent-account behavior.
