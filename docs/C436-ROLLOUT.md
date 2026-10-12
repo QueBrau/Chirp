@@ -21,6 +21,12 @@ recent authentication. Verify the API identity can read Firebase account status
 before release; existing certificate-only token verification does not prove that
 permission. No new cloud permission is granted by this code change.
 
+Firebase SDK calls run in a worker thread with a fixed timeout. Timeout or caller
+cancellation drains that worker before the provider result is returned, so the
+deletion step lease is not released while a Firebase mutation is still running.
+The outcome remains sanitized and uncertain until the next idempotent retry and
+readback.
+
 ## Stripe customer adapter boundary
 
 The Stripe customer adapter is a dormant operator component. It is not imported
