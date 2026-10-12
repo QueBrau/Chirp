@@ -23,9 +23,11 @@ import { runModerationQueueCases } from "./moderation-queue-cases.mjs";
 
 const MODERATION = new URL("../app/(tabs)/chapter/moderation.tsx", import.meta.url);
 const COLLECTION_PAGES = new URL("../src/lib/collectionPages.ts", import.meta.url);
+const MODERATION_API = new URL("../src/api/moderation.ts", import.meta.url);
 
 const moderation = readFileSync(MODERATION, "utf8");
 const collectionPages = readFileSync(COLLECTION_PAGES, "utf8");
+const moderationApi = readFileSync(MODERATION_API, "utf8");
 
 let failures = 0;
 const check = (name, actual, expected = true) => {
@@ -62,6 +64,11 @@ check(
   "the Screen is wired to pull-to-refresh",
   /<Screen[^>]*\bonRefresh=\{load\}/.test(moderation),
 );
+check("imports the named-content removal client", /\bremoveContent\b/.test(moderation));
+check("routes posts and comments through the typed removal endpoint", /removeContent\(target\.type, target\.id, report\.reason\)/.test(moderation));
+check("keeps user and message reports out of automatic removal", /Automatic removal isn't available/.test(moderation));
+check("accepts only post/comment removal targets at runtime", /targetType !== \"post\" && targetType !== \"comment\"/.test(moderationApi));
+check("only already_removed conflicts are treated as an already-completed removal", /error\.detail === \"already_removed\"/.test(moderation));
 
 // Order is the whole fix: if the bare `reports.length === 0` branch is reached before
 // the `allClear` branch, an emptied-but-not-exhausted page renders "All clear" again

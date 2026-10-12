@@ -1,4 +1,4 @@
-/** Moderation API: content reports, user blocks, admin chirp removal — routers/moderation.py. */
+/** Moderation API: content reports, user blocks, admin content removal — routers/moderation.py. */
 
 import { request } from "./client";
 
@@ -110,4 +110,24 @@ export async function unblockChirpAuthor(chirpId: string): Promise<void> {
 /** Admin removal of a chirp (moderator action, distinct from author delete). */
 export async function removeChirp(chirpId: string, reason: string): Promise<void> {
   return request<void>(`/moderation/chirps/${chirpId}/remove`, { method: "POST", body: { reason } });
+}
+
+export type RemovableContentType = "post" | "comment";
+
+/** Admin removal for named-author posts and comments. */
+export async function removeContent(
+  targetType: RemovableContentType,
+  targetId: string,
+  reason: string,
+): Promise<void> {
+  if (targetType !== "post" && targetType !== "comment") {
+    throw new Error("unsupported removal target");
+  }
+  if (!targetId || !reason) {
+    throw new Error("removal target and reason are required");
+  }
+  return request<void>("/moderation/content/remove", {
+    method: "POST",
+    body: { target_type: targetType, target_id: targetId, reason },
+  });
 }
