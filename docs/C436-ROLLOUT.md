@@ -20,3 +20,33 @@ Sensitive request creation and downloads check both Firebase token revocation an
 recent authentication. Verify the API identity can read Firebase account status
 before release; existing certificate-only token verification does not prove that
 permission. No new cloud permission is granted by this code change.
+
+## Stripe customer adapter boundary
+
+The Stripe customer adapter is a dormant operator component. It is not imported
+by the request executor and makes no provider call by default. Its input is a
+bounded, caller-owned set of `chapter_stripe_customers` rows joined to the exact
+chapter connected account. It rejects malformed IDs, duplicate or foreign
+ownership, and active payment plans or in-flight payment intents before any
+Stripe call. A stable step key is accepted for the surrounding journal; Stripe
+customer deletion itself is retried only through exact readback.
+
+The adapter requires complete `Subscription.list(status=all)` results with no
+unknown status or pagination remainder. Active, pending, or malformed payment
+activity requires operator review. It requires the exact connected account and
+customer ID plus `object=customer` and boolean `deleted=true` on both the delete
+response and the subsequent readback. A 404, string-valued `deleted`, mismatched
+ID/type, timeout, or lost response is a blocked provider result rather than a
+success. Stripe's retained deleted-customer shell and local ledger, payment
+intent, plan, installment, and chapter mapping history remain retained; this
+adapter does not claim whole-provider or financial-record erasure.
+
+Before enablement, operators must independently review the ownership snapshot,
+connected-account credentials and quiescence, pending payment obligations, and
+the separate Firebase, media, email/log, and backup adapters. No production SDK
+call, automatic wiring, or provider permission is included in this release.
+
+The adapter follows Stripe's documented Customer deletion and retrieval behavior
+and connected-account scoping: [delete a Customer](https://docs.stripe.com/api/customers/delete),
+[retrieve a Customer](https://docs.stripe.com/api/customers/retrieve), and
+[Connect authentication](https://docs.stripe.com/connect/authentication).
