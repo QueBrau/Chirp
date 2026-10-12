@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 
 from app import models
 from app.db import get_session_factory
@@ -219,8 +220,9 @@ async def test_preflight_read_only_transaction_rejects_update_and_preserves_row(
         return {}
 
     monkeypatch.setattr(preflight, "inspect_request", attempted_write)
-    with pytest.raises(Exception):
+    with pytest.raises(DBAPIError) as rejected:
         await run_preflight(database_url, request_id=request_id, expected_user_id=uuid.UUID(owner.id))
+    assert rejected.value.orig.sqlstate == "25006"
     async with get_session_factory()() as session:
         assert await session.scalar(select(models.User.display_name).where(
             models.User.id == uuid.UUID(owner.id)
@@ -240,13 +242,13 @@ async def test_preflight_repeatable_read_snapshot_survives_concurrent_update(
     async def snapshot_reader(session, **kwargs):
         first = await session.scalar(select(models.User.display_name).where(models.User.id == uuid.UUID(owner.id)))
         ready.set()
-        await changed.wait()
+        await asyncio.wait_for(changed.wait(), timeout=10)
         second = await session.scalar(select(models.User.display_name).where(models.User.id == uuid.UUID(owner.id)))
         assert first == second == "Preflight snapshot"
         return {"status": "snapshot-ok"}
 
     async def update_after_snapshot():
-        await ready.wait()
+        await asyncio.wait_for(ready.wait(), timeout=10)
         async with get_session_factory()() as session:
             await session.execute(models.User.__table__.update().where(
                 models.User.id == uuid.UUID(owner.id)
@@ -256,8 +258,12 @@ async def test_preflight_repeatable_read_snapshot_survives_concurrent_update(
 
     monkeypatch.setattr(preflight, "inspect_request", snapshot_reader)
     updater = asyncio.create_task(update_after_snapshot())
-    result = await run_preflight(database_url, request_id=request_id, expected_user_id=uuid.UUID(owner.id))
-    await updater
+    try:
+        result = await run_preflight(database_url, request_id=request_id, expected_user_id=uuid.UUID(owner.id))
+        await asyncio.wait_for(updater, timeout=10)
+    finally:
+        updater.cancel()
+        await asyncio.gather(updater, return_exceptions=True)
     assert result == {"status": "snapshot-ok"}
 
 
@@ -322,3 +328,18 @@ def test_preflight_cli_rejects_invalid_input_without_database_or_secret_output(m
     assert "error_type" in output
     assert "bad" not in output
     assert "DATABASE_URL" not in output
+
+
+def test_preflight_cli_sanitizes_connection_errors(monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://operator:private-sentinel@invalid/chirp")
+
+    async def connection_failure(*args, **kwargs):
+        raise RuntimeError("private-sentinel: remote error details")
+
+    monkeypatch.setattr(preflight, "run_preflight", connection_failure)
+    assert preflight.main([
+        "--request-id", str(uuid.uuid4()), "--expected-user-id", str(uuid.uuid4()),
+    ]) == 2
+    captured = capsys.readouterr()
+    assert captured.out.strip() == '{"error_type": "RuntimeError", "status": "failed"}'
+    assert captured.err == ""
