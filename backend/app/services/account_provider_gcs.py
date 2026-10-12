@@ -28,7 +28,7 @@ PREFIXES = ("tmp/", "posts/", "avatars/")
 MAX_OBJECTS = 10_000
 MAX_POSTS = 10_000
 MAX_MEDIA_VALUES = 64
-MAX_SECONDS = 900.0
+MAX_SECONDS = 120.0
 
 
 class MediaProviderUnavailable(RuntimeError):
@@ -108,29 +108,39 @@ def _collect(reader: MediaReader, prefix: str, deadline: float, limit: int) -> l
 
 
 async def _list_bounded(reader: MediaReader, prefix: str, *, deadline: float, limit: int) -> list[Any]:
+    task = asyncio.create_task(asyncio.to_thread(_collect, reader, prefix, deadline, limit))
     try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(_collect, reader, prefix, deadline, limit),
-            timeout=_remaining(deadline),
-        )
+        return await asyncio.wait_for(asyncio.shield(task), timeout=_remaining(deadline))
     except MediaProviderUnavailable:
         raise
     except asyncio.TimeoutError:
+        try:
+            await task
+        except Exception:
+            pass
         raise MediaProviderUnavailable("media_deadline_exceeded") from None
+    except asyncio.CancelledError:
+        await asyncio.shield(task)
+        raise
     except Exception:
         raise MediaProviderUnavailable("media_list_failed") from None
 
 
 async def _reader_call(reader: MediaReader, operation: str, *args: Any, deadline: float) -> Any:
+    task = asyncio.create_task(asyncio.to_thread(getattr(reader, operation), *args, deadline=deadline))
     try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(getattr(reader, operation), *args, deadline=deadline),
-            timeout=_remaining(deadline),
-        )
+        return await asyncio.wait_for(asyncio.shield(task), timeout=_remaining(deadline))
     except MediaProviderUnavailable:
         raise
     except asyncio.TimeoutError:
+        try:
+            await task
+        except Exception:
+            pass
         raise MediaProviderUnavailable("media_deadline_exceeded") from None
+    except asyncio.CancelledError:
+        await asyncio.shield(task)
+        raise
     except Exception:
         raise MediaProviderUnavailable(f"media_{operation}_failed") from None
 
@@ -198,7 +208,6 @@ async def _owned_references(session: AsyncSession, user_id: UUID, bucket: str) -
     if len(rows) > MAX_POSTS:
         raise MediaProviderUnavailable("media_post_cap_reached")
     names: set[str] = set()
-    raw_by_name: dict[str, set[str]] = {}
     for values in rows:
         values = values or []
         if len(values) > MAX_MEDIA_VALUES:
@@ -210,7 +219,6 @@ async def _owned_references(session: AsyncSession, user_id: UUID, bucket: str) -
             if name is None or not _owned_name(name, user_id):
                 raise MediaProviderUnavailable("media_reference_scope_invalid")
             names.add(name)
-            raw_by_name.setdefault(name, set()).add(value)
     avatar = (await session.execute(
         select(models.User.avatar_url).where(models.User.id == user_id)
     )).scalar_one_or_none()
@@ -219,21 +227,27 @@ async def _owned_references(session: AsyncSession, user_id: UUID, bucket: str) -
         if name is None or not _owned_name(name, user_id):
             raise MediaProviderUnavailable("media_reference_scope_invalid")
         names.add(name)
-        raw_by_name.setdefault(name, set()).add(avatar)
-    for name, raw_values in raw_by_name.items():
-        for raw_value in raw_values:
-            foreign_post = (await session.execute(
-                select(models.Post.id)
-                .where(models.Post.author_id != user_id, models.Post.media_urls.any(raw_value))
-                .limit(1)
-            )).scalar_one_or_none()
-            foreign_avatar = (await session.execute(
-                select(models.User.id)
-                .where(models.User.id != user_id, models.User.avatar_url == raw_value)
-                .limit(1)
-            )).scalar_one_or_none()
-            if foreign_post is not None or foreign_avatar is not None:
+    foreign_posts = (await session.execute(
+        select(models.Post.media_urls)
+        .where(models.Post.author_id != user_id)
+        .limit(MAX_POSTS + 1)
+    )).scalars().all()
+    if len(foreign_posts) > MAX_POSTS:
+        raise MediaProviderUnavailable("media_foreign_reference_cap_reached")
+    for values in foreign_posts:
+        for value in values or []:
+            foreign_name = _parse_url(value, bucket)
+            if foreign_name in names:
                 raise MediaProviderUnavailable("media_reference_foreign_owner")
+    foreign_avatars = (await session.execute(
+        select(models.User.avatar_url)
+        .where(models.User.id != user_id, models.User.avatar_url.is_not(None))
+        .limit(MAX_POSTS + 1)
+    )).scalars().all()
+    if len(foreign_avatars) > MAX_POSTS:
+        raise MediaProviderUnavailable("media_foreign_reference_cap_reached")
+    if any(_parse_url(value, bucket) in names for value in foreign_avatars):
+        raise MediaProviderUnavailable("media_reference_foreign_owner")
     return names
 
 

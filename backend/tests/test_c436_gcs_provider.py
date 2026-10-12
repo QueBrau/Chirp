@@ -12,6 +12,7 @@ from app.db import get_session_factory
 from app.services.account_provider_gcs import (
     FreezeReceipt,
     GCSMediaProvider,
+    GCSMediaReader,
     MediaProviderUnavailable,
     MediaObject,
     MediaSnapshot,
@@ -212,3 +213,54 @@ def test_infinite_listing_is_bounded_before_delete():
     with pytest.raises(MediaProviderUnavailable, match="media_object_cap_reached"):
         asyncio.run(GCSMediaProvider(reader, bucket="chirp-media", snapshot=empty_snapshot(user_id), freeze=freeze(user_id)).delete_account_data(user=user_model(user_id), idempotency_key="step"))
     assert not any(kind == "delete" for kind, _ in reader.calls)
+
+
+class SlowReader(FakeReader):
+    def read(self, name: str, *, deadline: float):
+        time.sleep(1.05)
+        return super().read(name, deadline=deadline)
+
+
+def test_reader_timeout_drains_inflight_operation_before_failure():
+    user_id = str(uuid.uuid4())
+    item = MediaObject(f"posts/{user_id}/file.jpg", "1")
+    reader = SlowReader([(item.name, item.generation)])
+    import asyncio
+    started = time.monotonic()
+    with pytest.raises(MediaProviderUnavailable, match="media_deadline_exceeded"):
+        asyncio.run(GCSMediaProvider(reader, bucket="chirp-media", snapshot=empty_snapshot(user_id, objects=(item,)), freeze=freeze(user_id)).delete_account_data(user=user_model(user_id), idempotency_key="step", deadline_seconds=1))
+    assert time.monotonic() - started >= 1.0
+    assert not any(kind == "delete" for kind, _ in reader.calls)
+
+
+def test_gcs_reader_binds_list_reload_and_generation_delete(monkeypatch):
+    class Blob:
+        name = "posts/u/file.jpg"
+        generation = 7
+        size = 3
+        md5_hash = None
+        crc32c = None
+        def reload(self, **kwargs):
+            self.reload_kwargs = kwargs
+        def delete(self, **kwargs):
+            self.delete_kwargs = kwargs
+
+    class Bucket:
+        def __init__(self):
+            self.blob_value = Blob()
+            self.list_kwargs = None
+        def list_blobs(self, **kwargs):
+            self.list_kwargs = kwargs
+            return [self.blob_value]
+        def blob(self, name):
+            self.blob_value.name = name
+            return self.blob_value
+
+    bucket = Bucket()
+    monkeypatch.setattr("app.services.storage_service._storage_client", lambda: SimpleNamespace(bucket=lambda _: bucket))
+    reader = GCSMediaReader("chirp-media")
+    assert list(reader.list("posts/u/", deadline=time.monotonic() + 2))[0].name == "posts/u/file.jpg"
+    assert bucket.list_kwargs["retry"] is None
+    assert reader.read("posts/u/file.jpg", deadline=time.monotonic() + 2).generation == "7"
+    reader.delete("posts/u/file.jpg", "7", deadline=time.monotonic() + 2)
+    assert bucket.blob_value.delete_kwargs["if_generation_match"] == 7
