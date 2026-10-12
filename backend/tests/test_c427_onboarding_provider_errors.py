@@ -29,6 +29,7 @@ nothing about the code and stops being true the day the fixture changes.
 """
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import pytest
@@ -36,6 +37,7 @@ import stripe
 from httpx import AsyncClient
 
 from app.config import get_settings
+from app.routers.payments import _onboarding_provider_failure
 from tests.conftest import ChapterSetup, MakeChapterWith, MakeUser
 
 # Imported rather than redefined, the convention test_c355_provider_waits.py
@@ -51,6 +53,86 @@ from tests.test_payments import (  # noqa: F401
 ONBOARDING = "/payments/connect/onboarding-link"
 """The detail the route now returns for a Stripe-side failure."""
 PROVIDER_DETAIL = "onboarding_unavailable"
+
+
+def test_provider_failure_logs_bounded_stripe_correlation_fields(caplog: pytest.LogCaptureFixture) -> None:
+    """A real SDK request id and parameter survive without exposing its message/body."""
+    raw_message = "bad sk_test_secret in business_profile[name]\nsecret-body"
+    error = stripe.InvalidRequestError(
+        raw_message,
+        "business_profile[name]",
+        code="parameter_invalid",
+        http_status=400,
+        headers={"request-id": "req_ABC123xyz"},
+    )
+
+    with caplog.at_level("WARNING"):
+        response_error = _onboarding_provider_failure(
+            error, uuid.UUID("00000000-0000-0000-0000-000000000427"), "create_account"
+        )
+
+    assert response_error.status_code == 503
+    assert response_error.detail == PROVIDER_DETAIL
+    message = caplog.records[-1].getMessage()
+    assert "request_id=req_ABC123xyz" in message
+    assert "http_status=400" in message
+    assert "param=business_profile[name]" in message
+    assert "code=parameter_invalid" in message
+    assert raw_message not in message
+    assert "sk_test_secret" not in message
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("request_id", "req_" + "a" * 65),
+        ("request_id", "req_bad-value"),
+        ("code", "sk_test_secret"),
+        ("code", "code with spaces"),
+        ("code", "a" * 65),
+        ("param", "business_profile[name]\nsecret"),
+        ("param", "../secret"),
+        ("param", "sk_test_secret"),
+        ("param", "capabilities[sk_test_secret]"),
+        ("param", "nested.whsec_secret"),
+        ("param", "a" * 129),
+        ("http_status", True),
+        ("http_status", 99),
+        ("http_status", 600),
+    ],
+)
+def test_provider_failure_omits_malformed_correlation_fields(
+    caplog: pytest.LogCaptureFixture, attribute: str, value: object,
+) -> None:
+    error = stripe.APIConnectionError("raw provider message")
+    setattr(error, attribute, value)
+
+    with caplog.at_level("WARNING"):
+        _onboarding_provider_failure(
+            error, uuid.UUID("00000000-0000-0000-0000-000000000427"), "account_link"
+        )
+
+    message = caplog.records[-1].getMessage()
+    assert f"{attribute}=" not in message or f"{attribute}=None" in message
+    assert "raw provider message" not in message
+
+
+def test_provider_failure_omits_missing_correlation_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    error = stripe.APIConnectionError("raw provider message")
+
+    with caplog.at_level("WARNING"):
+        _onboarding_provider_failure(
+            error, uuid.UUID("00000000-0000-0000-0000-000000000427"), "create_account"
+        )
+
+    message = caplog.records[-1].getMessage()
+    assert "code=None" in message
+    assert "request_id=None" in message
+    assert "http_status=None" in message
+    assert "param=None" in message
+    assert "raw provider message" not in message
 
 
 def _raise_stripe_error(**_params: Any) -> None:
