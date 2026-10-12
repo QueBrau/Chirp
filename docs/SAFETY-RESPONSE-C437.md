@@ -162,7 +162,7 @@ the private receipt, derive its reference with the read-only CLI and provide bot
 receipt path and the exact `c437-removal:<digest>` value to the `known_copy`
 `verified_absent` attempt command:
 
-```sh
+```bash
 REFERENCE_JSON=$(scripts/safety-case receipt-reference \
   --known-copy-receipt /private/operator/c437-removal-receipt.json)
 VERIFICATION_REF=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["verification_ref"])' <<<"$REFERENCE_JSON")
