@@ -1,13 +1,9 @@
 /**
  * Moderation (board c35/c78, App Store Guideline 1.2): lists open content reports,
- * lets an e-board moderator remove a reported chirp — the ONLY removal action the
- * backend actually supports (POST /moderation/chirps/{chirp_id}/remove, gated
- * `_require_any_eboard`) — and now closes reports for real via PATCH
- * /moderation/reports/{id} (c91). There is no endpoint to remove a reported post
- * or comment, and no endpoint at all for message_forward reports (E2EE — the
- * client would need to decrypt/forward plaintext, which the crypto layer doesn't
- * support yet, SPEC §6.7) — those reports get an explicit Dismiss action instead
- * of a Remove button that can't work, so the queue can still be emptied.
+ * lets an e-board moderator remove reported chirps, posts, and comments through
+ * their distinct server routes, and closes reports for real via PATCH
+ * /moderation/reports/{id} (c91). Message-forward and user reports remain visible
+ * with an honest manual-review state because neither has an automatic removal path.
  *
  * Reachable from Orgs > Tools, gated to e-board roles via `roleMeta.eboard`
  * (chapter/index.tsx OrgToolsSegment) — c80 made that a named `moderation`
@@ -34,11 +30,13 @@ import { Pressable, View } from "react-native";
 
 import {
   listReports,
+  removeContent,
   removeChirp,
   resolveReport,
   type ContentReportOut,
   type ReportTargetType,
 } from "@/api/moderation";
+import { ApiError } from "@/api/client";
 import { useOwnChapter } from "@/org/OwnChapterProvider";
 import { AppText, Button, Card, Chip, EmptyState, Screen, SectionHeader } from "@/components";
 import { confirmAction, showApiError } from "@/lib/alert";
@@ -71,10 +69,14 @@ const TARGET_LABELS: Record<ReportTargetType, string> = {
   user: "User",
 };
 
-/** Only chirp removal is wired to a real endpoint — narrows target_id to string
- * so the Remove button below never has to fight a `string | null` type. */
-function removableChirpId(report: ContentReportOut): string | null {
-  return report.target_type === "chirp" ? report.target_id : null;
+type RemovableTarget = { type: "chirp" | "post" | "comment"; id: string };
+
+/** Only targets with a server removal route get a destructive action. */
+function removableTarget(report: ContentReportOut): RemovableTarget | null {
+  if ((report.target_type === "chirp" || report.target_type === "post" || report.target_type === "comment") && report.target_id) {
+    return { type: report.target_type, id: report.target_id };
+  }
+  return null;
 }
 
 /** One page of the queue. The server caps at 200 (c258). */
@@ -203,13 +205,21 @@ export default function ModerationScreen() {
     setReports((current) => current.filter((r) => r.id !== reportId));
   };
 
-  const doRemove = async (report: ContentReportOut, chirpId: string) => {
+  const doRemove = async (report: ContentReportOut, target: RemovableTarget) => {
     setWorkingReportId(report.id);
     try {
       // Reuse the reporter's own stated reason as the removal reason (v1
       // scaffolding, CONVENTIONS.md "functional-but-simple" for moderation)
       // rather than adding a second free-text field just for this.
-      await removeChirp(chirpId, report.reason);
+      try {
+        if (target.type === "chirp") await removeChirp(target.id, report.reason);
+        else await removeContent(target.type, target.id, report.reason);
+      } catch (error) {
+        // A concurrent moderator may have removed the content after this queue
+        // loaded. It is still correct to record this report as actioned; every
+        // other authorization, conflict, or transport failure must remain retryable.
+        if (!(error instanceof ApiError && error.status === 409 && error.detail === "already_removed")) throw error;
+      }
       // c78: c91's resolve endpoint existed with no caller anywhere. Removing
       // the chirp takes the content down; resolving the REPORT is what actually
       // empties the queue — the two were separate actions server-side and
@@ -217,7 +227,7 @@ export default function ModerationScreen() {
       await resolveReport(report.id, "actioned", report.reason);
       closeReport(report.id);
     } catch (error) {
-      showApiError(error, "Couldn't remove that chirp");
+      showApiError(error, "Couldn't remove that content");
     } finally {
       setWorkingReportId(null);
     }
@@ -235,14 +245,15 @@ export default function ModerationScreen() {
     }
   };
 
-  const confirmRemove = (report: ContentReportOut, chirpId: string) => {
+  const confirmRemove = (report: ContentReportOut, target: RemovableTarget) => {
+    const label = target.type === "chirp" ? "chirp" : target.type;
     confirmAction({
-      title: "Remove this chirp?",
+      title: `Remove this ${label}?`,
       message: "This takes it down for everyone on the board. This can't be undone.",
       confirmLabel: "Remove",
       destructive: true,
       order: "confirm-first",
-      onConfirm: () => void doRemove(report, chirpId),
+      onConfirm: () => void doRemove(report, target),
     });
   };
 
@@ -286,7 +297,7 @@ export default function ModerationScreen() {
             caption={`${reports.length}${hasOlder ? "+" : ""} waiting`}
           />
           {reports.map((report) => {
-            const chirpId = removableChirpId(report);
+            const target = removableTarget(report);
             const working = workingReportId === report.id;
             return (
               <Card key={report.id}>
@@ -309,20 +320,20 @@ export default function ModerationScreen() {
                       {report.forwarded_plaintext}
                     </AppText>
                   ) : null}
-                  {chirpId === null ? (
+                  {target === null ? (
                     <AppText variant="caption" tone="tertiary">
-                      Removal isn't available for {TARGET_LABELS[report.target_type].toLowerCase()}{" "}
-                      reports yet. Dismiss it once you've reviewed it.
+                      Automatic removal isn't available for {TARGET_LABELS[report.target_type].toLowerCase()} reports.
+                      Review the report through the appropriate safety path before resolving it.
                     </AppText>
                   ) : null}
 
                   <View style={{ gap: spacing.xs }}>
-                    {chirpId !== null ? (
+                    {target !== null ? (
                       <Button
-                        label={working ? "Working..." : "Remove chirp"}
+                        label={working ? "Working..." : `Remove ${target.type}`}
                         variant="destructive"
                         disabled={working}
-                        onPress={() => confirmRemove(report, chirpId)}
+                        onPress={() => confirmRemove(report, target)}
                       />
                     ) : null}
                     <Button
