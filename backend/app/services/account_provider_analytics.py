@@ -1,5 +1,7 @@
-"""Dormant, operator-supplied BigQuery analytics deletion provider."""
+"""Dormant BigQuery adapter; explicit operator freeze, preview and approval required.
 
+No credential discovery, runtime registration, or production calls on import.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -9,46 +11,80 @@ import math
 import re
 import time
 import uuid
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, replace
+from functools import wraps
 
 import httpx
 
 from app.services.account_fulfillment import ProviderUnavailable
 
-ORIGIN = "https://bigquery.googleapis.com"
-LOCATION = "US"
-MAX_TABLES = 6
+ORIGIN = 'https://bigquery.googleapis.com'
+LOCATION = 'US'
+MAX_TABLES = 32
+MAX_PAGES = 8
 MAX_ROWS = 100_000
 MAX_RESPONSE_BYTES = 512 * 1024
-MAX_POLLS = 60
-IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,1024}$")
-TABLE_RE = re.compile(r"^[A-Za-z0-9_]{1,256}$")
-STDOUT_TABLE_RE = re.compile(r"^run_googleapis_com_stdout_[0-9]{8}$")
-USER_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+MAX_SECONDS = 120.0
+SNAPSHOT_SECONDS = 900
+MIN_BYTES = 10_000_000
+MAX_BYTES = 1_000_000_000
+POLL_SECONDS = 0.25
+PROJECT = re.compile(r'[a-z][a-z0-9-]{4,61}[a-z0-9]\Z')
+DATASET = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,1023}\Z')
+STDOUT = re.compile(r'run_googleapis_com_stdout_[0-9]{8}\Z')
+PROBE = 'chirps_analytics_probe_20260908'
+DIGEST = re.compile(r'[0-9a-f]{64}\Z')
 
 
 class AnalyticsProviderUnavailable(ProviderUnavailable):
     pass
 
 
-def _fail(code: str) -> AnalyticsProviderUnavailable:
-    return AnalyticsProviderUnavailable(code)
+def _fail(code: str):
+    return AnalyticsProviderUnavailable('analytics_' + code)
 
 
-def _canonical_uuid(value: uuid.UUID | str) -> str:
+def _uuid(value):
     try:
-        result = str(uuid.UUID(str(value)))
+        actual = str(uuid.UUID(str(value)))
     except (ValueError, TypeError, AttributeError):
-        raise _fail("analytics_subject_invalid") from None
-    if not USER_RE.fullmatch(result):
-        raise _fail("analytics_subject_invalid")
-    return result
+        raise _fail('identity_invalid') from None
+    if str(value) != actual:
+        raise _fail('identity_invalid')
+    return actual
 
 
-def _future(value: float) -> None:
-    if type(value) is bool or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= time.time():
-        raise _fail("analytics_freeze_invalid")
+def _digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def _integer(value, low, high, code):
+    if type(value) is not int or not low <= value <= high:
+        raise _fail(code)
+    return value
+
+
+def _number(value, code):
+    if type(value) not in (int, float) or not math.isfinite(value):
+        raise _fail(code)
+    return value
+
+
+def _decimal(value, limit=MAX_BYTES):
+    if type(value) is not str or not re.fullmatch(r'0|[1-9][0-9]{0,18}', value) or int(value) > limit:
+        raise _fail('numeric_response_invalid')
+    return int(value)
+
+
+def _bounded(fn):
+    @wraps(fn)
+    async def run(*args, **kwargs):
+        try:
+            async with asyncio.timeout(MAX_SECONDS):
+                return await fn(*args, **kwargs)
+        except (TimeoutError, httpx.HTTPError):
+            raise _fail('transport_unknown') from None
+    return run
 
 
 @dataclass(frozen=True)
@@ -59,29 +95,33 @@ class AnalyticsFreezeReceipt:
     verified: bool
     ingestion_drained: bool
 
-    def validate(self, user_id: str) -> None:
-        if (
-            self.verified is not True or self.ingestion_drained is not True
-            or self.user_id != user_id or not isinstance(self.freeze_id, str)
-            or not 1 <= len(self.freeze_id) <= 128
-        ):
-            raise _fail("analytics_freeze_invalid")
-        if _canonical_uuid(user_id) != user_id or _canonical_uuid(self.user_id) != self.user_id:
-            raise _fail("analytics_freeze_invalid")
-        _future(self.expires_at)
+    def validate(self, user_id):
+        if (self.verified is not True or self.ingestion_drained is not True
+                or self.user_id != _uuid(user_id) or type(self.freeze_id) is not str
+                or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', self.freeze_id)
+                or _number(self.expires_at, 'freeze_invalid') <= time.time()):
+            raise _fail('freeze_invalid')
+
+
+@dataclass(frozen=True)
+class AnalyticsExclusion:
+    name: str
+    schema_digest: str
+    reviewed_non_account_probe: bool
+
+    def validate(self):
+        if (self.name != PROBE or self.reviewed_non_account_probe is not True
+                or type(self.schema_digest) is not str or not DIGEST.fullmatch(self.schema_digest)):
+            raise _fail('exclusion_invalid')
 
 
 @dataclass(frozen=True)
 class AnalyticsTable:
     name: str
     schema_digest: str
-    streaming_buffer: bool
-    preview_count: int = 0
-    max_bytes_billed: int = 0
-
-    def validate(self) -> None:
-        if type(self.preview_count) is not int or self.preview_count < 0 or type(self.max_bytes_billed) is not int or self.max_bytes_billed < 10_000_000:
-            raise _fail("analytics_snapshot_budget_invalid")
+    preview_count: int
+    max_bytes_billed: int
+    estimated_delete_bytes: int
 
 
 @dataclass(frozen=True)
@@ -91,380 +131,396 @@ class AnalyticsSnapshot:
     project: str
     dataset: str
     tables: tuple[AnalyticsTable, ...]
+    exclusions: tuple[AnalyticsExclusion, ...]
     freeze_id: str
-    snapshot_digest: str
-    created_at: str
-    excluded_tables: tuple[str, ...] = ()
+    created_at: float
+    time_travel_hours: int
+    snapshot_digest: str = ''
 
-    def payload(self) -> dict[str, object]:
-        return {
-            "request_id": self.request_id, "user_id": self.user_id,
-            "project": self.project, "dataset": self.dataset,
-            "tables": [{"name": t.name, "schema_digest": t.schema_digest,
-                        "streaming_buffer": t.streaming_buffer,
-                        "preview_count": t.preview_count,
-                        "max_bytes_billed": t.max_bytes_billed} for t in self.tables],
-            "excluded_tables": list(self.excluded_tables),
-            "freeze_id": self.freeze_id, "created_at": self.created_at,
-        }
+    def payload(self):
+        return {key: value for key, value in asdict(self).items() if key != 'snapshot_digest'}
+
+    def validate(self):
+        _uuid(self.request_id)
+        _uuid(self.user_id)
+        if (type(self.project) is not str or not PROJECT.fullmatch(self.project)
+                or type(self.dataset) is not str or not DATASET.fullmatch(self.dataset)
+                or type(self.tables) is not tuple or not 1 <= len(self.tables) <= MAX_TABLES
+                or type(self.exclusions) is not tuple or len(self.exclusions) > 1 or len(self.tables) + len(self.exclusions) > MAX_TABLES):
+            raise _fail('snapshot_invalid')
+        names = []
+        for t in self.tables:
+            if (not isinstance(t, AnalyticsTable) or type(t.name) is not str or not STDOUT.fullmatch(t.name)
+                    or type(t.schema_digest) is not str or not DIGEST.fullmatch(t.schema_digest)):
+                raise _fail('snapshot_invalid')
+            names.append(t.name)
+            _integer(t.preview_count, 0, MAX_ROWS, 'row_budget_invalid')
+            _integer(t.max_bytes_billed, MIN_BYTES, MAX_BYTES, 'byte_budget_invalid')
+            _integer(t.estimated_delete_bytes, 0, t.max_bytes_billed, 'byte_budget_invalid')
+        if names != sorted(set(names)) or sum(t.preview_count for t in self.tables) > MAX_ROWS:
+            raise _fail('row_budget_invalid')
+        if sum(t.max_bytes_billed for t in self.tables) > MAX_BYTES:
+            raise _fail('byte_budget_invalid')
+        for e in self.exclusions:
+            if not isinstance(e, AnalyticsExclusion):
+                raise _fail('exclusion_invalid')
+            e.validate()
+        _integer(self.time_travel_hours, 48, 168, 'retention_invalid')
+        age = time.time() - _number(self.created_at, 'snapshot_expired')
+        if not 0 <= age <= SNAPSHOT_SECONDS:
+            raise _fail('snapshot_expired')
+        if self.snapshot_digest != _digest(self.payload()):
+            raise _fail('snapshot_digest_invalid')
 
 
-def _digest(value: object) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+def _fields(schema):
+    if not isinstance(schema, dict) or type(schema.get('fields')) is not list:
+        raise _fail('schema_invalid')
+    out = {}
+    for field in schema['fields']:
+        if (not isinstance(field, dict) or type(field.get('name')) is not str
+                or field['name'] in out):
+            raise _fail('schema_invalid')
+        out[field['name']] = field
+    return out
 
 
-def _fields(schema: object) -> dict[str, dict[str, object]]:
-    if not isinstance(schema, dict) or not isinstance(schema.get("fields"), list):
-        raise _fail("analytics_schema_invalid")
-    result: dict[str, dict[str, object]] = {}
-    for field in schema["fields"]:
-        if not isinstance(field, dict) or not isinstance(field.get("name"), str) or field["name"] in result:
-            raise _fail("analytics_schema_invalid")
-        result[field["name"]] = field
-    return result
-
-
-def _validate_schema(schema: object) -> None:
-    payload = _fields(schema).get("jsonPayload")
-    if not isinstance(payload, dict) or payload.get("type") != "RECORD" or payload.get("mode", "NULLABLE") != "NULLABLE":
-        raise _fail("analytics_schema_invalid")
+def _schema(schema, *, probe=False):
+    payload = _fields(schema).get('jsonPayload', {})
+    if payload.get('type') != 'RECORD' or payload.get('mode', 'NULLABLE') != 'NULLABLE':
+        raise _fail('schema_invalid')
     nested = _fields(payload)
-    if (nested.get("user_id", {}).get("type"), nested.get("user_id", {}).get("mode", "NULLABLE")) != ("STRING", "NULLABLE") or (nested.get("analytics", {}).get("type"), nested.get("analytics", {}).get("mode", "NULLABLE")) != ("BOOLEAN", "NULLABLE"):
-        raise _fail("analytics_schema_invalid")
+    required = {'analytics': 'BOOLEAN', 'probe_id' if probe else 'user_id': 'STRING'}
+    if probe and set(nested) != {'schema_version', 'emission_id', 'severity', 'event', 'emitted_at', 'analytics', 'probe_id'}:
+        raise _fail('exclusion_schema_invalid')
+    for name, typ in required.items():
+        f = nested.get(name, {})
+        if f.get('type') != typ or f.get('mode', 'NULLABLE') != 'NULLABLE':
+            raise _fail('schema_invalid')
 
 
-def _relation(project: str, dataset: str, table: str) -> str:
-    if not IDENTIFIER.fullmatch(project) or not IDENTIFIER.fullmatch(dataset) or not TABLE_RE.fullmatch(table):
-        raise _fail("analytics_identifier_invalid")
-    tick = chr(96)
-    return f"{tick}{project}.{dataset}.{table}{tick}"
+class _Rest:
+    def __init__(self, token, project, dataset, transport, timeout_seconds):
+        if (type(token) is not str or not 1 <= len(token) <= 4096
+                or any(ord(c) < 33 or ord(c) > 126 for c in token)):
+            raise _fail('credentials_invalid')
+        if type(project) is not str or not PROJECT.fullmatch(project) or type(dataset) is not str or not DATASET.fullmatch(dataset):
+            raise _fail('identifier_invalid')
+        if not 1 <= _number(timeout_seconds, 'timeout_invalid') <= 60:
+            raise _fail('timeout_invalid')
+        self.project, self.dataset = project, dataset
+        self._client_options = dict(base_url=ORIGIN, headers={'Authorization': 'Bearer ' + token},
+                                    timeout=timeout_seconds, follow_redirects=False, trust_env=False,
+                                    transport=transport)
+        self.client = httpx.AsyncClient(**self._client_options)
+        self.base = f'/bigquery/v2/projects/{project}'
+        self.data = f'{self.base}/datasets/{dataset}'
+
+    async def request(self, method, path, **kwargs):
+        try:
+            async with self.client.stream(method, path, **kwargs) as response:
+                if 300 <= response.status_code < 400:
+                    raise _fail('redirect_rejected')
+                if response.status_code in (404, 409):
+                    raise _fail('missing' if response.status_code == 404 else 'conflict')
+                if response.status_code != 200:
+                    raise _fail('provider_error')
+                data = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=16384):
+                    data.extend(chunk)
+                    if len(data) > MAX_RESPONSE_BYTES:
+                        raise _fail('response_too_large')
+                try:
+                    payload = json.loads(data)
+                except (ValueError, UnicodeError, RecursionError):
+                    raise _fail('response_invalid') from None
+                if type(payload) is not dict:
+                    raise _fail('response_invalid')
+                return payload
+        except httpx.HTTPError:
+            raise _fail('transport_unknown') from None
+
+    async def inventory(self, tables, exclusions):
+        dataset = await self.request('GET', self.data)
+        ref = dataset.get('datasetReference')
+        if (ref != {'projectId': self.project, 'datasetId': self.dataset}
+                or dataset.get('location') != LOCATION):
+            raise _fail('dataset_binding_invalid')
+        hours = _decimal(dataset.get('maxTimeTravelHours'), 168)
+        _integer(hours, 48, 168, 'retention_invalid')
+        expected = set(tables) | {e.name for e in exclusions}
+        names, tokens, page = set(), set(), None
+        for _ in range(MAX_PAGES):
+            params = {'maxResults': MAX_TABLES}
+            if page is not None:
+                params['pageToken'] = page
+            listing = await self.request('GET', self.data + '/tables', params=params)
+            rows = listing.get('tables', [])
+            if type(rows) is not list:
+                raise _fail('inventory_invalid')
+            for row in rows:
+                ref = row.get('tableReference') if isinstance(row, dict) else None
+                if (not isinstance(ref, dict) or row.get('type') != 'TABLE'
+                        or ref.get('projectId') != self.project or ref.get('datasetId') != self.dataset):
+                    raise _fail('inventory_invalid')
+                name = ref.get('tableId')
+                if type(name) is not str or name not in expected or name in names:
+                    raise _fail('inventory_drift')
+                names.add(name)
+                if len(names) > MAX_TABLES:
+                    raise _fail('inventory_invalid')
+            page = listing.get('nextPageToken')
+            if page is None:
+                break
+            if type(page) is not str or not 1 <= len(page) <= 2048 or page in tokens:
+                raise _fail('inventory_invalid')
+            tokens.add(page)
+        else:
+            raise _fail('inventory_page_limit')
+        if names != expected:
+            raise _fail('inventory_drift')
+        schemas = {}
+        excluded = {e.name: e for e in exclusions}
+        for name in sorted(names):
+            body = await self.request('GET', self.data + '/tables/' + name)
+            if (body.get('type') != 'TABLE' or body.get('tableReference') != {
+                    'projectId': self.project, 'datasetId': self.dataset, 'tableId': name}):
+                raise _fail('table_binding_invalid')
+            if 'streamingBuffer' in body:
+                raise _fail('streaming_buffer_present')
+            _schema(body.get('schema'), probe=name in excluded)
+            schemas[name] = _digest(body['schema'])
+            if name in excluded and schemas[name] != excluded[name].schema_digest:
+                raise _fail('exclusion_schema_drift')
+        return schemas, hours
+
+    def query(self, table, subject, *, count=None):
+        if not STDOUT.fullmatch(table):
+            raise _fail('table_invalid')
+        relation = f'`{self.project}.{self.dataset}.{table}`'
+        predicate = 'jsonPayload.user_id = @user_id AND jsonPayload.analytics IS TRUE'
+        params = [{'name': 'user_id', 'parameterType': {'type': 'STRING'}, 'parameterValue': {'value': _uuid(subject)}}]
+        if count is None:
+            sql = f'SELECT COUNT(*) AS remaining FROM {relation} WHERE {predicate}'
+        else:
+            _integer(count, 0, MAX_ROWS, 'row_budget_invalid')
+            sql = f'DELETE FROM {relation} WHERE {predicate} AND (SELECT COUNT(*) FROM {relation} WHERE {predicate}) = @reviewed_count'
+            params.append({'name': 'reviewed_count', 'parameterType': {'type': 'INT64'}, 'parameterValue': {'value': str(count)}})
+        return {'query': sql, 'useLegacySql': False, 'useQueryCache': False,
+                'parameterMode': 'NAMED', 'queryParameters': params}
+
+    def body(self, job_id, query, budget, *, plan=None, dry=False):
+        _integer(budget, MIN_BYTES, MAX_BYTES, 'byte_budget_invalid')
+        config = {'dryRun': dry, 'query': {**query, 'maximumBytesBilled': str(budget)}}
+        if plan is not None:
+            config['labels'] = {'chirp_plan': plan[:63]}
+        return {'jobReference': {'projectId': self.project, 'location': LOCATION, 'jobId': job_id}, 'configuration': config}
+
+    def validate_job(self, job, body, *, dry=False):
+        if (job.get('jobReference') != body['jobReference']
+                and not (dry and job.get('jobReference') is None)):
+            raise _fail('job_binding_invalid')
+        observed = job.get('configuration')
+        expected = body['configuration']
+        if not isinstance(observed, dict) or observed.get('dryRun', False) is not dry:
+            raise _fail('job_config_mismatch')
+        if set(observed) - {'query', 'dryRun', 'jobType', 'labels'} or observed.get('jobType', 'QUERY') != 'QUERY':
+            raise _fail('job_config_mismatch')
+        if observed.get('labels', {}) != expected.get('labels', {}):
+            raise _fail('job_config_mismatch')
+        query = observed.get('query')
+        if not isinstance(query, dict) or any(query.get(k) != v for k, v in expected['query'].items()):
+            raise _fail('job_config_mismatch')
+        extras = set(query) - set(expected['query'])
+        defaults = {'priority': 'INTERACTIVE', 'createDisposition': 'CREATE_IF_NEEDED',
+                    'writeDisposition': 'WRITE_EMPTY', 'allowLargeResults': False}
+        for k in extras - {'destinationTable'}:
+            # flattenResults is ignored for GoogleSQL. Anonymous result tables
+            # may also carry WRITE_TRUNCATE; only allow that with the narrowly
+            # validated server-generated SELECT destination below.
+            if k == 'flattenResults' and type(query[k]) is bool:
+                continue
+            if k == 'writeDisposition' and query[k] == 'WRITE_TRUNCATE' and 'destinationTable' in extras:
+                continue
+            if k not in defaults or query[k] != defaults[k]:
+                raise _fail('job_config_mismatch')
+        if 'destinationTable' in extras:
+            dest = query['destinationTable']
+            if (not expected['query']['query'].startswith('SELECT ') or not isinstance(dest, dict)
+                    or set(dest) != {'projectId', 'datasetId', 'tableId'} or dest.get('projectId') != self.project
+                    or not re.fullmatch(r'_[0-9a-f]{16,128}', str(dest.get('datasetId')))
+                    or not re.fullmatch(r'anon[0-9a-f_]{16,128}', str(dest.get('tableId')))):
+                raise _fail('job_config_mismatch')
+        status = job.get('status')
+        if not isinstance(status, dict) or status.get('state') not in ('DONE', 'PENDING', 'RUNNING'):
+            raise _fail('job_state_invalid')
+        if status.get('errorResult') or status.get('errors'):
+            raise _fail('job_failed')
+        return status['state']
+
+    async def job(self, body, *, dry=False):
+        job_id = body['jobReference']['jobId']
+        try:
+            job = await self.request('POST', self.base + '/jobs', json=body)
+        except AnalyticsProviderUnavailable as exc:
+            if dry or str(exc) not in ('analytics_conflict', 'analytics_transport_unknown'):
+                raise
+            # Resolve exactly the same job, including an uncertain insert response.
+            job = await self.request('GET', self.base + '/jobs/' + job_id, params={'location': LOCATION})
+        if dry:
+            # jobs.insert dry runs may omit the normal Job envelope. The
+            # directly returned processing estimate belongs to this POST;
+            # validate optional echoed fields, never poll a dry run.
+            if 'jobReference' in job and job['jobReference'] != body['jobReference']:
+                raise _fail('job_binding_invalid')
+            if 'status' in job:
+                status = job['status']
+                if not isinstance(status, dict) or status.get('errorResult') or status.get('errors'):
+                    raise _fail('job_failed')
+            if 'configuration' in job:
+                self.validate_job({**job, 'status': {'state': 'DONE'}}, body, dry=True)
+            return job
+        for _ in range(120):
+            state = self.validate_job(job, body, dry=dry)
+            if state == 'DONE':
+                return job
+            if dry:
+                raise _fail('dry_run_invalid')
+            await asyncio.sleep(POLL_SECONDS)
+            job = await self.request('GET', self.base + '/jobs/' + job_id, params={'location': LOCATION})
+        raise _fail('job_timeout')
+
+    async def count(self, body):
+        await self.job(body)
+        ref = body['jobReference']
+        result = await self.request('GET', self.base + '/queries/' + ref['jobId'], params={'location': LOCATION, 'maxResults': 1})
+        if (result.get('jobComplete') is not True or result.get('jobReference') != ref
+                or result.get('totalRows') != '1' or result.get('pageToken') or result.get('errors')):
+            raise _fail('query_result_invalid')
+        fields = _fields(result.get('schema'))
+        if set(fields) != {'remaining'} or fields['remaining'].get('type') != 'INTEGER' or fields['remaining'].get('mode', 'NULLABLE') not in ('NULLABLE', 'REQUIRED'):
+            raise _fail('query_result_invalid')
+        rows = result.get('rows')
+        if type(rows) is not list or len(rows) != 1 or not isinstance(rows[0], dict):
+            raise _fail('query_result_invalid')
+        cells = rows[0].get('f')
+        if type(cells) is not list or len(cells) != 1 or not isinstance(cells[0], dict):
+            raise _fail('query_result_invalid')
+        return _decimal(cells[0].get('v'), MAX_ROWS)
+
+
+def _job_id(request, operation, table=''):
+    # Snapshot deliberately excluded: conflicting plans reuse and reject the same job.
+    return 'chirp_' + hashlib.sha256(f'{request}:{operation}:{table}'.encode()).hexdigest()[:48]
 
 
 class BigQueryAnalyticsProvider:
-    """Operator-only provider requiring an explicit freeze and immutable snapshot."""
-
-    def __init__(
-        self, *, token: str, project: str, dataset: str, snapshot: AnalyticsSnapshot,
-        freeze: AnalyticsFreezeReceipt, reviewed_tables: tuple[str, ...],
-        transport: httpx.AsyncBaseTransport | None = None, timeout_seconds: float = 20.0,
-    ) -> None:
-        if type(token) is not str or not token or len(token) > 4096 or any(ord(c) < 33 or ord(c) > 126 for c in token):
-            raise _fail("analytics_credentials_unavailable")
-        if not IDENTIFIER.fullmatch(project) or not IDENTIFIER.fullmatch(dataset):
-            raise _fail("analytics_identifier_invalid")
-        if not 1 <= len(reviewed_tables) <= MAX_TABLES or len(set(reviewed_tables)) != len(reviewed_tables):
-            raise _fail("analytics_table_scope_invalid")
-        if any(not TABLE_RE.fullmatch(t) for t in reviewed_tables):
-            raise _fail("analytics_table_scope_invalid")
+    def __init__(self, *, token, project, dataset, snapshot, freeze, reviewed_snapshot_digest,
+                 transport=None, timeout_seconds=20.0):
+        snapshot.validate()
         freeze.validate(snapshot.user_id)
-        if tuple(t.name for t in snapshot.tables) != reviewed_tables or any(not STDOUT_TABLE_RE.fullmatch(t) for t in reviewed_tables):
-            raise _fail("analytics_table_scope_invalid")
-        if _digest(snapshot.payload()) != snapshot.snapshot_digest:
-            raise _fail("analytics_snapshot_digest_invalid")
-        if (
-            snapshot.project != project or snapshot.dataset != dataset
-            or snapshot.freeze_id != freeze.freeze_id or snapshot.request_id == ""
-            or any(t.streaming_buffer for t in snapshot.tables)
-        ):
-            raise _fail("analytics_snapshot_binding_invalid")
-        if _canonical_uuid(snapshot.user_id) != snapshot.user_id:
-            raise _fail("analytics_snapshot_binding_invalid")
-        try:
-            uuid.UUID(snapshot.request_id)
-        except (ValueError, TypeError, AttributeError):
-            raise _fail("analytics_snapshot_binding_invalid") from None
-        if type(timeout_seconds) is bool or not math.isfinite(timeout_seconds) or not 1 <= timeout_seconds <= 60:
-            raise _fail("analytics_timeout_invalid")
-        self._token, self.project, self.dataset = token, project, dataset
-        self.snapshot, self.freeze, self.reviewed_tables = snapshot, freeze, reviewed_tables
-        if sum(t.preview_count for t in snapshot.tables) > MAX_ROWS:
-            raise _fail("analytics_snapshot_row_budget_exceeded")
-        for table in snapshot.tables:
-            table.validate()
-        self.transport, self.timeout_seconds = transport, min(timeout_seconds, 120.0)
-
-    def _query(self, table: str, *, count: bool, reviewed_count: int | None = None) -> str:
-        relation = _relation(self.project, self.dataset, table)
-        where = "jsonPayload.user_id = @user_id AND jsonPayload.analytics IS TRUE"
-        if count:
-            return f"SELECT COUNT(*) AS remaining FROM {relation} WHERE {where}"
-        if reviewed_count is None or type(reviewed_count) is not int or reviewed_count < 0:
-            raise _fail("analytics_snapshot_row_budget_invalid")
-        return f"DELETE FROM {relation} WHERE {where} AND (SELECT COUNT(*) FROM {relation} WHERE {where}) = @reviewed_count"
-
-    def _job_id(self, table: str, operation: str) -> str:
-        raw = f"{self.snapshot.request_id}:{self.snapshot.snapshot_digest}:{table}:{operation}"
-        return "chirp_" + hashlib.sha256(raw.encode()).hexdigest()[:48]
-
-    def _job_body(self, query: str, job_id: str, *, dry_run: bool, reviewed_count: int | None = None, max_bytes_billed: int | None = None) -> dict[str, object]:
-        params = [{"name": "user_id", "parameterType": {"type": "STRING"}, "parameterValue": {"value": self.snapshot.user_id}}]
-        if reviewed_count is not None:
-            params.append({"name": "reviewed_count", "parameterType": {"type": "INT64"}, "parameterValue": {"value": str(reviewed_count)}})
-        query_config = {"query": query, "useLegacySql": False, "useQueryCache": False,
-                        "parameterMode": "NAMED", "queryParameters": params}
-        if max_bytes_billed is not None:
-            query_config["maximumBytesBilled"] = str(max_bytes_billed)
-        return {"jobReference": {"projectId": self.project, "jobId": job_id, "location": LOCATION},
-                "configuration": {"dryRun": dry_run, "query": query_config}}
-
-    def preview_requests(self) -> list[dict[str, object]]:
-        return [self._job_body(self._query(t, count=True), self._job_id(t, "preview"), dry_run=True)
-                for t in self.reviewed_tables]
+        if (snapshot.project != project or snapshot.dataset != dataset or snapshot.freeze_id != freeze.freeze_id
+                or reviewed_snapshot_digest != snapshot.snapshot_digest):
+            raise _fail('snapshot_binding_invalid')
+        self.snapshot, self.freeze = snapshot, freeze
+        self.rest = _Rest(token, project, dataset, transport, timeout_seconds)
 
     @classmethod
-    async def capture_preview_snapshot(
-        cls, *, token: str, project: str, dataset: str, request_id: str,
-        user_id: uuid.UUID | str, freeze: AnalyticsFreezeReceipt,
-        reviewed_tables: tuple[str, ...], excluded_tables: tuple[str, ...] = (),
-        transport: httpx.AsyncBaseTransport | None = None, timeout_seconds: float = 20.0,
-    ) -> AnalyticsSnapshot:
-        """Capture metadata for a fresh operator-reviewed scope.
-
-        Construction deliberately does not accept a preexisting snapshot. The
-        caller must review the returned table inventory and preview counts
-        before constructing the destructive adapter.
-        """
-        actual = _canonical_uuid(user_id)
-        if actual != freeze.user_id:
-            raise _fail("analytics_freeze_invalid")
-        freeze.validate(actual)
-        if type(request_id) is not str:
-            raise _fail("analytics_snapshot_binding_invalid")
-        try:
-            uuid.UUID(request_id)
-        except (ValueError, TypeError, AttributeError):
-            raise _fail("analytics_snapshot_binding_invalid") from None
-        if not reviewed_tables or len(reviewed_tables) > MAX_TABLES or any(not STDOUT_TABLE_RE.fullmatch(t) for t in reviewed_tables):
-            raise _fail("analytics_table_scope_invalid")
-        if any(not TABLE_RE.fullmatch(t) for t in excluded_tables):
-            raise _fail("analytics_table_scope_invalid")
-        if type(timeout_seconds) is bool or not math.isfinite(timeout_seconds) or not 1 <= timeout_seconds <= 60:
-            raise _fail("analytics_timeout_invalid")
-        headers = {"Authorization": f"Bearer {token}"}
-        async with httpx.AsyncClient(base_url=ORIGIN, headers=headers, timeout=timeout_seconds,
-                                     follow_redirects=False, trust_env=False, transport=transport) as client:
-            dataset_body = await client.get(f"/bigquery/v2/projects/{project}/datasets/{dataset}", follow_redirects=False)
-            if dataset_body.status_code >= 400:
-                raise _fail("analytics_provider_error")
-            dataset_info = dataset_body.json()
-            if not isinstance(dataset_info, dict) or dataset_info.get("location") != LOCATION:
-                raise _fail("analytics_dataset_binding_invalid")
-            seen: list[str] = []
-            page: str | None = None
-            while True:
-                suffix = "?maxResults=100" + (f"&pageToken={page}" if page else "")
-                payload = await cls._inventory_request(client, project, dataset, suffix)
-                rows = payload.get("tables")
-                if not isinstance(rows, list) or len(seen) + len(rows) > MAX_TABLES:
-                    raise _fail("analytics_table_inventory_invalid")
-                for row in rows:
-                    if not isinstance(row, dict) or row.get("type") != "TABLE":
-                        raise _fail("analytics_table_inventory_invalid")
-                    ref = row.get("tableReference", {})
-                    name = ref.get("tableId") if isinstance(ref, dict) else None
-                    if not isinstance(name, str) or name in seen or not (STDOUT_TABLE_RE.fullmatch(name) or name in excluded_tables):
-                        raise _fail("analytics_table_inventory_invalid")
-                    seen.append(name)
-                page = payload.get("nextPageToken")
-                if page is None:
-                    break
-                if not isinstance(page, str) or not page:
-                    raise _fail("analytics_table_inventory_invalid")
-            if set(seen) != set(reviewed_tables) | set(excluded_tables):
-                raise _fail("analytics_table_inventory_incomplete")
+    @_bounded
+    async def capture_preview_snapshot(cls, *, token, project, dataset, request_id, user_id, freeze,
+                                       reviewed_tables, exclusions=(), query_byte_budget=50_000_000,
+                                       transport=None, timeout_seconds=20.0):
+        request_id, user_id = _uuid(request_id), _uuid(user_id)
+        freeze.validate(user_id)
+        _integer(query_byte_budget, MIN_BYTES, MAX_BYTES, 'byte_budget_invalid')
+        if (type(reviewed_tables) is not tuple or not 1 <= len(reviewed_tables) <= MAX_TABLES
+                or any(type(t) is not str or not STDOUT.fullmatch(t) for t in reviewed_tables)
+                or list(reviewed_tables) != sorted(set(reviewed_tables)) or type(exclusions) is not tuple
+                or len(exclusions) > 1 or len(reviewed_tables) + len(exclusions) > MAX_TABLES
+                or len(reviewed_tables) * query_byte_budget > MAX_BYTES):
+            raise _fail('table_scope_invalid')
+        for e in exclusions:
+            if not isinstance(e, AnalyticsExclusion):
+                raise _fail('exclusion_invalid')
+            e.validate()
+        rest = _Rest(token, project, dataset, transport, timeout_seconds)
+        async with rest.client:
+            schemas, hours = await rest.inventory(reviewed_tables, exclusions)
             tables = []
             for name in reviewed_tables:
-                ref = await cls._metadata_request(client, project, dataset, name)
-                if "streamingBuffer" in ref:
-                    raise _fail("analytics_streaming_buffer_present")
-                _validate_schema(ref.get("schema"))
-                tables.append(AnalyticsTable(name, _digest(ref["schema"]), False))
-            # Build a valid metadata-only instance solely to execute bounded,
-            # read-only COUNT previews. It is never returned as the snapshot.
-            provisional = AnalyticsSnapshot(request_id, actual, project, dataset, tuple(AnalyticsTable(t.name, t.schema_digest, False, 0, 10_000_000) for t in tables), freeze.freeze_id, "", datetime.now(timezone.utc).isoformat(), tuple(excluded_tables))
-            provisional = AnalyticsSnapshot(**{**provisional.__dict__, "snapshot_digest": _digest(provisional.payload())})
-            previewer = cls(token=token, project=project, dataset=dataset, snapshot=provisional,
-                            freeze=freeze, reviewed_tables=tuple(reviewed_tables), transport=transport,
-                            timeout_seconds=timeout_seconds)
-            for index, table in enumerate(tuple(tables)):
-                job = await previewer._job(client, table.name, "preview", previewer._query(table.name, count=True), dry_run=False, max_bytes_billed=10_000_000)
-                result = await previewer._query_results(client, job, previewer._job_id(table.name, "preview"))
-                row = result["rows"][0]["f"][0]["v"]
-                if not isinstance(row, str) or not row.isdigit() or int(row) > MAX_ROWS:
-                    raise _fail("analytics_preview_count_invalid")
-                stats = job.get("statistics", {}).get("query", {}) if isinstance(job.get("statistics"), dict) else {}
-                processed = stats.get("totalBytesProcessed", "0") if isinstance(stats, dict) else "0"
-                if not isinstance(processed, str) or not processed.isdigit() or int(processed) > 10_000_000:
-                    raise _fail("analytics_preview_budget_invalid")
-                tables[index] = AnalyticsTable(table.name, table.schema_digest, False, int(row), int(processed))
-        current = AnalyticsSnapshot(request_id, actual, project, dataset, tuple(tables), freeze.freeze_id, "", datetime.now(timezone.utc).isoformat(), tuple(excluded_tables))
-        return AnalyticsSnapshot(**{**current.__dict__, "snapshot_digest": _digest(current.payload())})
+                freeze.validate(user_id)
+                count = await rest.count(rest.body('chirp_preview_' + uuid.uuid4().hex,
+                                                  rest.query(name, user_id), query_byte_budget))
+                if sum(t.preview_count for t in tables) + count > MAX_ROWS:
+                    raise _fail('row_budget_exceeded')
+                estimate = await rest.job(rest.body('chirp_estimate_' + uuid.uuid4().hex,
+                                                    rest.query(name, user_id, count=count), query_byte_budget, dry=True), dry=True)
+                stats = estimate.get('statistics')
+                query_stats = stats.get('query') if isinstance(stats, dict) else None
+                if (not isinstance(query_stats, dict)
+                        or query_stats.get('totalBytesProcessedAccuracy') not in ('PRECISE', 'UPPER_BOUND')):
+                    raise _fail('estimate_accuracy_unknown')
+                processed = _decimal(query_stats.get('totalBytesProcessed'))
+                if processed > query_byte_budget:
+                    raise _fail('byte_budget_exceeded')
+                tables.append(AnalyticsTable(name, schemas[name], count, query_byte_budget, processed))
+            if await rest.inventory(reviewed_tables, exclusions) != (schemas, hours):
+                raise _fail('snapshot_drift')
+            freeze.validate(user_id)
+        snapshot = AnalyticsSnapshot(request_id, user_id, project, dataset, tuple(tables), exclusions,
+                                     freeze.freeze_id, time.time(), hours)
+        snapshot = replace(snapshot, snapshot_digest=_digest(snapshot.payload()))
+        snapshot.validate()
+        return snapshot
 
-    @staticmethod
-    async def _inventory_request(client: httpx.AsyncClient, project: str, dataset: str, suffix: str) -> dict[str, object]:
-        response = await client.get(f"/bigquery/v2/projects/{project}/datasets/{dataset}/tables{suffix}", follow_redirects=False)
-        if response.status_code >= 400:
-            raise _fail("analytics_provider_error")
-        try:
-            payload = response.json()
-        except ValueError:
-            raise _fail("analytics_response_invalid") from None
-        if not isinstance(payload, dict):
-            raise _fail("analytics_response_invalid")
-        return payload
+    async def _current(self):
+        s = self.snapshot
+        schemas, hours = await self.rest.inventory(tuple(t.name for t in s.tables), s.exclusions)
+        expected = {t.name: t.schema_digest for t in s.tables} | {e.name: e.schema_digest for e in s.exclusions}
+        if schemas != expected or hours != s.time_travel_hours:
+            raise _fail('snapshot_drift')
 
-    @staticmethod
-    async def _metadata_request(client: httpx.AsyncClient, project: str, dataset: str, table: str) -> dict[str, object]:
-        response = await client.get(f"/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}", follow_redirects=False)
-        if response.status_code >= 400:
-            raise _fail("analytics_provider_error")
-        try:
-            payload = response.json()
-        except ValueError:
-            raise _fail("analytics_response_invalid") from None
-        if not isinstance(payload, dict):
-            raise _fail("analytics_response_invalid")
-        return payload
-
-    async def _request(self, client: httpx.AsyncClient, method: str, path: str, **kwargs: object) -> dict[str, object]:
-        try:
-            response = await client.request(method, path, follow_redirects=False, **kwargs)
-        except (httpx.HTTPError, asyncio.TimeoutError):
-            raise _fail("analytics_transport_unknown") from None
-        if response.status_code in {301, 302, 303, 307, 308} or response.next_request is not None:
-            raise _fail("analytics_redirect_rejected")
-        if len(response.content) > MAX_RESPONSE_BYTES:
-            raise _fail("analytics_response_too_large")
-        if response.status_code == 409:
-            raise _fail("analytics_provider_conflict")
-        if response.status_code >= 400:
-            raise _fail("analytics_provider_error")
-        try:
-            payload = response.json()
-        except ValueError:
-            raise _fail("analytics_response_invalid") from None
-        if not isinstance(payload, dict):
-            raise _fail("analytics_response_invalid")
-        return payload
-
-    async def _metadata(self, client: httpx.AsyncClient, table: str) -> AnalyticsTable:
-        payload = await self._request(client, "GET", f"/bigquery/v2/projects/{self.project}/datasets/{self.dataset}/tables/{table}")
-        ref = payload.get("tableReference", {})
-        if payload.get("type") != "TABLE" or not isinstance(ref, dict) or (ref.get("projectId"), ref.get("datasetId"), ref.get("tableId")) != (self.project, self.dataset, table):
-            raise _fail("analytics_table_binding_invalid")
-        _validate_schema(payload.get("schema"))
-        if "streamingBuffer" in payload:
-            raise _fail("analytics_streaming_buffer_present")
-        return AnalyticsTable(table, _digest(payload["schema"]), False)
-
-    async def _validate_current_snapshot(self, client: httpx.AsyncClient) -> None:
-        for expected in self.snapshot.tables:
-            current = await self._metadata(client, expected.name)
-            if current.schema_digest != expected.schema_digest or current.streaming_buffer:
-                raise _fail("analytics_snapshot_drift")
-
-    async def capture_snapshot(self) -> AnalyticsSnapshot:
-        self.freeze.validate(self.snapshot.user_id)
-        async with httpx.AsyncClient(base_url=ORIGIN, headers={"Authorization": f"Bearer {self._token}"},
-                                     timeout=self.timeout_seconds, follow_redirects=False, trust_env=False,
-                                     transport=self.transport) as client:
-            tables = tuple([await self._metadata(client, table) for table in self.reviewed_tables])
-        if any(t.streaming_buffer for t in tables):
-            raise _fail("analytics_streaming_buffer_present")
-        current = AnalyticsSnapshot(self.snapshot.request_id, self.snapshot.user_id, self.project, self.dataset,
-                                    tables, self.freeze.freeze_id, "", datetime.now(timezone.utc).isoformat())
-        return AnalyticsSnapshot(**{**current.__dict__, "snapshot_digest": _digest(current.payload())})
-
-    @staticmethod
-    def _validate_job_config(job: dict[str, object], body: dict[str, object]) -> None:
-        observed_cfg = job.get("configuration", {})
-        expected_cfg = body.get("configuration", {})
-        observed = observed_cfg.get("query", {}) if isinstance(observed_cfg, dict) else {}
-        expected = expected_cfg.get("query", {}) if isinstance(expected_cfg, dict) else {}
-        if (not isinstance(observed_cfg, dict) or observed_cfg.get("dryRun") is not expected_cfg.get("dryRun")
-                or not isinstance(observed, dict) or any(observed.get(key) != value for key, value in expected.items())):
-            raise _fail("analytics_job_config_mismatch")
-
-    async def _job(self, client: httpx.AsyncClient, table: str, operation: str, query: str, *, dry_run: bool, reviewed_count: int | None = None, max_bytes_billed: int | None = None, job_id: str | None = None) -> dict[str, object]:
-        job_id = job_id or self._job_id(table, operation)
-        body = self._job_body(query, job_id, dry_run=dry_run, reviewed_count=reviewed_count, max_bytes_billed=max_bytes_billed)
-        try:
-            job = await self._request(client, "POST", f"/bigquery/v2/projects/{self.project}/jobs", json=body)
-        except AnalyticsProviderUnavailable as exc:
-            if str(exc) != "analytics_provider_conflict":
-                raise
-            job = await self._request(client, "GET", f"/bigquery/v2/projects/{self.project}/jobs/{job_id}?location={LOCATION}")
-        ref = job.get("jobReference", {})
-        if not isinstance(ref, dict) or ref.get("jobId") != job_id or ref.get("projectId") != self.project:
-            raise _fail("analytics_job_binding_invalid")
-        self._validate_job_config(job, body)
-        for _ in range(MAX_POLLS):
-            status = job.get("status", {})
-            state = status.get("state") if isinstance(status, dict) else None
-            if state == "DONE":
-                if job.get("status", {}).get("errorResult"):
-                    raise _fail("analytics_job_failed")
-                return job
-            if state not in {"PENDING", "RUNNING"}:
-                raise _fail("analytics_job_state_invalid")
-            job = await self._request(client, "GET", f"/bigquery/v2/projects/{self.project}/jobs/{job_id}?location={LOCATION}")
-        raise _fail("analytics_job_timeout")
-
-    async def _query_results(self, client: httpx.AsyncClient, job: dict[str, object], job_id: str) -> dict[str, object]:
-        ref = job.get("jobReference", {})
-        if not isinstance(ref, dict) or ref.get("projectId") != self.project or ref.get("location") != LOCATION or ref.get("jobId") != job_id:
-            raise _fail("analytics_job_binding_invalid")
-        result = await self._request(
-            client, "GET", f"/bigquery/v2/projects/{self.project}/queries/{job_id}?location={LOCATION}&maxResults=1",
-        )
-        result_ref = result.get("jobReference", {})
-        if result.get("jobComplete") is not True or not isinstance(result_ref, dict) or any(result_ref.get(k) != ref.get(k) for k in ("projectId", "location", "jobId")):
-            raise _fail("analytics_query_result_invalid")
-        if result.get("totalRows") != "1":
-            raise _fail("analytics_query_result_invalid")
-        schema = result.get("schema", {})
-        fields = schema.get("fields", []) if isinstance(schema, dict) else []
-        rows = result.get("rows")
-        if not isinstance(fields, list) or len(fields) != 1 or not isinstance(fields[0], dict) or fields[0].get("name") != "remaining" or fields[0].get("type") != "INTEGER" or not isinstance(rows, list) or len(rows) != 1:
-            raise _fail("analytics_query_result_invalid")
-        return result
-
-    async def delete_account_data(self, *, user_id: uuid.UUID | str, idempotency_key: str) -> dict[str, object]:
-        actual = _canonical_uuid(user_id)
-        if actual != self.snapshot.user_id or type(idempotency_key) is not str or not idempotency_key:
-            raise _fail("analytics_subject_mismatch")
-        self.freeze.validate(actual)
-        async with asyncio.timeout(min(120.0, self.timeout_seconds * (2 * len(self.reviewed_tables) + 1))):
-            if idempotency_key != f"c436:{self.snapshot.request_id}":
-                raise _fail("analytics_idempotency_key_invalid")
-            async with httpx.AsyncClient(base_url=ORIGIN, headers={"Authorization": f"Bearer {self._token}"},
-                                         timeout=self.timeout_seconds, follow_redirects=False, trust_env=False,
-                                         transport=self.transport) as client:
-                await self._validate_current_snapshot(client)
-                affected = 0
-                for table in self.reviewed_tables:
-                    self.freeze.validate(actual)
-                    expected_count = next(t.preview_count for t in self.snapshot.tables if t.name == table)
-                    job = await self._job(client, table, "delete", self._query(table, count=False, reviewed_count=expected_count), dry_run=False, reviewed_count=expected_count, max_bytes_billed=next(t.max_bytes_billed for t in self.snapshot.tables if t.name == table))
-                    stats = job.get("statistics", {}).get("query", {}).get("dmlStats", {})
-                    raw = stats.get("deletedRowCount") if isinstance(stats, dict) else None
-                    if not isinstance(raw, str) or not raw.isdigit() or int(raw) > MAX_ROWS:
-                        raise _fail("analytics_affected_count_invalid")
-                    affected += int(raw)
-                    if affected > MAX_ROWS:
-                        raise _fail("analytics_affected_count_invalid")
-                    readback_id = self._job_id(table, "readback") + "_" + uuid.uuid4().hex[:12]
-                    readback_job = await self._job(client, table, "readback", self._query(table, count=True), dry_run=False, job_id=readback_id, max_bytes_billed=next(t.max_bytes_billed for t in self.snapshot.tables if t.name == table))
-                    readback = await self._query_results(client, readback_job, readback_id)
-                    rows = readback.get("rows")
-                    if not isinstance(rows, list) or len(rows) != 1:
-                        raise _fail("analytics_readback_invalid")
-                    fields = rows[0].get("f") if isinstance(rows[0], dict) else None
-                    value = fields[0].get("v") if isinstance(fields, list) and fields and isinstance(fields[0], dict) else None
-                    if value != "0":
-                        raise _fail("analytics_readback_nonzero")
-                return {"confirmed": True, "provider": "analytics", "subject": actual,
-                        "scope": list(self.reviewed_tables), "readback": True,
-                        "retention_disclosure": "bigquery_time_travel_and_fail_safe_retention; analytics scope is not permanent byte erasure",
-                        "affected_rows": affected,
-                        "snapshot_digest": self.snapshot.snapshot_digest}
+    @_bounded
+    async def delete_account_data(self, *, user_id, idempotency_key):
+        s, rest = self.snapshot, self.rest
+        if _uuid(user_id) != s.user_id or idempotency_key != 'c436:' + s.request_id:
+            raise _fail('subject_or_request_mismatch')
+        s.validate()
+        self.freeze.validate(s.user_id)
+        if rest.client.is_closed:
+            rest.client = httpx.AsyncClient(**rest._client_options)
+        async with rest.client:
+            await self._current()
+            first = s.tables[0]
+            # A stable read-only job locks this request to one plan before any DML.
+            # Its rows are never used as fresh evidence on retries.
+            await rest.job(rest.body(_job_id(s.request_id, 'plan'), rest.query(first.name, s.user_id),
+                                     first.max_bytes_billed, plan=s.snapshot_digest))
+            affected = 0
+            for t in s.tables:
+                s.validate()
+                self.freeze.validate(s.user_id)
+                job = await rest.job(rest.body(_job_id(s.request_id, 'delete', t.name),
+                                               rest.query(t.name, s.user_id, count=t.preview_count),
+                                               t.max_bytes_billed, plan=s.snapshot_digest))
+                stats = job.get('statistics', {}).get('query', {}) if isinstance(job.get('statistics'), dict) else {}
+                deleted = _decimal(stats.get('numDmlAffectedRows') if isinstance(stats, dict) else None, MAX_ROWS)
+                if deleted != t.preview_count:
+                    raise _fail('reviewed_count_changed')
+                affected += deleted
+            # Reread every table after every delete, not stale cached COUNT jobs.
+            for t in s.tables:
+                count = await rest.count(rest.body('chirp_verify_' + uuid.uuid4().hex,
+                                                  rest.query(t.name, s.user_id), t.max_bytes_billed,
+                                                  plan=s.snapshot_digest))
+                if count != 0:
+                    raise _fail('readback_nonzero')
+            await self._current()
+            s.validate()
+            self.freeze.validate(s.user_id)
+        return {'confirmed': True, 'provider': 'analytics', 'subject': s.user_id,
+                'scope': [t.name for t in s.tables], 'readback': True,
+                'retained_with_reason': ['bigquery_time_travel', 'bigquery_fail_safe'],
+                'time_travel_hours': s.time_travel_hours, 'fail_safe_days': 7,
+                'excluded_scope': [e.name for e in s.exclusions],
+                'affected_rows': affected, 'snapshot_digest': s.snapshot_digest}
