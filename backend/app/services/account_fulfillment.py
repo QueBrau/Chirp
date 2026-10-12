@@ -15,13 +15,15 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.services.account_cleanup import cleanup_local_account
+from app.services.account_cleanup import RETENTION_REASONS, cleanup_local_account
 
 PROVIDER_STEPS = ("payment_provider", "media_storage", "email_logs_backups", "firebase_auth")
 SAFE_PROVIDER_ERRORS = frozenset({
     "provider_not_configured", "provider_confirmation_missing", "provider_error",
     "firebase_delete_failed", "firebase_readback_failed", "firebase_delete_not_confirmed",
 })
+RETENTION_RECEIPT_CODES = frozenset(RETENTION_REASONS)
+MAX_RETENTION_RECEIPT_CODES = 8
 
 
 class ProviderUnavailable(RuntimeError):
@@ -29,7 +31,7 @@ class ProviderUnavailable(RuntimeError):
 
 
 class DeletionProvider(Protocol):
-    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, str]: ...
+    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]: ...
 
 
 class UnconfiguredProvider:
@@ -80,6 +82,18 @@ def _now() -> datetime:
 
 def _key(request_id: uuid.UUID, step: str) -> str:
     return f"account-deletion:{request_id}:{step}"
+
+
+def _retention_receipt(result: dict[str, object]) -> list[str]:
+    """Validate optional fixed retention acknowledgments from a provider."""
+    raw = result.get("retained_with_reason", [])
+    if not isinstance(raw, list) or len(raw) > MAX_RETENTION_RECEIPT_CODES:
+        raise ProviderUnavailable("provider_confirmation_missing")
+    if any(not isinstance(code, str) or code not in RETENTION_RECEIPT_CODES for code in raw):
+        raise ProviderUnavailable("provider_confirmation_missing")
+    if len(set(raw)) != len(raw):
+        raise ProviderUnavailable("provider_confirmation_missing")
+    return list(raw)
 
 
 async def prepare_deletion_plan(session: AsyncSession, request: models.AccountDataRequest) -> list[models.AccountFulfillmentStep]:
@@ -199,6 +213,7 @@ async def run_deletion(
                 or result.get("readback") is not True
             ):
                 raise ProviderUnavailable("provider_confirmation_missing")
+            retained_with_reason = _retention_receipt(result)
         except Exception as exc:
             code = str(exc) if isinstance(exc, ProviderUnavailable) else "provider_error"
             step_status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
@@ -237,7 +252,8 @@ async def run_deletion(
         ).values(status="succeeded", lease_token=None, lease_expires_at=None,
                  provider_ref={"confirmed": True, "provider": result["provider"],
                                "subject": result["subject"], "scope": result["scope"],
-                               "readback": True}, completed_at=_now()))
+                               "readback": True,
+                               "retained_with_reason": retained_with_reason}, completed_at=_now()))
         if fenced.rowcount != 1:
             await session.rollback()
             return DeletionRun("blocked", tuple(completed), step_key)
@@ -253,7 +269,16 @@ async def run_deletion(
         return DeletionRun("blocked", tuple(completed), None)
     # Apply the approved local cleanup boundary; shared/history rows remain.
     cleanup = await cleanup_local_account(session, user.id)
-    request.retention_reasons = list(cleanup["retained"].values())
+    durable_steps = list((await session.scalars(select(models.AccountFulfillmentStep).where(
+        models.AccountFulfillmentStep.request_id == request.id,
+    ).order_by(models.AccountFulfillmentStep.step_key))).all())
+    retention_reasons = dict(cleanup["retained"])
+    for durable_step in durable_steps:
+        receipt = durable_step.provider_ref or {}
+        for code in receipt.get("retained_with_reason", []):
+            if code in RETENTION_REASONS:
+                retention_reasons[code] = RETENTION_REASONS[code]
+    request.retention_reasons = list(retention_reasons.values())
     await session.flush()
     # Keep shared organization, authored encrypted message, legal, safety, and
     # append-only financial rows. Remove direct identity credentials only.

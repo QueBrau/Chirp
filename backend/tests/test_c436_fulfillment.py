@@ -2,6 +2,7 @@
 
 import uuid
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -13,17 +14,21 @@ from tests.conftest import ApiUser
 from app import models
 from app.db import get_session_factory
 from app.services.account_fulfillment import FirebaseProvider, PROVIDER_STEPS, run_deletion
-from app.services.account_cleanup import cleanup_local_account
+from app.services.account_cleanup import RETENTION_REASONS, cleanup_local_account
 
 
 class ConfirmingProvider:
-    def __init__(self, provider_key: str = "synthetic") -> None:
+    def __init__(self, provider_key: str = "synthetic", retained_with_reason: list[object] | None = None) -> None:
         self.provider_key = provider_key
         self.keys: list[str] = []
+        self.retained_with_reason = retained_with_reason
 
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
         self.keys.append(idempotency_key)
-        return {"confirmed": True, "provider": self.provider_key, "subject": str(user.id), "scope": [self.provider_key], "readback": True}
+        result = {"confirmed": True, "provider": self.provider_key, "subject": str(user.id), "scope": [self.provider_key], "readback": True}
+        if self.retained_with_reason is not None:
+            result["retained_with_reason"] = self.retained_with_reason
+        return result
 
 
 class StrictFalseProvider(ConfirmingProvider):
@@ -104,6 +109,56 @@ async def test_deletion_journal_blocks_without_adapters_then_retries_idempotentl
 
         repeat = await run_deletion(session, request.id, user, {key: StrictFalseProvider(key) for key in PROVIDER_STEPS})
         assert repeat.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_retention_receipts_survive_resumed_steps_and_final_status(client: AsyncClient, make_user) -> None:
+    owner: ApiUser = await make_user("Retention receipt owner")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert request is not None and user is not None
+        providers = provider_set()
+        providers[PROVIDER_STEPS[0]] = ConfirmingProvider(PROVIDER_STEPS[0], ["provider_retention"])
+        providers[PROVIDER_STEPS[1]] = FailOnceProvider(PROVIDER_STEPS[1])
+        first = await run_deletion(session, request.id, user, providers)
+        assert first.status == "blocked"
+        resumed = provider_set()
+        resumed[PROVIDER_STEPS[1]] = providers[PROVIDER_STEPS[1]]
+        second = await run_deletion(session, request.id, user, resumed)
+        assert second.status == "completed"
+        await session.refresh(request)
+        first_step = (await session.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request.id,
+            models.AccountFulfillmentStep.step_key == PROVIDER_STEPS[0],
+        ))).one()
+        assert first_step.provider_ref["retained_with_reason"] == ["provider_retention"]
+        assert RETENTION_REASONS["provider_retention"] in request.retention_reasons
+        assert request.retention_reasons.count(RETENTION_REASONS["provider_retention"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retained", [["provider-secret-sentinel"], [{"code": "provider_retention"}], ["provider_retention", "provider_retention"]])
+async def test_invalid_retention_receipts_fail_closed_without_persisting_details(client: AsyncClient, make_user, retained) -> None:
+    owner: ApiUser = await make_user("Invalid retention receipt")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert request is not None and user is not None
+        providers = provider_set()
+        providers[PROVIDER_STEPS[0]] = ConfirmingProvider(PROVIDER_STEPS[0], retained)
+        result = await run_deletion(session, request.id, user, providers)
+        assert result.status == "blocked"
+        await session.refresh(request)
+        step = (await session.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request.id,
+            models.AccountFulfillmentStep.step_key == PROVIDER_STEPS[0],
+        ))).one()
+        assert step.status == "manual_review"
+        assert step.provider_ref is None
+        assert "provider-secret-sentinel" not in json.dumps(request.provider_steps)
 
 
 @pytest.mark.asyncio
