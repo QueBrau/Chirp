@@ -36,6 +36,8 @@ PROVIDER_RETENTION_CODES = {
     "firebase_auth": frozenset(),
 }
 MAX_RETENTION_RECEIPT_CODES = 3
+MAX_RECEIPT_SCOPES = 16
+MAX_RECEIPT_SCOPE_LENGTH = 512
 FIREBASE_CALL_TIMEOUT_SECONDS = 30.0
 
 
@@ -134,6 +136,33 @@ def _retention_receipt(step_key: str, result: dict[str, object]) -> list[str]:
     return list(raw)
 
 
+def validate_provider_receipt(step_key: str, subject: uuid.UUID, result: object) -> list[str]:
+    """Validate fresh and durable confirmation against the exact account and step.
+
+    Scope labels are descriptive adapter output, not independent proof of a
+    remote operation. Actual provider readback remains the adapter's contract.
+    """
+    if (
+        step_key not in PROVIDER_STEPS
+        or not isinstance(result, dict)
+        or result.get("confirmed") is not True
+        or result.get("provider") != step_key
+        or result.get("subject") != str(subject)
+        or result.get("readback") is not True
+    ):
+        raise ProviderUnavailable("provider_confirmation_missing")
+    scope = result.get("scope")
+    if (
+        not isinstance(scope, list)
+        or not 1 <= len(scope) <= MAX_RECEIPT_SCOPES
+        or any(not isinstance(item, str) or not item.strip()
+               or len(item) > MAX_RECEIPT_SCOPE_LENGTH for item in scope)
+        or len(set(scope)) != len(scope)
+    ):
+        raise ProviderUnavailable("provider_confirmation_missing")
+    return _retention_receipt(step_key, result)
+
+
 async def prepare_deletion_plan(session: AsyncSession, request: models.AccountDataRequest) -> list[models.AccountFulfillmentStep]:
     """Create the complete provider plan before any irreversible work."""
     if request.kind != "deletion":
@@ -217,7 +246,7 @@ async def run_deletion(
             # A legacy or manually altered receipt must not silently authorize
             # continuation. Validate it before invoking any later provider.
             try:
-                _retention_receipt(step_key, step.provider_ref or {})
+                validate_provider_receipt(step_key, user.id, step.provider_ref)
             except ProviderUnavailable:
                 step.status = "manual_review"
                 step.last_error = "provider_confirmation_missing"
@@ -276,18 +305,7 @@ async def run_deletion(
         await session.commit()
         try:
             result = await provider.delete_account_data(user=user, idempotency_key=step.idempotency_key)
-            if (
-                not isinstance(result, dict)
-                or result.get("confirmed") is not True
-                or result.get("provider") != step_key
-                or result.get("subject") != str(user.id)
-                or not isinstance(result.get("scope"), list)
-                or not result["scope"]
-                or not all(isinstance(scope, str) and scope for scope in result["scope"])
-                or result.get("readback") is not True
-            ):
-                raise ProviderUnavailable("provider_confirmation_missing")
-            retained_with_reason = _retention_receipt(step_key, result)
+            retained_with_reason = validate_provider_receipt(step_key, user.id, result)
         except Exception as exc:
             code = str(exc) if isinstance(exc, ProviderUnavailable) else "provider_error"
             step_status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
@@ -343,12 +361,24 @@ async def run_deletion(
         return DeletionRun("blocked", tuple(completed), None)
     durable_steps = list((await session.scalars(select(models.AccountFulfillmentStep).where(
         models.AccountFulfillmentStep.request_id == request.id,
-    ).order_by(models.AccountFulfillmentStep.step_key).execution_options(populate_existing=True))).all())
+    ).order_by(models.AccountFulfillmentStep.step_key).execution_options(populate_existing=True).with_for_update())).all())
+    if {step.step_key for step in durable_steps} != set((*PROVIDER_STEPS, "database_tombstone")):
+        request.status = "blocked"
+        request.failure_code = "provider_step_incomplete"
+        request.fulfillment_lease_token = None
+        request.fulfillment_lease_expires_at = None
+        await session.commit()
+        return DeletionRun("blocked", tuple(completed), None)
     provider_retention_codes: dict[str, list[str]] = {}
     for durable_step in durable_steps:
-        receipt = durable_step.provider_ref or {}
+        if durable_step.step_key == "database_tombstone":
+            continue
         try:
-            provider_retention_codes[durable_step.step_key] = _retention_receipt(durable_step.step_key, receipt)
+            if durable_step.status != "succeeded":
+                raise ProviderUnavailable("provider_confirmation_missing")
+            provider_retention_codes[durable_step.step_key] = validate_provider_receipt(
+                durable_step.step_key, user.id, durable_step.provider_ref,
+            )
         except ProviderUnavailable:
             request.status = "blocked"
             request.failure_code = "provider_step_incomplete"
