@@ -191,6 +191,22 @@ async def run_deletion(
             models.AccountFulfillmentStep.step_key == step_key,
         ).with_for_update())).one()
         if step.status == "succeeded":
+            # A legacy or manually altered receipt must not silently authorize
+            # continuation. Validate it before invoking any later provider.
+            try:
+                _retention_receipt(step_key, step.provider_ref or {})
+            except ProviderUnavailable:
+                step.status = "manual_review"
+                step.last_error = "provider_confirmation_missing"
+                provider_steps = dict(request.provider_steps or {})
+                provider_steps[step_key] = "manual_review"
+                request.status = "blocked"
+                request.failure_code = "provider_step_incomplete"
+                request.provider_steps = provider_steps
+                request.fulfillment_lease_token = None
+                request.fulfillment_lease_expires_at = None
+                await session.commit()
+                return DeletionRun("blocked", tuple(completed), step_key)
             completed.append(step_key)
             continue
         provider = providers.get(step_key)

@@ -209,10 +209,13 @@ async def test_durable_invalid_retention_receipt_blocks_before_local_cleanup(cli
         request = await session.get(models.AccountDataRequest, request_id)
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert request is not None and user is not None
-        resumed = await run_deletion(session, request.id, user, providers)
+        fresh_providers = provider_set()
+        resumed = await run_deletion(session, request.id, user, fresh_providers)
         assert resumed.status == "blocked"
         assert resumed.failed_step == "payment_provider"
-        assert not providers["media_storage"].keys
+        assert not fresh_providers["payment_provider"].keys
+        assert not fresh_providers["media_storage"].keys
+        assert "provider-secret-sentinel" not in json.dumps(request.provider_steps)
         await session.refresh(user)
         assert user.firebase_uid == owner.firebase_uid
 
