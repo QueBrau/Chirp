@@ -22,6 +22,20 @@ SAFE_PROVIDER_ERRORS = frozenset({
     "provider_not_configured", "provider_confirmation_missing", "provider_error",
     "firebase_delete_failed", "firebase_readback_failed", "firebase_delete_not_confirmed",
 })
+PROVIDER_RETENTION_REASONS = {
+    "stripe_deleted_customer_history": "Stripe's deleted-customer history remains subject to provider retention; expiry is not measured",
+    "gcs_soft_deleted_versions": "Object-storage soft-deleted versions remain subject to provider retention; expiry is not measured",
+    "email_delivery_records": "Email-provider delivery records remain subject to provider retention; expiry is not measured",
+    "operational_logs": "Operational logs remain subject to provider retention; expiry is not measured",
+    "database_backups": "Database backups remain subject to provider retention; expiry is not measured",
+}
+PROVIDER_RETENTION_CODES = {
+    "payment_provider": frozenset({"stripe_deleted_customer_history"}),
+    "media_storage": frozenset({"gcs_soft_deleted_versions"}),
+    "email_logs_backups": frozenset({"email_delivery_records", "operational_logs", "database_backups"}),
+    "firebase_auth": frozenset(),
+}
+MAX_RETENTION_RECEIPT_CODES = 3
 
 
 class ProviderUnavailable(RuntimeError):
@@ -29,7 +43,7 @@ class ProviderUnavailable(RuntimeError):
 
 
 class DeletionProvider(Protocol):
-    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, str]: ...
+    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]: ...
 
 
 class UnconfiguredProvider:
@@ -80,6 +94,21 @@ def _now() -> datetime:
 
 def _key(request_id: uuid.UUID, step: str) -> str:
     return f"account-deletion:{request_id}:{step}"
+
+
+def _retention_receipt(step_key: str, result: dict[str, object]) -> list[str]:
+    """Validate optional fixed retention acknowledgments from a provider."""
+    if not isinstance(result, dict):
+        raise ProviderUnavailable("provider_confirmation_missing")
+    raw = result.get("retained_with_reason", [])
+    if not isinstance(raw, list) or len(raw) > MAX_RETENTION_RECEIPT_CODES:
+        raise ProviderUnavailable("provider_confirmation_missing")
+    allowed = PROVIDER_RETENTION_CODES.get(step_key, frozenset())
+    if any(not isinstance(code, str) or code not in allowed for code in raw):
+        raise ProviderUnavailable("provider_confirmation_missing")
+    if len(set(raw)) != len(raw):
+        raise ProviderUnavailable("provider_confirmation_missing")
+    return list(raw)
 
 
 async def prepare_deletion_plan(session: AsyncSession, request: models.AccountDataRequest) -> list[models.AccountFulfillmentStep]:
@@ -162,6 +191,22 @@ async def run_deletion(
             models.AccountFulfillmentStep.step_key == step_key,
         ).with_for_update())).one()
         if step.status == "succeeded":
+            # A legacy or manually altered receipt must not silently authorize
+            # continuation. Validate it before invoking any later provider.
+            try:
+                _retention_receipt(step_key, step.provider_ref or {})
+            except ProviderUnavailable:
+                step.status = "manual_review"
+                step.last_error = "provider_confirmation_missing"
+                provider_steps = dict(request.provider_steps or {})
+                provider_steps[step_key] = "manual_review"
+                request.status = "blocked"
+                request.failure_code = "provider_step_incomplete"
+                request.provider_steps = provider_steps
+                request.fulfillment_lease_token = None
+                request.fulfillment_lease_expires_at = None
+                await session.commit()
+                return DeletionRun("blocked", tuple(completed), step_key)
             completed.append(step_key)
             continue
         provider = providers.get(step_key)
@@ -199,6 +244,7 @@ async def run_deletion(
                 or result.get("readback") is not True
             ):
                 raise ProviderUnavailable("provider_confirmation_missing")
+            retained_with_reason = _retention_receipt(step_key, result)
         except Exception as exc:
             code = str(exc) if isinstance(exc, ProviderUnavailable) else "provider_error"
             step_status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
@@ -237,7 +283,8 @@ async def run_deletion(
         ).values(status="succeeded", lease_token=None, lease_expires_at=None,
                  provider_ref={"confirmed": True, "provider": result["provider"],
                                "subject": result["subject"], "scope": result["scope"],
-                               "readback": True}, completed_at=_now()))
+                               "readback": True,
+                               "retained_with_reason": retained_with_reason}, completed_at=_now()))
         if fenced.rowcount != 1:
             await session.rollback()
             return DeletionRun("blocked", tuple(completed), step_key)
@@ -251,9 +298,28 @@ async def run_deletion(
     ).execution_options(populate_existing=True).with_for_update())).one_or_none()
     if request is None or request.status != "processing" or request.user_id != user.id or request.fulfillment_lease_token != request_lease or request.fulfillment_lease_expires_at is None or request.fulfillment_lease_expires_at <= _now():
         return DeletionRun("blocked", tuple(completed), None)
+    durable_steps = list((await session.scalars(select(models.AccountFulfillmentStep).where(
+        models.AccountFulfillmentStep.request_id == request.id,
+    ).order_by(models.AccountFulfillmentStep.step_key).execution_options(populate_existing=True))).all())
+    provider_retention_codes: dict[str, list[str]] = {}
+    for durable_step in durable_steps:
+        receipt = durable_step.provider_ref or {}
+        try:
+            provider_retention_codes[durable_step.step_key] = _retention_receipt(durable_step.step_key, receipt)
+        except ProviderUnavailable:
+            request.status = "blocked"
+            request.failure_code = "provider_step_incomplete"
+            request.fulfillment_lease_token = None
+            request.fulfillment_lease_expires_at = None
+            await session.commit()
+            return DeletionRun("blocked", tuple(completed), durable_step.step_key)
     # Apply the approved local cleanup boundary; shared/history rows remain.
     cleanup = await cleanup_local_account(session, user.id)
-    request.retention_reasons = list(cleanup["retained"].values())
+    retention_reasons = dict(cleanup["retained"])
+    for retained_with_reason in provider_retention_codes.values():
+        for code in retained_with_reason:
+            retention_reasons[code] = PROVIDER_RETENTION_REASONS[code]
+    request.retention_reasons = list(retention_reasons.values())
     await session.flush()
     # Keep shared organization, authored encrypted message, legal, safety, and
     # append-only financial rows. Remove direct identity credentials only.
