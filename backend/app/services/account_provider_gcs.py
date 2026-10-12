@@ -10,18 +10,19 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import time
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Iterable, Protocol
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.services.account_fulfillment import ProviderUnavailable
 
 
 PREFIXES = ("tmp/", "posts/", "avatars/")
@@ -29,9 +30,10 @@ MAX_OBJECTS = 10_000
 MAX_POSTS = 10_000
 MAX_MEDIA_VALUES = 64
 MAX_SECONDS = 120.0
+DISABLE_BUCKET_METADATA = "DISABLE_GCS_PYTHON_CLIENT_OTEL_BUCKET_METADATA"
 
 
-class MediaProviderUnavailable(RuntimeError):
+class MediaProviderUnavailable(ProviderUnavailable):
     pass
 
 
@@ -41,7 +43,7 @@ class FreezeReceipt:
     bucket: str
     freeze_id: str
     expires_at: float
-    verified: bool = True
+    verified: bool = False
 
     def validate(self, user_id: UUID | str, bucket: str) -> None:
         if (
@@ -49,11 +51,37 @@ class FreezeReceipt:
             or self.verified is not True
             or str(self.user_id) != str(user_id)
             or self.bucket != bucket
-            or not self.freeze_id
+            or not isinstance(self.freeze_id, str)
+            or not 1 <= len(self.freeze_id) <= 128
+            or isinstance(self.expires_at, bool)
+            or not isinstance(self.expires_at, (int, float))
             or not math.isfinite(self.expires_at)
             or self.expires_at <= time.time()
         ):
             raise MediaProviderUnavailable("media_freeze_invalid")
+
+
+@dataclass(frozen=True)
+class MediaRetentionReview:
+    """Explicit operator review of bucket policy, not automatic policy discovery."""
+
+    bucket: str
+    versioning_enabled: bool
+    soft_delete_seconds: int
+    verified: bool = False
+
+    def receipt_codes(self, bucket: str) -> list[str]:
+        if (
+            self.verified is not True
+            or self.bucket != bucket
+            or self.versioning_enabled is not False
+            or type(self.soft_delete_seconds) is not int
+            or not 0 <= self.soft_delete_seconds <= 2**31 - 1
+        ):
+            # This live-object adapter cannot inventory or erase noncurrent
+            # versions. Unknown/unreviewed policies never imply full erasure.
+            raise MediaProviderUnavailable("media_retention_review_required")
+        return ["gcs_soft_deleted_versions"] if self.soft_delete_seconds else []
 
 
 @dataclass(frozen=True)
@@ -91,6 +119,7 @@ class MediaMetadata:
 
 
 class MediaReader(Protocol):
+    bucket_name: str
     def list(self, prefix: str, *, deadline: float) -> Iterable[Any]: ...
     def read(self, name: str, *, deadline: float) -> MediaMetadata | None: ...
     def delete(self, name: str, generation: str, *, deadline: float) -> None: ...
@@ -108,41 +137,42 @@ def _collect(reader: MediaReader, prefix: str, deadline: float, limit: int) -> l
 
 
 async def _list_bounded(reader: MediaReader, prefix: str, *, deadline: float, limit: int) -> list[Any]:
-    task = asyncio.create_task(asyncio.to_thread(_collect, reader, prefix, deadline, limit))
+    return await _thread_call(_collect, reader, prefix, deadline, limit, deadline=deadline, error="media_list_failed")
+
+
+async def _thread_call(operation: Any, *args: Any, deadline: float, error: str, **kwargs: Any) -> Any:
+    # A running SDK thread cannot be cancelled. Drain it before returning an
+    # uncertain result; never leave a delete running behind a released lease.
+    timeout = _remaining(deadline)
+    task = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
     try:
-        return await asyncio.wait_for(asyncio.shield(task), timeout=_remaining(deadline))
+        return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
     except MediaProviderUnavailable:
         raise
-    except asyncio.TimeoutError:
-        try:
-            await task
-        except Exception:
-            pass
+    except (asyncio.TimeoutError, asyncio.CancelledError) as original:
+        # Repeated cancellation must also not detach the worker. SDK calls use
+        # finite request timeouts and no retries; remote mutation can nevertheless
+        # have succeeded even when its response was lost.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if task.done() and not task.cancelled():
+            task.exception()  # consume a sanitized/remote failure without logging it
+        if isinstance(original, asyncio.CancelledError):
+            raise original
         raise MediaProviderUnavailable("media_deadline_exceeded") from None
-    except asyncio.CancelledError:
-        await asyncio.shield(task)
-        raise
     except Exception:
-        raise MediaProviderUnavailable("media_list_failed") from None
+        raise MediaProviderUnavailable(error) from None
 
 
 async def _reader_call(reader: MediaReader, operation: str, *args: Any, deadline: float) -> Any:
-    task = asyncio.create_task(asyncio.to_thread(getattr(reader, operation), *args, deadline=deadline))
-    try:
-        return await asyncio.wait_for(asyncio.shield(task), timeout=_remaining(deadline))
-    except MediaProviderUnavailable:
-        raise
-    except asyncio.TimeoutError:
-        try:
-            await task
-        except Exception:
-            pass
-        raise MediaProviderUnavailable("media_deadline_exceeded") from None
-    except asyncio.CancelledError:
-        await asyncio.shield(task)
-        raise
-    except Exception:
-        raise MediaProviderUnavailable(f"media_{operation}_failed") from None
+    from functools import partial
+    return await _thread_call(partial(getattr(reader, operation), deadline=deadline), *args,
+                              deadline=deadline, error=f"media_{operation}_failed")
 
 
 def _digest(payload: Any) -> str:
@@ -157,7 +187,9 @@ def _remaining(deadline: float) -> float:
 
 
 def _generation(value: Any) -> str:
-    if isinstance(value, bool) or not isinstance(value, (str, int)) or not str(value).isdigit() or int(value) <= 0:
+    if (isinstance(value, bool) or not isinstance(value, (str, int))
+            or not str(value).isascii() or not 1 <= len(str(value)) <= 20
+            or not str(value).isdigit() or int(value) <= 0):
         raise MediaProviderUnavailable("media_generation_invalid")
     return str(value)
 
@@ -178,6 +210,8 @@ def _owned_name(name: str, user_id: UUID | str) -> bool:
         canonical = str(UUID(str(user_id)))
     except (ValueError, TypeError, AttributeError):
         return False
+    if not isinstance(name, str) or len(name.encode("utf-8")) > 1024:
+        return False
     parts = name.split("/", 2)
     return len(parts) == 3 and parts[1] == canonical and bool(parts[2]) and parts[0] + "/" in PREFIXES
 
@@ -185,7 +219,13 @@ def _owned_name(name: str, user_id: UUID | str) -> bool:
 def _parse_url(value: str, bucket: str) -> str | None:
     if not isinstance(value, str):
         return None
-    path = value.split("?", 1)[0]
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or parsed.netloc not in {"storage.googleapis.com", "storage.cloud.google.com"}:
+        return None
+    path = f"https://{parsed.netloc}{parsed.path}"
     prefixes = (
         f"https://storage.googleapis.com/{bucket}/",
         f"https://storage.cloud.google.com/{bucket}/",
@@ -194,7 +234,7 @@ def _parse_url(value: str, bucket: str) -> str | None:
     for prefix in prefixes:
         if path.startswith(prefix):
             suffix = path[len(prefix):]
-            return unquote(suffix) if "storage/v1/b/" in prefix else suffix
+            return unquote(suffix)
     return None
 
 
@@ -235,9 +275,11 @@ async def _owned_references(session: AsyncSession, user_id: UUID, bucket: str) -
     if len(foreign_posts) > MAX_POSTS:
         raise MediaProviderUnavailable("media_foreign_reference_cap_reached")
     for values in foreign_posts:
+        if values is not None and len(values) > MAX_MEDIA_VALUES:
+            raise MediaProviderUnavailable("media_foreign_reference_cap_reached")
         for value in values or []:
             foreign_name = _parse_url(value, bucket)
-            if foreign_name in names:
+            if foreign_name is not None and _owned_name(foreign_name, user_id):
                 raise MediaProviderUnavailable("media_reference_foreign_owner")
     foreign_avatars = (await session.execute(
         select(models.User.avatar_url)
@@ -246,7 +288,7 @@ async def _owned_references(session: AsyncSession, user_id: UUID, bucket: str) -
     )).scalars().all()
     if len(foreign_avatars) > MAX_POSTS:
         raise MediaProviderUnavailable("media_foreign_reference_cap_reached")
-    if any(_parse_url(value, bucket) in names for value in foreign_avatars):
+    if any((name := _parse_url(value, bucket)) is not None and _owned_name(name, user_id) for value in foreign_avatars):
         raise MediaProviderUnavailable("media_reference_foreign_owner")
     return names
 
@@ -261,15 +303,23 @@ async def snapshot_user_media(
     max_objects: int = MAX_OBJECTS,
     deadline_seconds: float = 120.0,
 ) -> MediaSnapshot:
+    if not isinstance(bucket, str) or not bucket or getattr(reader, "bucket_name", None) != bucket:
+        raise MediaProviderUnavailable("media_reader_bucket_mismatch")
     freeze.validate(user_id, bucket)
     if isinstance(max_objects, bool) or not isinstance(max_objects, int) or not 1 <= max_objects <= MAX_OBJECTS:
         raise ValueError("media_object_cap_invalid")
     if not math.isfinite(deadline_seconds) or not 1 <= deadline_seconds <= MAX_SECONDS:
         raise ValueError("media_deadline_invalid")
-    await _owned_references(session, user_id, bucket)
     deadline = time.monotonic() + deadline_seconds
+    # DB work is bounded by the same budget; the caller owns rollback on failure.
+    async with asyncio.timeout(_remaining(deadline)):
+        exists = await session.scalar(select(models.User.id).where(models.User.id == user_id))
+        if exists is None:
+            raise MediaProviderUnavailable("media_subject_missing")
+        await _owned_references(session, user_id, bucket)
     found: dict[tuple[str, str], MediaObject] = {}
     for prefix in PREFIXES:
+        freeze.validate(user_id, bucket)
         scoped_prefix = f"{prefix}{user_id}/"
         rows = await _list_bounded(reader, scoped_prefix, deadline=deadline, limit=max_objects - len(found))
         for raw in rows:
@@ -280,6 +330,9 @@ async def snapshot_user_media(
             if len(found) > max_objects:
                 raise MediaProviderUnavailable("media_object_cap_reached")
     objects = tuple(sorted(found.values(), key=lambda item: (item.name, item.generation)))
+    if len({item.name for item in objects}) != len(objects):
+        raise MediaProviderUnavailable("media_snapshot_drift")
+    freeze.validate(user_id, bucket)
     payload = {
         "user_id": str(user_id),
         "bucket": bucket,
@@ -296,14 +349,44 @@ class GCSMediaReader:
     def __init__(self, bucket: str):
         if not isinstance(bucket, str) or not bucket or "/" in bucket:
             raise ValueError("media_bucket_invalid")
-        from app.services import storage_service
+        self._require_bounded_sdk()
+        from google.cloud import storage
         self.bucket_name = bucket
-        self._bucket = storage_service._storage_client().bucket(bucket)
+        # Keep an empty, dedicated SDK metadata cache. A shared runtime client
+        # may have cached buckets whose 404 handling queues background requests.
+        self._bucket = storage.Client().bucket(bucket)
+
+    @staticmethod
+    def _require_bounded_sdk() -> None:
+        # The SDK otherwise queues daemon bucket-metadata requests with its own
+        # default retries, outside the explicit object request deadline. Require
+        # process-start configuration; never mutate a shared process environment.
+        if os.environ.get(DISABLE_BUCKET_METADATA, "").strip().lower() not in {"1", "true", "yes", "on"}:
+            raise MediaProviderUnavailable("media_sdk_background_requests_enabled")
 
     def list(self, prefix: str, *, deadline: float) -> Iterable[Any]:
-        return self._bucket.list_blobs(prefix=prefix, timeout=_remaining(deadline), retry=None)
+        token = None
+        seen_tokens: set[str] = set()
+        while True:
+            self._require_bounded_sdk()
+            # Rebuild each request so a later page cannot reuse an expired
+            # timeout calculated before the first page.
+            iterator = self._bucket.list_blobs(
+                prefix=prefix, max_results=1000, page_size=1000, page_token=token,
+                timeout=_remaining(deadline), retry=None,
+            )
+            page = next(iterator.pages, None)
+            if page is not None:
+                yield from page
+            token = iterator.next_page_token
+            if not token:
+                return
+            if token in seen_tokens:
+                raise MediaProviderUnavailable("media_list_failed")
+            seen_tokens.add(token)
 
     def read(self, name: str, *, deadline: float) -> MediaMetadata | None:
+        self._require_bounded_sdk()
         blob = self._bucket.blob(name)
         try:
             blob.reload(timeout=_remaining(deadline), retry=None)
@@ -314,6 +397,7 @@ class GCSMediaReader:
         return MediaMetadata(str(blob.name), _generation(blob.generation))
 
     def delete(self, name: str, generation: str, *, deadline: float) -> None:
+        self._require_bounded_sdk()
         try:
             self._bucket.blob(name).delete(
                 if_generation_match=int(_generation(generation)),
@@ -331,11 +415,18 @@ class GCSMediaReader:
 class GCSMediaProvider:
     """Operator-only provider applying one verified snapshot, never auto-wired."""
 
-    def __init__(self, reader: MediaReader, *, bucket: str, snapshot: MediaSnapshot, freeze: FreezeReceipt):
+    def __init__(self, reader: MediaReader, *, bucket: str, snapshot: MediaSnapshot, freeze: FreezeReceipt,
+                 retention: MediaRetentionReview | None = None):
+        if not isinstance(bucket, str) or not bucket or getattr(reader, "bucket_name", None) != bucket:
+            raise MediaProviderUnavailable("media_reader_bucket_mismatch")
+        if not isinstance(retention, MediaRetentionReview):
+            raise MediaProviderUnavailable("media_retention_review_required")
+        retention.receipt_codes(bucket)
         self._reader = reader
         self.bucket = bucket
         self._snapshot = snapshot
         self._freeze = freeze
+        self._retention = retention
 
     def _validate_snapshot(self, user: models.User) -> None:
         try:
@@ -348,7 +439,7 @@ class GCSMediaProvider:
             raise MediaProviderUnavailable("media_snapshot_scope_invalid")
         if len(self._snapshot.objects) > MAX_OBJECTS:
             raise MediaProviderUnavailable("media_object_cap_reached")
-        pairs = {(item.name, item.generation) for item in self._snapshot.objects}
+        pairs = {item.name for item in self._snapshot.objects}
         if len(pairs) != len(self._snapshot.objects):
             raise MediaProviderUnavailable("media_snapshot_invalid")
         for item in self._snapshot.objects:
@@ -370,6 +461,7 @@ class GCSMediaProvider:
         if not isinstance(idempotency_key, str) or not idempotency_key:
             raise MediaProviderUnavailable("media_idempotency_key_invalid")
         self._validate_snapshot(user)
+        retention_codes = self._retention.receipt_codes(self.bucket)
         snapshot = self._snapshot
         freeze = self._freeze
         if not math.isfinite(deadline_seconds) or not 1 <= deadline_seconds <= MAX_SECONDS:
@@ -402,6 +494,7 @@ class GCSMediaProvider:
                 continue
             if (observed.name, observed.generation) != (item.name, item.generation):
                 raise MediaProviderUnavailable("media_generation_mismatch")
+            self._freeze.validate(user.id, self.bucket)
             await _reader_call(self._reader, "delete", item.name, item.generation, deadline=deadline)
             after = await _reader_call(self._reader, "read", item.name, deadline=deadline)
             if after is not None:
@@ -414,6 +507,7 @@ class GCSMediaProvider:
                 final[item.name] = item.generation
         if final:
             raise MediaProviderUnavailable("media_reappeared")
+        self._freeze.validate(user.id, self.bucket)
         return {
             "confirmed": True,
             "provider": "media_storage",
@@ -422,4 +516,5 @@ class GCSMediaProvider:
             "object_count": len(snapshot.objects),
             "snapshot_digest": snapshot.snapshot_digest,
             "readback": True,
+            "retained_with_reason": retention_codes,
         }
