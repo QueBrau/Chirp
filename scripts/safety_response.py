@@ -481,7 +481,13 @@ def main(argv: list[str] | None = None) -> int:
         try:
             reference = c437_receipt_reference(args.known_copy_receipt)
         except ValueError as error:
-            print(json.dumps({"complete": False, "error": str(error)}, sort_keys=True))
+            safe_errors = {
+                "known-copy receipt must be a private regular file",
+                "known-copy receipt is incomplete",
+                "known-copy receipt digest mismatch",
+            }
+            message = str(error) if str(error) in safe_errors else "invalid known-copy receipt"
+            print(json.dumps({"complete": False, "error": message}, sort_keys=True))
             return 2
         except Exception:
             print(json.dumps({"complete": False, "error": "invalid known-copy receipt"}, sort_keys=True))
