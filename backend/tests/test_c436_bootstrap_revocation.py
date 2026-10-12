@@ -88,6 +88,13 @@ async def test_bootstrap_rejects_noncurrent_old_identity(
             )
             is None
         )
+        tombstone = await session.scalar(
+            select(models.User).where(models.User.id == uuid.UUID(original.id))
+        )
+        assert tombstone is not None
+        assert tombstone.firebase_uid == f"deleted:{original.id}"
+        assert tombstone.email == f"deleted+{original.id}@invalid.chirp"
+        assert tombstone.is_ghost is True
 
 
 @pytest.mark.asyncio
