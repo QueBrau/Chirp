@@ -19,9 +19,12 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app import models
-from app.services.account_fulfillment import ProviderUnavailable, validate_provider_receipt
+from app.services.account_fulfillment import (
+    PROVIDER_STEPS,
+    ProviderUnavailable,
+    validate_provider_receipt,
+)
 
-PROVIDER_STEPS = ("payment_provider", "media_storage", "email_logs_backups", "firebase_auth")
 REQUIRED_STEPS = PROVIDER_STEPS + ("database_tombstone",)
 SAFE_FAILURE_CODES = frozenset({
     "provider_not_configured",
@@ -29,8 +32,6 @@ SAFE_FAILURE_CODES = frozenset({
     "provider_step_incomplete",
     "manual_processing_required",
 })
-MAX_SCOPE_ITEMS = 16
-MAX_SCOPE_TEXT = 512
 ALLOWED_REQUEST_KINDS = frozenset({"deletion"})
 ALLOWED_REQUEST_STATUSES = frozenset({"completed", "blocked", "processing", "received", "partially_completed"})
 ALLOWED_STEP_STATUSES = frozenset({"pending", "running", "succeeded", "failed", "manual_review"})
@@ -98,7 +99,10 @@ async def inspect_request(
     )).all())
     by_key = {step.step_key: step for step in steps}
     missing = [key for key in REQUIRED_STEPS if key not in by_key]
-    unknown = [step.step_key for step in steps if step.last_error == "firebase_outcome_unknown"]
+    unknown = [
+        step.step_key for step in steps
+        if step.last_error == "firebase_outcome_unknown" and step.step_key in REQUIRED_STEPS
+    ]
     extra_step_count = sum(step.step_key not in REQUIRED_STEPS for step in steps)
     unrecognized_status_count = sum(
         step.step_key in REQUIRED_STEPS and step.status not in ALLOWED_STEP_STATUSES
@@ -115,6 +119,8 @@ async def inspect_request(
         receipt_report[key] = {"status": step.status if step.status in ALLOWED_STEP_STATUSES else "unrecognized", **structural}
         if not valid and error:
             receipt_errors.append(f"{key}:{error}")
+        if step.completed_at is None:
+            receipt_errors.append(f"{key}:completion_timestamp_missing")
     tombstone = by_key.get("database_tombstone")
     tombstone_valid = bool(
         tombstone is not None and tombstone.status == "succeeded" and tombstone.completed_at is not None
@@ -154,7 +160,7 @@ async def inspect_request(
         if step is not None and step.status == "running" and state in {"absent", "expired", "malformed"}:
             blockers.append(f"{key}_outcome_unknown")
     lease_state = _lease_state(request.fulfillment_lease_token, request.fulfillment_lease_expires_at, now)
-    if lease_state in {"active", "malformed"}:
+    if lease_state != "absent":
         blockers.append(f"request_lease_{lease_state}")
     if request.status not in ALLOWED_REQUEST_STATUSES:
         blockers.append("request_status_unrecognized")

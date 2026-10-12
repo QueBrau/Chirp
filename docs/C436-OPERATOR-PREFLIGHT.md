@@ -17,9 +17,18 @@ detects active or malformed leases and Firebase unknown-outcome markers, and
 validates succeeded provider receipts without printing their subject or scope
 values.
 
+The timeout bounds the database connection and inspection work. Cancellation
+still waits for transaction rollback and connection cleanup before returning, so
+the process may take longer while unwinding a blocked database operation.
+
 Exit status 0 means the request was found and inspected, including when it is
 blocked or pending. Exit status 1 means the request was not found for the
 expected owner. Exit status 2 means invalid arguments or an inspection failure.
 The JSON report always has ready_for_deletion false: this command does not prove
 provider ownership, account quiescence, external readback, operator authority,
 or retention policy. It imports no provider adapter and cannot invoke deletion.
+
+The deletion executor separately revalidates stored provider receipts when a
+request resumes and locks/revalidates the complete journal before local cleanup.
+Those runtime guards are distinct from this inspection command; this command
+does not authorize or trigger them.

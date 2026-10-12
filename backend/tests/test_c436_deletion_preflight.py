@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +11,7 @@ from sqlalchemy import select
 
 from app import models
 from app.db import get_session_factory
+from app.jobs import account_deletion_preflight as preflight
 from app.jobs.account_deletion_preflight import inspect_request, run_preflight
 
 
@@ -98,7 +100,7 @@ async def test_preflight_rejects_malformed_succeeded_receipt_without_leaking_val
         database_url, request_id=request_id, expected_user_id=uuid.UUID(owner.id)
     )
     assert "succeeded_receipt_invalid" in result["blockers"]
-    assert result["receipt_errors"] == ["firebase_auth:provider_confirmation_invalid"]
+    assert "firebase_auth:provider_confirmation_invalid" in result["receipt_errors"]
     assert "private-secret-scope" not in str(result)
 
 
@@ -195,3 +197,128 @@ async def test_preflight_accepts_only_exact_completed_tombstone_evidence(client,
     )
     assert corrupted["tombstone_evidence"] is False
     assert corrupted["durable_completion_evidence"] is False
+
+
+@pytest.mark.asyncio
+async def test_preflight_read_only_transaction_rejects_update_and_preserves_row(
+    client, make_user, database_url, monkeypatch,
+):
+    owner = await make_user("Preflight readonly")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(response.json()["id"])
+    original = None
+
+    async def attempted_write(session, **kwargs):
+        nonlocal original
+        original = await session.scalar(select(models.User.display_name).where(models.User.id == uuid.UUID(owner.id)))
+        await session.execute(
+            models.User.__table__.update()
+            .where(models.User.id == uuid.UUID(owner.id))
+            .values(display_name="must-not-write")
+        )
+        return {}
+
+    monkeypatch.setattr(preflight, "inspect_request", attempted_write)
+    with pytest.raises(Exception):
+        await run_preflight(database_url, request_id=request_id, expected_user_id=uuid.UUID(owner.id))
+    async with get_session_factory()() as session:
+        assert await session.scalar(select(models.User.display_name).where(
+            models.User.id == uuid.UUID(owner.id)
+        )) == original == "Preflight readonly"
+
+
+@pytest.mark.asyncio
+async def test_preflight_repeatable_read_snapshot_survives_concurrent_update(
+    client, make_user, database_url, monkeypatch,
+):
+    owner = await make_user("Preflight snapshot")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(response.json()["id"])
+    ready = asyncio.Event()
+    changed = asyncio.Event()
+
+    async def snapshot_reader(session, **kwargs):
+        first = await session.scalar(select(models.User.display_name).where(models.User.id == uuid.UUID(owner.id)))
+        ready.set()
+        await changed.wait()
+        second = await session.scalar(select(models.User.display_name).where(models.User.id == uuid.UUID(owner.id)))
+        assert first == second == "Preflight snapshot"
+        return {"status": "snapshot-ok"}
+
+    async def update_after_snapshot():
+        await ready.wait()
+        async with get_session_factory()() as session:
+            await session.execute(models.User.__table__.update().where(
+                models.User.id == uuid.UUID(owner.id)
+            ).values(display_name="concurrent-change"))
+            await session.commit()
+        changed.set()
+
+    monkeypatch.setattr(preflight, "inspect_request", snapshot_reader)
+    updater = asyncio.create_task(update_after_snapshot())
+    result = await run_preflight(database_url, request_id=request_id, expected_user_id=uuid.UUID(owner.id))
+    await updater
+    assert result == {"status": "snapshot-ok"}
+
+
+@pytest.mark.asyncio
+async def test_preflight_expired_request_lease_and_incomplete_step_block_completion(
+    client, make_user, database_url,
+):
+    owner = await make_user("Preflight expired request")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(response.json()["id"])
+    now = datetime.now(timezone.utc)
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, request_id)
+        step = (await session.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request_id,
+            models.AccountFulfillmentStep.step_key == "firebase_auth",
+        ))).one()
+        assert request is not None
+        request.status = "completed"
+        request.completed_at = now
+        request.fulfillment_lease_token = uuid.uuid4()
+        request.fulfillment_lease_expires_at = now - timedelta(seconds=1)
+        step.status = "succeeded"
+        step.completed_at = None
+        step.provider_ref = {
+            "confirmed": True, "provider": "firebase_auth", "subject": owner.id,
+            "scope": ["firebase_auth"], "readback": True,
+        }
+        await session.commit()
+    result = await run_preflight(
+        database_url, request_id=request_id, expected_user_id=uuid.UUID(owner.id)
+    )
+    assert "request_lease_expired" in result["blockers"]
+    assert "succeeded_receipt_invalid" in result["blockers"]
+    assert "firebase_auth:completion_timestamp_missing" in result["receipt_errors"]
+    assert result["durable_completion_evidence"] is False
+
+
+@pytest.mark.asyncio
+async def test_preflight_export_and_missing_request_are_not_deletion_ready(
+    client, make_user, database_url,
+):
+    owner = await make_user("Preflight export")
+    response = await client.post("/me/data-requests", json={"kind": "export"}, headers=owner.headers)
+    export_result = await run_preflight(
+        database_url,
+        request_id=uuid.UUID(response.json()["id"]),
+        expected_user_id=uuid.UUID(owner.id),
+    )
+    assert export_result["request_kind"] == "unrecognized"
+    assert "request_kind_not_deletion" in export_result["blockers"]
+    missing = await run_preflight(
+        database_url, request_id=uuid.uuid4(), expected_user_id=uuid.UUID(owner.id)
+    )
+    assert missing["request_found"] is False
+
+
+def test_preflight_cli_rejects_invalid_input_without_database_or_secret_output(monkeypatch, capsys):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert preflight.main(["--request-id", "bad", "--expected-user-id", "also-bad"]) == 2
+    output = capsys.readouterr().out
+    assert "error_type" in output
+    assert "bad" not in output
+    assert "DATABASE_URL" not in output
