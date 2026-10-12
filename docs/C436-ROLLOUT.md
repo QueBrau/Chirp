@@ -42,10 +42,12 @@ intent, plan, installment, and chapter mapping history remain retained; this
 adapter does not claim whole-provider or financial-record erasure.
 
 Provider adapters may also return a `retained_with_reason` list containing only
-the fixed retention codes already defined by the local cleanup boundary. The
-deletion journal validates and durably stores those codes in the step receipt,
-then includes their fixed explanations in the final request status alongside
-local retention reasons. This is an acknowledgment of a declared retention
+the fixed code allowed for that provider step: `stripe_deleted_customer_history`,
+`gcs_soft_deleted_versions`, `email_delivery_records`, `operational_logs`, or
+`database_backups`. The deletion journal validates and durably stores those codes
+in the step receipt, then includes their fixed explanations in the final request
+status alongside local retention reasons. A provider step cannot claim another
+step's retention code. This is an acknowledgment of a declared retention
 boundary; it is not evidence of deletion, measured expiry, backup expiration,
 or whole-provider erasure. Unknown, duplicate, nested, or free-form values block
 the step and are never persisted.

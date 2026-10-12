@@ -13,12 +13,14 @@ from sqlalchemy import update
 from tests.conftest import ApiUser
 from app import models
 from app.db import get_session_factory
-from app.services.account_fulfillment import FirebaseProvider, PROVIDER_STEPS, run_deletion
+from app.services.account_fulfillment import PROVIDER_RETENTION_REASONS, FirebaseProvider, PROVIDER_STEPS, run_deletion
 from app.services.account_cleanup import RETENTION_REASONS, cleanup_local_account
+
+_UNSET = object()
 
 
 class ConfirmingProvider:
-    def __init__(self, provider_key: str = "synthetic", retained_with_reason: list[object] | None = None) -> None:
+    def __init__(self, provider_key: str = "synthetic", retained_with_reason: object = _UNSET) -> None:
         self.provider_key = provider_key
         self.keys: list[str] = []
         self.retained_with_reason = retained_with_reason
@@ -26,7 +28,7 @@ class ConfirmingProvider:
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
         self.keys.append(idempotency_key)
         result = {"confirmed": True, "provider": self.provider_key, "subject": str(user.id), "scope": [self.provider_key], "readback": True}
-        if self.retained_with_reason is not None:
+        if self.retained_with_reason is not _UNSET:
             result["retained_with_reason"] = self.retained_with_reason
         return result
 
@@ -115,15 +117,20 @@ async def test_deletion_journal_blocks_without_adapters_then_retries_idempotentl
 async def test_retention_receipts_survive_resumed_steps_and_final_status(client: AsyncClient, make_user) -> None:
     owner: ApiUser = await make_user("Retention receipt owner")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(response.json()["id"])
+    providers = provider_set()
+    providers[PROVIDER_STEPS[0]] = ConfirmingProvider(PROVIDER_STEPS[0], ["stripe_deleted_customer_history"])
+    providers[PROVIDER_STEPS[1]] = FailOnceProvider(PROVIDER_STEPS[1])
     async with get_session_factory()() as session:
-        request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
+        request = await session.get(models.AccountDataRequest, request_id)
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert request is not None and user is not None
-        providers = provider_set()
-        providers[PROVIDER_STEPS[0]] = ConfirmingProvider(PROVIDER_STEPS[0], ["provider_retention"])
-        providers[PROVIDER_STEPS[1]] = FailOnceProvider(PROVIDER_STEPS[1])
         first = await run_deletion(session, request.id, user, providers)
         assert first.status == "blocked"
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, request_id)
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert request is not None and user is not None
         resumed = provider_set()
         resumed[PROVIDER_STEPS[1]] = providers[PROVIDER_STEPS[1]]
         second = await run_deletion(session, request.id, user, resumed)
@@ -133,13 +140,85 @@ async def test_retention_receipts_survive_resumed_steps_and_final_status(client:
             models.AccountFulfillmentStep.request_id == request.id,
             models.AccountFulfillmentStep.step_key == PROVIDER_STEPS[0],
         ))).one()
-        assert first_step.provider_ref["retained_with_reason"] == ["provider_retention"]
-        assert RETENTION_REASONS["provider_retention"] in request.retention_reasons
-        assert request.retention_reasons.count(RETENTION_REASONS["provider_retention"]) == 1
+        assert first_step.provider_ref["retained_with_reason"] == ["stripe_deleted_customer_history"]
+        assert PROVIDER_RETENTION_REASONS["stripe_deleted_customer_history"] in request.retention_reasons
+        assert request.retention_reasons.count(PROVIDER_RETENTION_REASONS["stripe_deleted_customer_history"]) == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("retained", [["provider-secret-sentinel"], [{"code": "provider_retention"}], ["provider_retention", "provider_retention"]])
+async def test_provider_retention_receipt_is_disclosed_only_when_returned(client: AsyncClient, make_user) -> None:
+    owner: ApiUser = await make_user("No retention receipt")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert request is not None and user is not None
+        result = await run_deletion(session, request.id, user, provider_set())
+        assert result.status == "completed"
+        await session.refresh(request)
+        assert PROVIDER_RETENTION_REASONS["stripe_deleted_customer_history"] not in request.retention_reasons
+
+
+@pytest.mark.asyncio
+async def test_provider_retention_receipt_cannot_cross_step_allowlist(client: AsyncClient, make_user) -> None:
+    owner: ApiUser = await make_user("Cross-step retention receipt")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert request is not None and user is not None
+        providers = provider_set()
+        providers["media_storage"] = ConfirmingProvider(
+            "media_storage", ["stripe_deleted_customer_history"]
+        )
+        result = await run_deletion(session, request.id, user, providers)
+        assert result.status == "blocked"
+        media_step = (await session.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request.id,
+            models.AccountFulfillmentStep.step_key == "media_storage",
+        ))).one()
+        assert media_step.status == "manual_review"
+        assert media_step.provider_ref is None
+        await session.refresh(request)
+        assert PROVIDER_RETENTION_REASONS["stripe_deleted_customer_history"] not in (request.retention_reasons or [])
+
+
+@pytest.mark.asyncio
+async def test_durable_invalid_retention_receipt_blocks_before_local_cleanup(client: AsyncClient, make_user) -> None:
+    owner: ApiUser = await make_user("Durable invalid retention receipt")
+    response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    request_id = uuid.UUID(response.json()["id"])
+    providers = provider_set()
+    providers["payment_provider"] = ConfirmingProvider(
+        "payment_provider", ["stripe_deleted_customer_history"]
+    )
+    providers["media_storage"] = FailOnceProvider("media_storage")
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, request_id)
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert request is not None and user is not None
+        assert (await run_deletion(session, request.id, user, providers)).status == "blocked"
+    async with get_session_factory()() as session:
+        step = (await session.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request_id,
+            models.AccountFulfillmentStep.step_key == "payment_provider",
+        ))).one()
+        step.provider_ref = {"retained_with_reason": ["provider-secret-sentinel"]}
+        await session.commit()
+    async with get_session_factory()() as session:
+        request = await session.get(models.AccountDataRequest, request_id)
+        user = await session.get(models.User, uuid.UUID(owner.id))
+        assert request is not None and user is not None
+        resumed = await run_deletion(session, request.id, user, providers)
+        assert resumed.status == "blocked"
+        assert resumed.failed_step == "payment_provider"
+        assert not providers["media_storage"].keys
+        await session.refresh(user)
+        assert user.firebase_uid == owner.firebase_uid
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retained", [["provider-secret-sentinel"], [{"code": "stripe_deleted_customer_history"}], ["stripe_deleted_customer_history", "stripe_deleted_customer_history"], ["stripe_deleted_customer_history"] * 4, None])
 async def test_invalid_retention_receipts_fail_closed_without_persisting_details(client: AsyncClient, make_user, retained) -> None:
     owner: ApiUser = await make_user("Invalid retention receipt")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
