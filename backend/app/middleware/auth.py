@@ -109,9 +109,10 @@ async def get_verified_identity(
     x_debug_firebase_uid: str | None = Header(default=None, alias="X-Debug-Firebase-Uid"),
     authorization: str | None = Header(default=None),
 ) -> tuple[str, str | None]:
-    """Return (uid, verified_email) — used by POST /auth/bootstrap to stop email squatting
-    (SECURITY-REVIEW finding 3): the verified token email, not the client body, is
-    authoritative in firebase mode.
+    """Return the verified identity for ordinary authenticated identity reads.
+
+    Bootstrap uses get_bootstrap_verified_identity for an additional current-user
+    and revocation check.
     """
     return await _verify_identity(x_debug_firebase_uid, authorization)
 
@@ -137,7 +138,7 @@ async def get_current_user(
 ) -> models.User:
     """Resolve the verified uid to a registered users row, or raise 401/403.
 
-    Only POST /auth/bootstrap uses get_verified_uid directly (it creates the row).
+    Auth bootstrap uses its stricter current-user/revocation dependency before creating a row.
 
     Also rejects a suspended account (board card c76): the Terms claims "we can
     suspend accounts," which has to actually block every authenticated request, not
