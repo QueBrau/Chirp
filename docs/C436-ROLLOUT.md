@@ -27,7 +27,11 @@ extend beyond the nominal 30-second SDK timeout, and it cannot prevent the
 separate five-minute orchestration lease from expiring if the SDK itself hangs.
 The outcome remains sanitized and uncertain until the next idempotent retry and
 readback; the step lease is not intentionally released while the worker is
-running.
+running. If an attempt's request and step leases both expire first, a later
+runner records `firebase_outcome_unknown` and blocks without invoking Firebase
+again; only the reviewed operator verification/recovery workflow may resolve
+that marker after checking provider state. There is no blind clear or automatic
+retry for that state.
 
 ## Stripe customer adapter boundary
 

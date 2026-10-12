@@ -232,6 +232,26 @@ async def run_deletion(
                 return DeletionRun("blocked", tuple(completed), step_key)
             completed.append(step_key)
             continue
+        if step_key == "firebase_auth" and (
+            step.status == "running"
+            or (step.status == "manual_review" and step.last_error == "firebase_outcome_unknown")
+        ):
+            # A previous Firebase worker may still be finishing after its
+            # request and step leases expired. Do not invoke Firebase again;
+            # persist the uncertain outcome before releasing this runner.
+            step.status = "manual_review"
+            step.last_error = "firebase_outcome_unknown"
+            provider_steps = dict(request.provider_steps or {})
+            provider_steps[step_key] = "manual_review"
+            request.status = "blocked"
+            request.failure_code = "provider_step_incomplete"
+            request.provider_steps = provider_steps
+            request.fulfillment_lease_token = None
+            request.fulfillment_lease_expires_at = None
+            step.lease_token = None
+            step.lease_expires_at = None
+            await session.commit()
+            return DeletionRun("blocked", tuple(completed), step_key)
         provider = providers.get(step_key)
         if provider is None:
             step.status = "manual_review"
