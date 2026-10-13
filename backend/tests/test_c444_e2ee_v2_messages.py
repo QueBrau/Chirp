@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import DBAPIError
 
 from app import models
 from app.db import get_session_factory
@@ -369,14 +370,22 @@ async def test_a_retry_still_succeeds_after_the_device_set_changed(
 
 
 async def test_concurrent_identical_sends_store_exactly_one_message(
-    client: AsyncClient, make_user: MakeUser
+    client: AsyncClient, make_user: MakeUser, caplog: pytest.LogCaptureFixture,
 ) -> None:
     w = await _world(client, make_user)
     cmid = str(uuid.uuid4())
     legs = w.required_from_a1()
-    responses = await asyncio.gather(*(
-        send(client, w.convo, w.a1, legs, client_message_id=cmid) for _ in range(4)
-    ))
+    caplog.clear()
+    with caplog.at_level("INFO", logger="app.analytics"):
+        responses = await asyncio.gather(*(
+            send(client, w.convo, w.a1, legs, client_message_id=cmid) for _ in range(4)
+        ))
+    events = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "app.analytics" and record.getMessage().startswith("{")
+    ]
+    assert len(events) == 1
     statuses = [r.status_code for r in responses]
     assert set(statuses) <= {200, 201} and statuses.count(201) == 1, statuses
     assert len({r.json()["id"] for r in responses}) == 1
@@ -679,3 +688,130 @@ async def test_message_legs_and_outbox_row_commit_in_one_transaction(
     assert await _row_counts() == {"messages": 0, "legs": 0, "outbox": 0}, (
         "the message and its legs must roll back with the failed delivery intent"
     )
+
+async def test_v2_send_emits_one_private_message_event_and_retry_emits_none(
+    client: AsyncClient,
+    make_user: MakeUser,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Analytics counts one logical message, never its individual encrypted legs."""
+    w = await _world(client, make_user)
+    b2 = Keyring(w.bob, 2)
+    await register(client, b2)
+    await approve(client, approver=w.b1, new=b2)
+    legs = [leg(w.a2), leg(w.b1), leg(b2)]
+    client_message_id = str(uuid.uuid4())
+    caplog.clear()
+    with caplog.at_level("INFO", logger="app.analytics"):
+        await send(
+            client, w.convo, w.a1, legs,
+            client_message_id=client_message_id, expect=201,
+        )
+    events = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "app.analytics" and record.getMessage().startswith("{")
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event["event"] == "message_sent"
+    assert event["user_id"] == w.alice.id
+    assert event["conversation_id"] == w.convo
+    assert event["message_type"] == "olm"
+    assert event["recipient_count"] == 2  # sender + recipient users, not encrypted legs
+    assert set(event) == {
+        "analytics", "schema_version", "event", "emission_id", "emitted_at", "severity",
+        "user_id", "conversation_id", "message_type", "recipient_count",
+    }
+    encoded = json.dumps(event)
+    assert "ciphertext" not in encoded and "ciphertext_b64" not in encoded
+    assert w.a2.id not in encoded and w.b1.id not in encoded and b2.id not in encoded
+    assert client_message_id not in encoded
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="app.analytics"):
+        retry = await send(
+            client, w.convo, w.a1, legs,
+            client_message_id=client_message_id, expect=200,
+        )
+    retry_events = [
+        record for record in caplog.records
+        if record.name == "app.analytics" and record.getMessage().startswith("{")
+    ]
+    assert retry.status_code == 200
+    assert retry_events == []
+
+
+async def test_v2_device_set_refusal_emits_no_message_event(
+    client: AsyncClient,
+    make_user: MakeUser,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    w = await _world(client, make_user)
+    caplog.clear()
+    with caplog.at_level("INFO", logger="app.analytics"):
+        response = await send(client, w.convo, w.a1, [leg(w.b1)], expect=409)
+    assert response.json()["detail"] == "device_list_mismatch"
+    assert [
+        record for record in caplog.records
+        if record.name == "app.analytics" and record.getMessage().startswith("{")
+    ] == []
+
+
+async def test_v2_commit_failure_emits_no_message_event(
+    client: AsyncClient,
+    make_user: MakeUser,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A real deferred PostgreSQL commit failure cannot produce telemetry."""
+    w = await _world(client, make_user)
+    async with get_session_factory()() as session:
+        await session.execute(text("""
+            CREATE FUNCTION c447_reject_v2_message() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'c447 forced commit failure' USING ERRCODE='23514'; END $$
+        """))
+        await session.execute(text("""
+            CREATE CONSTRAINT TRIGGER c447_v2_message_commit
+            AFTER INSERT ON messages DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+            WHEN (NEW.message_type = 'olm')
+            EXECUTE FUNCTION c447_reject_v2_message()
+        """))
+        await session.commit()
+    caplog.clear()
+    try:
+        with caplog.at_level("INFO", logger="app.analytics"), pytest.raises(DBAPIError):
+            await send(client, w.convo, w.a1, w.required_from_a1())
+        events = [
+            record for record in caplog.records
+            if record.name == "app.analytics" and record.getMessage().startswith("{")
+        ]
+        assert events == []
+        assert await _row_counts() == {"messages": 0, "legs": 0, "outbox": 0}
+    finally:
+        async with get_session_factory()() as session:
+            await session.execute(text("DROP TRIGGER c447_v2_message_commit ON messages"))
+            await session.execute(text("DROP FUNCTION c447_reject_v2_message()"))
+            await session.commit()
+
+
+async def test_v2_logging_failure_does_not_fail_accepted_send(
+    client: AsyncClient,
+    make_user: MakeUser,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed analytics transport cannot fail an already committed message."""
+    from app.core import analytics
+
+    w = await _world(client, make_user)
+
+    def unavailable_logger(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("synthetic analytics transport failure")
+
+    monkeypatch.setattr(analytics.logger, "info", unavailable_logger)
+    accepted = await send(client, w.convo, w.a1, w.required_from_a1(), expect=201)
+    assert accepted.json()["conversation_id"] == w.convo
+    counts = await _row_counts()
+    assert counts["messages"] == 1 and counts["legs"] == 2
+    # Immediate dispatch can consume the outbox row; readable message history is
+    # the durable contract this analytics failure must leave intact.
+    assert (await _history(client, w, w.b1))[0]["id"] == accepted.json()["id"]

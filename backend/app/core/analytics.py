@@ -36,7 +36,7 @@ _SCHEMAS: dict[str, dict[str, str | tuple[str, ...]]] = {
     },
     "message_sent": {
         "user_id": _ID, "conversation_id": _ID,
-        "message_type": ("signal", "sender_key_distribution"), "recipient_count": _COUNT,
+        "message_type": ("signal", "sender_key_distribution", "olm"), "recipient_count": _COUNT,
     },
     "event_created": {
         "user_id": _ID, "chapter_id": _ID, "event_id": _ID,
