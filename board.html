@@ -499,12 +499,12 @@
     },
     {
       "id": "c447",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "J",
       "tag": "backend",
       "area": "messages",
-      "title": "c447 [P2, before E2EE launch, found by c444 Oct 7] Analytics message_sent is NOT emitted for E2EE v2 sends. The analytics allowlist enum only has signal and sender_key_distribution, and c444 deliberately did not widen the analytics schema. Once v2 is the only send path, product send-counts silently drop to zero. Fix: add a v2 message type to the allowlist (read ANALYTICS-VERIFICATION.md for the review rules) and emit on POST /v2/conversations/{id}/messages, counting one logical message, not one per leg.",
-      "detail": ""
+      "title": "c447 CLAIMED Oct13: add one allowlisted analytics event per committed v2 logical message; replay, rollback and privacy regression proof, reviewed PR/CI pending.",
+      "detail": "c447 [P2, before E2EE launch, found by c444 Oct 7] Analytics message_sent is NOT emitted for E2EE v2 sends. The analytics allowlist enum only has signal and sender_key_distribution, and c444 deliberately did not widen the analytics schema. Once v2 is the only send path, product send-counts silently drop to zero. Fix: add a v2 message type to the allowlist (read ANALYTICS-VERIFICATION.md for the review rules) and emit on POST /v2/conversations/{id}/messages, counting one logical message, not one per leg.\n\nOct13 autonomous-closeout claim BEFORE edits: user requests all feasible in-progress/backlog work without user input or manual/phone testing. Luna medium owns isolated jose/c447-v2-analytics-20261013: backend/app/core/analytics.py existing message_type enum, backend/app/routers/messages_v2.py postcommit emission, new focused API tests and ANALYTICS-VERIFICATION.md semantics. Count logical accepted messages, not device legs or HTTP retries; preserve existing permitted fields, no ciphertext/device/client-message IDs or new dimensions. Prove sequential/concurrent replay and failed commit do not emit extra events; logging failure cannot fail accepted send. Source acceptance for this missing event; do not claim live pipeline delivery or change deployment/provider settings. Root reviews and merges only green exacthead; Q native/app-wiring work untouched."
     },
     {
       "id": "c446",
