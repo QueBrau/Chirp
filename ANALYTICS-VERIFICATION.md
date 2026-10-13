@@ -61,6 +61,12 @@ properties or traceback, and a second logging failure cannot escape the emitter.
 | payment_succeeded / payment_failed | event_type, cycle_id, user_id, rail |
 | pipeline_probe | random probe_id only; **never a product action** |
 
+`message_type` includes `olm` for E2EE v2 sends. The v2 endpoint emits once after the
+one-message/multiple-leg domain commit, with the same recipient-user count convention as
+v1 (including the sender); an idempotent retry and a device-set refusal emit nothing.
+The event remains best-effort logging and does not claim exactly-once sink delivery.
+
+
 Anonymous Chirp creation, votes and reports are outside this pipeline. There is
 no chirp_id, anonymous-author link, message body, ciphertext, device identifier,
 email, token, provider payload, payment amount or provider/customer identifier in

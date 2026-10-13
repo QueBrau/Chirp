@@ -40,6 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.analytics import emit
 from app.core.blocks import blockers_of
 from app.core.errors import forbidden, not_found
 from app.core.rate_limits import MESSAGE_SEND_LIMIT, limit_per_user
@@ -268,6 +269,16 @@ async def send_message_v2(
         },
     )
     await session.commit()
+    # One logical v2 message emits one coarse product event after the domain commit.
+    # recipient_count follows v1: it counts recipient users including the sender, not
+    # encrypted device legs. Idempotent retries return above before this point.
+    emit(
+        "message_sent",
+        user_id=user.id,
+        conversation_id=conversation_id,
+        message_type=V2_MESSAGE_TYPE,
+        recipient_count=len(recipient_ids),
+    )
 
     event = {
         "type": "message",
