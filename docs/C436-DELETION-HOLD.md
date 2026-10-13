@@ -107,10 +107,45 @@ and reachability before consuming keys; a changed account set fails without
 consumption. A new request must perform a fresh preflight rather than expanding
 the lock set inside a transaction. Directory and key-count reads remain reads.
 
-This is not global messaging enrollment. Message sends, conversation creation,
-WebSocket delivery, shared-content mutations and background jobs still need their
-own account-set and transaction review. The current key-request schema bounds
-device claims to ten, and the general guard additionally caps its account scope.
+The current key-request schema bounds device claims to ten. The general guard
+supports up to 257 accounts, matching conversation creation's 256 invitees plus
+the creator. All shared locks still use one five-second budget, not five seconds
+per participant.
+
+## Conversation and message SQL
+
+The same disabled flag enrolls `POST /conversations`,
+`POST /conversations/{conversation_id}/messages`, and
+`POST /v2/conversations/{conversation_id}/messages`. Creation preflights the
+existing chapter, reachability and block rules before binding the requested
+participants, then repeats authorization in the guarded request transaction.
+After a conflicting DM insert rolls back, authorization runs again before reuse.
+
+Message admission binds the complete active roster, including members excluded
+from delivery by block filtering. Before new message, encrypted-leg or delivery
+intent rows are written, the handler locks the conversation row and rereads the
+active roster. A changed roster fails closed and requires a fresh request rather
+than extending the lock set mid-transaction. DM reuse and conversation leave use
+the same parent-row ordering; reuse validates its actual members before clearing
+`left_at`. Leave remains an actor-only mutation so another member's hold does not
+prevent departure.
+
+An owned v2 replay found in preflight binds only the actor and returns its stored
+message before recipient device-set and block eligibility checks. A recipient's
+hold therefore does not prevent this read-only retry; the actor's hold still
+does. The handler verifies the original conversation and exact encrypted legs.
+If the stored message disappears between preflight and the handler, the immutable
+actor-only scope cannot fall through to a new multi-account insert. The history
+read routes remain available. Admission does not imply that a previously accepted
+message vanished.
+
+Local deletion cleanup already marks the deleted account's conversation
+memberships left. Remaining group members therefore bind the remaining active
+roster and can keep sending after cleanup; existing shared history is retained.
+Reusing a DM cannot reactivate a held member. These are SQL transaction boundaries,
+not a guarantee that earlier Redis, push or WebSocket delivery has drained.
+Immediate delivery and the outbox worker still require separate durable operation
+fencing and drain integration before production deletion can be enabled.
 
 This flag neither activates a hold nor adds an activation endpoint. Ordinary
 deletion intake still does not create a hold. Keep the flag disabled until migration
@@ -121,8 +156,9 @@ and do not query the new table, preserving compatibility with deployed schema 00
 Before any production deletion, inventory and enroll the remaining HTTP writers
 (including GET routes that consume keys), WebSocket writes, outbox/worker writes,
 and writes by other actors that target the deleting account. Multi-account paths
-need sorted admission keys before row locks; only consuming key requests currently
-bind multiple accounts. Drain in-flight uploads, exports, provider calls and analytics ingestion
+need sorted admission keys before row locks; consuming key requests and the enrolled
+conversation/message writes bind multiple accounts. Drain in-flight uploads,
+exports, provider calls and analytics ingestion
 and review the executor's hold-owner path. SQL admission alone proves none of
 those external boundaries. No production migration, grants, enablement or deletion
 is authorized by this source change.

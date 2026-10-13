@@ -97,6 +97,10 @@ MAX_FORWARDED_PLAINTEXT_LENGTH = MAX_MESSAGE_PLAINTEXT_LENGTH
 # against live output. Re-check the arithmetic when real ciphertext first flows.
 MAX_CIPHERTEXT_B64_LENGTH = 65_536
 
+# Conversation creation accepts this many invitees, in addition to its creator.
+# Admission must support the same total roster rather than narrowing valid groups.
+MAX_CONVERSATION_INVITEES = 256
+
 
 def validate_public_url(value: str | None) -> str | None:
     """Reject anything that is not a well-formed http(s) URL. None passes through.

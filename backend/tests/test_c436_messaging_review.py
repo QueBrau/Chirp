@@ -143,7 +143,7 @@ async def test_leave_and_dm_reuse_wait_for_parent_lock(
         await _wait_for_parent_block(task, blocker_pid)
         await locker.commit()
         response = await asyncio.wait_for(task, 5)
-        assert response.status_code == (200 if operation == "leave" else 200), response.text
+        assert response.status_code == 200, response.text
         async with get_session_factory()() as session:
             member = await session.get(
                 models.ConversationMember,

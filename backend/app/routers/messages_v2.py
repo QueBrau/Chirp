@@ -58,6 +58,10 @@ from app.schemas.e2ee_v2 import (
 )
 from app.services import outbox
 from app.services.e2ee_v2_service import approved_v2_devices_for_users, conflict_response
+from app.services.messaging_write_admission import (
+    get_current_user_for_message_v2_write,
+    lock_message_participants,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +153,7 @@ async def send_message_v2(
     conversation_id: uuid.UUID,
     body: MessageCreateV2,
     response: Response,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_message_v2_write),
     session: AsyncSession = Depends(get_session),
 ) -> MessageV2Out | JSONResponse:
     """Store one message with one ciphertext leg per recipient device, atomically.
@@ -188,16 +192,10 @@ async def send_message_v2(
             return _message_out(existing)
         return conflict_response("client_message_id_reused")
 
-    member_ids = list(
-        (
-            await session.execute(
-                select(models.ConversationMember.user_id).where(
-                    models.ConversationMember.conversation_id == conversation_id,
-                    models.ConversationMember.left_at.is_(None),
-                )
-            )
-        ).scalars()
-    )
+    # For a new message, serialize roster changes on the conversation row and verify
+    # the exact participant scope captured by the admission dependency.  Exact retries
+    # intentionally return above this point before block/device eligibility checks.
+    member_ids = await lock_message_participants(session, conversation_id, user.id)
     # Same block handling as v1 send_message: resolved BEFORE the insert so a refused
     # send leaves nothing behind. The required leg set below does NOT depend on blocks, so
     # a sender cannot learn who blocked them from a device_list_mismatch; blockers are

@@ -17,6 +17,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from app.core.validation import MAX_CONVERSATION_INVITEES
 from app.services.account_deletion_hold import (
     DeletionHoldActive,
     DeletionHoldInvalid,
@@ -26,7 +27,7 @@ from app.services.account_deletion_hold import (
 _INFO_KEY = "c436_account_write_guard"
 _FAILED_KEY = "c436_account_write_guard_failed"
 GUARD_LOCK_TIMEOUT_MS = 5_000
-MAX_GUARDED_ACCOUNTS = 64
+MAX_GUARDED_ACCOUNTS = MAX_CONVERSATION_INVITEES + 1
 
 
 def _canonical_uuid(value: uuid.UUID | str) -> uuid.UUID:

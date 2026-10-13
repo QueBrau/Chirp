@@ -21,8 +21,9 @@ from app.core.rate_limits import (
     limit_per_user,
 )
 from app.core.reachability import reachable_off_chapter_ids
-from app.db import get_session
-from app.middleware.auth import get_current_user, get_current_user_for_write
+from app.config import get_settings
+from app.db import get_session, get_session_factory
+from app.middleware.auth import get_current_user, get_current_user_for_write, get_verified_uid
 from app.schemas.identity import UserSearchResultOut
 from app.schemas.messaging import (
     ConversationCreate,
@@ -34,6 +35,12 @@ from app.schemas.messaging import (
     MessageReceiptOut,
 )
 from app.services import outbox
+from app.services.account_write_guard import assert_account_write_targets, bind_account_write_guard
+from app.services.account_deletion_hold import DeletionHoldInvalid
+from app.services.messaging_write_admission import (
+    get_current_user_for_message_write,
+    lock_message_participants,
+)
 from app.services.fcm_service import send_content_free_push
 from app.ws.pubsub import publish_to_user
 
@@ -195,6 +202,67 @@ async def _require_reachable_off_chapter(
         raise forbidden("recipient_not_reachable")
 
 
+async def _validate_conversation_request(
+    session: AsyncSession,
+    caller: models.User,
+    body: ConversationCreate,
+    member_ids: set[uuid.UUID],
+) -> None:
+    """Apply the complete conversation authorization policy for one participant set."""
+    users_result = await session.execute(
+        select(models.User.id, models.User.is_ghost).where(models.User.id.in_(member_ids))
+    )
+    users = {user_id: is_ghost for user_id, is_ghost in users_result.all()}
+    if len(users) != len(member_ids):
+        raise not_found("user_not_found")
+    if body.chapter_id is not None:
+        if await session.get(models.Chapter, body.chapter_id) is None:
+            raise not_found("chapter_not_found")
+        active_memberships = await session.execute(
+            select(models.Membership.user_id).where(
+                models.Membership.chapter_id == body.chapter_id,
+                models.Membership.status == "active",
+                models.Membership.user_id.in_(member_ids),
+            )
+        )
+        active_member_ids = set(active_memberships.scalars())
+        if caller.id not in active_member_ids:
+            raise forbidden("not_a_member")
+        non_ghost_ids = {
+            member_id
+            for member_id in member_ids
+            if member_id != caller.id and not users[member_id]
+        }
+        if not non_ghost_ids.issubset(active_member_ids):
+            raise forbidden("not_a_member")
+    else:
+        await _require_reachable_off_chapter(session, caller, member_ids)
+    if await blockers_of(session, subject_id=caller.id, candidate_ids=member_ids):
+        raise forbidden("recipient_not_reachable")
+
+
+async def _create_conversation_user(
+    body: ConversationCreate,
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Preflight creation policy, bind the full requested scope, then re-authenticate."""
+    if not get_settings().account_deletion_http_admission_enabled:
+        return await get_current_user(uid=uid, session=session)
+    member_ids: set[uuid.UUID]
+    async with get_session_factory()() as preflight:
+        caller = await get_current_user(uid=uid, session=preflight)
+        member_ids = {caller.id, *body.member_user_ids}
+        await _validate_conversation_request(preflight, caller, body, member_ids)
+    bind_account_write_guard(
+        session,
+        user_id=caller.id,
+        firebase_uid=uid,
+        target_user_ids=member_ids,
+    )
+    return await get_current_user(uid=uid, session=session)
+
+
 def _conversation_out(
     conversation: models.Conversation,
     members: list[models.ConversationMember],
@@ -243,7 +311,13 @@ def _dm_key(chapter_id: uuid.UUID | None, member_ids: set[uuid.UUID]) -> str | N
     return f"{chapter_part}:{first_id}:{second_id}"
 
 
-async def _reuse_dm(session: AsyncSession, dm_key: str) -> ConversationOut | None:
+async def _reuse_dm(
+    session: AsyncSession,
+    dm_key: str,
+    *,
+    expected_member_ids: set[uuid.UUID] | None = None,
+    actor_id: uuid.UUID | None = None,
+) -> ConversationOut | None:
     """Return the existing DM for `dm_key`, or None if no such conversation exists.
 
     Clears left_at on BOTH member rows when reuse fires, rather than leaving a
@@ -253,9 +327,12 @@ async def _reuse_dm(session: AsyncSession, dm_key: str) -> ConversationOut | Non
     "successfully" re-contacted them — a silent dead end from the departed party's
     side (board c344 decision).
     """
-    result = await session.execute(
-        select(models.Conversation).where(models.Conversation.dm_key == dm_key)
+    conversation_query = select(models.Conversation).where(
+        models.Conversation.dm_key == dm_key
     )
+    if get_settings().account_deletion_http_admission_enabled:
+        conversation_query = conversation_query.with_for_update()
+    result = await session.execute(conversation_query)
     conversation = result.scalar_one_or_none()
     if conversation is None:
         return None
@@ -266,6 +343,18 @@ async def _reuse_dm(session: AsyncSession, dm_key: str) -> ConversationOut | Non
         )
     )
     members = list(member_rows.scalars().all())
+    if get_settings().account_deletion_http_admission_enabled:
+        actual_member_ids = {member.user_id for member in members}
+        if actor_id is None or expected_member_ids is None:
+            raise DeletionHoldInvalid("guarded_dm_reuse_scope_missing")
+        if actual_member_ids != expected_member_ids:
+            assert_account_write_targets(
+                session, user_id=actor_id, target_user_ids=actual_member_ids
+            )
+            raise DeletionHoldInvalid("guarded_dm_reuse_scope_changed")
+        assert_account_write_targets(
+            session, user_id=actor_id, target_user_ids=actual_member_ids
+        )
     rejoined = False
     for member in members:
         if member.left_at is not None:
@@ -322,7 +411,7 @@ async def _message_presence(
 async def create_conversation(
     body: ConversationCreate,
     response: Response,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(_create_conversation_user),
     session: AsyncSession = Depends(get_session),
 ) -> ConversationOut:
     """Create a dm/group conversation; the creator is always added as a member.
@@ -338,50 +427,16 @@ async def create_conversation(
     _reuse_dm lookup).
     """
     member_ids = {user.id, *body.member_user_ids}
-    users_result = await session.execute(
-        select(models.User.id, models.User.is_ghost).where(models.User.id.in_(member_ids))
-    )
-    users = {user_id: is_ghost for user_id, is_ghost in users_result.all()}
-    if len(users) != len(member_ids):
-        raise not_found("user_not_found")
-    if body.chapter_id is not None:
-        if await session.get(models.Chapter, body.chapter_id) is None:
-            raise not_found("chapter_not_found")
-        active_memberships = await session.execute(
-            select(models.Membership.user_id).where(
-                models.Membership.chapter_id == body.chapter_id,
-                models.Membership.status == "active",
-                models.Membership.user_id.in_(member_ids),
-            )
-        )
-        active_member_ids = set(active_memberships.scalars())
-        if user.id not in active_member_ids:
-            raise forbidden("not_a_member")
-        # Ghost users are historical placeholders, not live chapter accounts. They
-        # are the explicit exception that lets a chapter conversation retain them
-        # alongside its active members without creating a membership row.
-        non_ghost_ids = {
-            member_id
-            for member_id in member_ids
-            if member_id != user.id and not users[member_id]
-        }
-        if not non_ghost_ids.issubset(active_member_ids):
-            raise forbidden("not_a_member")
-    else:
-        await _require_reachable_off_chapter(session, user, member_ids)
-
-    # Blocks are checked on BOTH paths, because a chapter_id does not make contact
-    # consensual: someone you blocked is still on the roster and could otherwise name
-    # you into a chapter conversation. Same refusal string as the eligibility failure
-    # above so "they blocked me" and "they are not reachable" are one indistinguishable
-    # response — the chapter branch already collapses four distinct causes into a single
-    # not_a_member for the same reason.
-    if await blockers_of(session, subject_id=user.id, candidate_ids=member_ids):
-        raise forbidden("recipient_not_reachable")
+    await _validate_conversation_request(session, user, body, member_ids)
 
     dm_key = _dm_key(body.chapter_id, member_ids) if body.kind == "dm" else None
     if dm_key is not None:
-        reused = await _reuse_dm(session, dm_key)
+        reused = await _reuse_dm(
+            session,
+            dm_key,
+            expected_member_ids=member_ids,
+            actor_id=user.id,
+        )
         if reused is not None:
             response.status_code = status.HTTP_200_OK
             return reused
@@ -389,6 +444,7 @@ async def create_conversation(
     conversation = models.Conversation(
         chapter_id=body.chapter_id, kind=body.kind, title=body.title, dm_key=dm_key
     )
+    actor_uid = user.firebase_uid
     session.add(conversation)
     try:
         await session.flush()
@@ -400,7 +456,21 @@ async def create_conversation(
         # the caller's perspective, a completely ordinary "someone already talked to
         # this person" outcome.
         await session.rollback()
-        reused = await _reuse_dm(session, dm_key) if dm_key is not None else None
+        # Re-authenticate and rerun the entire eligibility policy after rollback;
+        # the competing insert may have changed the roster or block state.
+        user = await get_current_user(uid=actor_uid, session=session)
+        member_ids = {user.id, *body.member_user_ids}
+        await _validate_conversation_request(session, user, body, member_ids)
+        reused = (
+            await _reuse_dm(
+                session,
+                dm_key,
+                expected_member_ids=member_ids,
+                actor_id=user.id,
+            )
+            if dm_key is not None
+            else None
+        )
         if reused is None:
             raise
         response.status_code = status.HTTP_200_OK
@@ -531,11 +601,11 @@ async def get_conversation(
 async def send_message(
     conversation_id: uuid.UUID,
     body: MessageCreate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_message_write),
     session: AsyncSession = Depends(get_session),
 ) -> MessageOut:
     """Store ciphertext (never parsed) and fan out to active members via Redis + push."""
-    await _require_active_member(session, conversation_id, user.id)
+    member_ids = await lock_message_participants(session, conversation_id, user.id)
     device = await session.get(models.Device, body.sender_device_id)
     if device is None or device.user_id != user.id:
         raise forbidden("not_your_device")
@@ -547,14 +617,6 @@ async def send_message(
         # opaque v1 ciphertext here would bypass that rule and store a message nobody
         # can decrypt. Legacy (suite NULL) devices are unaffected.
         raise forbidden("device_requires_v2")
-
-    recipients_result = await session.execute(
-        select(models.ConversationMember.user_id).where(
-            models.ConversationMember.conversation_id == conversation_id,
-            models.ConversationMember.left_at.is_(None),
-        )
-    )
-    member_ids = list(recipients_result.scalars().all())
 
     # Block enforcement, resolved BEFORE the insert so a refused send never leaves
     # ciphertext behind (board card c243). A conversation that already exists is not a
@@ -744,6 +806,15 @@ async def leave_conversation(
     session: AsyncSession = Depends(get_session),
 ) -> ConversationMemberOut:
     """Set left_at for the caller — remaining clients rotate the sender key (SPEC §6.4)."""
+    # The admission-enabled path serializes the parent before reading the
+    # membership row.  This prevents a leave racing a guarded DM reuse from
+    # acting on a stale left_at value cached by the session.
+    if get_settings().account_deletion_http_admission_enabled:
+        await session.execute(
+            select(models.Conversation.id)
+            .where(models.Conversation.id == conversation_id)
+            .with_for_update()
+        )
     member = await session.get(
         models.ConversationMember, (conversation_id, user.id)
     )
