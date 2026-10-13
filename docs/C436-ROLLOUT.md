@@ -6,7 +6,7 @@ The current export covers the account profile, memberships, authored content and
 
 The export explicitly omits provider-held Firebase/Auth, payment, email, object storage, logging, and backup copies; plaintext that is never stored by the server; prekey byte material; dormant client-only SQLite data; and outbox delivery payloads or recipient identifiers. Role terms are currently limited to terms changed by the caller. Installment details are represented by caller-linked payment-plan rows; provider payment records remain omitted. Shared organization, safety, append-only financial, provider-backup, and logging records have documented retention reasons. User-block export includes only blocks initiated by the caller and never exposes the other account's identifier. New tables or columns require an allowlist review before they can enter an export.
 
-Deletion requests are accepted and tracked with a durable provider-step plan (migration 0043). The request route remains blocked until an operator supplies all four reviewed provider adapters: Firebase/Auth, payment provider, media storage, and email/logs/backups. Each step has a stable idempotency key, attempt count, sanitized outcome, and manual-review state; missing or ambiguous provider confirmation cannot reach the database tombstone. The injected executor preserves shared organization, safety/legal, authored encrypted-message, and append-only financial rows, removes the caller's server-side prekey rows for revoked devices, and removes direct Firebase/email identity linkage only after every provider step is confirmed. The default deployment has no configured adapters and therefore cannot perform deletion; operator credentials, grants, and adapters must be reviewed before any enablement. Export artifacts have a bounded maintenance CLI (`python -m app.jobs.account_data`) that previews by default and requires explicit `--delete`; this release does not enable a production schedule.
+Deletion requests are accepted and tracked with a durable provider-step plan (migration 0043). The request route remains blocked until an operator supplies all five reviewed provider adapters: payment provider, media storage, email/logs/backups, account-linked analytics, and Firebase/Auth. Each step has a stable idempotency key, attempt count, sanitized outcome, and manual-review state; missing or ambiguous provider confirmation cannot reach the database tombstone. The injected executor preserves shared organization, safety/legal, authored encrypted-message, and append-only financial rows, removes the caller's server-side prekey rows for revoked devices, and removes direct Firebase/email identity linkage only after every provider step is confirmed. The default deployment has no configured adapters and therefore cannot perform deletion; operator credentials, grants, and adapters must be reviewed before any enablement. Export artifacts have a bounded maintenance CLI (`python -m app.jobs.account_data`) that previews by default and requires explicit `--delete`; this release does not enable a production schedule.
 
 Rollout order:
 
@@ -76,3 +76,17 @@ The adapter follows Stripe's documented Customer deletion and retrieval behavior
 and connected-account scoping: [delete a Customer](https://docs.stripe.com/api/customers/delete),
 [retrieve a Customer](https://docs.stripe.com/api/customers/retrieve), and
 [Connect authentication](https://docs.stripe.com/connect/authentication).
+
+## Durable hold primitive (migration 0044)
+
+Migration 0044 adds the dormant account-deletion hold primitive after 0043.
+See `docs/C436-DELETION-HOLD.md`. It grants no permissions and is not called by
+HTTP, WebSocket, outbox or the executor. A complete release must enroll every
+writer and drain provider operations, uploads, exports and analytics ingestion
+before an operator uses provider cleanup. This source change does not establish
+that quiescence or authorize running the migration or deletion in production.
+
+The journal now requires five providers, including account-linked analytics,
+and a sixth local tombstone step. Successful analytics receipts preserve the
+request UUID, snapshot digest and BigQuery retention metadata. Those fields do
+not replace the operator's immutable reviewed snapshot or external readback.

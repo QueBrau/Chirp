@@ -12,7 +12,7 @@ PROJECT = 'chirps-prod'
 DATASET = 'chirp_analytics'
 TABLE = 'run_googleapis_com_stdout_20261012'
 RID = '11111111-1111-4111-8111-111111111111'
-KEY = 'c436:' + RID
+KEY = 'account-deletion:' + RID + ':analytics'
 
 def user_schema():
     return {'fields': [{'name': 'jsonPayload', 'type': 'RECORD', 'mode': 'NULLABLE', 'fields': [{'name': 'analytics', 'type': 'BOOLEAN', 'mode': 'NULLABLE'}, {'name': 'user_id', 'type': 'STRING', 'mode': 'NULLABLE'}]}]}

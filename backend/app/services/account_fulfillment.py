@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 import asyncio
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
@@ -17,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.services.account_cleanup import cleanup_local_account
 
-PROVIDER_STEPS = ("payment_provider", "media_storage", "email_logs_backups", "firebase_auth")
+PROVIDER_STEPS = ("payment_provider", "media_storage", "email_logs_backups", "analytics", "firebase_auth")
 SAFE_PROVIDER_ERRORS = frozenset({
     "provider_not_configured", "provider_confirmation_missing", "provider_error",
     "firebase_delete_failed", "firebase_readback_failed", "firebase_delete_not_confirmed",
@@ -28,15 +29,19 @@ PROVIDER_RETENTION_REASONS = {
     "email_delivery_records": "Email-provider delivery records remain subject to provider retention; expiry is not measured",
     "operational_logs": "Operational logs remain subject to provider retention; expiry is not measured",
     "database_backups": "Database backups remain subject to provider retention; expiry is not measured",
+    "bigquery_time_travel": "BigQuery time-travel retention remains provider controlled; expiry is not measured",
+    "bigquery_fail_safe": "BigQuery fail-safe retention remains provider controlled; expiry is not measured",
 }
 PROVIDER_RETENTION_CODES = {
     "payment_provider": frozenset({"stripe_deleted_customer_history"}),
     "media_storage": frozenset({"gcs_soft_deleted_versions"}),
     "email_logs_backups": frozenset({"email_delivery_records", "operational_logs", "database_backups"}),
     "firebase_auth": frozenset(),
+    "analytics": frozenset({"bigquery_time_travel", "bigquery_fail_safe"}),
 }
 MAX_RETENTION_RECEIPT_CODES = 3
 MAX_RECEIPT_SCOPES = 16
+MAX_ANALYTICS_SCOPES = 32
 MAX_RECEIPT_SCOPE_LENGTH = 512
 FIREBASE_CALL_TIMEOUT_SECONDS = 30.0
 
@@ -136,7 +141,10 @@ def _retention_receipt(step_key: str, result: dict[str, object]) -> list[str]:
     return list(raw)
 
 
-def validate_provider_receipt(step_key: str, subject: uuid.UUID, result: object) -> list[str]:
+def validate_provider_receipt(
+    step_key: str, subject: uuid.UUID, result: object, *,
+    expected_request_id: uuid.UUID | None = None,
+) -> list[str]:
     """Validate fresh and durable confirmation against the exact account and step.
 
     Scope labels are descriptive adapter output, not independent proof of a
@@ -151,15 +159,45 @@ def validate_provider_receipt(step_key: str, subject: uuid.UUID, result: object)
         or result.get("readback") is not True
     ):
         raise ProviderUnavailable("provider_confirmation_missing")
+    if step_key == "analytics":
+        if (type(result.get("time_travel_hours")) is not int
+                or not 48 <= result["time_travel_hours"] <= 168
+                or type(result.get("fail_safe_days")) is not int
+                or result.get("fail_safe_days") != 7):
+            raise ProviderUnavailable("provider_confirmation_missing")
+        request_id = result.get("request_id")
+        snapshot_digest = result.get("snapshot_digest")
+        try:
+            parsed_request_id = uuid.UUID(request_id) if isinstance(request_id, str) else None
+        except (TypeError, ValueError, AttributeError):
+            parsed_request_id = None
+        if parsed_request_id is None or not isinstance(snapshot_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", snapshot_digest):
+            raise ProviderUnavailable("provider_confirmation_missing")
+        if (expected_request_id is None or parsed_request_id != expected_request_id
+                or request_id != str(expected_request_id)):
+            raise ProviderUnavailable("provider_confirmation_missing")
+        excluded = result.get("excluded_scope")
+        if (not isinstance(excluded, list) or len(excluded) > 1
+                or any(not isinstance(item, str) or not item.strip() or len(item) > MAX_RECEIPT_SCOPE_LENGTH for item in excluded)):
+            raise ProviderUnavailable("provider_confirmation_missing")
+        if excluded and excluded != ["chirps_analytics_probe_20260908"]:
+            raise ProviderUnavailable("provider_confirmation_missing")
     scope = result.get("scope")
+    scope_limit = MAX_ANALYTICS_SCOPES if step_key == "analytics" else MAX_RECEIPT_SCOPES
     if (
         not isinstance(scope, list)
-        or not 1 <= len(scope) <= MAX_RECEIPT_SCOPES
+        or not 1 <= len(scope) <= scope_limit
         or any(not isinstance(item, str) or not item.strip()
                or len(item) > MAX_RECEIPT_SCOPE_LENGTH for item in scope)
         or len(set(scope)) != len(scope)
     ):
         raise ProviderUnavailable("provider_confirmation_missing")
+    if step_key == "analytics":
+        if (scope != sorted(scope) or len(scope) + len(excluded) > MAX_ANALYTICS_SCOPES
+                or any(not re.fullmatch(r"run_googleapis_com_stdout_[0-9]{8}", item) for item in scope)):
+            raise ProviderUnavailable("provider_confirmation_missing")
+        if result.get("retained_with_reason") != ["bigquery_time_travel", "bigquery_fail_safe"]:
+            raise ProviderUnavailable("provider_confirmation_missing")
     return _retention_receipt(step_key, result)
 
 
@@ -179,8 +217,9 @@ async def prepare_deletion_plan(session: AsyncSession, request: models.AccountDa
             )
             session.add(step)
             steps.append(step)
-    if not request.provider_steps:
-        request.provider_steps = {step_key: "pending" for step_key in (*PROVIDER_STEPS, "database_tombstone")}
+    request.provider_steps = {
+        step.step_key: step.status or "pending" for step in steps
+    }
     request.status = "processing"
     request.failure_code = None
     request.updated_at = _now()
@@ -200,10 +239,43 @@ async def run_deletion(
     adapter, exception, or ambiguous result leaves the account and remaining steps
     intact for retry/manual review.
     """
-    request = await session.get(models.AccountDataRequest, request_id, with_for_update=True)
+    request = await session.get(
+        models.AccountDataRequest, request_id, with_for_update=True, populate_existing=True,
+    )
     if request is None or request.user_id != user.id or request.kind != "deletion":
         raise LookupError("deletion_request_not_found")
     if request.status == "completed":
+        durable = list((await session.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request.id)
+            .execution_options(populate_existing=True).with_for_update())).all())
+        await session.refresh(user)
+        required = set((*PROVIDER_STEPS, "database_tombstone"))
+        if {step.step_key for step in durable} != required:
+            # A historical terminal request must remain an immutable record. Do
+            # not grow a new plan or retry providers against its tombstoned user.
+            await session.rollback()
+            return DeletionRun("blocked", (), "analytics")
+        tombstone = next(step for step in durable if step.step_key == "database_tombstone")
+        valid_terminal = (request.completed_at is not None
+                          and request.fulfillment_lease_token is None
+                          and request.fulfillment_lease_expires_at is None
+                          and all(step.lease_token is None and step.lease_expires_at is None for step in durable)
+                          and tombstone.status == "succeeded" and tombstone.completed_at is not None
+                          and tombstone.idempotency_key == _key(request.id, "database_tombstone")
+                          and user.is_ghost is True
+                          and user.firebase_uid == f"deleted:{user.id}"
+                          and user.email == f"deleted+{user.id}@invalid.chirp")
+        for step in durable:
+            if step.step_key == "database_tombstone":
+                continue
+            try:
+                validate_provider_receipt(step.step_key, user.id, step.provider_ref, expected_request_id=request.id)
+                valid_terminal = valid_terminal and step.status == "succeeded" and step.completed_at is not None and step.idempotency_key == _key(request.id, step.step_key)
+            except ProviderUnavailable:
+                valid_terminal = False
+        if not valid_terminal:
+            await session.rollback()
+            return DeletionRun("blocked", (), "analytics")
         return DeletionRun("completed", tuple(PROVIDER_STEPS) + ("database_tombstone",))
     if request.status in {"canceled", "failed"}:
         return DeletionRun("blocked", (), None)
@@ -246,7 +318,9 @@ async def run_deletion(
             # A legacy or manually altered receipt must not silently authorize
             # continuation. Validate it before invoking any later provider.
             try:
-                validate_provider_receipt(step_key, user.id, step.provider_ref)
+                if step.completed_at is None or step.idempotency_key != _key(request.id, step_key):
+                    raise ProviderUnavailable("provider_confirmation_missing")
+                validate_provider_receipt(step_key, user.id, step.provider_ref, expected_request_id=request.id)
             except ProviderUnavailable:
                 step.status = "manual_review"
                 step.last_error = "provider_confirmation_missing"
@@ -305,7 +379,7 @@ async def run_deletion(
         await session.commit()
         try:
             result = await provider.delete_account_data(user=user, idempotency_key=step.idempotency_key)
-            retained_with_reason = validate_provider_receipt(step_key, user.id, result)
+            retained_with_reason = validate_provider_receipt(step_key, user.id, result, expected_request_id=request.id)
         except Exception as exc:
             code = str(exc) if isinstance(exc, ProviderUnavailable) else "provider_error"
             step_status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
@@ -336,16 +410,22 @@ async def run_deletion(
                 return DeletionRun("blocked", tuple(completed), step_key)
             await session.commit()
             return DeletionRun("blocked", tuple(completed), step_key)
+        provider_ref = {"confirmed": True, "provider": result["provider"],
+                        "subject": result["subject"], "scope": result["scope"],
+                        "readback": True, "retained_with_reason": retained_with_reason}
+        if step_key == "analytics":
+            provider_ref.update({"time_travel_hours": result["time_travel_hours"],
+                                 "fail_safe_days": result["fail_safe_days"],
+                                 "excluded_scope": result["excluded_scope"],
+                                 "request_id": result["request_id"],
+                                 "snapshot_digest": result["snapshot_digest"]})
         fenced = await session.execute(update(models.AccountFulfillmentStep).where(
             models.AccountFulfillmentStep.id == step.id,
             models.AccountFulfillmentStep.status == "running",
             models.AccountFulfillmentStep.lease_token == token,
             models.AccountFulfillmentStep.lease_expires_at > _now(),
         ).values(status="succeeded", lease_token=None, lease_expires_at=None,
-                 provider_ref={"confirmed": True, "provider": result["provider"],
-                               "subject": result["subject"], "scope": result["scope"],
-                               "readback": True,
-                               "retained_with_reason": retained_with_reason}, completed_at=_now()))
+                 provider_ref=provider_ref, completed_at=_now()))
         if fenced.rowcount != 1:
             await session.rollback()
             return DeletionRun("blocked", tuple(completed), step_key)
@@ -374,10 +454,12 @@ async def run_deletion(
         if durable_step.step_key == "database_tombstone":
             continue
         try:
-            if durable_step.status != "succeeded":
+            if (durable_step.status != "succeeded" or durable_step.completed_at is None
+                    or durable_step.idempotency_key != _key(request.id, durable_step.step_key)):
                 raise ProviderUnavailable("provider_confirmation_missing")
             provider_retention_codes[durable_step.step_key] = validate_provider_receipt(
                 durable_step.step_key, user.id, durable_step.provider_ref,
+                expected_request_id=request.id,
             )
         except ProviderUnavailable:
             request.status = "blocked"

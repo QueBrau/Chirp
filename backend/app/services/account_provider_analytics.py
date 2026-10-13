@@ -13,6 +13,10 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, replace
 from functools import wraps
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.models import User
 
 import httpx
 
@@ -481,9 +485,16 @@ class BigQueryAnalyticsProvider:
             raise _fail('snapshot_drift')
 
     @_bounded
-    async def delete_account_data(self, *, user_id, idempotency_key):
+    async def delete_account_data(
+        self, *, user: User | None = None, user_id: uuid.UUID | str | None = None,
+        idempotency_key: str,
+    ) -> dict[str, object]:
         s, rest = self.snapshot, self.rest
-        if _uuid(user_id) != s.user_id or idempotency_key != 'c436:' + s.request_id:
+        if user is not None:
+            if user_id is not None and _uuid(user_id) != str(user.id):
+                raise _fail('subject_or_request_mismatch')
+            user_id = user.id
+        if user_id is None or _uuid(user_id) != s.user_id or idempotency_key != 'account-deletion:' + s.request_id + ':analytics':
             raise _fail('subject_or_request_mismatch')
         s.validate()
         self.freeze.validate(s.user_id)
@@ -519,6 +530,7 @@ class BigQueryAnalyticsProvider:
             s.validate()
             self.freeze.validate(s.user_id)
         return {'confirmed': True, 'provider': 'analytics', 'subject': s.user_id,
+                'request_id': s.request_id,
                 'scope': [t.name for t in s.tables], 'readback': True,
                 'retained_with_reason': ['bigquery_time_travel', 'bigquery_fail_safe'],
                 'time_travel_hours': s.time_travel_hours, 'fail_safe_days': 7,

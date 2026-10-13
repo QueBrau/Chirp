@@ -238,7 +238,7 @@ async def run_peer(tmp_path, mode="normal", **options):
 @pytest.mark.asyncio
 async def test_real_early_receipts_reconcile_after_http_response_and_private_aggregate(tmp_path):
     result, peer, raw = await run_peer(tmp_path)
-    assert result["status"] == "LOCAL_RECEIPTS_OBSERVED"
+    assert result["status"] == "LOCAL_RECEIPTS_OBSERVED", result
     assert result["errors"] == []
     assert result["messages"] == {"requested": 1, "attempted": 1, "accepted": 1, "rejected": 0, "unconfirmed": 0}
     assert result["receipts"]["expected"] == result["receipts"]["unique"] == 2

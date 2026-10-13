@@ -1,6 +1,7 @@
 """Durable provider receipts must still authorize the same account on resume."""
 
 import uuid
+from datetime import date, timedelta
 from collections.abc import Awaitable, Callable
 
 import pytest
@@ -102,3 +103,31 @@ async def test_changed_durable_receipt_blocks_final_cleanup(
         request = await session.get(models.AccountDataRequest, request_id)
         assert request.completed_at is None
         assert request.fulfillment_lease_token is None
+
+
+@pytest.mark.parametrize(
+    ("targets", "exclude_probe", "allowed"),
+    [(32, False, True), (31, True, True), (32, True, False), (33, False, False)],
+)
+def test_analytics_receipt_inventory_bound_includes_probe(
+    targets: int, exclude_probe: bool, allowed: bool,
+) -> None:
+    from app.services.account_fulfillment import ProviderUnavailable, validate_provider_receipt
+
+    subject = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    request_id = uuid.UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    receipt = {
+        "provider": "analytics", "subject": str(subject), "confirmed": True,
+        "readback": True, "request_id": str(request_id), "snapshot_digest": "c" * 64,
+        "scope": [f"run_googleapis_com_stdout_{date(2026, 1, 1) + timedelta(days=n):%Y%m%d}" for n in range(targets)],
+        "excluded_scope": ["chirps_analytics_probe_20260908"] if exclude_probe else [],
+        "time_travel_hours": 168, "fail_safe_days": 7,
+        "retained_with_reason": ["bigquery_time_travel", "bigquery_fail_safe"],
+    }
+    if allowed:
+        assert validate_provider_receipt(
+            "analytics", subject, receipt, expected_request_id=request_id,
+        ) == receipt["retained_with_reason"]
+    else:
+        with pytest.raises(ProviderUnavailable):
+            validate_provider_receipt("analytics", subject, receipt, expected_request_id=request_id)

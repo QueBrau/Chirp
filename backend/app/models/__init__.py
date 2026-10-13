@@ -3,6 +3,7 @@
 from app.models.alumni import AlumniProfile, JobPost
 from app.models.delivery import DeliveryOutbox
 from app.models.data_requests import AccountDataArtifact, AccountDataRequest, AccountFulfillmentStep
+from app.models.account_deletion_holds import AccountDeletionHold
 from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
 from app.models.events import Event, EventInvite, EventRsvp
 from app.models.finance import (
@@ -58,6 +59,7 @@ __all__ = [
     "AccountDataArtifact",
     "AccountDataRequest",
     "AccountFulfillmentStep",
+    "AccountDeletionHold",
     "Device",
     "DuesCycle",
     "DuesPaymentPlan",

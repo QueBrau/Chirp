@@ -32,7 +32,7 @@ async def test_preflight_binds_owner_and_reports_blocked_plan(client, make_user,
     assert result["ready_for_deletion"] is False
     assert "provider_not_configured" not in result["receipt_errors"]
     assert set(result["step_statuses"]) == {
-        "payment_provider", "media_storage", "email_logs_backups", "firebase_auth", "database_tombstone",
+        "payment_provider", "media_storage", "email_logs_backups", "analytics", "firebase_auth", "database_tombstone",
     }
     assert "provider_ref" not in str(result)
     assert owner.email not in str(result)
@@ -181,6 +181,16 @@ async def test_preflight_accepts_only_exact_completed_tombstone_evidence(client,
                 "readback": True,
                 "retained_with_reason": [],
             }
+            if step.step_key == "analytics":
+                step.provider_ref.update({
+                    "scope": ["run_googleapis_com_stdout_20261012"],
+                    "retained_with_reason": ["bigquery_time_travel", "bigquery_fail_safe"],
+                    "time_travel_hours": 168,
+                    "fail_safe_days": 7,
+                    "excluded_scope": [],
+                    "request_id": str(request_id),
+                    "snapshot_digest": "e" * 64,
+                })
         await session.commit()
     result = await run_preflight(
         database_url, request_id=request_id, expected_user_id=uuid.UUID(owner.id)
@@ -189,9 +199,28 @@ async def test_preflight_accepts_only_exact_completed_tombstone_evidence(client,
     assert result["ready_for_deletion"] is False
 
     async with get_session_factory()() as session:
+        step = await session.scalar(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request_id,
+            models.AccountFulfillmentStep.step_key == "analytics",
+        ))
+        step.idempotency_key = "foreign-private-key"
+        await session.commit()
+    wrong_key = await run_preflight(
+        database_url, request_id=request_id, expected_user_id=uuid.UUID(owner.id),
+    )
+    assert "analytics_idempotency_key_invalid" in wrong_key["blockers"]
+    assert wrong_key["durable_completion_evidence"] is False
+    assert "foreign-private-key" not in str(wrong_key)
+
+    async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
         user.email = "deleted+wrong@invalid.chirp"
+        step = await session.scalar(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request_id,
+            models.AccountFulfillmentStep.step_key == "analytics",
+        ))
+        step.idempotency_key = f"account-deletion:{request_id}:analytics"
         await session.commit()
     corrupted = await run_preflight(
         database_url, request_id=request_id, expected_user_id=uuid.UUID(owner.id)
