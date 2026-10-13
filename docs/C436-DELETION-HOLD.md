@@ -64,8 +64,9 @@ independent-account behavior.
 identity dependency. It preserves suspension checks without requiring the
 acceptance the request is recording. Policy/status reads remain unguarded reads.
 Chirp creation uses a guarded campus dependency; the existing campus and current
-verification checks still apply. Other nested membership and role dependencies
-have not been enrolled.
+verification checks still apply. The organization routes listed below use
+guarded membership and role dependencies; other callers of the ordinary
+dependencies are not implicitly enrolled.
 
 The dependency resolves the verified Firebase UID to a database user UUID in a
 separate short read session, then closes that session before using the request
@@ -147,6 +148,46 @@ not a guarantee that earlier Redis, push or WebSocket delivery has drained.
 Immediate delivery and the outbox worker still require separate durable operation
 fencing and drain integration before production deletion can be enabled.
 
+## Organization and safety preferences
+
+The same disabled flag also enrolls these mutations:
+
+- Chapter creation and joining: `POST /chapters`, `POST /chapters/join`.
+- Chapter updates and approval: `PATCH /chapters/{chapter_id}` and
+  `PATCH /chapters/{chapter_id}/moderation-approval`.
+- Membership updates: `PATCH /chapters/{chapter_id}/members`.
+- Invite creation and revocation: `POST /chapters/{chapter_id}/invites` and
+  `POST /chapters/{chapter_id}/invites/revoke`.
+- Meeting creation, updates and deletion, plus attendance upserts:
+  `POST /chapters/{chapter_id}/meetings`,
+  `PATCH` and `DELETE /chapters/{chapter_id}/meetings/{meeting_id}`, and
+  `PUT /chapters/{chapter_id}/meetings/{meeting_id}/attendance`.
+- Reporter/blocker-owned safety preferences: `POST /moderation/reports`,
+  `POST` and `DELETE /moderation/blocks`, and
+  `POST` and `DELETE /moderation/blocks/by-chirp/{chirp_id}`.
+
+Membership updates bind both the actor and the target user. A separate short
+preflight checks ordinary authentication, active chapter membership, president
+authority and target membership existence before checking any target hold. The
+guarded request repeats authorization and locks the target membership, validating
+the exact bound scope before mutation. A hold prevents reactivation or promotion
+after cleanup and prevents new role terms for the deleted account.
+
+The other listed routes bind only the actor. Organization meeting and attendance
+records are retained history, and an attendee's hold must not freeze another
+authorized officer's work. The existing attendee eligibility and role policies
+still apply. Incoming reports and blocks are retained safety records owned by
+the reporter/blocker; their target's hold does not prevent these actions. In
+particular, anonymous blocking does not query or expose the author's hold state.
+Cleanup removes outgoing blocks, and the held actor cannot recreate them.
+Reads retain their existing authorization and stay outside write admission.
+
+Moderator report resolution, content removal and account suspension are not
+enrolled by this safety-preference change. Finance, other shared-content writers,
+background dispatch and external operations also remain separate review gates.
+
+## Remaining rollout gates
+
 This flag neither activates a hold nor adds an activation endpoint. Ordinary
 deletion intake still does not create a hold. Keep the flag disabled until migration
 0044 and the runtime's required read permission have been separately reviewed and
@@ -157,8 +198,8 @@ Before any production deletion, inventory and enroll the remaining HTTP writers
 (including GET routes that consume keys), WebSocket writes, outbox/worker writes,
 and writes by other actors that target the deleting account. Multi-account paths
 need sorted admission keys before row locks; consuming key requests and the enrolled
-conversation/message writes bind multiple accounts. Drain in-flight uploads,
-exports, provider calls and analytics ingestion
+conversation/message writes and membership updates bind multiple accounts.
+Drain in-flight uploads, exports, provider calls and analytics ingestion
 and review the executor's hold-owner path. SQL admission alone proves none of
 those external boundaries. No production migration, grants, enablement or deletion
 is authorized by this source change.

@@ -110,22 +110,25 @@ async def test_ineligible_held_targets_keep_original_creation_refusals(
 ):
     _set_admission(monkeypatch, True)
     caller, target = await make_user("Caller"), await make_user("Unreachable target")
+    blocked_target = await make_user("Blocked target")
+    await share_verified_campus(caller.id, blocked_target.id)
+    blocked = await client.post(
+        "/moderation/blocks", headers=blocked_target.headers,
+        json={"blocked_id": caller.id},
+    )
+    assert blocked.status_code == 201, blocked.text
     # Unrelated accounts have no reachable-campus or chapter relationship.
     await _hold(target.id)
+    await _hold(blocked_target.id)
     refused = await client.post(
         "/conversations", headers=caller.headers,
         json={"kind": "dm", "member_user_ids": [target.id]},
     )
     assert refused.status_code == 403, refused.text
     assert refused.json() == {"detail": "recipient_not_reachable"}
-    await share_verified_campus(caller.id, target.id)
-    blocked = await client.post(
-        "/moderation/blocks", headers=target.headers, json={"blocked_id": caller.id},
-    )
-    assert blocked.status_code == 201, blocked.text
     refused = await client.post(
         "/conversations", headers=caller.headers,
-        json={"kind": "dm", "member_user_ids": [target.id]},
+        json={"kind": "dm", "member_user_ids": [blocked_target.id]},
     )
     assert refused.status_code == 403, refused.text
     assert refused.json() == {"detail": "recipient_not_reachable"}
