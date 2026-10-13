@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import event, select, text
 
 from app import models
 from app.config import get_settings
@@ -13,8 +13,15 @@ from app.db import get_session_factory
 from app.services.account_deletion_hold import activate_deletion_hold
 
 
-def _set_admission_flag(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+def _set_admission_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    *,
+    legal_enforcement: bool | None = None,
+) -> None:
     monkeypatch.setenv("ACCOUNT_DELETION_HTTP_ADMISSION_ENABLED", str(enabled).lower())
+    if legal_enforcement is not None:
+        monkeypatch.setenv("LEGAL_ENFORCEMENT_ENABLED", str(legal_enforcement).lower())
     get_settings.cache_clear()
 
 
@@ -150,8 +157,21 @@ async def test_flag_off_preserves_legacy_writes_and_does_not_activate_intake_hol
 ) -> None:
     _set_admission_flag(monkeypatch, False)
     user = await make_user("Compatibility user")
-    response = await _profile(client, user, company="Legacy path")
+    from app.db import get_engine
+
+    statements: list[str] = []
+
+    def record_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement.lower())
+
+    engine = get_engine()
+    event.listen(engine.sync_engine, "before_cursor_execute", record_sql)
+    try:
+        response = await _profile(client, user, company="Legacy path")
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record_sql)
     assert response.status_code == 200, response.text
+    assert not any("account_deletion_holds" in statement for statement in statements)
 
     intake = await client.post(
         "/me/data-requests", headers=user.headers, json={"kind": "deletion"}
@@ -165,6 +185,35 @@ async def test_flag_off_preserves_legacy_writes_and_does_not_activate_intake_hol
             )
         )
         assert hold is None
+
+
+@pytest.mark.asyncio
+async def test_legal_enforcement_still_rejects_unaccepted_write(
+    client, make_user, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_admission_flag(monkeypatch, True, legal_enforcement=True)
+    user = await make_user("Legal gate user")
+    response = await _profile(client, user, company="Must accept first")
+    assert response.status_code == 428, response.text
+    assert response.json()["detail"] == "legal_acceptance_required"
+
+
+@pytest.mark.asyncio
+async def test_invalid_guard_is_sanitized_by_actual_http_handler(
+    client, make_user, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_admission_flag(monkeypatch, True)
+    user = await make_user("Guard failure user")
+    from app.services import account_write_guard
+    from app.services.account_deletion_hold import DeletionHoldInvalid
+
+    def fail_bind(*_args, **_kwargs):
+        raise DeletionHoldInvalid("internal identity or SQL detail")
+
+    monkeypatch.setattr(account_write_guard, "bind_account_write_guard", fail_bind)
+    response = await _profile(client, user, company="Should not write")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "account_write_admission_unavailable"}
 
 
 def test_only_alumni_mutations_are_enrolled_in_write_admission() -> None:
