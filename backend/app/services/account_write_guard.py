@@ -1,17 +1,18 @@
 """Session-local account write admission for deletion holds.
 
-The guard is deliberately attached to one SQLAlchemy session instance.  It does not
-install a global event handler, commit transactions, or keep a database connection
-alive while a caller performs external work.  The binding persists across commit and
-rollback; each new transaction runs the guard again.
+The actor and target binding persists across commit and rollback. Every new
+transaction acquires its shared gates before application SQL. Event handlers are
+attached to the individual session; callers still own commit and rollback.
 """
 from __future__ import annotations
 
 import re
+import time
 import uuid
+from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import event, text
+from sqlalchemy import bindparam, event, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -25,6 +26,7 @@ from app.services.account_deletion_hold import (
 _INFO_KEY = "c436_account_write_guard"
 _FAILED_KEY = "c436_account_write_guard_failed"
 GUARD_LOCK_TIMEOUT_MS = 5_000
+MAX_GUARDED_ACCOUNTS = 64
 
 
 def _canonical_uuid(value: uuid.UUID | str) -> uuid.UUID:
@@ -54,6 +56,51 @@ def _timeout_millis(value: str) -> float | None:
     return amount * factor
 
 
+def _target_ids(
+    actor_id: uuid.UUID, target_user_ids: Iterable[uuid.UUID | str] | None,
+) -> tuple[uuid.UUID, ...]:
+    targets = {actor_id}
+    if target_user_ids is not None:
+        try:
+            iterator = iter(target_user_ids)
+        except TypeError:
+            raise DeletionHoldInvalid("invalid_target_set") from None
+        for position, value in enumerate(iterator, start=1):
+            if position > MAX_GUARDED_ACCOUNTS:
+                raise DeletionHoldInvalid("target_set_too_large")
+            try:
+                targets.add(_canonical_uuid(value))
+            except (DeletionHoldInvalid, TypeError):
+                raise DeletionHoldInvalid("invalid_target_set") from None
+            if len(targets) > MAX_GUARDED_ACCOUNTS:
+                raise DeletionHoldInvalid("target_set_too_large")
+    return tuple(sorted(targets, key=str))
+
+
+def _binding_parts(binding: object) -> tuple[uuid.UUID, str, tuple[uuid.UUID, ...]]:
+    if not isinstance(binding, tuple) or len(binding) != 3:
+        raise DeletionHoldInvalid("invalid_write_guard_binding")
+    user_id, firebase_uid = binding[:2]
+    if not isinstance(user_id, uuid.UUID) or not isinstance(firebase_uid, str):
+        raise DeletionHoldInvalid("invalid_write_guard_binding")
+    try:
+        _validate_uid(firebase_uid)
+    except DeletionHoldInvalid:
+        raise DeletionHoldInvalid("invalid_write_guard_binding") from None
+    raw_targets = binding[2]
+    if not isinstance(raw_targets, tuple):
+        raise DeletionHoldInvalid("invalid_write_guard_binding")
+    targets = _target_ids(user_id, raw_targets)
+    if user_id not in raw_targets or raw_targets != targets:
+        raise DeletionHoldInvalid("invalid_write_guard_binding")
+    return user_id, firebase_uid, targets
+
+
+def _advisory_keys(targets: tuple[uuid.UUID, ...]) -> tuple[int, ...]:
+    """Deduplicate collision-equivalent keys and impose one global lock order."""
+    return tuple(sorted({advisory_key(target) for target in targets}))
+
+
 def _failed(sync_session: Session) -> None:
     if sync_session.info.get(_FAILED_KEY):
         raise DeletionHoldInvalid("write_guard_transaction_failed_rollback_required")
@@ -77,82 +124,96 @@ def _after_soft_rollback(sync_session: Session, previous_transaction: Any) -> No
 
 
 def _after_begin(sync_session: Session, transaction: Any, connection: Any) -> None:
-    """Install the shared gate and verify identity at each outer transaction start."""
+    """Acquire all shared gates and revalidate the bound scope per transaction."""
     if transaction.parent is not None:
         return
     binding = sync_session.info.get(_INFO_KEY)
     try:
-        if not isinstance(binding, tuple) or len(binding) != 2:
-            raise DeletionHoldInvalid("invalid_write_guard_binding")
-        user_id, firebase_uid = binding
-        if not isinstance(user_id, uuid.UUID) or not isinstance(firebase_uid, str):
-            raise DeletionHoldInvalid("invalid_write_guard_binding")
+        user_id, firebase_uid, targets = _binding_parts(binding)
         isolation = connection.exec_driver_sql("SHOW TRANSACTION ISOLATION LEVEL").scalar_one()
         if isolation != "read committed":
             raise DeletionHoldInvalid("read_committed_required")
         current_timeout = connection.exec_driver_sql("SHOW lock_timeout").scalar_one()
-        # SET LOCAL restores the caller's setting at transaction end. Keep a
-        # stricter caller timeout, but never wait indefinitely on a hold writer.
-        timeout_ms = _timeout_millis(current_timeout)
-        if timeout_ms is None or timeout_ms > GUARD_LOCK_TIMEOUT_MS:
+        configured_ms = _timeout_millis(current_timeout)
+        budget_ms = GUARD_LOCK_TIMEOUT_MS if configured_ms is None else min(configured_ms, GUARD_LOCK_TIMEOUT_MS)
+        # One deadline for the whole scope prevents N targets multiplying the
+        # wait budget. Restore the caller's setting before application SQL.
+        deadline = time.monotonic() + budget_ms / 1000
+        for key in _advisory_keys(targets):
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                raise DeletionHoldInvalid("write_guard_unavailable")
             connection.execute(
                 text("SELECT set_config('lock_timeout', :timeout, true)"),
-                {"timeout": f"{GUARD_LOCK_TIMEOUT_MS}ms"},
+                {"timeout": f"{remaining_ms}ms"},
             )
-        key = advisory_key(user_id)
-        connection.execute(
-            text("SELECT pg_advisory_xact_lock_shared(:key)"), {"key": key}
-        )
-        # The bounded setting is only for acquiring the shared lock. Restore the
-        # caller's transaction setting before any application SQL runs.
+            connection.execute(text("SELECT pg_advisory_xact_lock_shared(:key)"), {"key": key})
         connection.execute(
             text("SELECT set_config('lock_timeout', :timeout, true)"),
             {"timeout": current_timeout},
         )
         connection.execute(
-            text("SELECT set_config('chirp.deletion_hold_shared_key', :key, true)"), {"key": str(key)}
+            text("SELECT set_config('chirp.deletion_hold_shared_key', :key, true)"),
+            {"key": str(advisory_key(user_id))},
         )
         row = connection.execute(
-            text("SELECT id, firebase_uid FROM users WHERE id = :user_id"), {"user_id": user_id}
+            text("SELECT id, firebase_uid FROM users WHERE id = :user_id"),
+            {"user_id": user_id},
         ).first()
         if row is None or row[0] != user_id or row[1] != firebase_uid:
             raise DeletionHoldInvalid("write_guard_identity_changed")
+        target_rows = connection.execute(
+            text("SELECT id FROM users WHERE id IN :target_ids").bindparams(
+                bindparam("target_ids", expanding=True)
+            ),
+            {"target_ids": list(targets)},
+        ).all()
+        if len(target_rows) != len(targets):
+            raise DeletionHoldInvalid("write_guard_target_missing")
         hold = connection.execute(
             text("SELECT id FROM account_deletion_holds "
-                 "WHERE user_id = :user_id AND state = 'active' LIMIT 1"),
-            {"user_id": user_id},
+                 "WHERE user_id IN :target_ids AND state = 'active' LIMIT 1").bindparams(
+                     bindparam("target_ids", expanding=True)
+                 ),
+            {"target_ids": list(targets)},
         ).first()
         if hold is not None:
             raise DeletionHoldActive("account_deletion_hold_active")
     except DBAPIError:
-        # The event runs before SQLAlchemy can finish the transaction start. A
-        # direct connection reference may still exist, so invalidate it deliberately;
-        # callers must rollback before any subsequent transaction can run.
+        # Transaction startup has not completed. Invalidate even a retained
+        # connection reference and require an explicit outer rollback.
         sync_session.info[_FAILED_KEY] = True
         connection.invalidate()
         raise DeletionHoldInvalid("write_guard_unavailable") from None
     except BaseException:
-        # Preserve cancellation and guard-specific errors, but fail closed first.
+        # Preserve cancellation and guard errors after failing closed.
         sync_session.info[_FAILED_KEY] = True
         connection.invalidate()
         raise
 
 
 def bind_account_write_guard(
-    session: AsyncSession, *, user_id: uuid.UUID, firebase_uid: str
+    session: AsyncSession, *, user_id: uuid.UUID, firebase_uid: str,
+    target_user_ids: Iterable[uuid.UUID | str] = (),
 ) -> None:
-    """Bind one account identity to this session before its first transaction."""
+    """Bind an immutable actor-plus-target scope before the first transaction."""
     uid = _canonical_uuid(user_id)
     fid = _validate_uid(firebase_uid)
     if session.in_transaction() or session.new or session.dirty or session.deleted:
         raise DeletionHoldInvalid("write_guard_must_be_bound_before_transaction")
+    targets = _target_ids(uid, target_user_ids)
+    binding = (uid, fid, targets)
     sync_session = session.sync_session
     previous = sync_session.info.get(_INFO_KEY)
     if previous is not None:
-        if previous != (uid, fid):
+        try:
+            previous_parts = _binding_parts(previous)
+        except DeletionHoldInvalid:
+            raise DeletionHoldInvalid("write_guard_rebind_identity") from None
+        if previous_parts != (uid, fid, targets):
             raise DeletionHoldInvalid("write_guard_rebind_identity")
         return
-    sync_session.info[_INFO_KEY] = (uid, fid)
+    sync_session.info[_INFO_KEY] = binding
     event.listen(sync_session, "after_begin", _after_begin, once=False)
     event.listen(sync_session, "before_flush", _before_flush, once=False)
     event.listen(sync_session, "before_commit", _before_commit, once=False)
@@ -160,7 +221,34 @@ def bind_account_write_guard(
     event.listen(sync_session, "after_soft_rollback", _after_soft_rollback, once=False)
 
 
-def is_account_write_guard_bound(session: AsyncSession, *, firebase_uid: str) -> bool:
-    """Return whether this session is bound to the supplied Firebase identity."""
-    binding = session.sync_session.info.get(_INFO_KEY)
-    return isinstance(binding, tuple) and len(binding) == 2 and binding[1] == firebase_uid
+def is_account_write_guard_bound(
+    session: AsyncSession, *, firebase_uid: str,
+    target_user_ids: Iterable[uuid.UUID | str] | None = None,
+) -> bool:
+    """Return whether identity and optional exact target scope are bound."""
+    try:
+        user_id, bound_uid, targets = _binding_parts(session.sync_session.info.get(_INFO_KEY))
+        expected = _target_ids(user_id, target_user_ids)
+    except DeletionHoldInvalid:
+        return False
+    return bound_uid == firebase_uid and targets == expected
+
+
+def assert_account_write_targets(
+    session: AsyncSession, *, user_id: uuid.UUID | str,
+    target_user_ids: Iterable[uuid.UUID | str] = (),
+) -> None:
+    """Reject a route whose fresh actor-plus-target set differs from its binding."""
+    try:
+        actor_id, _firebase_uid, bound_targets = _binding_parts(
+            session.sync_session.info.get(_INFO_KEY)
+        )
+        if _canonical_uuid(user_id) != actor_id:
+            raise DeletionHoldInvalid("write_guard_target_set_changed")
+        fresh_targets = _target_ids(actor_id, target_user_ids)
+    except DeletionHoldInvalid:
+        session.sync_session.info[_FAILED_KEY] = True
+        raise DeletionHoldInvalid("write_guard_target_set_changed") from None
+    if fresh_targets != bound_targets:
+        session.sync_session.info[_FAILED_KEY] = True
+        raise DeletionHoldInvalid("write_guard_target_set_changed")

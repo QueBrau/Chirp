@@ -1,7 +1,7 @@
 # Account-deletion write-hold primitive
 
 This migration adds `account_deletion_holds` and the transaction-scoped primitive
-in `backend/app/services/account_deletion_hold.py`. The first HTTP enrollment below
+in `backend/app/services/account_deletion_hold.py`. The HTTP enrollment below
 is disabled by default. WebSocket, outbox, and deletion-executor paths are not yet
 enrolled. The primitive and partial enrollment do not freeze the product.
 
@@ -34,8 +34,9 @@ Hash collisions can only serialize or over-block unrelated accounts; they cannot
 permit a write. The protocol requires PostgreSQL `READ COMMITTED`, because that
 is the default isolation level with a fresh statement snapshot. Repeatable-read
 and serializable callers fail closed rather than using a potentially stale snapshot.
-All multi-account integrations must acquire keys in sorted UUID order before any
-row lock to avoid advisory/row-lock cycles.
+The session guard acquires deduplicated advisory keys in ascending signed-bigint
+order before any application SQL or row lock. All future multi-account
+integrations must use that same order to avoid advisory/row-lock cycles.
 
 The primitive does not attest ingestion quiescence, provider deletion, Redis
 delivery, active WebSocket closure, or complete write-path coverage. Those are
@@ -44,7 +45,7 @@ use real PostgreSQL, observe actual blocking PIDs, and coordinate an admitted wr
 its shared lock, a fresh post-activation writer, rollback, isolation rejection, and
 independent-account behavior.
 
-## First HTTP enrollment (disabled)
+## HTTP enrollment (disabled)
 
 `ACCOUNT_DELETION_HTTP_ADMISSION_ENABLED` defaults to `false`. When enabled,
 `get_current_user_for_write()` protects these actor-owned mutations:
@@ -52,6 +53,19 @@ independent-account behavior.
 - `PUT /alumni/profile`
 - `POST /jobs`
 - `DELETE /jobs/{job_id}` (the existing poster-only check still applies)
+- `POST /devices` and `POST /devices/{device_id}/prekeys`
+- `POST /v2/devices`, `POST /v2/devices/{device_id}/approve`,
+  `POST /v2/devices/{device_id}/keys`, and `DELETE /v2/devices/{device_id}`
+- `POST /campuses/{campus_id}/chirps` and `DELETE /chirps/{chirp_id}`
+- `POST /conversations/{conversation_id}/leave`
+- `POST /messages/{message_id}/receipts`
+
+`POST /auth/legal-acceptance` uses the same hold guard with the legal-status
+identity dependency. It preserves suspension checks without requiring the
+acceptance the request is recording. Policy/status reads remain unguarded reads.
+Chirp creation uses a guarded campus dependency; the existing campus and current
+verification checks still apply. Other nested membership and role dependencies
+have not been enrolled.
 
 The dependency resolves the verified Firebase UID to a database user UUID in a
 separate short read session, then closes that session before using the request
@@ -63,8 +77,9 @@ commit or rollback, including a flush with pending ORM changes. A nested savepoi
 keeps the outer transaction's admission lock. Ordinary suspension, legal and
 membership authorization still apply.
 
-The shared-lock wait is capped at five seconds and preserves a stricter existing
-`lock_timeout`; the caller's timeout is restored after lock acquisition. Rejected
+The entire shared-lock acquisition has a five-second budget and preserves a
+stricter existing `lock_timeout`; the caller's timeout is restored after all locks
+are acquired. Rejected
 admission invalidates the connection and marks the session failed, so catching the
 exception cannot permit another statement, flush or commit. An outer rollback
 clears that marker; the next transaction must pass admission again.
@@ -75,6 +90,28 @@ available. A hold activated after a successful commit can block the response's
 subsequent refresh; callers must not interpret every 423 as proof that no earlier
 transaction committed. No background/provider work is added to these routes.
 
+## Consuming key requests
+
+`GET /users/{user_id}/prekey-bundle` and `POST /v2/keys/claim` also mutate data:
+they consume another account's one-time keys. Their guarded dependencies resolve
+the actor and target account set in a separate short read session before binding
+the request session. The v2 preflight applies the existing reachability rules
+before any target-hold check, preserving the identical refusal for an unknown
+device and a device owned by an unreachable account. Ordinary auth, suspension
+and legal checks apply to preflight and to the guarded request.
+
+The bound account set is immutable and includes the actor. Every transaction
+acquires all its shared locks, rechecks the actor's Firebase identity, verifies
+target existence and rejects any active hold. The handler revalidates ownership
+and reachability before consuming keys; a changed account set fails without
+consumption. A new request must perform a fresh preflight rather than expanding
+the lock set inside a transaction. Directory and key-count reads remain reads.
+
+This is not global messaging enrollment. Message sends, conversation creation,
+WebSocket delivery, shared-content mutations and background jobs still need their
+own account-set and transaction review. The current key-request schema bounds
+device claims to ten, and the general guard additionally caps its account scope.
+
 This flag neither activates a hold nor adds an activation endpoint. Ordinary
 deletion intake still does not create a hold. Keep the flag disabled until migration
 0044 and the runtime's required read permission have been separately reviewed and
@@ -84,8 +121,8 @@ and do not query the new table, preserving compatibility with deployed schema 00
 Before any production deletion, inventory and enroll the remaining HTTP writers
 (including GET routes that consume keys), WebSocket writes, outbox/worker writes,
 and writes by other actors that target the deleting account. Multi-account paths
-need sorted admission keys before row locks; this pilot binds only one actor per
-session. Drain in-flight uploads, exports, provider calls and analytics ingestion
+need sorted admission keys before row locks; only consuming key requests currently
+bind multiple accounts. Drain in-flight uploads, exports, provider calls and analytics ingestion
 and review the executor's hold-owner path. SQL admission alone proves none of
 those external boundaries. No production migration, grants, enablement or deletion
 is authorized by this source change.

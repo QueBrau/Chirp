@@ -40,6 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.config import get_settings
 from app.core.e2ee_v2 import (
     KEY_KIND_FALLBACK,
     KEY_KIND_ONE_TIME,
@@ -51,7 +52,12 @@ from app.core.e2ee_v2 import (
 )
 from app.core.errors import conflict, forbidden, too_many_requests
 from app.db import get_session
-from app.middleware.auth import get_current_user
+from app.middleware.auth import (
+    get_current_user,
+    get_current_user_for_write,
+    get_verified_uid,
+)
+from app.db import get_session_factory
 from app.core.rate_limits import limit_per_user
 from app.routers.keys import (
     _DEVICE_REGISTER_RATE_MAX_CALLS,
@@ -64,6 +70,7 @@ from app.routers.keys import (
     MAX_ACTIVE_DEVICES,
     _bounded_count,
     _check_device_quota,
+    _bind_key_target_scope,
     _get_owned_device,
 )
 from app.schemas.e2ee_v2 import (
@@ -90,6 +97,8 @@ from app.services.e2ee_v2_service import (
     lock_account,
     lookup_allowed_user_ids,
 )
+from app.services.account_write_guard import assert_account_write_targets
+from app.services.account_deletion_hold import DeletionHoldInvalid
 from app.services.rate_limit import allow as rate_limit_allow
 
 router = APIRouter(prefix="/v2", tags=["keys-v2"])
@@ -201,7 +210,7 @@ def _constraint_in(exc: IntegrityError, name: str) -> bool:
 )
 async def register_device_v2(
     body: DeviceRegisterV2,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> DeviceV2Out | JSONResponse:
     """Register a v2 device. Every signature is verified; the first device is self-approved.
@@ -319,7 +328,7 @@ async def register_device_v2(
 async def approve_device_v2(
     device_id: uuid.UUID,
     body: DeviceApproveV2,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> DeviceV2Out:
     """Approve a pending device with a signature from an approved device of the same user.
@@ -401,7 +410,7 @@ async def _available_counts(session: AsyncSession, device_id: uuid.UUID) -> KeyC
 async def upload_keys_v2(
     device_id: uuid.UUID,
     body: KeyUploadV2,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> KeyCountV2Out:
     """Top up one-time keys and/or replace the fallback key. Owner only.
@@ -561,6 +570,53 @@ async def get_user_directory(
     return UserDirectoryOut(user_id=user_id, devices=entries)
 
 
+async def _claim_owners(
+    session: AsyncSession,
+    *,
+    actor_id: uuid.UUID,
+    ids: list[uuid.UUID],
+) -> dict[uuid.UUID, uuid.UUID]:
+    if len(set(ids)) != len(ids):
+        raise HTTPException(status_code=422, detail="duplicate_device_ids")
+    owners = dict(
+        (
+            await session.execute(
+                select(models.Device.id, models.Device.user_id).where(
+                    models.Device.id.in_(ids)
+                )
+            )
+        ).tuples().all()
+    )
+    allowed_owners = await lookup_allowed_user_ids(session, actor_id, set(owners.values()))
+    if any(
+        device_id not in owners or owners[device_id] not in allowed_owners
+        for device_id in ids
+    ):
+        raise forbidden(NOT_ALLOWED_DETAIL)
+    return owners
+
+
+async def _claim_keys_user(
+    body: KeyClaimRequest,
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Preflight exact device owners before binding the consuming request session."""
+    if not get_settings().account_deletion_http_admission_enabled:
+        return await get_current_user(uid=uid, session=session)
+    ids = body.device_ids
+    async with get_session_factory()() as preflight:
+        actor = await get_current_user(uid=uid, session=preflight)
+        owners = await _claim_owners(preflight, actor_id=actor.id, ids=ids)
+        target_ids = {actor.id, *owners.values()}
+    return await _bind_key_target_scope(
+        session,
+        uid=uid,
+        actor_id=actor.id,
+        target_user_ids=target_ids,
+    )
+
+
 @router.post(
     "/keys/claim",
     response_model=KeyClaimOut,
@@ -569,7 +625,7 @@ async def get_user_directory(
 )
 async def claim_keys(
     body: KeyClaimRequest,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(_claim_keys_user),
     session: AsyncSession = Depends(get_session),
 ) -> KeyClaimOut | JSONResponse:
     """Atomically claim one key per named device: a one-time key, else the fallback key.
@@ -592,20 +648,12 @@ async def claim_keys(
     key already taken.
     """
     ids = body.device_ids
-    if len(set(ids)) != len(ids):
-        raise HTTPException(status_code=422, detail="duplicate_device_ids")
-
     # Owners of the named devices, whatever state each device is in.
-    owners = dict(
-        (
-            await session.execute(
-                select(models.Device.id, models.Device.user_id).where(models.Device.id.in_(ids))
-            )
-        ).tuples().all()
-    )
-    allowed_owners = await lookup_allowed_user_ids(session, user.id, set(owners.values()))
-    if any(device_id not in owners or owners[device_id] not in allowed_owners for device_id in ids):
-        raise forbidden(NOT_ALLOWED_DETAIL)
+    owners = await _claim_owners(session, actor_id=user.id, ids=ids)
+    if get_settings().account_deletion_http_admission_enabled:
+        assert_account_write_targets(
+            session, user_id=user.id, target_user_ids=set(owners.values())
+        )
 
     rows = await session.execute(
         select(models.Device).where(
@@ -613,9 +661,20 @@ async def claim_keys(
         )
     )
     devices = {device.id: device for device in rows.scalars()}
+    actual_owners = {device.id: device.user_id for device in devices.values()}
+    if get_settings().account_deletion_http_admission_enabled:
+        if any(
+            device_id in actual_owners and actual_owners[device_id] != owners[device_id]
+            for device_id in ids
+        ):
+            raise DeletionHoldInvalid("write_guard_target_set_changed")
     unavailable = [str(device_id) for device_id in ids if device_id not in devices]
     if unavailable:
         return conflict_response("device_unavailable", device_ids=unavailable)
+    if get_settings().account_deletion_http_admission_enabled:
+        assert_account_write_targets(
+            session, user_id=user.id, target_user_ids=set(actual_owners.values())
+        )
 
     for target_user_id in sorted({device.user_id for device in devices.values()}, key=str):
         if not await rate_limit_allow(
@@ -654,7 +713,7 @@ async def claim_keys(
 )
 async def revoke_device_v2(
     device_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> DeviceV2Out:
     """Revoke one of the caller's v2 devices. Idempotent: a second call changes nothing.

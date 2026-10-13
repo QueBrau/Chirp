@@ -81,10 +81,13 @@ and connected-account scoping: [delete a Customer](https://docs.stripe.com/api/c
 
 Migration 0044 adds the dormant account-deletion hold primitive after 0043.
 See `docs/C436-DELETION-HOLD.md`. It grants no permissions. The first HTTP admission
-pilot covers only own alumni-profile writes and job creation/deletion, behind
+enrollment covers the explicitly listed profile, job, device/key, Chirp,
+receipt/leave and legal-acceptance mutations in that document, behind
 `ACCOUNT_DELETION_HTTP_ADMISSION_ENABLED=false`. It checks each request-session
 transaction, including transactions after commit/rollback, without activating any
-hold. Existing reads and privacy status remain available. Leave the flag off until
+hold. Consuming key requests additionally bind the actor and authorized target
+accounts before request SQL; their immutable scope is revalidated before key
+consumption. Existing reads and privacy status remain available. Leave the flag off until
 migration 0044 and the runtime read grant have separate review and rollout.
 WebSocket, outbox and executor paths are not enrolled. A complete release must
 enroll every writer and drain provider operations, uploads, exports and analytics ingestion

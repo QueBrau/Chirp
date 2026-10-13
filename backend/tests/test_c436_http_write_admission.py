@@ -216,7 +216,7 @@ async def test_invalid_guard_is_sanitized_by_actual_http_handler(
     assert response.json() == {"detail": "account_write_admission_unavailable"}
 
 
-def test_only_alumni_mutations_are_enrolled_in_write_admission() -> None:
+def test_alumni_mutations_keep_write_admission() -> None:
     """Guard the intended route inventory without claiming global enrollment."""
     import inspect
 

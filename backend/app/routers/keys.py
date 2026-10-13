@@ -8,9 +8,15 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.config import get_settings
 from app.core.errors import conflict, forbidden, not_found, too_many_requests
-from app.db import get_session
-from app.middleware.auth import get_current_user
+from app.db import get_session, get_session_factory
+from app.middleware.auth import (
+    get_current_user,
+    get_current_user_for_write,
+    get_verified_uid,
+)
+from app.services.account_write_guard import assert_account_write_targets, bind_account_write_guard
 from app.schemas.e2ee import (
     DeviceCreate,
     DeviceOut,
@@ -79,6 +85,46 @@ async def _check_device_quota(session: AsyncSession, user_id: uuid.UUID) -> None
     active_count = await _bounded_count(session, active, limit=MAX_ACTIVE_DEVICES)
     if active_count >= MAX_ACTIVE_DEVICES:
         raise conflict("active_device_limit_reached")
+
+
+async def _bind_key_target_scope(
+    session: AsyncSession,
+    *,
+    uid: str,
+    actor_id: uuid.UUID,
+    target_user_ids: set[uuid.UUID],
+) -> models.User:
+    """Bind the actor and preflighted target accounts before request SQL begins."""
+    if not get_settings().account_deletion_http_admission_enabled:
+        return await get_current_user(uid=uid, session=session)
+    bind_account_write_guard(
+        session,
+        user_id=actor_id,
+        firebase_uid=uid,
+        target_user_ids=target_user_ids,
+    )
+    return await get_current_user(uid=uid, session=session)
+
+
+async def _prekey_bundle_user(
+    user_id: uuid.UUID,
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Resolve and bind actor plus bundle target without exposing held-account state."""
+    if not get_settings().account_deletion_http_admission_enabled:
+        return await get_current_user(uid=uid, session=session)
+    async with get_session_factory()() as preflight:
+        actor = await get_current_user(uid=uid, session=preflight)
+        target = await preflight.scalar(select(models.User.id).where(models.User.id == user_id))
+        if target is None:
+            raise not_found("user_not_found")
+    return await _bind_key_target_scope(
+        session,
+        uid=uid,
+        actor_id=actor.id,
+        target_user_ids={actor.id, user_id},
+    )
 
 
 async def _check_prekey_quota(
@@ -200,7 +246,7 @@ async def _prekey_count_out(session: AsyncSession, device_id: uuid.UUID) -> Prek
 @router.post("/devices", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
 async def register_device(
     body: DeviceCreate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> DeviceOut:
     """Register a device: identity key + signed prekey + a batch of one-time prekeys."""
@@ -272,7 +318,7 @@ async def register_device(
 async def replenish_prekeys(
     device_id: uuid.UUID,
     body: PrekeyUpload,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> PrekeyCountOut:
     """Replenish one-time prekeys (and optionally rotate the signed prekey). Owner only."""
@@ -354,7 +400,7 @@ async def prekey_count(
 @router.get("/users/{user_id}/prekey-bundle", response_model=PrekeyBundleOut)
 async def fetch_prekey_bundle(
     user_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(_prekey_bundle_user),
     session: AsyncSession = Depends(get_session),
 ) -> PrekeyBundleOut:
     """Return a bundle per non-revoked device, consuming one one-time prekey per device.
@@ -377,6 +423,8 @@ async def fetch_prekey_bundle(
     target = await session.get(models.User, user_id)
     if target is None:
         raise not_found("user_not_found")
+    if get_settings().account_deletion_http_admission_enabled:
+        assert_account_write_targets(session, user_id=user.id, target_user_ids={user_id})
 
     devices_result = await session.execute(
         select(models.Device)

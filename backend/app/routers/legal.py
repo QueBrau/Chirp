@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.db import get_session
-from app.middleware.auth import get_current_user_without_legal_gate
+from app.middleware.auth import get_current_user_for_legal_write, get_current_user_without_legal_gate
 from sqlalchemy.dialects.postgresql import insert
 from app.schemas.legal import LegalAcceptanceCreate, LegalStatusOut, PolicyOut
 
@@ -37,7 +37,7 @@ async def legal_status(user: models.User = Depends(get_current_user_without_lega
     return await _status(session, user)
 
 @router.post("/auth/legal-acceptance", response_model=LegalStatusOut)
-async def accept_legal(body: LegalAcceptanceCreate, user: models.User = Depends(get_current_user_without_legal_gate), session: AsyncSession = Depends(get_session)) -> LegalStatusOut:
+async def accept_legal(body: LegalAcceptanceCreate, user: models.User = Depends(get_current_user_for_legal_write), session: AsyncSession = Depends(get_session)) -> LegalStatusOut:
     current = (await session.execute(select(models.LegalPolicy).where(models.LegalPolicy.is_current.is_(True)))).scalars().all()
     if {p.policy_key for p in current} != {"terms", "privacy"} or len(current) != 2:
         raise HTTPException(status_code=503, detail="legal_policy_unavailable")

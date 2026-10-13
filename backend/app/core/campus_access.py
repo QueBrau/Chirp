@@ -36,7 +36,7 @@ from fastapi import Depends, Path
 
 from app import models
 from app.core.errors import forbidden
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_user_for_write
 
 # Jose's ruling, Aug 16: verification is re-checked YEARLY rather than being permanent,
 # so the verified population stays close to actually-enrolled instead of drifting into
@@ -81,5 +81,14 @@ async def require_campus_member(
     Replaces the `_require_campus_user` helpers that used to live in feed.py and
     chirps.py separately.
     """
+    require_verified_campus(user, campus_id)
+    return user
+
+
+async def require_campus_member_for_write(
+    campus_id: uuid.UUID = Path(...),
+    user: models.User = Depends(get_current_user_for_write),
+) -> models.User:
+    """Admit a campus write under account deletion fencing and campus verification."""
     require_verified_campus(user, campus_id)
     return user
