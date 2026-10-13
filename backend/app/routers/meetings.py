@@ -12,7 +12,7 @@ from app import models
 from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.errors import not_found
 from app.core.pagination import MAX_ROSTER_PAGE, warn_if_capped
-from app.core.permissions import MINUTES_ADMIN, require_role
+from app.core.permissions import MINUTES_ADMIN, require_role, require_role_for_write
 from app.core.windows import meeting_window
 from app.db import get_session
 from app.middleware.org_scope import get_current_membership
@@ -340,7 +340,7 @@ async def attendance_summary(
 async def create_meeting(
     chapter_id: uuid.UUID,
     body: MeetingCreate,
-    membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
+    membership: models.Membership = Depends(require_role_for_write(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> MeetingOut:
     """Create a meeting; secretary/president only."""
@@ -374,7 +374,7 @@ async def update_meeting(
     chapter_id: uuid.UUID,
     meeting_id: uuid.UUID,
     body: MeetingUpdate,
-    _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
+    _membership: models.Membership = Depends(require_role_for_write(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> MeetingOut:
     """Update title/date/minutes; secretary/president only."""
@@ -393,7 +393,7 @@ async def update_meeting(
 async def delete_meeting(
     chapter_id: uuid.UUID,
     meeting_id: uuid.UUID,
-    _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
+    _membership: models.Membership = Depends(require_role_for_write(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Delete a meeting and its attendance records; secretary/president only."""
@@ -459,7 +459,7 @@ async def upsert_attendance(
     chapter_id: uuid.UUID,
     meeting_id: uuid.UUID,
     body: MeetingAttendanceUpdate,
-    _membership: models.Membership = Depends(require_role(*MINUTES_ADMIN)),
+    _membership: models.Membership = Depends(require_role_for_write(*MINUTES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> list[MeetingAttendanceOut]:
     """Bulk-upsert attendance statuses for a meeting; secretary/president only.

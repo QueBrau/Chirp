@@ -15,7 +15,7 @@ from app.core.errors import conflict, forbidden, not_found
 from app.core.permissions import EBOARD, require_platform_admin
 from app.core.rate_limits import REPORT_CREATE_LIMIT, limit_per_user
 from app.db import get_session
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_user_for_write
 from app.schemas.moderation import (
     ContentRemoveRequest,
     ReportResolveRequest,
@@ -244,7 +244,7 @@ async def _require_moderator_for_campus(
 )
 async def create_report(
     body: ContentReportCreate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> ContentReportOut:
     """File a content report; forwarded_plaintext supports E2EE message reports (SPEC §6.7).
@@ -418,7 +418,7 @@ async def resolve_report(
 @router.post("/moderation/blocks", status_code=201)
 async def create_block(
     body: UserBlockCreate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> UserBlockOut:
     """Add named intent; only an existing named intent conflicts, including races."""
@@ -464,7 +464,7 @@ async def create_block(
 @router.post("/moderation/blocks/by-chirp/{chirp_id}", status_code=204)
 async def block_chirp_author(
     chirp_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Block the (anonymous) author of a chirp without ever revealing who that author is.
@@ -519,7 +519,7 @@ async def block_chirp_author(
 @router.delete("/moderation/blocks", status_code=204)
 async def delete_block(
     blocked_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Remove named intent only; missing and anonymous-only rows both answer 404."""
@@ -548,7 +548,7 @@ async def delete_block(
 @router.delete("/moderation/blocks/by-chirp/{chirp_id}", status_code=204)
 async def unblock_chirp_author(
     chirp_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Remove anonymous intent through a server-resolved Chirp, never a user ID.

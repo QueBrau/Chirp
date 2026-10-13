@@ -7,8 +7,8 @@ from fastapi import Depends, HTTPException
 
 from app import models
 from app.core.errors import forbidden
-from app.middleware.auth import get_current_user
-from app.middleware.org_scope import get_current_membership
+from app.middleware.auth import get_current_user, get_current_user_for_write
+from app.middleware.org_scope import get_current_membership, get_current_membership_for_write
 
 
 class Role(str, Enum):
@@ -105,6 +105,18 @@ def require_role(*roles: Role) -> Callable[..., Coroutine[Any, Any, models.Membe
     return _require_role
 
 
+def require_role_for_write(*roles: Role) -> Callable[..., Coroutine[Any, Any, models.Membership]]:
+    """Apply the same role policy after actor write admission and chapter scoping."""
+    role_gate = require_role(*roles)
+
+    async def _require_role_for_write(
+        membership: models.Membership = Depends(get_current_membership_for_write),
+    ) -> models.Membership:
+        return await role_gate(membership=membership)
+
+    return _require_role_for_write
+
+
 async def require_platform_admin(
     user: models.User = Depends(get_current_user),
 ) -> models.User:
@@ -119,3 +131,10 @@ async def require_platform_admin(
     if not user.is_platform_admin:
         raise forbidden("platform_admin_required")
     return user
+
+
+async def require_platform_admin_for_write(
+    user: models.User = Depends(get_current_user_for_write),
+) -> models.User:
+    """Apply the existing platform policy after actor write admission."""
+    return await require_platform_admin(user=user)

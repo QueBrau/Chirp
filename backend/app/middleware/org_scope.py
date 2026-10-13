@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.db import get_session
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_user_for_write
 
 
 async def get_current_membership(
@@ -27,6 +27,15 @@ async def get_current_membership(
     if membership is None:
         raise HTTPException(status_code=403, detail="not_a_member")
     return membership
+
+
+async def get_current_membership_for_write(
+    chapter_id: uuid.UUID = Path(...),
+    user: models.User = Depends(get_current_user_for_write),
+    session: AsyncSession = Depends(get_session),
+) -> models.Membership:
+    """Admit the actor before resolving their ordinary active chapter membership."""
+    return await get_current_membership(chapter_id=chapter_id, user=user, session=session)
 
 
 async def get_current_chapter_member(
