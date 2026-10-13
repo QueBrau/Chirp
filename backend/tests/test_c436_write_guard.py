@@ -143,15 +143,20 @@ async def test_guard_does_not_attach_a_global_event_and_nested_savepoint_is_safe
         await engine.dispose()
 
 @pytest.mark.asyncio
-async def test_committed_hold_rejects_next_orm_flush(migrated_db: str) -> None:
+@pytest.mark.parametrize("boundary", ["commit", "rollback"])
+async def test_hold_after_boundary_rejects_same_session_flush(
+    migrated_db: str, boundary: str,
+) -> None:
     engine, user_id, firebase_uid = await _seed(migrated_db)
     factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
     try:
-        async with factory() as guarded:
+        async with factory() as guarded, factory() as seed:
             bind_account_write_guard(guarded, user_id=user_id, firebase_uid=firebase_uid)
             assert await guarded.scalar(text("SELECT 1")) == 1
-            await guarded.commit()
-        async with factory() as seed:
+            if boundary == "commit":
+                await guarded.commit()
+            else:
+                await guarded.rollback()
             request_id = uuid.uuid4()
             seed.add(models.AccountDataRequest(
                 id=request_id, user_id=user_id, kind="deletion", status="processing",
@@ -159,14 +164,17 @@ async def test_committed_hold_rejects_next_orm_flush(migrated_db: str) -> None:
             await seed.commit()
             await activate_deletion_hold(seed, user_id=user_id, request_id=request_id)
             await seed.commit()
-        async with factory() as guarded:
-            bind_account_write_guard(guarded, user_id=user_id, firebase_uid=firebase_uid)
             guarded.add(models.AccountDataRequest(
                 id=uuid.uuid4(), user_id=user_id, kind="export", status="received",
             ))
             with pytest.raises(DeletionHoldActive, match="account_deletion_hold_active"):
                 await guarded.flush()
             await guarded.rollback()
+            saved = await seed.scalar(text(
+                "SELECT count(*) FROM account_data_requests "
+                "WHERE user_id = :id AND kind = 'export'"), {"id": user_id},
+            )
+            assert saved == 0
     finally:
         await engine.dispose()
 
@@ -271,6 +279,31 @@ async def test_identity_race_before_first_guarded_sql_fails_closed(migrated_db: 
                 await guarded.scalar(text("SELECT 1"))
             with pytest.raises(DeletionHoldInvalid, match="rollback_required"):
                 await guarded.scalar(text("SELECT 1"))
+            await guarded.rollback()
+    finally:
+        await engine.dispose()
+
+@pytest.mark.asyncio
+async def test_guard_lock_wait_is_bounded_and_retryable(
+    migrated_db: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.services.account_write_guard as guard_module
+
+    monkeypatch.setattr(guard_module, "GUARD_LOCK_TIMEOUT_MS", 25)
+    engine, user_id, firebase_uid = await _seed(migrated_db)
+    factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    try:
+        async with factory() as blocker, factory() as guarded:
+            await blocker.scalar(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": advisory_key(user_id)},
+            )
+            bind_account_write_guard(guarded, user_id=user_id, firebase_uid=firebase_uid)
+            with pytest.raises(DeletionHoldInvalid, match="write_guard_unavailable"):
+                await guarded.scalar(text("SELECT 1"))
+            await guarded.rollback()
+            await blocker.rollback()
+            assert await guarded.scalar(text("SELECT 1")) == 1
             await guarded.rollback()
     finally:
         await engine.dispose()

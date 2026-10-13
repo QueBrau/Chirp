@@ -2,15 +2,17 @@
 
 The guard is deliberately attached to one SQLAlchemy session instance.  It does not
 install a global event handler, commit transactions, or keep a database connection
-alive while a caller performs external work.  Bind a session again after every
-commit/rollback boundary before using it for another account write.
+alive while a caller performs external work.  The binding persists across commit and
+rollback; each new transaction runs the guard again.
 """
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
 from sqlalchemy import event, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -22,6 +24,7 @@ from app.services.account_deletion_hold import (
 
 _INFO_KEY = "c436_account_write_guard"
 _FAILED_KEY = "c436_account_write_guard_failed"
+GUARD_LOCK_TIMEOUT_MS = 5_000
 
 
 def _canonical_uuid(value: uuid.UUID | str) -> uuid.UUID:
@@ -38,6 +41,17 @@ def _validate_uid(value: str) -> str:
     if not isinstance(value, str) or not value or len(value) > 256:
         raise DeletionHoldInvalid("invalid_firebase_identity")
     return value
+
+
+def _timeout_millis(value: str) -> float | None:
+    if value == "0":
+        return None
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)(us|ms|s|min|h)", value)
+    if match is None:
+        raise DeletionHoldInvalid("invalid_lock_timeout")
+    amount = float(match.group(1))
+    factor = {"us": 0.001, "ms": 1.0, "s": 1000.0, "min": 60000.0, "h": 3600000.0}[match.group(2)]
+    return amount * factor
 
 
 def _failed(sync_session: Session) -> None:
@@ -62,17 +76,15 @@ def _after_soft_rollback(sync_session: Session, previous_transaction: Any) -> No
         sync_session.info.pop(_FAILED_KEY, None)
 
 
-def _after_commit(sync_session: Session) -> None:
-    sync_session.info.pop(_FAILED_KEY, None)
-
-
 def _after_begin(sync_session: Session, transaction: Any, connection: Any) -> None:
     """Install the shared gate and verify identity at each outer transaction start."""
     if transaction.parent is not None:
         return
     binding = sync_session.info.get(_INFO_KEY)
-    if not isinstance(binding, tuple) or len(binding) != 2:
+    if binding is None:
         return
+    if not isinstance(binding, tuple) or len(binding) != 2:
+        raise DeletionHoldInvalid("invalid_write_guard_binding")
     try:
         user_id, firebase_uid = binding
         if not isinstance(user_id, uuid.UUID) or not isinstance(firebase_uid, str):
@@ -80,6 +92,15 @@ def _after_begin(sync_session: Session, transaction: Any, connection: Any) -> No
         isolation = connection.exec_driver_sql("SHOW TRANSACTION ISOLATION LEVEL").scalar_one()
         if isolation != "read committed":
             raise DeletionHoldInvalid("read_committed_required")
+        current_timeout = connection.exec_driver_sql("SHOW lock_timeout").scalar_one()
+        # SET LOCAL restores the caller's setting at transaction end. Keep a
+        # stricter caller timeout, but never wait indefinitely on a hold writer.
+        timeout_ms = _timeout_millis(current_timeout)
+        if timeout_ms is None or timeout_ms > GUARD_LOCK_TIMEOUT_MS:
+            connection.execute(
+                text("SELECT set_config('lock_timeout', :timeout, true)"),
+                {"timeout": f"{GUARD_LOCK_TIMEOUT_MS}ms"},
+            )
         key = advisory_key(user_id)
         connection.execute(
             text("SELECT pg_advisory_xact_lock_shared(:key)"), {"key": key}
@@ -99,7 +120,15 @@ def _after_begin(sync_session: Session, transaction: Any, connection: Any) -> No
         ).first()
         if hold is not None:
             raise DeletionHoldActive("account_deletion_hold_active")
+    except DBAPIError:
+        # The event runs before SQLAlchemy can finish the transaction start. A
+        # direct connection reference may still exist, so invalidate it deliberately;
+        # callers must rollback before any subsequent transaction can run.
+        sync_session.info[_FAILED_KEY] = True
+        connection.invalidate()
+        raise DeletionHoldInvalid("write_guard_unavailable") from None
     except BaseException:
+        # Preserve cancellation and guard-specific errors, but fail closed first.
         sync_session.info[_FAILED_KEY] = True
         connection.invalidate()
         raise
@@ -125,7 +154,6 @@ def bind_account_write_guard(
     event.listen(sync_session, "before_commit", _before_commit, once=False)
     event.listen(sync_session, "do_orm_execute", _before_orm_execute, once=False)
     event.listen(sync_session, "after_soft_rollback", _after_soft_rollback, once=False)
-    event.listen(sync_session, "after_commit", _after_commit, once=False)
 
 
 def is_account_write_guard_bound(session: AsyncSession, *, firebase_uid: str) -> bool:
