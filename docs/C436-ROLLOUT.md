@@ -89,6 +89,11 @@ hold. Consuming key requests additionally bind the actor and authorized target
 accounts before request SQL; their immutable scope is revalidated before key
 consumption. Existing reads and privacy status remain available. Leave the flag off until
 migration 0044 and the runtime read grant have separate review and rollout.
+Conversation creation/reuse and legacy/v2 message SQL also bind their participant
+scope. Conversation-row locks serialize enrolled membership changes with sends,
+and the roster is rechecked before new message, leg and outbox-intent writes.
+The scope supports the existing 256-invitee creation limit. Local cleanup removes
+the deleted account from the active roster while preserving shared history.
 WebSocket, outbox and executor paths are not enrolled. A complete release must
 enroll every writer and drain provider operations, uploads, exports and analytics ingestion
 before an operator uses provider cleanup. This source change does not establish
