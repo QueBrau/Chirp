@@ -10,7 +10,7 @@ from app import models
 from app.core.errors import forbidden, not_found
 from app.core.permissions import EBOARD, Role
 from app.db import get_session
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_user_for_write
 from app.schemas.alumni import (
     AlumniProfileOut,
     AlumniProfileUpdate,
@@ -63,7 +63,7 @@ async def get_own_profile(
 @router.put("/alumni/profile")
 async def upsert_own_profile(
     body: AlumniProfileUpdate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> AlumniProfileOut:
     """Create or fully replace the caller's own alumni profile."""
@@ -145,7 +145,7 @@ async def list_directory(
 @router.post("/jobs", status_code=201)
 async def create_job_post(
     body: JobPostCreate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> JobPostOut:
     """Post a job; requires a real e-board or alumni MEMBERSHIP row (c242).
@@ -288,7 +288,7 @@ async def list_job_posts(
 @router.delete("/jobs/{job_id}", status_code=204)
 async def delete_job_post(
     job_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Delete a job post; poster only."""

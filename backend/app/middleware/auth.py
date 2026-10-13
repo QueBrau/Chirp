@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import get_settings
-from app.db import get_session
+from app.db import get_session, get_session_factory
 from app.services.identity_verification import run_verification
 from app.services.legal_enforcement import current_legal_status
 
@@ -159,6 +159,39 @@ async def get_current_user(
         if status != "accepted":
             raise HTTPException(status_code=428, detail="legal_acceptance_required")
     return user
+
+
+async def get_current_user_for_write(
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Admit an enrolled actor's SQL transactions before resolving product access.
+
+    The rollout flag is off until schema/grants and full write-path coverage are
+    reviewed. Identity lookup uses a separate short read transaction: the actual
+    request session must acquire its advisory lock before any row locks or writes.
+    The guard checks the same user/UID again on every new database transaction.
+    """
+    if not get_settings().account_deletion_http_admission_enabled:
+        return await get_current_user(uid=uid, session=session)
+
+    from app.services.account_deletion_hold import DeletionHoldInvalid
+    from app.services.account_write_guard import (
+        bind_account_write_guard,
+        is_account_write_guard_bound,
+    )
+
+    if not is_account_write_guard_bound(session, firebase_uid=uid):
+        if session.in_transaction() or session.new or session.dirty or session.deleted:
+            raise DeletionHoldInvalid("hold_gate_must_be_first_operation")
+        async with get_session_factory()() as identity_session:
+            user_id = await identity_session.scalar(
+                select(models.User.id).where(models.User.firebase_uid == uid)
+            )
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="user_not_registered")
+        bind_account_write_guard(session, user_id=user_id, firebase_uid=uid)
+    return await get_current_user(uid=uid, session=session)
 
 
 async def get_current_user_without_legal_gate(

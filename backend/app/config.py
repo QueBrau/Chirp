@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # Maximum age of a Firebase sign-in accepted for irreversible privacy actions.
     privacy_reauth_max_age_seconds: int = 900
     account_data_request_daily_limit: int = 5
+    # c436 pilot: only explicitly enrolled HTTP mutations use this gate. Keep
+    # false until migration 0044, read grants and a reviewed rollout are ready.
+    # This flag neither activates holds nor proves product-wide write coverage.
+    account_deletion_http_admission_enabled: bool = False
     stripe_secret_key: str | None = None
     stripe_publishable_key: str | None = None
     stripe_webhook_secret: str | None = None
