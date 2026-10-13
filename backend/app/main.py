@@ -38,6 +38,7 @@ from app.routers import (
     data_requests,
     legal,
 )
+from app.services.account_deletion_hold import DeletionHoldActive, DeletionHoldInvalid
 from app.ws import gateway
 
 logger = logging.getLogger(__name__)
@@ -266,6 +267,16 @@ def create_app() -> FastAPI:
             content={"detail": "over_capacity"},
             headers={"Retry-After": "5"},
         )
+
+    @app.exception_handler(DeletionHoldActive)
+    async def _account_deletion_active(_request: Request, _exc: DeletionHoldActive) -> JSONResponse:
+        return JSONResponse(status_code=423, content={"detail": "account_deletion_in_progress"})
+
+    @app.exception_handler(DeletionHoldInvalid)
+    async def _account_write_admission_invalid(_request: Request, _exc: DeletionHoldInvalid) -> JSONResponse:
+        # Protocol errors are service failures; never expose SQL, identity or
+        # internal exception values to the client.
+        return JSONResponse(status_code=503, content={"detail": "account_write_admission_unavailable"})
 
     app.add_middleware(
         CORSMiddleware,

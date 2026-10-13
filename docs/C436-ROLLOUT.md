@@ -80,9 +80,14 @@ and connected-account scoping: [delete a Customer](https://docs.stripe.com/api/c
 ## Durable hold primitive (migration 0044)
 
 Migration 0044 adds the dormant account-deletion hold primitive after 0043.
-See `docs/C436-DELETION-HOLD.md`. It grants no permissions and is not called by
-HTTP, WebSocket, outbox or the executor. A complete release must enroll every
-writer and drain provider operations, uploads, exports and analytics ingestion
+See `docs/C436-DELETION-HOLD.md`. It grants no permissions. The first HTTP admission
+pilot covers only own alumni-profile writes and job creation/deletion, behind
+`ACCOUNT_DELETION_HTTP_ADMISSION_ENABLED=false`. It checks each request-session
+transaction, including transactions after commit/rollback, without activating any
+hold. Existing reads and privacy status remain available. Leave the flag off until
+migration 0044 and the runtime read grant have separate review and rollout.
+WebSocket, outbox and executor paths are not enrolled. A complete release must
+enroll every writer and drain provider operations, uploads, exports and analytics ingestion
 before an operator uses provider cleanup. This source change does not establish
 that quiescence or authorize running the migration or deletion in production.
 
