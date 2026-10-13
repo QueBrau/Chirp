@@ -81,11 +81,9 @@ def _after_begin(sync_session: Session, transaction: Any, connection: Any) -> No
     if transaction.parent is not None:
         return
     binding = sync_session.info.get(_INFO_KEY)
-    if binding is None:
-        return
-    if not isinstance(binding, tuple) or len(binding) != 2:
-        raise DeletionHoldInvalid("invalid_write_guard_binding")
     try:
+        if not isinstance(binding, tuple) or len(binding) != 2:
+            raise DeletionHoldInvalid("invalid_write_guard_binding")
         user_id, firebase_uid = binding
         if not isinstance(user_id, uuid.UUID) or not isinstance(firebase_uid, str):
             raise DeletionHoldInvalid("invalid_write_guard_binding")
@@ -104,6 +102,12 @@ def _after_begin(sync_session: Session, transaction: Any, connection: Any) -> No
         key = advisory_key(user_id)
         connection.execute(
             text("SELECT pg_advisory_xact_lock_shared(:key)"), {"key": key}
+        )
+        # The bounded setting is only for acquiring the shared lock. Restore the
+        # caller's transaction setting before any application SQL runs.
+        connection.execute(
+            text("SELECT set_config('lock_timeout', :timeout, true)"),
+            {"timeout": current_timeout},
         )
         connection.execute(
             text("SELECT set_config('chirp.deletion_hold_shared_key', :key, true)"), {"key": str(key)}

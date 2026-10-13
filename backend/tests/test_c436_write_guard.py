@@ -47,6 +47,7 @@ async def test_guard_rechecks_after_commit_and_is_session_local(migrated_db: str
             assert is_account_write_guard_bound(guarded, firebase_uid=firebase_uid)
             assert not is_account_write_guard_bound(unguarded, firebase_uid=firebase_uid)
             assert await guarded.scalar(text("SELECT 1")) == 1
+            assert await guarded.scalar(text("SHOW lock_timeout")) == "0"
             await guarded.commit()
             assert await guarded.scalar(text("SELECT 1")) == 1
             await guarded.rollback()
@@ -306,4 +307,46 @@ async def test_guard_lock_wait_is_bounded_and_retryable(
             assert await guarded.scalar(text("SELECT 1")) == 1
             await guarded.rollback()
     finally:
+        await engine.dispose()
+
+@pytest.mark.asyncio
+async def test_missing_or_malformed_binding_poisoned_until_rollback(migrated_db: str) -> None:
+    engine, user_id, firebase_uid = await _seed(migrated_db)
+    factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    try:
+        async with factory() as missing:
+            bind_account_write_guard(missing, user_id=user_id, firebase_uid=firebase_uid)
+            del missing.sync_session.info["c436_account_write_guard"]
+            with pytest.raises(DeletionHoldInvalid, match="invalid_write_guard_binding"):
+                await missing.scalar(text("SELECT 1"))
+            with pytest.raises(DeletionHoldInvalid, match="rollback_required"):
+                await missing.scalar(text("SELECT 1"))
+            await missing.rollback()
+        async with factory() as malformed:
+            bind_account_write_guard(malformed, user_id=user_id, firebase_uid=firebase_uid)
+            malformed.sync_session.info["c436_account_write_guard"] = "tampered"
+            with pytest.raises(DeletionHoldInvalid, match="invalid_write_guard_binding"):
+                await malformed.scalar(text("SELECT 1"))
+            with pytest.raises(DeletionHoldInvalid, match="rollback_required"):
+                await malformed.scalar(text("SELECT 1"))
+            await malformed.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_guard_restores_stricter_existing_lock_timeout(migrated_db: str) -> None:
+    engine, user_id, firebase_uid = await _seed(migrated_db)
+    strict_engine = create_async_engine(
+        migrated_db, connect_args={"server_settings": {"lock_timeout": "1s"}},
+    )
+    factory = async_sessionmaker(strict_engine, expire_on_commit=False, autoflush=False)
+    try:
+        async with factory() as session:
+            bind_account_write_guard(session, user_id=user_id, firebase_uid=firebase_uid)
+            assert await session.scalar(text("SELECT 1")) == 1
+            assert await session.scalar(text("SHOW lock_timeout")) == "1s"
+            await session.rollback()
+    finally:
+        await strict_engine.dispose()
         await engine.dispose()
