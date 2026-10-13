@@ -7,7 +7,8 @@ from typing import Annotated, Literal
 
 from pydantic import AliasChoices, BeforeValidator, Field
 
-from app.core.validation import MAX_CIPHERTEXT_B64_LENGTH, MAX_CONVERSATION_INVITEES
+from app.core.messaging_limits import MAX_CONVERSATION_INVITEES
+from app.core.validation import MAX_CIPHERTEXT_B64_LENGTH
 from app.schemas.base import _Schema
 
 ConversationKind = Literal["dm", "group"]

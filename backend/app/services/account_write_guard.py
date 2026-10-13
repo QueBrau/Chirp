@@ -17,7 +17,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.core.validation import MAX_CONVERSATION_INVITEES
+from app.core.messaging_limits import MAX_CONVERSATION_INVITEES
 from app.services.account_deletion_hold import (
     DeletionHoldActive,
     DeletionHoldInvalid,
