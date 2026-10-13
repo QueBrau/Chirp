@@ -172,8 +172,14 @@ async def get_current_user_for_write(
     request session must acquire its advisory lock before any row locks or writes.
     The guard checks the same user/UID again on every new database transaction.
     """
+    await _bind_user_write_guard(uid=uid, session=session)
+    return await get_current_user(uid=uid, session=session)
+
+
+async def _bind_user_write_guard(*, uid: str, session: AsyncSession) -> None:
+    """Bind the actor before request SQL, independently of product-access gates."""
     if not get_settings().account_deletion_http_admission_enabled:
-        return await get_current_user(uid=uid, session=session)
+        return
 
     from app.services.account_deletion_hold import DeletionHoldInvalid
     from app.services.account_write_guard import (
@@ -191,7 +197,6 @@ async def get_current_user_for_write(
         if user_id is None:
             raise HTTPException(status_code=401, detail="user_not_registered")
         bind_account_write_guard(session, user_id=user_id, firebase_uid=uid)
-    return await get_current_user(uid=uid, session=session)
 
 
 async def get_current_user_without_legal_gate(
@@ -205,6 +210,19 @@ async def get_current_user_without_legal_gate(
     if user.suspended_at is not None:
         raise HTTPException(status_code=403, detail="account_suspended")
     return user
+
+
+async def get_current_user_for_legal_write(
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Protect assent writes without requiring the assent being recorded.
+
+    Suspension and identity checks still apply. Read-only policy and acceptance
+    status routes retain their ordinary dependency while deletion is in progress.
+    """
+    await _bind_user_write_guard(uid=uid, session=session)
+    return await get_current_user_without_legal_gate(uid=uid, session=session)
 
 
 async def get_current_user_for_privacy(

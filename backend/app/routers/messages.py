@@ -22,7 +22,7 @@ from app.core.rate_limits import (
 )
 from app.core.reachability import reachable_off_chapter_ids
 from app.db import get_session
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_user_for_write
 from app.schemas.identity import UserSearchResultOut
 from app.schemas.messaging import (
     ConversationCreate,
@@ -740,7 +740,7 @@ async def list_messages(
 )
 async def leave_conversation(
     conversation_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> ConversationMemberOut:
     """Set left_at for the caller — remaining clients rotate the sender key (SPEC §6.4)."""
@@ -759,7 +759,7 @@ async def leave_conversation(
 async def upsert_receipt(
     message_id: uuid.UUID,
     body: MessageReceiptCreate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> MessageReceiptOut:
     """Record delivered_at for one of the caller's devices. Members only."""

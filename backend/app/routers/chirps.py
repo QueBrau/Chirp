@@ -8,11 +8,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.core.campus_access import require_campus_member, require_verified_campus
+from app.core.campus_access import (
+    require_campus_member,
+    require_campus_member_for_write,
+    require_verified_campus,
+)
 from app.core.errors import forbidden, not_found
 from app.core.rate_limits import CHIRP_CREATE_LIMIT, limit_per_user
 from app.db import get_session
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_user_for_write
 from app.schemas.chirp import ChirpCreate, ChirpOut, ChirpVoteCreate, ChirpVoteOut
 from app.services.pseudonym_service import daily_pseudonym
 
@@ -121,7 +125,7 @@ async def list_chirps(
 async def create_chirp(
     campus_id: uuid.UUID,
     body: ChirpCreate,
-    user: models.User = Depends(require_campus_member),
+    user: models.User = Depends(require_campus_member_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> ChirpOut:
     """Post an anonymous chirp; author_id is stored server-side only, never returned."""
@@ -191,7 +195,7 @@ async def vote_chirp(
 @router.delete("/chirps/{chirp_id}", status_code=204)
 async def delete_chirp(
     chirp_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Author-only soft removal: sets removed_at with removed_reason='author_deleted'.
