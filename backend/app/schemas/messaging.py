@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import AliasChoices, BeforeValidator, Field
 
+from app.core.messaging_limits import MAX_CONVERSATION_INVITEES
 from app.core.validation import MAX_CIPHERTEXT_B64_LENGTH
 from app.schemas.base import _Schema
 
@@ -41,7 +42,9 @@ class ConversationCreate(_Schema):
     # groups near this size are already impractical — and far below a payload worth
     # sending. The eligibility rule in the route decides WHO may be named; this only
     # decides how many.
-    member_user_ids: list[uuid.UUID] = Field(default_factory=list, max_length=256)
+    member_user_ids: list[uuid.UUID] = Field(
+        default_factory=list, max_length=MAX_CONVERSATION_INVITEES,
+    )
 
 
 class ConversationMemberOut(_Schema):
