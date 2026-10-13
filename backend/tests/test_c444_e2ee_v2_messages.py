@@ -792,3 +792,26 @@ async def test_v2_commit_failure_emits_no_message_event(
             await session.execute(text("DROP TRIGGER c447_v2_message_commit ON messages"))
             await session.execute(text("DROP FUNCTION c447_reject_v2_message()"))
             await session.commit()
+
+
+async def test_v2_logging_failure_does_not_fail_accepted_send(
+    client: AsyncClient,
+    make_user: MakeUser,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed analytics transport cannot fail an already committed message."""
+    from app.core import analytics
+
+    w = await _world(client, make_user)
+
+    def unavailable_logger(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("synthetic analytics transport failure")
+
+    monkeypatch.setattr(analytics.logger, "info", unavailable_logger)
+    accepted = await send(client, w.convo, w.a1, w.required_from_a1(), expect=201)
+    assert accepted.json()["conversation_id"] == w.convo
+    counts = await _row_counts()
+    assert counts["messages"] == 1 and counts["legs"] == 2
+    # Immediate dispatch can consume the outbox row; readable message history is
+    # the durable contract this analytics failure must leave intact.
+    assert (await _history(client, w, w.b1))[0]["id"] == accepted.json()["id"]
