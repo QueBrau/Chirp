@@ -17,7 +17,7 @@ from app.core.analytics import emit
 from app.core.errors import conflict, not_found
 from app.core.rate_limits import ACCOUNT_BOOTSTRAP_LIMIT, limit_per_ip
 from app.db import get_session
-from app.middleware.auth import get_current_user, get_user_by_uid, get_verified_identity
+from app.middleware.auth import get_bootstrap_verified_identity, get_current_user, get_user_by_uid, get_verified_identity
 from app.schemas.identity import (
     CampusOut,
     MeOut,
@@ -44,7 +44,7 @@ router = APIRouter(tags=["auth"])
 )
 async def bootstrap_account(
     body: UserCreate,
-    identity: tuple[str, str | None] = Depends(get_verified_identity),
+    identity: tuple[str, str | None] = Depends(get_bootstrap_verified_identity),
     session: AsyncSession = Depends(get_session),
 ) -> UserOut:
     """Register the authenticated-but-unregistered identity; 409 if the uid already has a row.
