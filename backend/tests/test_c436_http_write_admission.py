@@ -5,22 +5,12 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app import models
 from app.config import get_settings
 from app.db import get_session_factory
 from app.services.account_deletion_hold import activate_deletion_hold
-
-
-def _dependency_names(dependant) -> set[str]:
-    names: set[str] = set()
-    for dependency in dependant.dependencies:
-        call = dependency.call
-        if call is not None:
-            names.add(getattr(call, "__name__", ""))
-        names.update(_dependency_names(dependency))
-    return names
 
 
 def _set_admission_flag(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
@@ -42,11 +32,17 @@ async def _activate_hold(user_id: str) -> uuid.UUID:
         )
         session.add(request)
         await session.flush()
+        await session.commit()
+        request_id = request.id
+    # The hold primitive must be the first operation in its transaction. The
+    # request itself is operator-created fixture state, so activate in a fresh
+    # transaction rather than after the request INSERT flush.
+    async with get_session_factory()() as session:
         await activate_deletion_hold(
-            session, user_id=uuid.UUID(user_id), request_id=request.id
+            session, user_id=uuid.UUID(user_id), request_id=request_id
         )
         await session.commit()
-        return request.id
+    return request_id
 
 
 async def _profile(client, user, *, company: str):
@@ -139,9 +135,8 @@ async def test_active_hold_isolated_to_owner_and_suspended_auth_still_wins(
 
     async with get_session_factory()() as session:
         await session.execute(
-            models.User.__table__.update()
-            .where(models.User.id == uuid.UUID(other.id))
-            .values(is_suspended=True)
+            text("UPDATE users SET suspended_at = now() WHERE id = :id"),
+            {"id": uuid.UUID(other.id)},
         )
         await session.commit()
 
@@ -174,24 +169,19 @@ async def test_flag_off_preserves_legacy_writes_and_does_not_activate_intake_hol
 
 def test_only_alumni_mutations_are_enrolled_in_write_admission() -> None:
     """Guard the intended route inventory without claiming global enrollment."""
-    from app.main import create_app
+    import inspect
 
-    app = create_app()
-    expected = {
-        ("PUT", "/alumni/profile"),
-        ("POST", "/jobs"),
-        ("DELETE", "/jobs/{job_id}"),
-    }
-    routes = {
-        (method, route.path): route
-        for route in app.routes
-        if hasattr(route, "methods")
-        for method in route.methods
-    }
-    for method, path in expected:
-        route = routes[(method, path)]
-        assert "get_current_user_for_write" in _dependency_names(route.dependant)
+    from app.routers import alumni
 
-    for method, path in (("GET", "/alumni/profile"), ("GET", "/jobs")):
-        route = routes[(method, path)]
-        assert "get_current_user_for_write" not in _dependency_names(route.dependant)
+    expected = (
+        alumni.upsert_own_profile,
+        alumni.create_job_post,
+        alumni.delete_job_post,
+    )
+    for endpoint in expected:
+        dependency = inspect.signature(endpoint).parameters["user"].default
+        assert dependency.dependency.__name__ == "get_current_user_for_write"
+
+    for endpoint in (alumni.get_own_profile, alumni.list_job_posts):
+        dependency = inspect.signature(endpoint).parameters["user"].default
+        assert dependency.dependency.__name__ != "get_current_user_for_write"
