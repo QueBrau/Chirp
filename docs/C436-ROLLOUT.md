@@ -94,8 +94,13 @@ scope. Conversation-row locks serialize enrolled membership changes with sends,
 and the roster is rechecked before new message, leg and outbox-intent writes.
 The scope supports the existing 256-invitee creation limit. Local cleanup removes
 the deleted account from the active roster while preserving shared history.
-WebSocket, outbox and executor paths are not enrolled. A complete release must
-enroll every writer and drain provider operations, uploads, exports and analytics ingestion
+The listed chapter/member, meeting/attendance and reporter/blocker mutations are
+also enrolled. Member changes guard both actor and target; retained organization
+and safety records use actor admission, preserving other users' authorized work
+and anonymous target privacy. Moderator resolution/removal/suspension and other
+unlisted writers still need review. WebSocket, outbox and executor paths are not
+enrolled. A complete release must enroll every writer and drain provider
+operations, uploads, exports and analytics ingestion
 before an operator uses provider cleanup. This source change does not establish
 that quiescence or authorize running the migration or deletion in production.
 

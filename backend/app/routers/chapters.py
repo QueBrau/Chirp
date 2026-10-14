@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.config import get_settings
 from app.core.campus_access import is_campus_verified
 from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, forbidden, not_found
@@ -28,7 +29,9 @@ from app.core.permissions import (
     Role,
     capabilities_for,
     require_platform_admin,
+    require_platform_admin_for_write,
     require_role,
+    require_role_for_write,
 )
 from app.core.rate_limits import (
     CHAPTER_CREATE_LIMIT,
@@ -37,9 +40,10 @@ from app.core.rate_limits import (
     limit_per_user,
 )
 from app.core.windows import meeting_window
-from app.db import get_session
-from app.middleware.auth import get_current_user
+from app.db import get_session, get_session_factory
+from app.middleware.auth import get_current_user, get_current_user_for_write, get_verified_uid
 from app.middleware.org_scope import get_current_membership
+from app.services.account_write_guard import assert_account_write_targets, bind_account_write_guard
 from app.schemas.moderation import (
     ChapterModerationApprovalHistoryEntry,
     ChapterModerationApprovalRequest,
@@ -82,6 +86,66 @@ DEFAULT_CHAPTER_APPROVAL_REASON = "platform admin decision, no reason given"
 _EBOARD_ROLE_VALUES: frozenset[str] = frozenset(role.value for role in EBOARD)
 
 
+async def _update_member_for_write(
+    chapter_id: uuid.UUID,
+    body: MembershipUpdate,
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.Membership:
+    """Authorize and bind both the president and the membership being changed."""
+    if not get_settings().account_deletion_http_admission_enabled:
+        user = await get_current_user(uid=uid, session=session)
+        actor = await get_current_membership(
+            chapter_id=chapter_id, user=user, session=session
+        )
+        if actor.role not in {role.value for role in MEMBERS_ADMIN}:
+            raise HTTPException(status_code=403, detail="insufficient_role")
+        return actor
+
+    async with get_session_factory()() as preflight:
+        user = await get_current_user(uid=uid, session=preflight)
+        actor = await get_current_membership(
+            chapter_id=chapter_id, user=user, session=preflight
+        )
+        if actor.role not in {role.value for role in MEMBERS_ADMIN}:
+            raise HTTPException(status_code=403, detail="insufficient_role")
+        target = await preflight.scalar(
+            select(models.Membership).where(
+                models.Membership.chapter_id == chapter_id,
+                models.Membership.user_id == body.user_id,
+            )
+        )
+        if target is None:
+            raise not_found("membership_not_found")
+
+    bind_account_write_guard(
+        session,
+        user_id=user.id,
+        firebase_uid=uid,
+        target_user_ids=(body.user_id,),
+    )
+    user = await get_current_user(uid=uid, session=session)
+    actor = await get_current_membership(
+        chapter_id=chapter_id, user=user, session=session
+    )
+    if actor.role not in {role.value for role in MEMBERS_ADMIN}:
+        raise HTTPException(status_code=403, detail="insufficient_role")
+    target = await session.scalar(
+        select(models.Membership)
+        .where(
+            models.Membership.chapter_id == chapter_id,
+            models.Membership.user_id == body.user_id,
+        )
+        .with_for_update()
+    )
+    if target is None:
+        raise not_found("membership_not_found")
+    assert_account_write_targets(
+        session, user_id=actor.user_id, target_user_ids=(target.user_id,)
+    )
+    return actor
+
+
 @router.post(
     "/chapters",
     status_code=201,
@@ -89,7 +153,7 @@ _EBOARD_ROLE_VALUES: frozenset[str] = frozenset(role.value for role in EBOARD)
 )
 async def create_chapter(
     body: ChapterCreate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> ChapterOut:
     """Create a chapter; the creator becomes its president via a new membership.
@@ -197,7 +261,7 @@ async def get_chapter(
 async def update_chapter(
     chapter_id: uuid.UUID,
     body: ChapterUpdate,
-    _actor: models.Membership = Depends(require_role(*MEMBERS_ADMIN)),
+    _actor: models.Membership = Depends(require_role_for_write(*MEMBERS_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> ChapterOut:
     """Update org_name/chapter_name; president only (board card c77).
@@ -232,7 +296,7 @@ async def update_chapter(
 async def set_chapter_moderation_approval(
     chapter_id: uuid.UUID,
     body: ChapterModerationApprovalRequest,
-    admin: models.User = Depends(require_platform_admin),
+    admin: models.User = Depends(require_platform_admin_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> ChapterModerationApprovalOut:
     """Platform-admin setter for chapters.moderation_approved (board card c325).
@@ -810,7 +874,7 @@ async def treasurer_overview(
 async def update_member(
     chapter_id: uuid.UUID,
     body: MembershipUpdate,
-    actor: models.Membership = Depends(require_role(*MEMBERS_ADMIN)),
+    actor: models.Membership = Depends(_update_member_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> MembershipOut:
     """Update a member's role/status/pledge_class; president only.
@@ -893,7 +957,7 @@ async def list_role_terms(
 async def create_invite(
     chapter_id: uuid.UUID,
     body: ChapterInviteCreate,
-    actor: models.Membership = Depends(require_role(*EBOARD)),
+    actor: models.Membership = Depends(require_role_for_write(*EBOARD)),
     session: AsyncSession = Depends(get_session),
 ) -> ChapterInviteOut:
     """Create a deep-link invite code; e-board only. Bounded expiry, bounded uses.
@@ -988,7 +1052,7 @@ async def list_invites(
 async def revoke_invite(
     chapter_id: uuid.UUID,
     body: ChapterInviteRevokeRequest,
-    actor: models.Membership = Depends(require_role(*EBOARD)),
+    actor: models.Membership = Depends(require_role_for_write(*EBOARD)),
     session: AsyncSession = Depends(get_session),
 ) -> ChapterInviteOut:
     """Kill a leaked invite code. E-board only, and only for their own chapter.
@@ -1029,7 +1093,7 @@ async def revoke_invite(
 )
 async def join_chapter(
     body: ChapterJoinRequest,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> MembershipOut:
     """Redeem an invite code: validates expiry, revocation and the redemption
