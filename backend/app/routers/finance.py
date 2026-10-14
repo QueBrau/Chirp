@@ -16,9 +16,13 @@ from app.core.csv_export import csv_response, sanitize_csv_text
 from app.core.dues_status import dues_contributions_subquery
 from app.core.errors import conflict, is_cross_table_dues_guard_conflict, not_found
 from app.core.pagination import MAX_ROSTER_PAGE, warn_if_capped
-from app.core.permissions import DUES_ADMIN, Role, require_role
+from app.core.permissions import DUES_ADMIN, Role, require_role, require_role_for_write
 from app.db import get_session
-from app.middleware.org_scope import get_current_membership
+from app.middleware.org_scope import get_current_membership, get_current_membership_for_write
+from app.services.finance_write_admission import (
+    assert_dues_plan_target_scope,
+    get_dues_plan_writer,
+)
 from app.schemas.finance import (
     LedgerBalancePoint,
     LedgerCategoryTotal,
@@ -159,7 +163,7 @@ async def _viewer_standing_by_cycle(
 async def create_dues_cycle(
     chapter_id: uuid.UUID,
     body: DuesCycleCreate,
-    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    _membership: models.Membership = Depends(require_role_for_write(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> DuesCycleOut:
     """Create a dues cycle; treasurer/president only."""
@@ -170,9 +174,11 @@ async def create_dues_cycle(
         due_date=body.due_date,
     )
     session.add(cycle)
-    await session.commit()
+    await session.flush()
     await session.refresh(cycle)
-    return DuesCycleOut.model_validate(cycle)
+    response = DuesCycleOut.model_validate(cycle)
+    await session.commit()
+    return response
 
 
 # ---- ledger (append-only) ----
@@ -428,7 +434,7 @@ async def _current_cycle_dues(
 async def create_ledger_entry(
     chapter_id: uuid.UUID,
     body: LedgerEntryCreate,
-    membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    membership: models.Membership = Depends(require_role_for_write(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> LedgerEntryOut:
     """Append a ledger entry; treasurer/president only.
@@ -518,9 +524,11 @@ async def create_ledger_entry(
         created_by=membership.user_id,
     )
     session.add(entry)
-    await session.commit()
+    await session.flush()
     await session.refresh(entry)
-    return LedgerEntryOut.model_validate(entry)
+    response = LedgerEntryOut.model_validate(entry)
+    await session.commit()
+    return response
 
 
 def _format_amount_cents(amount_cents: int) -> str:
@@ -601,7 +609,7 @@ async def export_ledger_csv(
 async def create_spend_approval(
     chapter_id: uuid.UUID,
     body: SpendApprovalCreate,
-    membership: models.Membership = Depends(get_current_membership),
+    membership: models.Membership = Depends(get_current_membership_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> SpendApprovalOut:
     """Request a spend approval; any active member."""
@@ -612,9 +620,11 @@ async def create_spend_approval(
         description=body.description,
     )
     session.add(approval)
-    await session.commit()
+    await session.flush()
     await session.refresh(approval)
-    return SpendApprovalOut.model_validate(approval)
+    response = SpendApprovalOut.model_validate(approval)
+    await session.commit()
+    return response
 
 
 @router.get("/chapters/{chapter_id}/spend-approvals")
@@ -637,7 +647,7 @@ async def decide_spend_approval(
     chapter_id: uuid.UUID,
     approval_id: uuid.UUID,
     body: SpendApprovalDecision,
-    membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    membership: models.Membership = Depends(require_role_for_write(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> SpendApprovalOut:
     """Approve/reject a pending spend approval; treasurer/president; 409 if decided."""
@@ -676,12 +686,13 @@ async def decide_spend_approval(
     if decided.scalar_one_or_none() is None:
         raise conflict("already_decided")
 
-    await session.commit()
     # synchronize_session=False leaves the identity-mapped `approval` holding the
     # pre-UPDATE values, so it must be re-read before it is serialized. Without this
     # the response body would report the row as still pending.
     await session.refresh(approval)
-    return SpendApprovalOut.model_validate(approval)
+    response = SpendApprovalOut.model_validate(approval)
+    await session.commit()
+    return response
 
 
 # ---- dues payment plans (board card c195) ----
@@ -800,7 +811,7 @@ async def create_dues_payment_plan(
     chapter_id: uuid.UUID,
     cycle_id: uuid.UUID,
     body: DuesPaymentPlanCreate,
-    membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    membership: models.Membership = Depends(get_dues_plan_writer),
     session: AsyncSession = Depends(get_session),
 ) -> DuesPaymentPlanOut:
     """Set up an installment plan for one member's dues cycle; treasurer/president only.
@@ -826,6 +837,9 @@ async def create_dues_payment_plan(
     race), or has a LIVE self-serve reservation in flight (an open/failed/succeeded
     DuesPaymentIntent with no ledger row yet — see the reservation check below).
     """
+    assert_dues_plan_target_scope(
+        session, actor_user_id=membership.user_id, target_user_id=body.user_id
+    )
     cycle = await session.get(models.DuesCycle, cycle_id)
     if cycle is None or cycle.chapter_id != chapter_id:
         raise not_found("dues_cycle_not_found")
@@ -934,6 +948,9 @@ async def create_dues_payment_plan(
                 )
             )
 
+        await session.flush()
+        installments = await _load_installments(session, plan.id)
+        response = _plan_out(plan, installments, {})
         await session.commit()
     except IntegrityError:
         # The read above narrows the race but is not the guard — two concurrent
@@ -956,10 +973,7 @@ async def create_dues_payment_plan(
             raise
         raise conflict("payment_in_progress") from None
 
-    await session.refresh(plan)
-    # Freshly created installments have no ledger_entry_id yet (none has been paid),
-    # so there is nothing to net — corrections_by_entry is trivially empty.
-    return _plan_out(plan, await _load_installments(session, plan.id), {})
+    return response
 
 
 @router.post(
@@ -970,7 +984,7 @@ async def record_dues_installment_payment(
     plan_id: uuid.UUID,
     seq: int,
     body: DuesInstallmentRecordPaymentRequest,
-    membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    membership: models.Membership = Depends(require_role_for_write(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> DuesPlanInstallmentOut:
     """Record one installment as paid; treasurer/president only.
@@ -1056,12 +1070,14 @@ async def record_dues_installment_payment(
     if remaining_unpaid == 0:
         plan.status = "completed"
 
-    await session.commit()
+    await session.flush()
     await session.refresh(installment)
     # No correction can exist yet against an entry this same request just created
     # (corrects_entry_id would have to reference a row that didn't exist a moment
     # ago), so effective_paid is trivially True here — {} skips the query.
-    return _installment_out(installment, {})
+    response = _installment_out(installment, {})
+    await session.commit()
+    return response
 
 
 @router.get("/chapters/{chapter_id}/dues-cycles/{cycle_id}/plans")
@@ -1155,7 +1171,7 @@ async def get_my_dues_payment_plan(
 async def cancel_dues_payment_plan(
     chapter_id: uuid.UUID,
     plan_id: uuid.UUID,
-    _membership: models.Membership = Depends(require_role(*DUES_ADMIN)),
+    _membership: models.Membership = Depends(require_role_for_write(*DUES_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> DuesPaymentPlanOut:
     """Cancel an active plan; treasurer/president only. 409 if it is not active
@@ -1180,9 +1196,10 @@ async def cancel_dues_payment_plan(
     if canceled.scalar_one_or_none() is None:
         raise conflict("plan_not_active")
 
-    await session.commit()
     await session.refresh(plan)
     installments = await _load_installments(session, plan.id)
     entry_ids = [i.ledger_entry_id for i in installments if i.ledger_entry_id is not None]
     corrections_by_entry = await _corrections_by_entry(session, chapter_id, entry_ids)
-    return _plan_out(plan, installments, corrections_by_entry)
+    response = _plan_out(plan, installments, corrections_by_entry)
+    await session.commit()
+    return response

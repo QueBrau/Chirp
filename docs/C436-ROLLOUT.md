@@ -113,8 +113,19 @@ cleanup now removes the caller's house ballots, with event history explicitly
 retained. Review the cleanup executor's DELETE permission on `house_ballots`
 before rollout; this source change adds no database grant.
 
-Unlisted writers still require review, including finance/payment/webhook paths,
-upload capabilities and privacy exports. Avatar/feed media copies, campus
+The seven finance mutations listed in the hold document are also enrolled. New
+payment plans bind the actor and target member; other officers can still maintain
+retained financial history for a held member. The ledger remains append-only,
+existing payment/conflict rules remain in force, and response reads occur before
+commit. This does not enroll Stripe provider operations or settlement webhooks.
+
+Export creation is also enrolled before its request transaction and artifact
+generation. Fresh-auth privacy access for suspended users is preserved. Deletion
+intake/retries, request status and existing downloads remain available under their
+privacy authorization rules; intake still cannot activate a hold or run cleanup.
+
+Unlisted writers still require review, including payment/webhook paths and
+upload capabilities. Avatar/feed media copies, campus
 verification delivery and analytics emission still need external fencing/drain.
 Bootstrap identity recreation also needs its provider-boundary review.
 WebSocket, outbox and executor paths are not enrolled. A complete release must
