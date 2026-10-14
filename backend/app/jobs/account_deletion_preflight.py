@@ -20,8 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app import models
 from app.services.account_fulfillment import (
+    OUTCOME_UNKNOWN_ERRORS,
     PROVIDER_STEPS,
     ProviderUnavailable,
+    provider_attempt_may_have_started,
     validate_provider_receipt,
 )
 
@@ -108,7 +110,10 @@ async def inspect_request(
     missing = [key for key in REQUIRED_STEPS if key not in by_key]
     unknown = [
         step.step_key for step in steps
-        if step.last_error == "firebase_outcome_unknown" and step.step_key in REQUIRED_STEPS
+        if step.step_key in PROVIDER_STEPS and (
+            step.last_error in OUTCOME_UNKNOWN_ERRORS
+            or (step.status != "succeeded" and provider_attempt_may_have_started(step))
+        )
     ]
     extra_step_count = sum(step.step_key not in REQUIRED_STEPS for step in steps)
     unrecognized_status_count = sum(
@@ -128,6 +133,13 @@ async def inspect_request(
             receipt_errors.append(f"{key}:{error}")
         if step.completed_at is None:
             receipt_errors.append(f"{key}:completion_timestamp_missing")
+        if (not valid or step.completed_at is None
+                or step.idempotency_key != f"account-deletion:{request_id}:{key}"):
+            # A succeeded label with unusable evidence cannot authorize another
+            # provider call, even when a legacy attempt counter is zero.
+            if key not in unknown:
+                unknown.append(key)
+    unknown.sort()
     tombstone = by_key.get("database_tombstone")
     tombstone_valid = bool(
         tombstone is not None and tombstone.status == "succeeded" and tombstone.completed_at is not None
