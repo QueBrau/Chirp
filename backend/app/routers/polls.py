@@ -28,11 +28,11 @@ from sqlalchemy.orm import selectinload
 from app import models
 from app.core.analytics import emit
 from app.core.errors import conflict, not_found
-from app.core.permissions import POLLS_ADMIN, require_role
+from app.core.permissions import POLLS_ADMIN, require_role_for_write
 from app.core.rate_limits import enforce_limit
 from app.db import get_session
 from app.middleware.auth import get_verified_uid
-from app.middleware.org_scope import get_current_membership
+from app.middleware.org_scope import get_current_membership, get_current_membership_for_write
 from app.schemas.polls import PollCreate, PollOptionResult, PollOut, PollVoteIn
 from app.services import outbox
 from app.ws.pubsub import publish_to_user
@@ -269,7 +269,7 @@ def _assemble(
 async def create_poll(
     chapter_id: uuid.UUID,
     body: PollCreate,
-    membership: models.Membership = Depends(require_role(*POLLS_ADMIN)),
+    membership: models.Membership = Depends(require_role_for_write(*POLLS_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> PollOut:
     """Open a poll; secretary/president only."""
@@ -414,7 +414,7 @@ async def cast_vote(
     chapter_id: uuid.UUID,
     poll_id: uuid.UUID,
     body: PollVoteIn,
-    membership: models.Membership = Depends(get_current_membership),
+    membership: models.Membership = Depends(get_current_membership_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> PollOut:
     """Cast or change the caller's vote; any member of the chapter.
@@ -465,7 +465,7 @@ async def cast_vote(
 async def close_poll(
     chapter_id: uuid.UUID,
     poll_id: uuid.UUID,
-    membership: models.Membership = Depends(require_role(*POLLS_ADMIN)),
+    membership: models.Membership = Depends(require_role_for_write(*POLLS_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> PollOut:
     """Close a poll to further voting; secretary/president only.
@@ -507,7 +507,7 @@ async def close_poll(
 async def delete_poll(
     chapter_id: uuid.UUID,
     poll_id: uuid.UUID,
-    _membership: models.Membership = Depends(require_role(*POLLS_ADMIN)),
+    _membership: models.Membership = Depends(require_role_for_write(*POLLS_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Delete a poll NOBODY HAS VOTED ON; secretary/president only.

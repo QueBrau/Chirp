@@ -97,9 +97,20 @@ the deleted account from the active roster while preserving shared history.
 The listed chapter/member, meeting/attendance and reporter/blocker mutations are
 also enrolled. Member changes guard both actor and target; retained organization
 and safety records use actor admission, preserving other users' authorized work
-and anonymous target privacy. Moderator resolution/removal/suspension and other
-unlisted writers still need review. WebSocket, outbox and executor paths are not
-enrolled. A complete release must enroll every writer and drain provider
+and anonymous target privacy. Poll SQL mutations, lineage mutations and the
+remaining moderator actions are also enrolled as listed in the hold document.
+New/replacement lineage edges bind both endpoints; unsuspension binds the target
+whose access would be restored. Other officers can still remove retained edges,
+maintain polls and perform safety removals against held targets. Conditional
+content removal preserves a concurrent cleanup's redaction reason and avoids
+duplicate successful-removal audit rows.
+
+Unlisted writers still require review, including profile/avatar updates, campus
+verification, feed/comment/like writes, Chirp votes, house ballots, event/invite/RSVP
+writes, finance/payment/webhook paths, upload capabilities and privacy exports.
+Bootstrap identity recreation also needs its provider-boundary review.
+WebSocket, outbox and executor paths are not enrolled. A complete release must
+enroll every writer and drain provider
 operations, uploads, exports and analytics ingestion
 before an operator uses provider cleanup. This source change does not establish
 that quiescence or authorize running the migration or deletion in production.

@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.core.permissions import EBOARD, require_role
+from app.core.permissions import EBOARD, require_role_for_write
 from app.db import get_session
-from app.middleware.org_scope import get_current_membership
+from app.middleware.org_scope import get_current_membership, get_current_membership_for_write
 from app.schemas.lineage import (
     FamilyCreate,
     FamilyOut,
@@ -16,6 +16,7 @@ from app.schemas.lineage import (
     LineageTreeOut,
 )
 from app.services import lineage_service
+from app.services.lineage_write_admission import get_lineage_edge_writer
 
 router = APIRouter(tags=["lineage"])
 
@@ -34,7 +35,7 @@ async def get_lineage_tree(
 async def create_family(
     chapter_id: uuid.UUID,
     body: FamilyCreate,
-    _membership: models.Membership = Depends(require_role(*EBOARD)),
+    _membership: models.Membership = Depends(require_role_for_write(*EBOARD)),
     session: AsyncSession = Depends(get_session),
 ) -> FamilyOut:
     """Create a family (name + color) in the chapter; e-board only."""
@@ -49,7 +50,7 @@ async def create_family(
 async def create_edge(
     chapter_id: uuid.UUID,
     body: LineageEdgeCreate,
-    membership: models.Membership = Depends(require_role(*EBOARD)),
+    membership: models.Membership = Depends(get_lineage_edge_writer),
     session: AsyncSession = Depends(get_session),
 ) -> LineageEdgeOut:
     """Create a big/little edge; e-board (incl. historian). One big per little → 409,
@@ -66,7 +67,7 @@ async def create_edge(
 async def delete_edge(
     chapter_id: uuid.UUID,
     edge_id: uuid.UUID,
-    _membership: models.Membership = Depends(require_role(*EBOARD)),
+    _membership: models.Membership = Depends(require_role_for_write(*EBOARD)),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Remove a big/little edge (pure unpair); e-board only. Reassignment should
@@ -78,7 +79,7 @@ async def delete_edge(
 async def confirm_edge(
     chapter_id: uuid.UUID,
     edge_id: uuid.UUID,
-    membership: models.Membership = Depends(get_current_membership),
+    membership: models.Membership = Depends(get_current_membership_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> LineageEdgeOut:
     """Little confirms their own big/little edge (idempotent)."""
