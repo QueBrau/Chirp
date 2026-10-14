@@ -25,13 +25,30 @@ Firebase SDK calls run in a worker thread with a fixed timeout. Timeout or calle
 cancellation drains that worker before the provider result is returned. This can
 extend beyond the nominal 30-second SDK timeout, and it cannot prevent the
 separate five-minute orchestration lease from expiring if the SDK itself hangs.
-The outcome remains sanitized and uncertain until the next idempotent retry and
-readback; the step lease is not intentionally released while the worker is
-running. If a later runner inherits a still-running Firebase step, it records
-`firebase_outcome_unknown` and blocks without invoking Firebase again. Resolving
-that marker requires a separately reviewed operator procedure that verifies
-provider state and confirms the prior worker has stopped. This patch provides
-no recovery command, blind clear, or automatic retry for that state.
+The outcome remains sanitized and uncertain; a lease deadline is not proof that
+external work stopped. The step lease is not intentionally released while the
+Firebase worker is running.
+
+The c458 executor repair applies the no-retry boundary to every provider step.
+An inherited running step or a previously attempted unsuccessful step is held
+for review, including legacy rows whose older error text did not say the outcome
+was unknown. Running state, timestamps, lease data, stored provider responses and
+unknown-outcome markers also block retry when a legacy attempt counter is zero.
+Firebase retains `firebase_outcome_unknown`; the other providers use
+`provider_outcome_unknown`. An exception or invalid confirmation after invocation
+cannot authorize a second call. A stale runner cannot overwrite the durable
+outcome or reach local cleanup. Cancellation propagates without proceeding to
+later providers or the account tombstone; existing adapter worker-drain rules
+still apply.
+
+Never-attempted pending work can resume after missing adapters are supplied.
+Already-succeeded steps are reused only after their stored receipt is validated.
+Resolving an uncertain attempted step requires a separately reviewed operator
+procedure that confirms the original worker stopped and verifies provider state;
+this source change adds no marker-clearing command or automatic retry path.
+The read-only preflight reports both unknown-outcome markers and ambiguous legacy
+attempts without disclosing provider error bodies. These changes do not configure
+adapters or enable deletion.
 
 ## Stripe customer adapter boundary
 
