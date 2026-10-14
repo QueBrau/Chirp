@@ -8,15 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 
 RETENTION_REASONS = {
-    "organization_history": "membership, role, lineage, and shared organization history remains attributed to Deleted account",
+    "organization_history": "membership, role, lineage, event and shared organization history remains attributed to Deleted account",
     "financial_history": "append-only ledger and payment history remains for accounting and disputes",
     "safety_legal": "reports, moderation, legal acceptance, and safety records remain for audit and holds",
     "message_history": "encrypted message history remains for other participants; server cannot decrypt it",
     "provider_retention": "provider, backup, log, and unresolved media retention requires provider confirmation",
 }
-PRIVATE_COVERAGE = ("alumni_profiles", "campus_verifications", "account_data_artifacts", "job_posts", "post_likes", "chirp_votes", "poll_votes", "own_user_blocks", "conversation_memberships_left", "signed_prekeys", "one_time_prekeys", "kyber_prekeys", "devices_revoke")
+PRIVATE_COVERAGE = ("alumni_profiles", "campus_verifications", "account_data_artifacts", "job_posts", "post_likes", "chirp_votes", "poll_votes", "house_ballots", "own_user_blocks", "conversation_memberships_left", "signed_prekeys", "one_time_prekeys", "kyber_prekeys", "devices_revoke")
 RETAINED_COVERAGE = (
-    "memberships", "role_terms", "lineage_edges", "ledger_entries", "dues_payment_plans",
+    "memberships", "role_terms", "lineage_edges", "events", "event_invites", "event_rsvps", "ledger_entries", "dues_payment_plans",
     "dues_plan_installments", "chapter_stripe_customers", "legal_acceptances",
     "organization_authority_acceptances", "moderation_actions", "content_reports",
     "messages_and_conversation_history", "incoming_user_blocks", "provider_backups_logs",
@@ -44,6 +44,7 @@ async def cleanup_local_account(session: AsyncSession, user_id: uuid.UUID) -> di
     await session.execute(delete(models.PostLike).where(models.PostLike.user_id == user_id))
     await session.execute(delete(models.ChirpVote).where(models.ChirpVote.user_id == user_id))
     await session.execute(delete(models.PollVote).where(models.PollVote.user_id == user_id))
+    await session.execute(delete(models.HouseBallot).where(models.HouseBallot.voter_id == user_id))
     await session.execute(delete(models.UserBlock).where(models.UserBlock.blocker_id == user_id))
     await session.execute(update(models.ConversationMember).where(
         models.ConversationMember.user_id == user_id,

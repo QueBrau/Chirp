@@ -225,6 +225,110 @@ refreshes the target before checking the bound scope and clearing suspension.
 Suspension also locks and refreshes its target row, but can still enforce a safety
 restriction during deletion. Reads keep their original dependencies.
 
+## Profile, campus participation, feeds and events
+
+The same disabled flag enrolls 18 additional SQL mutation routes:
+
+- Profile updates: `PATCH /auth/me`.
+- Campus verification: `POST /auth/campus-verification` and
+  `POST /auth/campus-verification/redeem`.
+- Private votes: `PUT /campuses/{campus_id}/house-ballot` and
+  `PUT /chirps/{chirp_id}/vote`.
+- Feed posts: `POST /chapters/{chapter_id}/posts`,
+  `POST /campuses/{campus_id}/posts`,
+  `PATCH` and `DELETE /chapters/{chapter_id}/posts/{post_id}`, and
+  `DELETE /posts/{post_id}`.
+- Feed interactions: `PUT` and `DELETE /posts/{post_id}/likes`, and
+  `POST /posts/{post_id}/comments`.
+- Events: `POST /chapters/{chapter_id}/events`, `PATCH /events/{event_id}`,
+  `POST /events/{event_id}/cancel`, `PUT /events/{event_id}/rsvps`, and
+  `POST /events/{event_id}/invites`.
+
+These bind the actor, except event invitations also lock their immutable recipient
+candidate set. Post editing remains author-only; its ordinary authorization is
+checked before admission and again in the guarded session. Post interactions lock
+the visible post before writing, and authorized deletion uses a conditional update
+that cannot overwrite a concurrent cleanup's removal state. Locked post reloads
+refresh the identity map, including after media finalization. Profile updates and
+feed post/comment/like creation refresh response fields before the final commit;
+a hold beginning immediately afterward cannot turn that committed mutation into
+a failed response refresh. Media write failures still report orphaned objects.
+Other users' retained
+likes/comments and an anonymous Chirp author's hold do not become hold-status
+disclosures. Cleanup removes all of the caller's house ballots, alongside existing
+Chirp/poll votes, while leaving other voters' rows and organization history intact.
+
+Event creation, updates, cancellation and RSVPs refresh their response data before
+commit, so a post-commit hold cannot turn a completed mutation into a failed SQL
+refresh. Events, invites and RSVPs are retained shared organization history. A held
+host does not prevent another authorized officer from maintaining the event.
+
+Invitations preserve the existing atomic batch and 500-recipient limit. Ordinary
+authentication, active membership, management permission and unknown-user checks
+run before the request session binds all candidates. The filtered guard acquires
+globally sorted shared gates for the actor plus every candidate before application
+SQL. An active actor hold still rejects the write; held recipients and completed
+deletion stubs are silently omitted, as blocked recipients already are. The handler
+rechecks authorization, the exact candidate set and blocks, then inserts eligible
+recipients in one transaction. Eligibility is specific to that SQL transaction and
+recomputed after commit or rollback; stale eligibility or a changed scope fails
+closed. This filtered batch API has a separate 500-candidate bound and does not
+expand the strict 257-account guard used by messaging.
+
+These changes only fence SQL. An already admitted avatar/feed media copy, verification
+email, Redis rate-limit operation or analytics emission can outlive its SQL
+transaction. Provider operations and ingestion still need durable fencing/drain;
+an active hold blocking a later SQL write does not undo an earlier external effect.
+
+## Financial records and payment plans
+
+The same disabled flag enrolls seven finance SQL mutations:
+
+- `POST /chapters/{chapter_id}/dues-cycles`
+- `POST /chapters/{chapter_id}/ledger`
+- `POST /chapters/{chapter_id}/spend-approvals`
+- `POST /chapters/{chapter_id}/spend-approvals/{approval_id}/decide`
+- `POST /chapters/{chapter_id}/dues-cycles/{cycle_id}/plans`
+- `POST /chapters/{chapter_id}/dues-plans/{plan_id}/installments/{seq}/record-payment`
+- `POST /chapters/{chapter_id}/dues-plans/{plan_id}/cancel`
+
+All require actor admission and preserve their existing role requirements. New
+payment plans additionally bind the member receiving the plan. Ordinary chapter,
+dues-admin, cycle and active-member checks run before binding, then repeat in the
+guarded request transaction. The actor and target set cannot change during the
+request, and completed deletion tombstones cannot receive new plans.
+
+The other six routes bind only the actor. A target's deletion hold must not prevent
+another authorized officer from recording money already received, appending a
+ledger correction, deciding a retained spend request or canceling an existing
+plan. Financial and organization records remain retained history; this change
+neither erases ledger entries nor claims that outstanding obligations disappear.
+Existing installment, plan and ledger conflict rules still apply. Response data
+is loaded before the final commit so a newly activated hold cannot turn a
+successfully committed financial action into a failed response refresh. Read and
+CSV-export routes retain their existing authorization.
+
+This is SQL admission only. Stripe onboarding, payment creation and provider
+webhooks require separate integration. A webhook must still account for money
+already captured while preventing new provider work during deletion; an ordinary
+actor dependency is not an appropriate substitute for that settlement policy.
+
+## Privacy requests
+
+`POST /me/data-requests` requires actor write admission when `kind=export`, before
+its request transaction can create an export request or artifact. The dependency
+retains the privacy route's fresh authentication and access for suspended accounts;
+ordinary product-access or legal-acceptance gates are not added. Export generation
+is local SQL work within the admitted transaction. The response, including artifact
+expiry, is materialized before commit.
+
+Deletion intake and idempotent deletion-request retries remain privacy control
+operations and do not require ordinary write admission. They create or reuse the
+blocked, journaled request; they do not activate a hold or execute deletion. Request
+status and existing export downloads retain their existing owner and authentication
+checks during a hold. These read paths do not create new artifacts. System expiry
+of old artifacts remains a separate bounded retention job.
+
 ## Remaining rollout gates
 
 This flag neither activates a hold nor adds an activation endpoint. Ordinary
@@ -238,7 +342,8 @@ Before any production deletion, inventory and enroll the remaining HTTP writers
 and writes by other actors that target the deleting account. Multi-account paths
 need sorted admission keys before row locks; consuming key requests and the enrolled
 conversation/message writes, membership updates, lineage creation/replacement and
-unsuspension bind multiple accounts.
+unsuspension bind multiple accounts. Event invitations use filtered multi-account
+admission without weakening the other routes' strict target holds.
 Drain in-flight uploads, exports, provider calls and analytics ingestion
 and review the executor's hold-owner path. SQL admission alone proves none of
 those external boundaries. No production migration, grants, enablement or deletion

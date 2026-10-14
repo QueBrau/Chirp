@@ -228,7 +228,10 @@ async def run_peer(tmp_path, mode="normal", **options):
             original_receive(index, frame)
             peer.arrival_bounds.append((before, time.monotonic()))
         peer.observation.receive = observed_receive
-        result = await asyncio.wait_for(peer.observation.run(), 3)
+        # Observation has its own wall-clock phase and cleanup budgets. This
+        # outer test watchdog only prevents a hung test; three seconds could
+        # cancel a healthy run during CI startup and turn that into NOT_PROVEN.
+        result = await asyncio.wait_for(peer.observation.run(), 10)
     assert peer.closed == 2
     assert result["http_and_ws"]["ws"]["active_ready"] == 0
     assert result["http_and_ws"]["ws"]["pending"] == 0
@@ -260,6 +263,23 @@ async def test_real_early_receipts_reconcile_after_http_response_and_private_agg
                   raw["message_workload"]["conversation_id"], *peer.payloads):
         assert value not in serialized
     assert all("Authorization" not in headers for _, _, headers in peer.requests)
+    assert len(peer.post_starts) == 1
+
+
+@pytest.mark.asyncio
+async def test_receipt_observation_survives_slow_test_startup(tmp_path, monkeypatch):
+    original_warmup = workload.Runner._warmup
+
+    async def delayed_warmup(runner, client):
+        # Test-harness startup can exceed the old three-second outer watchdog.
+        # Keep the observation's configured HTTP/receipt budgets unchanged.
+        await asyncio.sleep(3.1)
+        await original_warmup(runner, client)
+
+    monkeypatch.setattr(workload.Runner, "_warmup", delayed_warmup)
+    result, peer, _ = await run_peer(tmp_path)
+    assert result["status"] == "LOCAL_RECEIPTS_OBSERVED", result
+    assert result["errors"] == []
     assert len(peer.post_starts) == 1
 
 

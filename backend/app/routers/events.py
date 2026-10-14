@@ -43,14 +43,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app import models
+from app.config import get_settings
 from app.core.analytics import emit
 from app.core.blocks import blockers_of
 from app.core.campus_access import is_campus_verified
 from app.core.errors import forbidden, not_found
 from app.core.permissions import EBOARD
-from app.db import get_session
-from app.middleware.auth import get_current_user
-from app.middleware.org_scope import get_current_membership
+from app.db import get_session, get_session_factory
+from app.middleware.auth import get_current_user, get_current_user_for_write, get_verified_uid
+from app.middleware.org_scope import (
+    get_current_membership,
+    get_current_membership_for_write,
+)
 from app.schemas.events import (
     EventCreate,
     EventInviteBatchOut,
@@ -65,6 +69,10 @@ from app.schemas.events import (
     EventUpdate,
     EventWithRsvpSummaryOut,
     PublicEventOut,
+)
+from app.services.account_write_guard import (
+    bind_filtered_account_write_guard,
+    eligible_account_write_targets,
 )
 
 router = APIRouter(tags=["events"])
@@ -165,6 +173,51 @@ async def _readable_event(
 def _may_manage(event: models.Event, membership: models.Membership) -> bool:
     """Host, or the chapter's e-board. Hosting is open; rewriting someone else's is not."""
     return membership.user_id == event.host_id or membership.role in EBOARD
+
+
+async def _admit_event_invite_write(
+    event_id: uuid.UUID,
+    body: EventInviteCreate,
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Preflight an invite batch before binding its actor+recipient write scope.
+
+    The target set is fixed from the request body before request-session SQL.  A
+    separate session preserves ordinary auth/permission/unknown-ID errors ahead of
+    hold admission.  Once the request session acquires the complete sorted scope,
+    the handler rechecks authorization and IDs and asks the guard for the targets
+    still eligible under those same locks. Held targets are silently filtered just
+    like blocked targets; their hold state is never returned to the inviter.
+    """
+    if not get_settings().account_deletion_http_admission_enabled:
+        return await get_current_user(uid=uid, session=session)
+
+    candidate_ids = set(body.user_ids)
+    async with get_session_factory()() as preflight:
+        actor = await get_current_user(uid=uid, session=preflight)
+        event, membership = await _event_with_membership(event_id, actor, preflight)
+        if not _may_manage(event, membership):
+            raise forbidden("not_the_host")
+        known_ids = set(
+            (
+                await preflight.scalars(
+                    select(models.User.id).where(models.User.id.in_(candidate_ids))
+                )
+            ).all()
+        )
+        if candidate_ids - known_ids:
+            raise HTTPException(status_code=422, detail="unknown_user_in_invite_list")
+
+    bind_filtered_account_write_guard(
+        session,
+        user_id=actor.id,
+        firebase_uid=uid,
+        candidate_user_ids=candidate_ids,
+    )
+    # The guard now runs before every transaction in the request session. Resolve
+    # the identity again there; this also rechecks the actor UID inside the guard.
+    return await get_current_user(uid=uid, session=session)
 
 
 @router.get("/chapters/{chapter_id}/events")
@@ -322,7 +375,7 @@ async def list_events_with_rsvps(
 async def create_event(
     chapter_id: uuid.UUID,
     body: EventCreate,
-    membership: models.Membership = Depends(get_current_membership),
+    membership: models.Membership = Depends(get_current_membership_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> EventOut:
     """Create an event hosted by the caller; any active member may host."""
@@ -338,8 +391,9 @@ async def create_event(
         visibility=body.visibility,
     )
     session.add(event)
-    await session.commit()
+    await session.flush()
     await session.refresh(event)
+    await session.commit()
     emit(
         "event_created",
         user_id=membership.user_id,
@@ -365,7 +419,7 @@ async def get_event(
 async def update_event(
     event_id: uuid.UUID,
     body: EventUpdate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> EventOut:
     """Edit an event. Host or e-board only.
@@ -393,15 +447,16 @@ async def update_event(
         await session.rollback()
         raise HTTPException(status_code=422, detail="ends_at_must_be_after_starts_at")
 
-    await session.commit()
+    await session.flush()
     await session.refresh(event)
+    await session.commit()
     return EventOut.model_validate(event)
 
 
 @router.post("/events/{event_id}/cancel")
 async def cancel_event(
     event_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> EventOut:
     """Call off an event. Host or e-board only.
@@ -416,8 +471,9 @@ async def cancel_event(
         raise forbidden("not_the_host")
     if event.canceled_at is None:
         event.canceled_at = datetime.now(timezone.utc)
-        await session.commit()
+        await session.flush()
         await session.refresh(event)
+        await session.commit()
     return EventOut.model_validate(event)
 
 
@@ -425,7 +481,7 @@ async def cancel_event(
 async def invite_to_event(
     event_id: uuid.UUID,
     body: EventInviteCreate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(_admit_event_invite_write),
     session: AsyncSession = Depends(get_session),
 ) -> EventInviteBatchOut:
     """Invite people. Host or e-board only.
@@ -468,6 +524,16 @@ async def invite_to_event(
     # other fifty. The blocked-by user simply is not invited.
     blockers = await blockers_of(session, subject_id=user.id, candidate_ids=known_ids)
     invitable_ids = known_ids - blockers
+    if get_settings().account_deletion_http_admission_enabled:
+        # Keep the same transaction and batch INSERT: a held recipient is silently
+        # omitted while unaffected invitees still receive their grants atomically.
+        invitable_ids &= set(
+            eligible_account_write_targets(
+                session,
+                user_id=user.id,
+                candidate_user_ids=set(body.user_ids),
+            )
+        )
 
     created: list[models.EventInvite] = []
     if invitable_ids:
@@ -789,7 +855,7 @@ async def list_event_invites(
 async def upsert_rsvp(
     event_id: uuid.UUID,
     body: EventRsvpUpdate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> EventRsvpOut:
     """Upsert the caller's RSVP (going/maybe/cant).
@@ -808,7 +874,7 @@ async def upsert_rsvp(
         rsvp = models.EventRsvp(event_id=event_id, user_id=user.id, status=body.status)
         session.add(rsvp)
         try:
-            await session.commit()
+            await session.flush()
         except IntegrityError:
             # Concurrent double-tap raced us to insert the same (event_id, user_id)
             # RSVP row - rollback and apply the status to the row that won instead.
@@ -820,6 +886,7 @@ async def upsert_rsvp(
             await session.commit()
         else:
             await session.refresh(rsvp)
+            await session.commit()
     else:
         rsvp.status = body.status
         await session.commit()

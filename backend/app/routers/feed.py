@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import func, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,7 @@ from app.core.analytics import emit
 from app.core.campus_access import (
     is_campus_verified,
     require_campus_member,
+    require_campus_member_for_write,
     require_verified_campus,
 )
 from app.core.errors import forbidden, not_found
@@ -33,8 +34,12 @@ from app.core.rate_limits import (
     limit_per_user,
 )
 from app.db import get_session
-from app.middleware.auth import get_current_user
-from app.middleware.org_scope import get_current_chapter_member, get_current_membership
+from app.middleware.auth import get_current_user, get_current_user_for_write
+from app.middleware.org_scope import (
+    get_current_chapter_member,
+    get_current_membership,
+    get_current_membership_for_write,
+)
 from app.schemas.social import (
     CampusPostCreate,
     FeedPostOut,
@@ -54,6 +59,7 @@ from app.services.storage_service import (
     validate_media_object_names,
     validate_media_urls,
 )
+from app.services.feed_write_admission import PostEditor, get_post_editor_for_write
 
 logger = logging.getLogger(__name__)
 
@@ -160,12 +166,16 @@ async def _finalize_media(
     return urls
 
 
-async def _commit_or_log_orphaned_media(session: AsyncSession, media_urls: list[str]) -> None:
-    """await session.commit(), logging any already-moved permanent media loudly before
-    re-raising if the commit fails.
+async def _commit_or_log_orphaned_media(
+    session: AsyncSession,
+    media_urls: list[str],
+    *,
+    response_row: models.Post | None = None,
+) -> None:
+    """Prepare an optional response row and commit, logging any moved media on failure.
 
-    c132: if media was moved to its permanent posts/ location above and THEN the DB
-    commit fails (rare — e.g. an IntegrityError), the resulting object cannot be
+    c132: if media was moved to its permanent posts/ location above and THEN the
+    final database write fails (rare — e.g. an IntegrityError), the resulting object cannot be
     compensated away by deleting it - the service account's delete grant is
     IAM-conditioned to tmp/ only, on purpose (see finalize_media_object()'s docstring).
     The orphan is logged loudly instead, rather than trading away posts/ immutability
@@ -176,15 +186,21 @@ async def _commit_or_log_orphaned_media(session: AsyncSession, media_urls: list[
     is past that job's age floor, but reclaiming it still waits on a human (board
     c414: a manager reviews a --list-eligible dry run and approves a manual, one-off
     --delete per DEPLOY.md section 8; nothing is deleted automatically). The loud log
-    stays regardless - it is the only signal that a commit failed at all, and it names
-    the object immediately instead of waiting on the reconciler's next scheduled run.
+    stays regardless - it is the only signal that the database write failed at all,
+    and it names the object immediately instead of waiting on the reconciler's next
+    scheduled run.
     """
     try:
+        if response_row is not None:
+            # Resolve generated response fields while the admission transaction still
+            # holds its shared gates. A hold may begin as soon as commit releases them.
+            await session.flush()
+            await session.refresh(response_row)
         await session.commit()
     except Exception:
         for url in media_urls:
             logger.error(
-                "post commit failed after media was already moved to permanent "
+                "post database write failed after media was already moved to permanent "
                 "storage url=%s - now an orphan; this route cannot delete it "
                 "(posts/ is immutable to this identity by design); "
                 "app.jobs.media_reconcile can flag it as eligible on a later dry "
@@ -329,6 +345,8 @@ async def _readable_post(
     post_id: uuid.UUID,
     user: models.User,
     session: AsyncSession,
+    *,
+    lock_row: bool = False,
 ) -> models.Post:
     """Load a live post the caller is allowed to interact with (like/comment).
 
@@ -370,7 +388,14 @@ async def _readable_post(
     like on a post their own chapter made. Caught by an existing test doing exactly
     that (test_counts_present_on_campus_feed_too).
     """
-    post = await session.get(models.Post, post_id)
+    post_stmt = (
+        select(models.Post)
+        .where(models.Post.id == post_id)
+        .execution_options(populate_existing=True)
+    )
+    if lock_row:
+        post_stmt = post_stmt.with_for_update()
+    post = await session.scalar(post_stmt)
     if post is None or post.deleted_at is not None:
         raise not_found("post_not_found")
 
@@ -606,8 +631,8 @@ async def count_my_posts(
 async def create_post(
     chapter_id: uuid.UUID,
     body: PostCreate,
-    membership: models.Membership = Depends(get_current_membership),
-    user: models.User = Depends(get_current_user),
+    membership: models.Membership = Depends(get_current_membership_for_write),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> PostOut:
     """Create a post authored by the caller, inside a chapter they belong to.
@@ -669,8 +694,7 @@ async def create_post(
         duration_sec=body.duration_sec,
     )
     session.add(post)
-    await _commit_or_log_orphaned_media(session, media_urls)
-    await session.refresh(post)
+    await _commit_or_log_orphaned_media(session, media_urls, response_row=post)
     emit(
         "post_created",
         user_id=membership.user_id,
@@ -690,7 +714,7 @@ async def create_post(
 async def create_campus_post(
     campus_id: uuid.UUID,
     body: CampusPostCreate,
-    user: models.User = Depends(require_campus_member),
+    user: models.User = Depends(require_campus_member_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> PostOut:
     """Post to the campus feed without going through a chapter (c71).
@@ -733,8 +757,7 @@ async def create_campus_post(
         duration_sec=body.duration_sec,
     )
     session.add(post)
-    await _commit_or_log_orphaned_media(session, media_urls)
-    await session.refresh(post)
+    await _commit_or_log_orphaned_media(session, media_urls, response_row=post)
     emit(
         "post_created",
         user_id=user.id,
@@ -801,12 +824,17 @@ async def update_post(
     chapter_id: uuid.UUID,
     post_id: uuid.UUID,
     body: PostUpdate,
-    membership: models.Membership = Depends(get_current_membership),
+    editor: PostEditor = Depends(get_post_editor_for_write),
     session: AsyncSession = Depends(get_session),
-    user: models.User = Depends(get_current_user),
 ) -> PostOut:
     """Edit a post; author only."""
-    post = await session.get(models.Post, post_id)
+    membership, user = editor.membership, editor.user
+    post = await session.scalar(
+        select(models.Post)
+        .where(models.Post.id == post_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if post is None or post.chapter_id != chapter_id or post.deleted_at is not None:
         raise not_found("post_not_found")
     if post.author_id != membership.user_id:
@@ -822,9 +850,16 @@ async def update_post(
     if body.media_object_names is not None:
         media_urls = await _finalize_media(author_id, body.media_object_names)
     if body.media_object_names:
-        user = await get_current_user(uid=uid, session=session)
-        membership = await get_current_membership(chapter_id=chapter_id, user=user, session=session)
-        post = await session.get(models.Post, post_id)
+        user = await get_current_user_for_write(uid=uid, session=session)
+        membership = await get_current_membership_for_write(
+            chapter_id=chapter_id, user=user, session=session
+        )
+        post = await session.scalar(
+            select(models.Post)
+            .where(models.Post.id == post_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if post is None or post.chapter_id != chapter_id or post.deleted_at is not None:
             raise not_found("post_not_found")
         if post.author_id != membership.user_id:
@@ -843,7 +878,7 @@ async def update_post(
 async def delete_post(
     chapter_id: uuid.UUID,
     post_id: uuid.UUID,
-    membership: models.Membership = Depends(get_current_membership),
+    membership: models.Membership = Depends(get_current_membership_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Soft-delete a post (sets deleted_at); author or president only."""
@@ -852,14 +887,25 @@ async def delete_post(
         raise not_found("post_not_found")
     if post.author_id != membership.user_id and membership.role != Role.president.value:
         raise forbidden("not_author_or_president")
-    post.deleted_at = datetime.now(timezone.utc)
+    removed = await session.execute(
+        update(models.Post)
+        .where(
+            models.Post.id == post_id,
+            models.Post.chapter_id == chapter_id,
+            models.Post.deleted_at.is_(None),
+        )
+        .values(deleted_at=datetime.now(timezone.utc))
+        .returning(models.Post.id)
+    )
+    if removed.scalar_one_or_none() is None:
+        raise not_found("post_not_found")
     await session.commit()
 
 
 @router.delete("/posts/{post_id}", status_code=204)
 async def delete_own_post(
     post_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Soft-delete a post you authored, without going through a chapter (board c84).
@@ -910,23 +956,32 @@ async def delete_own_post(
         if membership is None or membership.role != Role.president.value:
             raise forbidden("not_author_or_president")
 
-    post.deleted_at = datetime.now(timezone.utc)
+    removed = await session.execute(
+        update(models.Post)
+        .where(models.Post.id == post_id, models.Post.deleted_at.is_(None))
+        .values(deleted_at=datetime.now(timezone.utc))
+        .returning(models.Post.id)
+    )
+    if removed.scalar_one_or_none() is None:
+        raise not_found("post_not_found")
     await session.commit()
 
 
 @router.put("/posts/{post_id}/likes")
 async def like_post(
     post_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> PostLikeOut:
     """Like a post (idempotent upsert); scoped through the post's chapter."""
-    await _readable_post(post_id, user, session)
+    await _readable_post(post_id, user, session, lock_row=True)
     like = await session.get(models.PostLike, (post_id, user.id))
     if like is None:
         like = models.PostLike(post_id=post_id, user_id=user.id)
         session.add(like)
         try:
+            await session.flush()
+            await session.refresh(like)
             await session.commit()
         except IntegrityError:
             # Concurrent double-tap raced us to insert the same (post_id, user_id)
@@ -935,19 +990,17 @@ async def like_post(
             like = await session.get(models.PostLike, (post_id, user.id))
             if like is None:
                 raise
-        else:
-            await session.refresh(like)
     return PostLikeOut.model_validate(like)
 
 
 @router.delete("/posts/{post_id}/likes", status_code=204)
 async def unlike_post(
     post_id: uuid.UUID,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Remove the caller's like (idempotent); scoped through the post's chapter."""
-    await _readable_post(post_id, user, session)
+    await _readable_post(post_id, user, session, lock_row=True)
     like = await session.get(models.PostLike, (post_id, user.id))
     if like is not None:
         await session.delete(like)
@@ -1061,15 +1114,16 @@ async def list_comments(
 async def create_comment(
     post_id: uuid.UUID,
     body: PostCommentCreate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> PostCommentOut:
     """Comment on a post; author membership checked through the post's chapter."""
-    await _readable_post(post_id, user, session)
+    await _readable_post(post_id, user, session, lock_row=True)
     comment = models.PostComment(post_id=post_id, author_id=user.id, body=body.body)
     session.add(comment)
-    await session.commit()
+    await session.flush()
     await session.refresh(comment)
+    await session.commit()
     # No lookup for the identity half (c228): the author of this comment is the
     # authenticated caller, already loaded. Re-reading the same row through
     # list_comments' join would be a second query for something we are holding.
