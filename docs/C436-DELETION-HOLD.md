@@ -280,6 +280,39 @@ email, Redis rate-limit operation or analytics emission can outlive its SQL
 transaction. Provider operations and ingestion still need durable fencing/drain;
 an active hold blocking a later SQL write does not undo an earlier external effect.
 
+## Financial records and payment plans
+
+The same disabled flag enrolls seven finance SQL mutations:
+
+- `POST /chapters/{chapter_id}/dues-cycles`
+- `POST /chapters/{chapter_id}/ledger`
+- `POST /chapters/{chapter_id}/spend-approvals`
+- `POST /chapters/{chapter_id}/spend-approvals/{approval_id}/decide`
+- `POST /chapters/{chapter_id}/dues-cycles/{cycle_id}/plans`
+- `POST /chapters/{chapter_id}/dues-plans/{plan_id}/installments/{seq}/record-payment`
+- `POST /chapters/{chapter_id}/dues-plans/{plan_id}/cancel`
+
+All require actor admission and preserve their existing role requirements. New
+payment plans additionally bind the member receiving the plan. Ordinary chapter,
+dues-admin, cycle and active-member checks run before binding, then repeat in the
+guarded request transaction. The actor and target set cannot change during the
+request, and completed deletion tombstones cannot receive new plans.
+
+The other six routes bind only the actor. A target's deletion hold must not prevent
+another authorized officer from recording money already received, appending a
+ledger correction, deciding a retained spend request or canceling an existing
+plan. Financial and organization records remain retained history; this change
+neither erases ledger entries nor claims that outstanding obligations disappear.
+Existing installment, plan and ledger conflict rules still apply. Response data
+is loaded before the final commit so a newly activated hold cannot turn a
+successfully committed financial action into a failed response refresh. Read and
+CSV-export routes retain their existing authorization.
+
+This is SQL admission only. Stripe onboarding, payment creation and provider
+webhooks require separate integration. A webhook must still account for money
+already captured while preventing new provider work during deletion; an ordinary
+actor dependency is not an appropriate substitute for that settlement policy.
+
 ## Remaining rollout gates
 
 This flag neither activates a hold nor adds an activation endpoint. Ordinary
