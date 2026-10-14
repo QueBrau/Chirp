@@ -18,7 +18,7 @@ from app import models
 from app.core.analytics import emit
 from app.core.campus_access import is_campus_verified
 from app.db import get_session
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_user_for_write
 from app.schemas.campus_verification import (
     CampusVerificationRedeem,
     CampusVerificationStart,
@@ -51,7 +51,7 @@ async def verification_status(
 @router.post("/auth/campus-verification", status_code=202)
 async def start_verification(
     body: CampusVerificationStart,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> PendingVerificationOut:
     """Mail a one-time code to an .edu address whose domain maps to a known campus.
@@ -76,7 +76,7 @@ async def start_verification(
 @router.post("/auth/campus-verification/redeem")
 async def redeem_verification(
     body: CampusVerificationRedeem,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> CampusVerificationStatus:
     """Redeem a code and record the proof; opens the campus feed and Chirp."""

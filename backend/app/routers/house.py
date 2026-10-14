@@ -27,7 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.core.campus_access import require_campus_member
+from app.core.campus_access import require_campus_member, require_campus_member_for_write
 from app.core.windows import current_term, current_week_start
 from app.db import get_session
 from app.schemas.house import (
@@ -121,7 +121,7 @@ def _per_week_totals(campus_id: uuid.UUID, start: date, end: date):
 async def cast_house_ballot(
     campus_id: uuid.UUID,
     body: HouseBallotCreate,
-    voter: models.User = Depends(require_campus_member),
+    voter: models.User = Depends(require_campus_member_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> HouseBallotOut:
     """Cast or replace this week's ballot; campus-verified students only.

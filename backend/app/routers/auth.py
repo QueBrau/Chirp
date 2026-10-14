@@ -17,7 +17,7 @@ from app.core.analytics import emit
 from app.core.errors import conflict, not_found
 from app.core.rate_limits import ACCOUNT_BOOTSTRAP_LIMIT, limit_per_ip
 from app.db import get_session
-from app.middleware.auth import get_bootstrap_verified_identity, get_current_user, get_user_by_uid, get_verified_identity
+from app.middleware.auth import get_bootstrap_verified_identity, get_current_user, get_current_user_for_write, get_user_by_uid, get_verified_identity
 from app.schemas.identity import (
     CampusOut,
     MeOut,
@@ -135,7 +135,7 @@ async def get_me(
 @router.patch("/auth/me", response_model=UserOut)
 async def update_me(
     body: ProfileUpdate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> UserOut:
     """Edit your own profile: display name, profile picture, and account type (c221, c381).
@@ -216,10 +216,14 @@ async def update_me(
                 "account_type": user.account_type,
             }
 
+    # Materialize the response while this write's admission lock is still held.
+    # A hold may activate immediately after commit; a post-commit refresh would then
+    # reject the response for a mutation that already committed successfully.
+    await session.flush()
+    await session.refresh(user)
     await session.commit()
     if account_type_event is not None:
         emit("account_type_changed", **account_type_event)
-    await session.refresh(user)
     return UserOut.model_validate(user)
 
 

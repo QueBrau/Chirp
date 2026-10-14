@@ -16,7 +16,7 @@ from app.core.campus_access import (
 from app.core.errors import forbidden, not_found
 from app.core.rate_limits import CHIRP_CREATE_LIMIT, limit_per_user
 from app.db import get_session
-from app.middleware.auth import get_current_user, get_current_user_for_write
+from app.middleware.auth import get_current_user_for_write
 from app.schemas.chirp import ChirpCreate, ChirpOut, ChirpVoteCreate, ChirpVoteOut
 from app.services.pseudonym_service import daily_pseudonym
 
@@ -148,7 +148,7 @@ async def create_chirp(
 async def vote_chirp(
     chirp_id: uuid.UUID,
     body: ChirpVoteCreate,
-    user: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> ChirpVoteOut:
     """Upsert the caller's -1/+1 vote (idempotent, 200); the score maintains itself.
