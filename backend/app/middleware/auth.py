@@ -243,6 +243,15 @@ async def get_current_user_for_privacy(
     return user
 
 
+async def get_current_user_for_privacy_write(
+    uid: str = Depends(get_fresh_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Admit export writes without removing suspended users' privacy rights."""
+    await _bind_user_write_guard(uid=uid, session=session)
+    return await get_current_user_for_privacy(uid=uid, session=session)
+
+
 async def get_current_user_for_privacy_status(
     uid: str = Depends(get_verified_uid),
     session: AsyncSession = Depends(get_session),

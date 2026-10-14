@@ -313,6 +313,22 @@ webhooks require separate integration. A webhook must still account for money
 already captured while preventing new provider work during deletion; an ordinary
 actor dependency is not an appropriate substitute for that settlement policy.
 
+## Privacy requests
+
+`POST /me/data-requests` requires actor write admission when `kind=export`, before
+its request transaction can create an export request or artifact. The dependency
+retains the privacy route's fresh authentication and access for suspended accounts;
+ordinary product-access or legal-acceptance gates are not added. Export generation
+is local SQL work within the admitted transaction. The response, including artifact
+expiry, is materialized before commit.
+
+Deletion intake and idempotent deletion-request retries remain privacy control
+operations and do not require ordinary write admission. They create or reuse the
+blocked, journaled request; they do not activate a hold or execute deletion. Request
+status and existing export downloads retain their existing owner and authentication
+checks during a hold. These read paths do not create new artifacts. System expiry
+of old artifacts remains a separate bounded retention job.
+
 ## Remaining rollout gates
 
 This flag neither activates a hold nor adds an activation endpoint. Ordinary

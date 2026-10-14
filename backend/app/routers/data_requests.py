@@ -13,12 +13,28 @@ from sqlalchemy.orm import load_only
 from app import models
 from app.config import get_settings
 from app.db import get_session
-from app.middleware.auth import get_current_user_for_privacy, get_current_user_for_privacy_status
+from app.middleware.auth import (
+    get_current_user_for_privacy,
+    get_current_user_for_privacy_status,
+    get_current_user_for_privacy_write,
+    get_fresh_verified_uid,
+)
 from app.schemas.data_requests import DataRequestCreate, DataRequestOut
 from app.services.account_data import fulfill_request
 from app.services.account_fulfillment import prepare_deletion_plan
 
 router = APIRouter(tags=["account-data"])
+
+
+async def get_data_request_user(
+    body: DataRequestCreate,
+    uid: str = Depends(get_fresh_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Hold-gate exports while keeping deletion intake available as control plane."""
+    if body.kind == "export":
+        return await get_current_user_for_privacy_write(uid=uid, session=session)
+    return await get_current_user_for_privacy(uid=uid, session=session)
 
 
 def _out(row: models.AccountDataRequest, artifact: models.AccountDataArtifact | datetime | None = None) -> DataRequestOut:
@@ -85,7 +101,7 @@ async def list_data_requests(
 @router.post("/me/data-requests", response_model=DataRequestOut, status_code=201)
 async def create_data_request(
     body: DataRequestCreate,
-    user: models.User = Depends(get_current_user_for_privacy),
+    user: models.User = Depends(get_data_request_user),
     session: AsyncSession = Depends(get_session),
 ) -> DataRequestOut:
     # Serialize the caller's request budget and pending-request reuse across tabs/devices.
@@ -132,11 +148,13 @@ async def create_data_request(
     if row.kind == "deletion":
         await prepare_deletion_plan(session, row)
     await fulfill_request(session, row, user)
-    await session.commit()
+    await session.flush()
     artifact = (await session.execute(
         select(models.AccountDataArtifact).where(models.AccountDataArtifact.request_id == row.id)
     )).scalar_one_or_none()
-    return _out(row, artifact)
+    response = _out(row, artifact)
+    await session.commit()
+    return response
 
 
 @router.get("/me/data-requests/{request_id}", response_model=DataRequestOut)
