@@ -182,9 +182,48 @@ particular, anonymous blocking does not query or expose the author's hold state.
 Cleanup removes outgoing blocks, and the held actor cannot recreate them.
 Reads retain their existing authorization and stay outside write admission.
 
-Moderator report resolution, content removal and account suspension are not
-enrolled by this safety-preference change. Finance, other shared-content writers,
-background dispatch and external operations also remain separate review gates.
+## Polls, lineage and moderator actions
+
+The same disabled flag enrolls four poll mutations:
+`POST /chapters/{chapter_id}/polls`,
+`POST /chapters/{chapter_id}/polls/{poll_id}/vote`,
+`POST /chapters/{chapter_id}/polls/{poll_id}/close`, and
+`DELETE /chapters/{chapter_id}/polls/{poll_id}`.
+All bind only the actor. Cleanup removes that actor's secret ballots, and a held
+actor cannot recreate them. Another officer can still maintain a chapter's
+retained poll even if its creator is held. The poll and delivery-intent SQL is
+guarded; the subsequent Redis dispatch and sweeper still require separate
+durable operation fencing and drain. A post-commit hold can prevent a later
+outbox outcome update without proving an earlier publication did not occur.
+
+Four lineage mutations are also enrolled: family creation, edge creation or
+replacement, edge deletion, and little-member confirmation under
+`/chapters/{chapter_id}/lineage`. Creation/replacement preflights active chapter
+membership, e-board authority and both endpoint accounts before binding the actor
+and both endpoints. Authorization and current body endpoints are checked again
+under the immutable guard. An altered target set fails closed. With admission
+enabled, a completed deletion tombstone is not a reusable ghost placeholder. The false-default path
+retains the existing validation behavior. Family creation, edge deletion and
+confirmation bind only the actor; an unheld officer can remove a retained edge
+to another held account. Existing read and little-only confirmation rules remain.
+
+Five remaining moderator mutations are enrolled:
+`PATCH /moderation/reports/{report_id}`,
+`POST /moderation/chirps/{chirp_id}/remove`,
+`POST /moderation/content/remove`, and
+`POST /moderation/users/{user_id}/suspend` or `/unsuspend`.
+Report resolution, content removal and suspension bind only the moderator/admin
+actor, preserving other users' safety actions against held targets. Anonymous
+content removal does not inspect its author's hold. Removal updates only a still
+visible row; a concurrent cleanup or removal wins without its reason being
+overwritten or a second successful-removal audit being recorded.
+
+Unsuspension restores access, so it binds both the admin and target account.
+Ordinary admin authorization and target existence are established before a hold
+can be disclosed. The guarded request reauthenticates the admin and locks and
+refreshes the target before checking the bound scope and clearing suspension.
+Suspension also locks and refreshes its target row, but can still enforce a safety
+restriction during deletion. Reads keep their original dependencies.
 
 ## Remaining rollout gates
 
@@ -198,7 +237,8 @@ Before any production deletion, inventory and enroll the remaining HTTP writers
 (including GET routes that consume keys), WebSocket writes, outbox/worker writes,
 and writes by other actors that target the deleting account. Multi-account paths
 need sorted admission keys before row locks; consuming key requests and the enrolled
-conversation/message writes and membership updates bind multiple accounts.
+conversation/message writes, membership updates, lineage creation/replacement and
+unsuspension bind multiple accounts.
 Drain in-flight uploads, exports, provider calls and analytics ingestion
 and review the executor's hold-owner path. SQL admission alone proves none of
 those external boundaries. No production migration, grants, enablement or deletion

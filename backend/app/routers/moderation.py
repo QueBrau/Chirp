@@ -10,12 +10,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.config import get_settings
 from app.core.campus_access import require_verified_campus
 from app.core.errors import conflict, forbidden, not_found
-from app.core.permissions import EBOARD, require_platform_admin
+from app.core.permissions import EBOARD, require_platform_admin, require_platform_admin_for_write
 from app.core.rate_limits import REPORT_CREATE_LIMIT, limit_per_user
-from app.db import get_session
-from app.middleware.auth import get_current_user, get_current_user_for_write
+from app.db import get_session, get_session_factory
+from app.middleware.auth import get_current_user, get_current_user_for_write, get_verified_uid
 from app.schemas.moderation import (
     ContentRemoveRequest,
     ReportResolveRequest,
@@ -33,6 +34,42 @@ from app.schemas.chirp import (
 router = APIRouter(tags=["moderation"])
 
 _EBOARD_ROLES: list[str] = [role.value for role in EBOARD]
+
+
+async def _require_any_moderator_for_write(
+    user: models.User = Depends(get_current_user_for_write),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Apply the ordinary moderator policy only after actor write admission."""
+    return await _require_any_moderator(user=user, session=session)
+
+
+async def _require_admin_for_unsuspend(
+    user_id: uuid.UUID,
+    uid: str = Depends(get_verified_uid),
+    session: AsyncSession = Depends(get_session),
+) -> models.User:
+    """Authorize and establish target existence before binding target admission."""
+    from app.services.account_write_guard import bind_account_write_guard
+
+    if not get_settings().account_deletion_http_admission_enabled:
+        current = await get_current_user(uid=uid, session=session)
+        return await require_platform_admin(user=current)
+
+    # Preserve ordinary auth/admin and 404 behavior before checking the target hold.
+    async with get_session_factory()() as preflight:
+        actor = await get_current_user(uid=uid, session=preflight)
+        await require_platform_admin(user=actor)
+        exists = await preflight.scalar(select(models.User.id).where(models.User.id == user_id))
+    if exists is None:
+        raise not_found("user_not_found")
+    bind_account_write_guard(
+        session, user_id=actor.id, firebase_uid=uid, target_user_ids={user_id}
+    )
+    # Reauthenticate on the guarded request session. The guard checks actor and target
+    # holds before this query can run when admission is enabled.
+    current = await get_current_user(uid=uid, session=session)
+    return await require_platform_admin(user=current)
 
 
 async def _require_any_moderator(
@@ -333,7 +370,7 @@ async def list_reports(
 async def resolve_report(
     report_id: uuid.UUID,
     body: ReportResolveRequest,
-    moderator: models.User = Depends(_require_any_moderator),
+    moderator: models.User = Depends(_require_any_moderator_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> ContentReportOut:
     """Close a report as actioned or dismissed (board card c91).
@@ -585,7 +622,7 @@ async def unblock_chirp_author(
 async def remove_chirp(
     chirp_id: uuid.UUID,
     body: ChirpRemoveRequest,
-    moderator: models.User = Depends(_require_any_moderator),
+    moderator: models.User = Depends(_require_any_moderator_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Admin removal: sets removed_at + removed_reason, and writes a moderation_actions
@@ -602,8 +639,14 @@ async def remove_chirp(
         raise conflict("already_removed")
     # Chirps are the campus-wide surface by definition (c108).
     await _require_moderator_for_campus(session, moderator, chirp.campus_id, campus_content=True)
-    chirp.removed_at = datetime.now(timezone.utc)
-    chirp.removed_reason = body.reason
+    removed = await session.execute(
+        update(models.Chirp)
+        .where(models.Chirp.id == chirp.id, models.Chirp.removed_at.is_(None))
+        .values(removed_at=datetime.now(timezone.utc), removed_reason=body.reason)
+        .returning(models.Chirp.id)
+    )
+    if removed.scalar_one_or_none() is None:
+        raise conflict("already_removed")
     session.add(
         models.ModerationAction(
             actor_id=moderator.id,
@@ -619,7 +662,7 @@ async def remove_chirp(
 @router.post("/moderation/content/remove", status_code=204)
 async def remove_content(
     body: ContentRemoveRequest,
-    moderator: models.User = Depends(_require_any_moderator),
+    moderator: models.User = Depends(_require_any_moderator_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Admin removal of a post or comment (board card c76: the Terms claims we can
@@ -679,8 +722,15 @@ async def remove_content(
     campus_content = _content_campus_tier(source_post)
     await _require_moderator_for_campus(session, moderator, campus_id, campus_content=campus_content)
 
-    target.deleted_at = datetime.now(timezone.utc)
-    target.removed_reason = body.reason
+    target_model = models.Post if body.target_type == "post" else models.PostComment
+    removed = await session.execute(
+        update(target_model)
+        .where(target_model.id == body.target_id, target_model.deleted_at.is_(None))
+        .values(deleted_at=datetime.now(timezone.utc), removed_reason=body.reason)
+        .returning(target_model.id)
+    )
+    if removed.scalar_one_or_none() is None:
+        raise conflict("already_removed")
     session.add(
         models.ModerationAction(
             actor_id=moderator.id,
@@ -697,7 +747,7 @@ async def remove_content(
 async def suspend_user(
     user_id: uuid.UUID,
     body: SuspendUserRequest,
-    admin: models.User = Depends(require_platform_admin),
+    admin: models.User = Depends(require_platform_admin_for_write),
     session: AsyncSession = Depends(get_session),
 ) -> SuspensionStateOut:
     """Suspend an account platform-wide (board card c76, Terms: "we can suspend
@@ -711,7 +761,9 @@ async def suspend_user(
     every request from a suspended account from here on, so this just flips the state
     and records why.
     """
-    target = await session.get(models.User, user_id)
+    target = (await session.execute(
+        select(models.User).where(models.User.id == user_id).with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
     if target is None:
         raise not_found("user_not_found")
     if target.suspended_at is not None:
@@ -737,18 +789,26 @@ async def suspend_user(
 async def unsuspend_user(
     user_id: uuid.UUID,
     body: SuspendUserRequest,
-    admin: models.User = Depends(require_platform_admin),
+    admin: models.User = Depends(_require_admin_for_unsuspend),
     session: AsyncSession = Depends(get_session),
 ) -> SuspensionStateOut:
     """Restore a suspended account's access. Clears the users.suspended_* columns back
     to NULL — the moderation_actions row already written by suspend_user (and the one
     this call adds) is what keeps the history past that clear.
     """
-    target = await session.get(models.User, user_id)
+    target = (await session.execute(
+        select(models.User).where(models.User.id == user_id).with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
     if target is None:
         raise not_found("user_not_found")
     if target.suspended_at is None:
         raise conflict("not_suspended")
+    if get_settings().account_deletion_http_admission_enabled:
+        from app.services.account_write_guard import assert_account_write_targets
+
+        assert_account_write_targets(
+            session, user_id=admin.id, target_user_ids={target.id}
+        )
     target.suspended_at = None
     target.suspension_reason = None
     target.suspended_by = None
