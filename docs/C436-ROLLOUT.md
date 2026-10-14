@@ -88,7 +88,8 @@ transaction, including transactions after commit/rollback, without activating an
 hold. Consuming key requests additionally bind the actor and authorized target
 accounts before request SQL; their immutable scope is revalidated before key
 consumption. Existing reads and privacy status remain available. Leave the flag off until
-migration 0044 and the runtime read grant have separate review and rollout.
+migrations 0044/0045 and the runtime hold-read and operation-registry grants have
+separate review and rollout.
 Conversation creation/reuse and legacy/v2 message SQL also bind their participant
 scope. Conversation-row locks serialize enrolled membership changes with sends,
 and the roster is rechecked before new message, leg and outbox-intent writes.
@@ -125,8 +126,9 @@ intake/retries, request status and existing downloads remain available under the
 privacy authorization rules; intake still cannot activate a hold or run cleanup.
 
 Unlisted writers still require review, including payment/webhook paths and
-upload capabilities. Avatar/feed media copies, campus
-verification delivery and analytics emission still need external fencing/drain.
+upload capabilities. Avatar/feed finalizers are registered and awaited as described
+below; their caller SQL still requires fresh admission. Campus verification
+delivery and analytics emission still need external fencing/drain.
 Bootstrap identity recreation also needs its provider-boundary review.
 WebSocket, outbox and executor paths are not enrolled. A complete release must
 enroll every writer and drain provider
@@ -138,3 +140,28 @@ The journal now requires five providers, including account-linked analytics,
 and a sixth local tombstone step. Successful analytics receipts preserve the
 request UUID, snapshot digest and BigQuery retention metadata. Those fields do
 not replace the operator's immutable reviewed snapshot or external readback.
+
+
+## External media-operation registry (migration 0045)
+
+Migration 0045 follows 0044 and adds the operation and account-scope tables only;
+it creates no grants, schedule, executor or production hold. The API needs reviewed
+SELECT/INSERT on both tables and UPDATE limited to the operation state/completed
+columns before the existing HTTP admission flag can be enabled. Scope links,
+effect identity and owner tokens are immutable through the service API and must
+not receive routine update/delete privileges. Confirm the exact production-role
+SQL separately; nothing in this source change applies it.
+
+The enabled path enrolls actual avatar and feed storage finalizers, deduplicates
+attempts and waits for their real worker completion without retaining a SQL
+connection. Provider errors or abandoned running records block drain pending
+review. No automatic lease expiry, takeover or recovery command is provided.
+Keep the flag false on deployed schema 0043; that path performs the original
+finalization without querying either registry table.
+
+Before using this registry for deletion, integrate all external producers, drain
+signed-upload capabilities, and take the immutable media snapshot after drain.
+Review a provider-readback recovery path for ambiguous records, including failure
+before a remote write. Local registered-work counts alone cannot attest complete
+quiescence. The deletion executor still needs to require the matching active hold
+and complete producer coverage before any provider cleanup or local tombstone.

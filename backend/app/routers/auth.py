@@ -3,7 +3,6 @@
 Also serves GET /campuses/{campus_id} — campus identity, so screens can render the
 caller's real campus name instead of a hardcoded one (c46).
 """
-import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,6 +26,7 @@ from app.schemas.identity import (
     UserOut,
 )
 from app.schemas.legal import LegalAcceptanceCreate
+from app.services.account_media_operations import finalize_account_media
 from app.services.storage_service import (
     AVATAR_PREFIX,
     finalize_media_object,
@@ -185,8 +185,8 @@ async def update_me(
         # This commit contains only the initial authentication reads.
         await session.commit()
         session.expire_all()
-        avatar_url = await asyncio.to_thread(
-            finalize_media_object, str(user_id), body.avatar_object_name,
+        avatar_url = await finalize_account_media(
+            user_id, uid, body.avatar_object_name, finalize=finalize_media_object,
             destination_prefix=AVATAR_PREFIX,
         )
         user = await get_current_user(uid=uid, session=session)

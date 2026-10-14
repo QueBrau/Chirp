@@ -60,6 +60,7 @@ from app.services.storage_service import (
     validate_media_urls,
 )
 from app.services.feed_write_admission import PostEditor, get_post_editor_for_write
+from app.services.account_media_operations import finalize_account_media
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,8 @@ def _post_out(post: models.Post, viewer_id: uuid.UUID) -> PostOut:
 
 
 async def _finalize_media(
-    user_id: uuid.UUID, media_object_names: list[str] | None
+    user_id: uuid.UUID, media_object_names: list[str] | None, *,
+    firebase_uid: str | None = None,
 ) -> list[str]:
     """Validate + move every tmp/ reference to its permanent posts/ location (c132).
 
@@ -118,46 +120,25 @@ async def _finalize_media(
     function itself just built (see that function's docstring), before the caller ever
     writes the result to a post row.
 
-    ASYNC PURELY SO THE MOVE CAN BE AWAITED OFF THE EVENT LOOP (c223) - nothing else in
-    here awaits, both validators are local checks with no I/O. See the call below.
+    With deletion admission enabled, each actual worker has a durable operation
+    before storage I/O starts. No request database connection remains checked out
+    during that I/O; the routes commit their initial reads before calling here.
     """
     validate_media_object_names(str(user_id), media_object_names)
     if not media_object_names:
         return []
-    # c223: the call site c211 did not reach. finalize_media_object() is a SYNCHRONOUS
-    # function that makes GCS network calls (copy_blob, then delete), and this process
-    # runs one uvicorn worker with no --workers (see the Dockerfile) at
-    # containerConcurrency 80 - a single event loop serving every in-flight request.
-    # Called inline it stalls all of them for the length of the copy, not just the post
-    # being created. to_thread puts it on a worker thread so only the request that asked
-    # for it waits, which is what c211 did for the two signing sites in routers/media.py
-    # and what c221 did for the avatar in routers/auth.py.
-    #
-    # CONCURRENT RATHER THAN SEQUENTIAL, decided rather than defaulted. The finalizes are
-    # independent - distinct tmp sources, distinct destination names, no shared state
-    # past the _storage_client() singleton, which is already warm by the time anyone
-    # posts. gather preserves ORDER, and that is load-bearing here: media_urls is the
-    # order the photos are displayed in. On a failure gather raises the first exception
-    # while the remaining threads run to completion, but sequential is no better on that
-    # front - a to_thread call cannot be cancelled either way, so both leave an
-    # already-copied posts/ object with no row pointing at it. That orphan is a case this
-    # route already accepts by design (this identity holds no delete grant on posts/, see
-    # finalize_media_object's docstring) and app.jobs.media_reconcile reclaims it later
-    # (c153). Concurrency can therefore produce MORE of an accepted outcome, never a new
-    # one.
-    #
-    # READ THIS BEFORE INFERRING A SPEEDUP: storage_service.MAX_MEDIA_URLS_PER_POST is 1
-    # today (alpha scope, matching the compose UI's single-photo cap) and
-    # validate_media_object_names above rejects anything longer, so this list holds one
-    # entry at most and gather is exactly equivalent to a sequential loop in production
-    # right now. It is written this way because it is the shape that is already correct
-    # on the day that cap moves, not because it buys anything at a cap of one. The
-    # event-loop stall the to_thread fixes IS reachable at a cap of one; the
-    # once-per-image multiplier is not, yet.
+    # Preserve input order and the existing concurrent finalization behavior.
+    # The production cap is currently one image. If that cap grows, gather can
+    # raise before a sibling finishes; that sibling's own durable record keeps
+    # registered-operation drain blocked until it actually completes.
+    # A successful copy whose SQL reauthorization later fails is an orphan. The
+    # deletion media snapshot must be taken after registered workers have drained.
     urls: list[str] = list(
         await asyncio.gather(
             *(
-                asyncio.to_thread(finalize_media_object, str(user_id), name)
+                finalize_account_media(
+                    user_id, firebase_uid, name, finalize=finalize_media_object,
+                )
                 for name in media_object_names
             )
         )
@@ -673,7 +654,7 @@ async def create_post(
     if body.media_object_names:
         await session.commit()  # release the read transaction before GCS waits
         session.expire_all()
-    media_urls = await _finalize_media(author_id, body.media_object_names)
+    media_urls = await _finalize_media(author_id, body.media_object_names, firebase_uid=uid)
     if body.media_object_names:
         user = await get_current_user(uid=uid, session=session)
         membership = await get_current_membership(chapter_id=chapter_id, user=user, session=session)
@@ -742,7 +723,7 @@ async def create_campus_post(
     if body.media_object_names:
         await session.commit()
         session.expire_all()
-    media_urls = await _finalize_media(author_id, body.media_object_names)
+    media_urls = await _finalize_media(author_id, body.media_object_names, firebase_uid=uid)
     if body.media_object_names:
         user = await get_current_user(uid=uid, session=session)
         require_verified_campus(user, campus_id)
@@ -848,7 +829,7 @@ async def update_post(
         await session.commit()
         session.expire_all()
     if body.media_object_names is not None:
-        media_urls = await _finalize_media(author_id, body.media_object_names)
+        media_urls = await _finalize_media(author_id, body.media_object_names, firebase_uid=uid)
     if body.media_object_names:
         user = await get_current_user_for_write(uid=uid, session=session)
         membership = await get_current_membership_for_write(
