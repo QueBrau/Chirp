@@ -25,6 +25,7 @@ RETAINED_COVERAGE = (
     # Cleanup never erases unresolved connection evidence. The executor must
     # already have proved this account has no rows before reaching cleanup.
     "account_ws_connections",
+    "account_delivery_attempts",
 )
 
 

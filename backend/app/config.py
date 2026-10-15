@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # c436: enroll WebSocket subscription lifetimes in the external-operation
     # drain. Keep false until migrations 0044-0047 and permissions are ready.
     account_deletion_ws_admission_enabled: bool = False
+    # c436: suppress held recipients and track delivery attempts before Redis
+    # publication. Keep false until migration 0048 and permissions are ready.
+    account_deletion_delivery_admission_enabled: bool = False
     stripe_secret_key: str | None = None
     stripe_publishable_key: str | None = None
     stripe_webhook_secret: str | None = None

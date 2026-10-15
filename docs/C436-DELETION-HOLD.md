@@ -2,7 +2,8 @@
 
 This migration adds `account_deletion_holds` and the transaction-scoped primitive
 in `backend/app/services/account_deletion_hold.py`. The HTTP enrollment below
-is disabled by default. WebSocket and outbox paths remain outside HTTP enrollment.
+is disabled by default. WebSocket and outbox paths use separate default-off flags
+and lifetime registries described below.
 The deletion executor now requires the exact active hold and a drained operation
 registry before nonterminal work and again before local cleanup/tombstoning.
 No production caller or activation workflow is wired, and this gate does not prove
@@ -161,8 +162,8 @@ memberships left. Remaining group members therefore bind the remaining active
 roster and can keep sending after cleanup; existing shared history is retained.
 Reusing a DM cannot reactivate a held member. These are SQL transaction boundaries,
 not a guarantee that earlier Redis, push or WebSocket delivery has drained.
-Immediate delivery and the outbox worker still require separate durable operation
-fencing and drain integration before production deletion can be enabled.
+Immediate delivery and the outbox worker use the separate delivery registry below
+when its flag is enabled; production rollout and drain remain prerequisites.
 
 ## Organization and safety preferences
 
@@ -208,9 +209,9 @@ The same disabled flag enrolls four poll mutations:
 All bind only the actor. Cleanup removes that actor's secret ballots, and a held
 actor cannot recreate them. Another officer can still maintain a chapter's
 retained poll even if its creator is held. The poll and delivery-intent SQL is
-guarded; the subsequent Redis dispatch and sweeper still require separate
-durable operation fencing and drain. A post-commit hold can prevent a later
-outbox outcome update without proving an earlier publication did not occur.
+guarded; subsequent Redis dispatch and sweeps use the separate opt-in delivery
+registry below. With delivery admission disabled, a post-commit hold can prevent
+a later outbox outcome update without proving an earlier publication did not occur.
 
 Four lineage mutations are also enrolled: family creation, edge creation or
 replacement, edge deletion, and little-member confirmation under
@@ -388,10 +389,10 @@ under an exclusive account gate and reports running/uncertain counts for that
 account. Its `registered_operations_drained` value describes this registry only;
 it does not attest complete producer enrollment or trigger cleanup. Signed PUT
 capabilities can remain usable after issuance and are explicitly not covered by
-finalizer completion. Delivery, payment, analytics ingestion, bootstrap, WebSocket
-access and production runner/activation wiring remain separate requirements. The
-separate WebSocket enrollment below covers only connections registered while its
-own flag is enabled. Executor counts only cover registrations actually present.
+finalizer completion. Payment, analytics ingestion, bootstrap and production
+runner/activation wiring remain separate requirements. The separate WebSocket and
+delivery enrollment below covers only work registered while each flag is enabled.
+Executor counts only cover registrations actually present.
 
 ## Campus verification email operations (migration 0046)
 
@@ -466,25 +467,80 @@ are unregistered; enabling the flag cannot enroll them retrospectively. Before
 deletion activation, rollout must drain all such instances/connections and prove
 every receiving service uses the reviewed configuration. Disabling the flag again
 requires stopping deletion execution until those unregistered connections drain.
-An empty table alone cannot prove this coverage. Outbox publication, queued
-delivery, signed upload capabilities and analytics ingestion remain separate gates.
+An empty table alone cannot prove this coverage. The separate delivery flag below
+does not replace socket drain. Signed uploads and analytics ingestion also remain
+separate gates.
 
 The local tests use real PostgreSQL locks/migrations, a real Redis subscription,
 and controlled ASGI transports for cancellation and failure cases. They do not
 attest production routing, a real phone session or peer-side frame delivery.
 
+## Queued delivery registration (migration 0048)
+
+The user-approved policy suppresses queued notifications to a held, deleted or
+missing recipient while continuing delivery to other recipients. Shared message
+history remains available under existing authorization. This applies only when
+`ACCOUNT_DELETION_DELIVERY_ADMISSION_ENABLED=true`; the default is `false`.
+
+Migration 0048 adds `account_delivery_attempts` and a nullable outbox claim token.
+The live and sweeper paths reconstruct the event from committed source data and
+use the same admission protocol. A short preflight reads at most 128 recipient IDs.
+A fresh READ COMMITTED transaction acquires sorted exclusive account gates before
+the queue row lock, revalidates that prefix and filters held/deleted recipients.
+It registers at most eight attempts, with 32 database-enforced unresolved slots per
+account, before any transport call. Remaining recipients stay queued; deferred
+prefix entries rotate behind the untouched tail. A full account does not prevent
+delivery to others. Registration and hold activation serialize on the same gate.
+
+Each attempt has an immutable identity and owner token, independent of the outbox
+row. Poll coalescing or source deletion cannot erase its evidence. The claim removes
+registered recipients from the pending array and commits before transport I/O;
+no SQL connection is held over Redis/dispatcher awaits. V1 ciphertext and v2
+content-free message hints retain their existing wire shapes.
+
+Dispatch uses at most eight concurrent singleton-recipient calls and the configured
+`outbox_dispatch_timeout_s` budget, followed by a 250 ms cancellation drain.
+Confirmed recipient success is recorded independently of a sibling failure. A
+successful result means local transport acceptance, not device receipt. Success
+deletes only the exact running attempt; failure, cancellation or an invalid result
+leaves uncertainty. Cancellation-resistant work remains strongly owned and blocks
+drain even after its caller returns. Late termination cannot turn uncertainty into
+success. The terminal attempt changes and claim-token-fenced queue update share
+one bounded transaction; stale workers cannot alter a newer queue claim.
+
+Unstarted recipients remain eligible for later sweeps; full-slot deferrals back
+off. A 30-second queue lease permits a later worker to advance the remaining tail,
+but never replays a registered recipient or expires its evidence. Running and
+uncertain attempts block both executor entry and final tombstoning indefinitely.
+No automatic retry, expiry or recovery command clears them. Review of the exact
+effect is required before any recovery. Completed attempts do not accumulate as
+permanent delivery history. The registry stores no payload or ciphertext.
+
+Admission/listing SQL has a five-second budget; terminal SQL has a two-second
+budget. Repeated cancellation retains ownership of bounded finalization and still
+propagates cancellation. Downgrade refuses any attempt row or nonnull claim token.
+The new claim column is excluded from the legacy ORM mapping, so the flag-off
+dispatcher can still use the older schema. The deletion executor itself requires
+0048 and SELECT on the registry for its unconditional drain checks.
+
+Before deletion activation, drain every old/flag-off API and sweeper process and
+verify the delivery flag on every dispatcher. Enabling it cannot register prior
+in-flight work. Socket lifetime registration and drain remain independently
+required for frames already published. Real push is still a log-only stub; this
+increment makes no provider-delivery or phone-verification claim.
+
 ## Remaining rollout gates
 
 This flag neither activates a hold nor adds an activation endpoint. Ordinary
 deletion intake still does not create a hold. Keep the flag disabled until migration
-0044 through 0047 plus the runtime's exact hold-read and registry
-permissions have been separately reviewed and applied. Keep the separate WS flag
-off until its own rollout requirements above are satisfied. With both flags off,
-the enrolled request/socket dependencies use the existing auth path
-and do not query the new table, preserving compatibility with deployed schema 0043.
+0044 through 0048 plus the runtime's exact hold-read and registry
+permissions have been separately reviewed and applied. Keep the separate WS and
+delivery flags off until their own rollout requirements above are satisfied.
+With all three flags off, request/socket/delivery paths retain their existing
+behavior without new registry queries, preserving compatibility with schema 0043.
 
 Before any production deletion, inventory and enroll the remaining HTTP writers
-(including GET routes that consume keys), outbox/worker writes,
+(including GET routes that consume keys), remaining worker writes,
 and writes by other actors that target the deleting account. Multi-account paths
 need sorted admission keys before row locks; consuming key requests and the enrolled
 conversation/message writes, membership updates, lineage creation/replacement and
