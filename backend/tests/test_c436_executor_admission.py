@@ -15,6 +15,10 @@ from app.services.account_external_operations import (
     finish_external_operation,
     register_external_operation,
 )
+from app.services.account_ws_connections import (
+    finish_ws_connection,
+    register_ws_connection,
+)
 from app.services.account_fulfillment import (
     PROVIDER_STEPS, run_deletion, validate_provider_receipt,
 )
@@ -118,6 +122,38 @@ async def test_target_scoped_operation_from_another_actor_blocks_executor(client
         assert user.is_ghost is False
     # The target scope remains until the external owner resolves it.
     await finish_external_operation(handle, state="finished")
+
+
+@pytest.mark.asyncio
+async def test_running_and_uncertain_websocket_connections_block_provider_calls(
+    client, make_user,
+):
+    owner = await make_user("WebSocket executor admission owner")
+    user_id = uuid.UUID(owner.id)
+    request_id = await _create_request(client, owner)
+    handle = await register_ws_connection(
+        user_id=user_id, firebase_uid=owner.firebase_uid,
+    )
+    await activate_executor_hold(user_id=user_id, request_id=request_id)
+    providers = provider_set()
+
+    async with get_session_factory()() as session:
+        user = await session.get(models.User, user_id)
+        assert user is not None
+        blocked = await run_deletion(session, request_id, user, providers)
+        assert blocked.status == "blocked"
+        assert blocked.failed_step == "registered_external_operations"
+        assert all(not provider.keys for provider in providers.values())
+
+    # An uncertain connection never frees its slot or makes the executor retry.
+    await finish_ws_connection(handle, state="uncertain")
+    async with get_session_factory()() as session:
+        user = await session.get(models.User, user_id)
+        assert user is not None
+        blocked = await run_deletion(session, request_id, user, providers)
+        assert blocked.status == "blocked"
+        assert blocked.failed_step == "registered_external_operations"
+        assert all(not provider.keys for provider in providers.values())
 
 
 @pytest.mark.asyncio

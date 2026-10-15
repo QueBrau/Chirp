@@ -8,6 +8,7 @@ from app.models.account_external_operations import (
     AccountExternalOperation,
     AccountExternalOperationScope,
 )
+from app.models.account_ws_connections import AccountWsConnection
 from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
 from app.models.events import Event, EventInvite, EventRsvp
 from app.models.finance import (
@@ -66,6 +67,7 @@ __all__ = [
     "AccountDeletionHold",
     "AccountExternalOperation",
     "AccountExternalOperationScope",
+    "AccountWsConnection",
     "Device",
     "DuesCycle",
     "DuesPaymentPlan",

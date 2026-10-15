@@ -16,6 +16,13 @@ from app.config import get_settings
 from app.core.operational_signals import observe
 from app.db import get_session_factory
 from app.middleware.auth import get_user_by_uid
+from app.services.account_deletion_hold import DeletionHoldActive, inspect_deletion_hold
+from app.services.account_ws_connections import (
+    WsConnectionHandle,
+    WsConnectionLimit,
+    finish_ws_connection,
+    register_ws_connection,
+)
 from app.services.identity_verification import run_verification
 from app.services.legal_enforcement import current_legal_status
 from app.ws.pubsub import get_redis
@@ -144,6 +151,14 @@ class _EndStream(Exception):
         super().__init__(reason)
 
 
+def _consume_task_result(task: asyncio.Task) -> None:
+    """Retrieve late task failures without logging payload-bearing exceptions."""
+    try:
+        task.exception()
+    except BaseException:
+        pass
+
+
 @dataclass(frozen=True)
 class _Frame:
     text: str
@@ -185,10 +200,13 @@ class _OutboundBuffer:
             self.release(self.queue.get_nowait())
 
 
-async def _bounded_close(websocket: WebSocket, code: int) -> None:
-    with contextlib.suppress(Exception):
+async def _bounded_close(websocket: WebSocket, code: int) -> bool:
+    try:
         async with asyncio.timeout(WS_CLOSE_SECONDS):
             await websocket.close(code=code)
+    except Exception:
+        return False
+    return True
 
 
 @router.websocket("/ws")
@@ -199,6 +217,11 @@ async def websocket_gateway(websocket: WebSocket) -> None:
     connection for its lifetime (c205). A Redis subscription belongs to this
     socket until teardown; sharing subscriptions is a measured follow-up.
     """
+    # Capture this per connection. A flag change cannot enroll or unenroll an
+    # already-running socket halfway through its lifetime.
+    ws_admission_enabled = bool(
+        getattr(get_settings(), "account_deletion_ws_admission_enabled", False)
+    )
     try:
         async with asyncio.timeout(WS_AUTH_SECONDS):
             uid = await _resolve_uid(websocket)
@@ -259,11 +282,38 @@ async def websocket_gateway(websocket: WebSocket) -> None:
         await _bounded_close(websocket, WS_REALTIME_UNAVAILABLE if legal_status == "unavailable" else WS_LEGAL_REQUIRED)
         return
 
+    operation: WsConnectionHandle | None = None
+    if ws_admission_enabled:
+        # Register after ordinary auth/legal checks but before accepting or opening
+        # Redis. The helper revalidates the actor and active hold in a short SQL
+        # transaction, then releases its connection before transport work begins.
+        try:
+            async with asyncio.timeout(WS_RECONCILE_SECONDS):
+                operation = await register_ws_connection(
+                    user_id=user_id,
+                    firebase_uid=uid,
+                )
+        except DeletionHoldActive:
+            logger.warning("ws reject reason=account_deletion_hold pre_accept=true")
+            await _bounded_close(websocket, WS_REALTIME_UNAVAILABLE)
+            return
+        except WsConnectionLimit:
+            logger.warning("ws reject reason=connection_limit pre_accept=true")
+            await _bounded_close(websocket, WS_REALTIME_UNAVAILABLE)
+            return
+        except Exception:
+            # A registration commit may have succeeded despite a lost response;
+            # without its owner handle, leave any durable row running and fail closed.
+            logger.warning("ws reject reason=operation_registration_failed pre_accept=true")
+            await _bounded_close(websocket, WS_REALTIME_UNAVAILABLE)
+            return
+
     channel = f"user:{user_id}"
     buffer = _OutboundBuffer()
     pubsub = None
     tasks: list[asyncio.Task] = []
     reason, close_code = "client_disconnect", None
+    peer_disconnect_observed = False
 
     async def read_broker() -> None:
         # redis-py subscribe() sends the command but does NOT read its ACK.
@@ -313,6 +363,14 @@ async def websocket_gateway(websocket: WebSocket) -> None:
             await asyncio.sleep(WS_SUSPENSION_POLL_SECONDS * jitter)
             async with asyncio.timeout(WS_RECONCILE_SECONDS):
                 async with get_session_factory()() as poll_session:
+                    if ws_admission_enabled:
+                        # The hold gate must precede this transaction's other SQL.
+                        # The session closes before the task reports stream shutdown.
+                        hold = await inspect_deletion_hold(
+                            poll_session, user_id=user_id
+                        )
+                    else:
+                        hold = None
                     result = await poll_session.execute(
                         select(models.User.suspended_at).where(models.User.id == user_id)
                     )
@@ -320,6 +378,8 @@ async def websocket_gateway(websocket: WebSocket) -> None:
                     legal_status = "accepted"
                     if get_settings().legal_enforcement_enabled:
                         legal_status = await current_legal_status(poll_session, user_id)
+            if hold is not None:
+                raise _EndStream("account_deletion_hold", WS_REALTIME_UNAVAILABLE)
             # scalar_one_or_none cannot distinguish a missing user from the
             # SQL NULL that means an existing user is not suspended.
             if row is None:
@@ -349,7 +409,7 @@ async def websocket_gateway(websocket: WebSocket) -> None:
     except _EndStream as exc:
         reason, close_code = exc.reason, exc.code
     except WebSocketDisconnect:
-        pass
+        peer_disconnect_observed = True
     except Exception as exc:
         # Exception type is safe; provider URLs, token material, and payloads
         # are not. Timeouts/failures are realtime loss, not credential failure.
@@ -361,20 +421,57 @@ async def websocket_gateway(websocket: WebSocket) -> None:
         with anyio.CancelScope(shield=True):
             for task in tasks:
                 task.cancel()
-            with contextlib.suppress(Exception):
-                async with asyncio.timeout(WS_CLEANUP_SECONDS):
-                    await asyncio.gather(*tasks, return_exceptions=True)
+            if not tasks:
+                tasks_stopped = True
+            elif operation is None:
+                # Keep the existing default-off teardown behavior unchanged.
+                try:
+                    async with asyncio.timeout(WS_CLEANUP_SECONDS):
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                except Exception:
+                    pass
+                tasks_stopped = all(task.done() for task in tasks)
+            else:
+                # asyncio.wait returns at the deadline even if a child suppresses
+                # cancellation; gather can remain pending on such a child forever.
+                done, pending = await asyncio.wait(
+                    tasks, timeout=WS_CLEANUP_SECONDS
+                )
+                for task in done:
+                    _consume_task_result(task)
+                for task in pending:
+                    task.add_done_callback(_consume_task_result)
+                tasks_stopped = not pending
             buffer.clear()
-            if close_code is not None:
+            close_confirmed = peer_disconnect_observed
+            if close_code is not None or (operation is not None and not peer_disconnect_observed):
+                code = close_code if close_code is not None else WS_REALTIME_UNAVAILABLE
                 logger.warning(
                     "ws stream closed reason=%s user_id=%s peak_frames=%s peak_bytes=%s",
                     reason, user_id, buffer.peak_frames, buffer.peak_bytes,
                     extra={"ws_reason": reason, "ws_peak_frames": buffer.peak_frames, "ws_peak_bytes": buffer.peak_bytes},
                 )
-                await _bounded_close(websocket, close_code)
+                close_confirmed = await _bounded_close(websocket, code)
+            pubsub_closed = pubsub is None
             if pubsub is not None:
-                with contextlib.suppress(Exception):
+                try:
                     async with asyncio.timeout(WS_CLEANUP_SECONDS):
                         # aclose disconnects and releases the dedicated subscription
                         # connection. No extra UNSUBSCRIBE round trip is necessary.
                         await pubsub.aclose()
+                    pubsub_closed = True
+                except Exception:
+                    pubsub_closed = False
+
+            if operation is not None:
+                teardown_confirmed = tasks_stopped and pubsub_closed and close_confirmed
+                try:
+                    async with asyncio.timeout(WS_CLEANUP_SECONDS):
+                        await finish_ws_connection(
+                            operation,
+                            state="finished" if teardown_confirmed else "uncertain",
+                        )
+                except Exception:
+                    # A failed transition leaves the operation running, which also
+                    # blocks deletion drain. Never log handles or identity tokens.
+                    logger.warning("ws external operation completion failed")

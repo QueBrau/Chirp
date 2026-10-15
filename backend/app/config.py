@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # false until migration 0044, read grants and a reviewed rollout are ready.
     # This flag neither activates holds nor proves product-wide write coverage.
     account_deletion_http_admission_enabled: bool = False
+    # c436: enroll WebSocket subscription lifetimes in the external-operation
+    # drain. Keep false until migrations 0044-0047 and permissions are ready.
+    account_deletion_ws_admission_enabled: bool = False
     stripe_secret_key: str | None = None
     stripe_publishable_key: str | None = None
     stripe_webhook_secret: str | None = None
