@@ -105,7 +105,7 @@ transaction, including transactions after commit/rollback, without activating an
 hold. Consuming key requests additionally bind the actor and authorized target
 accounts before request SQL; their immutable scope is revalidated before key
 consumption. Existing reads and privacy status remain available. Leave the flag off until
-migrations 0044 through 0047 and the runtime hold-read and registry grants have
+migrations 0044 through 0048 and the runtime hold-read and registry grants have
 separate review and rollout.
 Conversation creation/reuse and legacy/v2 message SQL also bind their participant
 scope. Conversation-row locks serialize enrolled membership changes with sends,
@@ -148,8 +148,9 @@ below; their caller SQL still requires fresh admission. Campus verification send
 are registered, but provider-side queued delivery and retention are not drained;
 analytics emission still needs external fencing/drain. Bootstrap identity
 recreation also needs its provider-boundary review. WebSocket enrollment has its
-own disabled flag and rollout gates below. Outbox and analytics-ingestion paths
-remain un-enrolled, and no production caller or activation/run
+own disabled flag and rollout gates below. Outbox dispatch now has separate
+default-off enrollment described below; analytics ingestion remains un-enrolled.
+No production caller or activation/run
 workflow is wired. A complete release must enroll every writer and drain provider
 operations, uploads, exports and analytics ingestion before an operator uses
 provider cleanup. The executor gate is necessary but does not establish that
@@ -210,7 +211,7 @@ Roll out the schema before running the new executor. Drain all old or flag-off
 socket instances before enabling deletion execution: the flag is captured at
 handshake and cannot enroll existing connections. Verify API/WS routing and every
 receiving revision, then establish complete producer drain through the remaining
-outbox/payment/upload/analytics work. Flag rollback again creates unregistered
+delivery/payment/upload/analytics rollout. Flag rollback again creates unregistered
 connections and requires stopping deletion execution. Neither empty registry counts
 nor the read-only operator preflight establish complete drain; that preflight
 does not inspect live socket counts and always reports `ready_for_deletion: false`.
@@ -219,6 +220,42 @@ Local PostgreSQL/Redis and controlled ASGI tests establish source behavior only.
 They do not prove peer receipt of close frames, device-cache removal, production
 rollout or whole-ticket acceptance. No migration, grants, deployment, activation,
 provider request or account deletion is included in this source increment.
+
+## Delivery attempt registry (migration 0048)
+
+Migration 0048 follows 0047, adding `account_delivery_attempts` and
+`delivery_outbox.claim_token`. It changes no grants or production configuration.
+`ACCOUNT_DELETION_DELIVERY_ADMISSION_ENABLED=false` preserves legacy immediate
+dispatch and sweeper behavior. The claim column is excluded from legacy ORM
+mapping so ordinary outbox INSERT/SELECT operations work before 0048. The new
+executor still requires 0048 and SELECT on the attempt registry at both drain gates.
+
+Before enabling delivery admission, review each actual API/worker runtime's
+identity/user and hold reads, existing message/outbox access, SELECT/INSERT/DELETE
+on `account_delivery_attempts`, UPDATE limited to its `state`, and SELECT/UPDATE
+on the outbox `claim_token` column. Attempt identity, account, slot, source and
+owner token are immutable through the service API. Prepare exact role grants
+separately; this source increment applies none. Roll out migration and reviewed
+permissions before the new executor or any enabled dispatcher.
+
+The approved policy suppresses held/deleted recipients and retains others in the
+queue. New attempts commit before transport calls. Confirmed completion removes
+the exact running attempt; running or uncertain attempts block both executor
+gates without expiry or automatic replay. Poll coalescing cannot erase them.
+Both attempt transitions and queue completion are fenced; an old worker cannot
+release a newer claim. See `C436-DELETION-HOLD.md` and `DELIVERY-OUTBOX.md` for bounds
+and cancellation semantics. Downgrade refuses any attempt or outstanding claim
+token; do not delete safety evidence to force a downgrade.
+
+All API and worker dispatchers must use the same reviewed flag configuration.
+Drain old/flag-off processes and their in-flight publishes before deletion can
+rely on registry counts. Disabling admission again requires stopping deletion
+execution. Separately establish socket drain for published frames and finish
+payment, upload, analytics and activation/runner integration. Empty local tables
+alone do not establish production quiescence. Local PostgreSQL/Redis regressions
+prove source behavior; they do not attest device receipt or real push delivery.
+No deployment, provider request, migration application, grant or deletion is
+included here.
 
 ## Verification-email registration (migration 0046)
 

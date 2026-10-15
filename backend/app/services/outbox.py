@@ -101,6 +101,9 @@ class DispatchStats:
     delivered: int
     retried: int
     dead: int
+    suppressed: int = 0
+    uncertain: int = 0
+    successful_recipients: int = 0
 
 
 def _backoff_seconds(attempts: int) -> float:
@@ -139,6 +142,19 @@ async def dispatch_now(
     over the wire to every recipient and must never carry a sender user id (c356 fix;
     see the Dispatcher type comment).
     """
+    if getattr(get_settings(), "account_deletion_delivery_admission_enabled", False):
+        # The enabled path reconstructs all trusted dispatch inputs from the
+        # persisted row. Never silently commit or publish while the caller still
+        # owns a transaction or has pending ORM mutations.
+        if session.in_transaction() or session.new or session.dirty or session.deleted:
+            raise RuntimeError("admitted delivery requires a clean committed request session")
+        from app.services.account_delivery_admission import dispatch_admitted_outbox_row
+
+        await dispatch_admitted_outbox_row(
+            row_id, dispatchers=_dispatchers, settings=get_settings()
+        )
+        return
+
     dispatcher = _dispatchers.get(kind)
     if dispatcher is None:
         return
@@ -188,6 +204,21 @@ async def dispatch_pending(limit: int | None = None) -> DispatchStats:
     """
     settings = get_settings()
     batch_limit = limit if limit is not None else settings.outbox_sweep_batch_limit
+    if getattr(settings, "account_deletion_delivery_admission_enabled", False):
+        from app.services.account_delivery_admission import dispatch_admitted_pending
+
+        result = await dispatch_admitted_pending(
+            batch_limit, dispatchers=_dispatchers, settings=settings
+        )
+        return DispatchStats(
+            claimed=result.claimed,
+            delivered=result.delivered,
+            retried=result.retried,
+            dead=result.dead,
+            suppressed=result.suppressed,
+            uncertain=result.uncertain,
+            successful_recipients=result.successful_recipients,
+        )
     session_factory = get_session_factory()
 
     claimed: list[dict] = []

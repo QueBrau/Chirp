@@ -9,6 +9,7 @@ from app.models.account_external_operations import (
     AccountExternalOperationScope,
 )
 from app.models.account_ws_connections import AccountWsConnection
+from app.models.account_delivery_attempts import AccountDeliveryAttempt
 from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
 from app.models.events import Event, EventInvite, EventRsvp
 from app.models.finance import (
@@ -49,6 +50,7 @@ from app.models.social import Post, PostComment, PostLike
 from app.models.chirp import ContentReport, UserBlock, Chirp, ChirpVote
 
 __all__ = [
+    "AccountDeliveryAttempt",
     "AlumniProfile",
     "Campus",
     "CampusVerification",

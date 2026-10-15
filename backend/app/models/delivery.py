@@ -22,6 +22,7 @@ from datetime import datetime
 from sqlalchemy import (
     ARRAY,
     CheckConstraint,
+    Column,
     DateTime,
     Index,
     Integer,
@@ -36,6 +37,10 @@ from app.db import Base
 
 class DeliveryOutbox(Base):
     __tablename__ = "delivery_outbox"
+    # The dormant admission column belongs to schema metadata, but legacy ORM
+    # INSERT/SELECT must still work before 0048 is installed. The opted-in path
+    # addresses it explicitly through SQL/table.c and requires the new schema.
+    __mapper_args__ = {"exclude_properties": ("claim_token",)}
     __table_args__ = (
         CheckConstraint("kind IN ('message', 'poll')", name="ck_delivery_outbox_kind"),
         Index(
@@ -70,3 +75,6 @@ class DeliveryOutbox(Base):
     # A short code only -- never ciphertext, never raw exception text (it could carry
     # a transport credential). See app/services/outbox.py for the fixed vocabulary.
     last_error: Mapped[str | None] = mapped_column(Text)
+    # The opt-in deletion-aware dispatcher owns this queue generation separately
+    # from its recipient attempts, which must survive row coalescing/deletion.
+    claim_token = Column(UUID(as_uuid=True), nullable=True)

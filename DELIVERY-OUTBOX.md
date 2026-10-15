@@ -23,7 +23,10 @@ Three states, defined precisely because they are easy to conflate:
 - **READ**: the existing receipt upsert, `POST /messages/{id}/receipts`,
   untouched by this card.
 
-## How retry works
+## How legacy retry works
+
+The following is the default behavior while deletion-aware delivery admission is
+disabled. The separate opt-in protocol below changes uncertain-effect replay.
 
 `send_message` enqueues the outbox row before its own commit, so the message and
 the delivery intent commit or roll back together. After commit it attempts
@@ -106,6 +109,50 @@ recipient ids (as strings) that did not receive the event, matching the
 `Dispatcher` shape `dispatch_now`/`dispatch_pending` call generically; it is
 registered as `outbox.register_dispatcher('poll', _broadcast)` at
 `polls.py` import time.
+
+## Deletion-aware delivery (c436, disabled by default)
+
+`ACCOUNT_DELETION_DELIVERY_ADMISSION_ENABLED` defaults to `false`. Enabling it
+requires migration 0048 and separately reviewed runtime permissions. Both
+`dispatch_now` and `dispatch_pending` then use `account_delivery_admission.py`.
+Immediate dispatch requires a clean, committed request session and reconstructs
+its inputs from committed rows; it does not trust caller-supplied recipients or
+event bytes. Its short registry transactions use independent sessions.
+
+The approved policy drops queued recipients whose deletion hold is active, whose
+identity is tombstoned, or whose account is missing, and continues delivery to
+others. A bounded preflight and sorted exclusive account locks precede the queue
+row lock. Each claim revalidates at most 128 recipient IDs and registers at most
+eight singleton-recipient attempts before transport work; each account has at
+most 32 unresolved slots. Unstarted recipients remain queued and can advance on
+later sweeps. Full-slot recipients are deferred with backoff and rotated behind
+other recipients. The sweep selects at most 128 queue rows.
+
+Each registration survives independently of source-row coalescing/deletion. Its
+private owner token fences completion; a separate queue token fences ownership
+of the remaining tail. Transport work holds no SQL connection. V1 ciphertext and
+v2 content-free hints retain their existing wire formats. A confirmed success
+removes that recipient's exact attempt even when another recipient times out.
+Success means local transport acceptance; it does not prove device receipt.
+
+Exceptions, failed-recipient results, invalid results and cancellation can follow
+a real publish. These attempts remain running/uncertain and block account deletion
+instead of being blindly replayed. A queue lease expiring does not clear evidence
+or authorize another call for that recipient. Cancellation-resistant tasks remain
+owned; later completion leaves a review blocker. Only unstarted queue entries
+continue through normal sweeps. Resolving uncertain work requires a separately
+reviewed procedure; there is no automatic expiry or recovery command.
+
+Per-recipient terminal writes and queue finalization share one bounded transaction.
+Claim fences prevent old workers from changing newer queue ownership, and attempt
+fences prevent them from clearing another effect. Completed rows are removed
+rather than retained as permanent delivery history. Legacy stats remain row counts;
+`successful_recipients`, `suppressed` and `uncertain` are recipient counts.
+
+Drain all old/flag-off API and worker dispatchers before relying on this registry
+for deletion. WebSocket registration/drain is separately required for already
+published frames. See `docs/C436-ROLLOUT.md` for rollout order, privileges and the
+downgrade refusal when evidence remains. This source change activates no flag.
 
 ## Not covered
 

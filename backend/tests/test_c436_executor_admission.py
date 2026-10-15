@@ -13,6 +13,7 @@ from app.db import get_session_factory
 from app.services.account_deletion_hold import activate_deletion_hold, advisory_key
 from app.services.account_external_operations import (
     finish_external_operation,
+    inspect_registered_operation_drain,
     register_external_operation,
 )
 from app.services.account_ws_connections import (
@@ -20,7 +21,7 @@ from app.services.account_ws_connections import (
     register_ws_connection,
 )
 from app.services.account_fulfillment import (
-    PROVIDER_STEPS, run_deletion, validate_provider_receipt,
+    PROVIDER_STEPS, _lock_executor_finalization, run_deletion, validate_provider_receipt,
 )
 from tests.c436_executor_helpers import activate_executor_hold
 from tests.test_c436_fulfillment import ConfirmingProvider, provider_set
@@ -154,6 +155,43 @@ async def test_running_and_uncertain_websocket_connections_block_provider_calls(
         assert blocked.status == "blocked"
         assert blocked.failed_step == "registered_external_operations"
         assert all(not provider.keys for provider in providers.values())
+
+
+@pytest.mark.parametrize("state", ["running", "uncertain"])
+async def test_delivery_attempt_blocks_both_executor_gates_without_source_row(
+    client, make_user, state,
+):
+    owner = await make_user("Delivery executor admission owner")
+    user_id = uuid.UUID(owner.id)
+    request_id = await _create_request(client, owner)
+    async with get_session_factory()() as session:
+        # No outbox parent exists: coalescing must not discard this blocker.
+        attempt = models.AccountDeliveryAttempt(
+            user_id=user_id, slot=0, outbox_id=uuid.uuid4(), owner_token=uuid.uuid4(), state=state,
+        )
+        session.add(attempt)
+        await session.commit()
+        attempt_id = attempt.id
+    await activate_executor_hold(user_id=user_id, request_id=request_id)
+    drain = await inspect_registered_operation_drain(user_id=user_id, request_id=request_id)
+    assert (drain.running_count, drain.uncertain_count) == (
+        (1, 0) if state == "running" else (0, 1)
+    )
+    assert not drain.registered_operations_drained
+    async with get_session_factory()() as session:
+        assert not await _lock_executor_finalization(session, user_id, request_id)
+    providers = provider_set()
+    async with get_session_factory()() as session:
+        user = await session.get(models.User, user_id)
+        blocked = await run_deletion(session, request_id, user, providers)
+        assert blocked.status == "blocked"
+        assert blocked.failed_step == "registered_external_operations"
+        assert all(not provider.keys for provider in providers.values())
+        await session.refresh(user)
+        assert not user.is_ghost
+    async with get_session_factory()() as session:
+        still_present = await session.get(models.AccountDeliveryAttempt, attempt_id)
+        assert still_present is not None and still_present.state == state
 
 
 @pytest.mark.asyncio

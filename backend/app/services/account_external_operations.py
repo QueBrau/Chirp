@@ -323,6 +323,17 @@ async def inspect_registered_operation_drain(
             )).all())
             for state, count in ws_counts.items():
                 counts[state] = int(counts.get(state, 0)) + int(count)
+            delivery_counts = dict((await session.execute(
+                select(
+                    models.AccountDeliveryAttempt.state,
+                    func.count(models.AccountDeliveryAttempt.id),
+                ).where(
+                    models.AccountDeliveryAttempt.user_id == actor_id,
+                    models.AccountDeliveryAttempt.state.in_(("running", "uncertain")),
+                ).group_by(models.AccountDeliveryAttempt.state)
+            )).all())
+            for state, count in delivery_counts.items():
+                counts[state] = int(counts.get(state, 0)) + int(count)
             await session.commit()
         except DeletionHoldInvalid:
             await session.rollback()
