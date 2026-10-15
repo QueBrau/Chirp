@@ -390,7 +390,8 @@ it does not attest complete producer enrollment or trigger cleanup. Signed PUT
 capabilities can remain usable after issuance and are explicitly not covered by
 finalizer completion. Delivery, payment, analytics ingestion, bootstrap, WebSocket
 access and production runner/activation wiring remain separate requirements. The
-executor's journal count only covers registrations already present in that registry.
+separate WebSocket enrollment below covers only connections registered while its
+own flag is enabled. Executor counts only cover registrations actually present.
 
 ## Campus verification email operations (migration 0046)
 
@@ -424,16 +425,66 @@ registry. This slice does not send a real email or enable deletion. Provider-sid
 delivery and retention/readback, plus the remaining producer work, still need
 separate acceptance.
 
+## WebSocket lifetime registration (migration 0047)
+
+`ACCOUNT_DELETION_WS_ADMISSION_ENABLED` is a separate flag, defaulting to `false`.
+Migration 0047 adds `account_ws_connections`, with 32 database-enforced slots per
+account. After ordinary authentication, suspension and legal checks, registration
+takes the exclusive account advisory gate, rechecks identity and active holds,
+then commits a running row before accepting the socket or opening Redis. The
+short SQL transaction ends before transport work. A hold or exhausted slots
+rejects the connection; failed or canceled registration never permits acceptance.
+A lost commit response may leave a running row, which continues to block drain.
+
+The existing suspension watcher also checks for a hold, using its shared advisory
+gate before other SQL. Its normal polling interval is 24–36 seconds, followed by
+bounded reconciliation and teardown; this is not immediate revocation. The row
+blocks deletion while that connection is still running. Registration and polling
+use `WS_RECONCILE_SECONDS`; child termination, Redis closure and the final registry
+write each have `WS_CLEANUP_SECONDS`, and ASGI close uses `WS_CLOSE_SECONDS`.
+No SQL connection is held across the socket lifetime or network awaits.
+
+Confirmed teardown requires all owned tasks to finish, Redis subscription closure
+to return, and either peer disconnect observation or successful local ASGI close
+issuance. It deletes only the matching running connection ID, account, slot and
+owner token. A reused slot has a new ID/token, so an old handle cannot remove it.
+This avoids permanent history for every reconnect. It does not prove a peer
+received a close frame or erased frames already delivered or cached.
+
+A failed close, a child that ignores cancellation, or failed Redis teardown leaves
+an `uncertain` row. A failed/ambiguous final write can leave `running`; both states
+block executor entry and final cleanup under the exclusive hold gate. Unresolved
+rows consume slots and never expire or become safe through blind retry. Recovery
+requires separately reviewed evidence that the exact connection can no longer
+run; this change supplies no recovery command. Cleanup must not sweep these rows.
+Its retained coverage classifies safety evidence, not a claim that successful
+deletion leaves socket rows: successful deletion requires none for that account.
+Downgrade to 0046 refuses any nonempty connection table instead of erasing evidence.
+
+The flag is captured once per connection. Flag-off connections and older instances
+are unregistered; enabling the flag cannot enroll them retrospectively. Before
+deletion activation, rollout must drain all such instances/connections and prove
+every receiving service uses the reviewed configuration. Disabling the flag again
+requires stopping deletion execution until those unregistered connections drain.
+An empty table alone cannot prove this coverage. Outbox publication, queued
+delivery, signed upload capabilities and analytics ingestion remain separate gates.
+
+The local tests use real PostgreSQL locks/migrations, a real Redis subscription,
+and controlled ASGI transports for cancellation and failure cases. They do not
+attest production routing, a real phone session or peer-side frame delivery.
+
 ## Remaining rollout gates
 
 This flag neither activates a hold nor adds an activation endpoint. Ordinary
 deletion intake still does not create a hold. Keep the flag disabled until migration
-0044 through 0046 plus the runtime's exact hold-read and operation-registry
-permissions have been separately reviewed and applied. With the default flag off, these dependencies use the existing auth path
+0044 through 0047 plus the runtime's exact hold-read and registry
+permissions have been separately reviewed and applied. Keep the separate WS flag
+off until its own rollout requirements above are satisfied. With both flags off,
+the enrolled request/socket dependencies use the existing auth path
 and do not query the new table, preserving compatibility with deployed schema 0043.
 
 Before any production deletion, inventory and enroll the remaining HTTP writers
-(including GET routes that consume keys), WebSocket writes, outbox/worker writes,
+(including GET routes that consume keys), outbox/worker writes,
 and writes by other actors that target the deleting account. Multi-account paths
 need sorted admission keys before row locks; consuming key requests and the enrolled
 conversation/message writes, membership updates, lineage creation/replacement and

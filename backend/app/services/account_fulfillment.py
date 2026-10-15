@@ -293,7 +293,13 @@ async def _lock_executor_finalization(session: AsyncSession, user_id: uuid.UUID,
             models.AccountExternalOperation.state.in_(("running", "uncertain")),
         )
     )
-    return running == 0
+    ws_connections = await session.scalar(
+        select(func.count(models.AccountWsConnection.id)).where(
+            models.AccountWsConnection.user_id == user_id,
+            models.AccountWsConnection.state.in_(("running", "uncertain")),
+        )
+    )
+    return running == 0 and ws_connections == 0
 
 
 async def run_deletion(

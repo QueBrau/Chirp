@@ -22,6 +22,9 @@ RETAINED_COVERAGE = (
     "organization_authority_acceptances", "moderation_actions", "content_reports",
     "messages_and_conversation_history", "incoming_user_blocks", "provider_backups_logs",
     "account_external_operations", "account_external_operation_scopes",
+    # Cleanup never erases unresolved connection evidence. The executor must
+    # already have proved this account has no rows before reaching cleanup.
+    "account_ws_connections",
 )
 
 

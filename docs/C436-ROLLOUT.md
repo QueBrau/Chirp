@@ -105,7 +105,7 @@ transaction, including transactions after commit/rollback, without activating an
 hold. Consuming key requests additionally bind the actor and authorized target
 accounts before request SQL; their immutable scope is revalidated before key
 consumption. Existing reads and privacy status remain available. Leave the flag off until
-migrations 0044 through 0046 and the runtime hold-read and operation-registry grants have
+migrations 0044 through 0047 and the runtime hold-read and registry grants have
 separate review and rollout.
 Conversation creation/reuse and legacy/v2 message SQL also bind their participant
 scope. Conversation-row locks serialize enrolled membership changes with sends,
@@ -147,8 +147,9 @@ upload capabilities. Avatar/feed finalizers are registered and awaited as descri
 below; their caller SQL still requires fresh admission. Campus verification sends
 are registered, but provider-side queued delivery and retention are not drained;
 analytics emission still needs external fencing/drain. Bootstrap identity
-recreation also needs its provider-boundary review. WebSocket, outbox and analytics-
-ingestion paths remain un-enrolled, and no production caller or activation/run
+recreation also needs its provider-boundary review. WebSocket enrollment has its
+own disabled flag and rollout gates below. Outbox and analytics-ingestion paths
+remain un-enrolled, and no production caller or activation/run
 workflow is wired. A complete release must enroll every writer and drain provider
 operations, uploads, exports and analytics ingestion before an operator uses
 provider cleanup. The executor gate is necessary but does not establish that
@@ -185,6 +186,39 @@ quiescence. The executor now requires the matching active hold and a zero count 
 running/uncertain registered operations before provider cleanup and again before
 the local tombstone. This necessary gate does not establish complete producer
 coverage or prove that an issued signed upload capability has stopped working.
+
+## WebSocket connection registry (migration 0047)
+
+Migration 0047 adds a dedicated connection table with 32 slots per account; it
+does not change the permanent provider-operation journal or grant privileges.
+`ACCOUNT_DELETION_WS_ADMISSION_ENABLED=false` keeps existing socket behavior.
+The enabled path registers before accept/Redis, rejects active holds, and closes
+registered connections when the periodic watcher observes a hold. Confirmed local
+teardown deletes its fenced row; running/uncertain rows block both executor gates
+and consume a slot indefinitely until separately reviewed recovery. Downgrade
+refuses a nonempty table. See `C436-DELETION-HOLD.md` for timing and failure semantics.
+
+Before any activation, review the actual serving runtime identities and schema.
+The WS runtime needs existing identity/legal reads, hold SELECT, and SELECT/INSERT,
+UPDATE restricted to `state`, and DELETE on `account_ws_connections`. Registration
+does not need UPDATE on `users`. The deletion executor needs SELECT on the new
+table for both drain checks, even when the WS flag is disabled. A process that
+serves both roles needs their union; do not copy permissions to unrelated roles.
+Prepare and review exact grant SQL separately. This source change applies none.
+
+Roll out the schema before running the new executor. Drain all old or flag-off
+socket instances before enabling deletion execution: the flag is captured at
+handshake and cannot enroll existing connections. Verify API/WS routing and every
+receiving revision, then establish complete producer drain through the remaining
+outbox/payment/upload/analytics work. Flag rollback again creates unregistered
+connections and requires stopping deletion execution. Neither empty registry counts
+nor the read-only operator preflight establish complete drain; that preflight
+does not inspect live socket counts and always reports `ready_for_deletion: false`.
+
+Local PostgreSQL/Redis and controlled ASGI tests establish source behavior only.
+They do not prove peer receipt of close frames, device-cache removal, production
+rollout or whole-ticket acceptance. No migration, grants, deployment, activation,
+provider request or account deletion is included in this source increment.
 
 ## Verification-email registration (migration 0046)
 
