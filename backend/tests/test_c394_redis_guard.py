@@ -3,8 +3,8 @@
 Board c92 established the pattern (see tests/test_ws_fanout.py's needs_redis): the
 guard must be a CONNECTION check and nothing more, or it silently hides real
 regressions. c394 applies the same pattern to tests/test_ws_resource_integration.py,
-whose four Redis-backed tests otherwise ERROR permanently on a machine with no local
-Redis (Jose's Mac). This file drives that target file as a real pytest subprocess,
+whose six Redis-backed tests otherwise ERROR on a machine with no local Redis.
+This file drives that target file as a real pytest subprocess,
 twice, to prove the guard skips exactly when nothing is listening and never skips
 merely because something went wrong talking to a live, non-Redis port.
 """
@@ -83,7 +83,7 @@ def _run_target(redis_url: str) -> subprocess.CompletedProcess:
     env["REDIS_URL"] = redis_url
     # The inner run CONSTRUCTS skips on purpose (that is the property under test),
     # so the c103 skip ceiling (CHIRP_REQUIRE_DB=1, conftest) must not apply to it:
-    # under CI it turned the deliberate 4 skips into a failed inner run whose
+    # under CI it turned the deliberate skips into a failed inner run whose
     # output contained the word "failed" and tripped this test. The ceiling still
     # governs the OUTER suite, where this file's own tests never skip.
     env.pop("CHIRP_REQUIRE_DB", None)
@@ -93,7 +93,7 @@ def _run_target(redis_url: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_redis_less_machine_skips_the_four_tests_with_a_named_reason():
+def test_redis_less_machine_skips_the_redis_tests_with_a_named_reason():
     port = _closed_port()
     result = _run_target(f"redis://127.0.0.1:{port}/0")
     output = result.stdout + result.stderr
@@ -101,7 +101,9 @@ def test_redis_less_machine_skips_the_four_tests_with_a_named_reason():
 
     # Judge pytest's own summary line, never the whole output: the skip reasons
     # and any plugin prose can legitimately contain words like "failed".
-    assert "4 skipped" in summary, output
+    # c459 adds two Redis-dependent cohort cases to the original four. This is
+    # the intentional INNER run only; the outer CI skip ceiling is unchanged.
+    assert "6 skipped" in summary, output
     assert "error" not in summary, output
     assert "failed" not in summary, output
     assert result.returncode == 0, output
