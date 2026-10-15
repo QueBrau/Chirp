@@ -4,6 +4,11 @@ Production uses Redis fixed windows so Cloud Run instances share a budget. Local
 degraded environments retain the deterministic in-process limiter used by tests; a
 Redis outage must not turn a verification endpoint into a hard 500.
 
+Expiry repair applies to the current Redis bucket when it is encountered. Old,
+inactive keys without a TTL require a separate inventory and cleanup. Local cleanup
+is request-driven: an idle process can retain up to 4,096 subject mappings until
+further limiter calls or process exit. These bounds do not attest account deletion.
+
 THE FALLBACK USED TO BE SILENT, AND THAT WAS TWO PROBLEMS (board c292).
 
 Operationally: if Redis becomes unreachable, every instance quietly starts keeping its
@@ -28,14 +33,34 @@ import asyncio
 import logging
 import math
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
+from itertools import islice
 
 from app.core.operational_signals import observe
 
 logger = logging.getLogger(__name__)
 
 # key -> monotonic timestamps of allowed calls within the current local window.
-_WINDOWS: dict[str, deque[float]] = defaultdict(deque)
+# The map is deliberately bounded: during a Redis outage, attacker-controlled
+# subjects must not turn the fallback into an unbounded memory sink.
+_WINDOWS: dict[str, deque[float]] = {}
+_LOCAL_MAX_WINDOW_SECONDS: dict[str, float] = {}
+_LOCAL_RECENCY: OrderedDict[str, None] = OrderedDict()
+LOCAL_MAX_WINDOWS = 4096
+LOCAL_SWEEP_BATCH = 64
+
+# Increment and repair expiry in one Redis operation. Redis `TTL` returns -1 when
+# the key exists without an expiry. A live expiry is left alone, so traffic cannot
+# extend a fixed-window bucket indefinitely.
+_INCREMENT_WITH_EXPIRY_LUA = """
+local ttl = redis.call('TTL', KEYS[1])
+if ttl == -2 then
+  redis.call('SET', KEYS[1], 0, 'EX', ARGV[1])
+elseif ttl == -1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return redis.call('INCR', KEYS[1])
+"""
 
 # At most one fallback warning per process per this many seconds. Ten minutes matches
 # the shortest limiter window in use, so a persistent outage still leaves a steady
@@ -78,13 +103,69 @@ def _warn_fallback_once(key: str, exc: BaseException) -> None:
     )
 
 
+def _sweep_local_windows(now: float, *, budget: int | None = None) -> None:
+    """Evict a bounded number of inactive mappings without dropping live budgets."""
+    if budget is None:
+        budget = LOCAL_SWEEP_BATCH
+    candidates = list(islice(_LOCAL_RECENCY, budget))
+    for key in candidates:
+        window = _WINDOWS.get(key)
+        max_window = _LOCAL_MAX_WINDOW_SECONDS.get(key, 0.0)
+        if not window or now - window[-1] > max_window:
+            _WINDOWS.pop(key, None)
+            _LOCAL_MAX_WINDOW_SECONDS.pop(key, None)
+            _LOCAL_RECENCY.pop(key, None)
+        elif key in _LOCAL_RECENCY:
+            # Rotate still-active entries so repeated bounded sweeps make progress
+            # through the whole registry even when the oldest entry remains live.
+            _LOCAL_RECENCY.move_to_end(key)
+
+
 def _allow_local(key: str, *, max_calls: int, window_seconds: float) -> bool:
-    """Return True (and record a call) in the local fallback window."""
+    """Return True (and record a call) in the local fallback window.
+
+    Each call opportunistically examines at most LOCAL_SWEEP_BATCH mappings. Per-key
+    retention uses the longest window observed for that mapping to avoid premature
+    sweep eviction. Per-call timestamp pruning keeps the original sliding-window
+    semantics; a later policy change cannot reconstruct history already pruned or
+    evicted. Cleanup is opportunistic, not a wall-clock deletion guarantee. If the
+    hard cap is reached and the bounded sweep finds no safe stale mapping, an unseen
+    subject is conservatively refused rather than growing memory or discarding another subject's
+    active budget.
+    """
     now = time.monotonic()
-    window = _WINDOWS[key]
-    cutoff = now - window_seconds
-    while window and window[0] < cutoff:
-        window.popleft()
+    # Honor a wider window on this call before the bounded sweep can evict its
+    # history. Callers normally keep one window per key, but retaining the largest
+    # observed window also handles a changed window while the key is still present.
+    existing = _WINDOWS.get(key)
+    if existing is not None:
+        _LOCAL_MAX_WINDOW_SECONDS[key] = max(
+            _LOCAL_MAX_WINDOW_SECONDS.get(key, window_seconds), window_seconds
+        )
+    _sweep_local_windows(now)
+
+    window = _WINDOWS.get(key)
+    if window is not None:
+        cutoff = now - window_seconds
+        while window and window[0] < cutoff:
+            window.popleft()
+        if not window:
+            # An empty deque carries no active budget and needs no retained mapping.
+            _WINDOWS.pop(key, None)
+            _LOCAL_MAX_WINDOW_SECONDS.pop(key, None)
+            _LOCAL_RECENCY.pop(key, None)
+            window = None
+        else:
+            _LOCAL_RECENCY[key] = None
+            _LOCAL_RECENCY.move_to_end(key)
+
+    if window is None:
+        if len(_WINDOWS) >= LOCAL_MAX_WINDOWS:
+            return False
+        window = deque()
+        _WINDOWS[key] = window
+        _LOCAL_MAX_WINDOW_SECONDS[key] = window_seconds
+        _LOCAL_RECENCY[key] = None
     if len(window) >= max_calls:
         return False
     window.append(now)
@@ -118,14 +199,17 @@ async def allow(key: str, *, max_calls: int, window_seconds: float) -> bool:
         from app.ws.pubsub import get_redis
 
         redis = get_redis()
-        count = int(await asyncio.wait_for(redis.incr(redis_key), timeout=timeout))
-        if count == 1:
-            # Best effort: the bucket suffix prevents a missing expiry from affecting
-            # future windows, while expiry bounds normal Redis memory use.
+        count = int(
             await asyncio.wait_for(
-                redis.expire(redis_key, max(1, math.ceil(window_seconds))),
+                redis.eval(
+                    _INCREMENT_WITH_EXPIRY_LUA,
+                    1,
+                    redis_key,
+                    max(1, math.ceil(window_seconds)),
+                ),
                 timeout=timeout,
             )
+        )
         if started_epoch is not None and started_epoch is _fallback_epoch:
             # Only this completed operation is known to have used Redis after
             # the latest observed fallback. This is not fleet-wide recovery,
@@ -149,6 +233,8 @@ def _reset_all() -> None:
     """Test-only: clear every tracked local window so tests do not bleed into each other."""
     global _last_fallback_warning_at, _fallback_epoch
     _WINDOWS.clear()
+    _LOCAL_MAX_WINDOW_SECONDS.clear()
+    _LOCAL_RECENCY.clear()
     # The warning suppressor is process-global too, so it bleeds the same way: without
     # this, the first test to trip the fallback would silence every later one.
     _last_fallback_warning_at = None
