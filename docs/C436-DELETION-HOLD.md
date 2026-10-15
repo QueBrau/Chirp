@@ -276,9 +276,10 @@ closed. This filtered batch API has a separate 500-candidate bound and does not
 expand the strict 257-account guard used by messaging.
 
 These route guards fence SQL. Avatar/feed finalizers also have the durable
-operation tracking described below. Verification email, Redis rate-limit work
-and analytics emissions can still outlive their SQL transactions; those producers
-and ingestion need separate drain integration. An active hold blocking a later
+operation tracking described below. Verification email uses its own registered
+send boundary below. Redis rate-limit work and analytics emissions can still
+outlive their SQL transactions; those producers and ingestion need separate
+drain integration. An active hold blocking a later
 SQL write does not undo an earlier external effect.
 
 ## Financial records and payment plans
@@ -371,14 +372,46 @@ under an exclusive account gate and reports running/uncertain counts for that
 account. Its `registered_operations_drained` value describes this registry only;
 it does not attest complete producer enrollment or trigger cleanup. Signed PUT
 capabilities can remain usable after issuance and are explicitly not covered by
-finalizer completion. Delivery, payment, email, analytics ingestion, bootstrap,
+finalizer completion. Delivery, payment, analytics ingestion, bootstrap,
 WebSocket access and executor integration remain separate requirements.
+
+## Campus verification email operations (migration 0046)
+
+Migration 0046 widens the existing registry's kind constraint to include
+`campus_verification_email`; it adds no table or grant. A downgrade refuses to
+remove that kind while email-operation rows remain. The migration never deletes
+those safety records to make a downgrade succeed.
+
+With admission enabled, campus verification still commits its challenge before
+sending, then registers the send in a fresh admitted transaction. The effect key
+is a digest of that challenge's UUID and the scope is its authenticated owner.
+The registry does not retain the email address, code, body or provider message ID.
+A hold that wins before registration prevents the send. If registration wins,
+the operation remains visible to drain inspection while its provider call runs.
+Neither the request session nor the registry retains a SQL connection over the
+email await. A repeated operation is refused without a second send; an ordinary
+resend creates a fresh challenge and retains the existing rate limits.
+
+A normal provider return records `finished`, meaning the local send was accepted
+by the configured provider. It does not prove inbox delivery or that the provider
+has deleted its queued message or delivery records. Exceptions and cancellation
+record `uncertain`; repeated cancellation drains that journal update before
+propagating. A failed update or process crash leaves `running`, which also blocks
+drain. No transport error authorizes automatic replay or proves no remote effect.
+Normal completion can update the control journal during a hold, without bypassing
+ordinary authorization for domain writes. Challenge retirement after a send error
+still uses the guarded request session; a hold can refuse that later write.
+
+With the flag disabled, email follows the original path and does not query the
+registry. This slice does not send a real email or enable deletion. Provider-side
+delivery, retention/readback and the remaining producer/executor work still need
+separate acceptance.
 
 ## Remaining rollout gates
 
 This flag neither activates a hold nor adds an activation endpoint. Ordinary
 deletion intake still does not create a hold. Keep the flag disabled until migration
-0044 and 0045 plus the runtime's exact hold-read and operation-registry
+0044 through 0046 plus the runtime's exact hold-read and operation-registry
 permissions have been separately reviewed and applied. With the default flag off, these dependencies use the existing auth path
 and do not query the new table, preserving compatibility with deployed schema 0043.
 

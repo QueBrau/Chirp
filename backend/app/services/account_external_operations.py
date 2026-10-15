@@ -20,9 +20,9 @@ from app.services.account_write_guard import (
     bind_account_write_guard,
 )
 
-OperationKind = Literal["media_finalize_post", "media_finalize_avatar"]
+OperationKind = Literal["media_finalize_post", "media_finalize_avatar", "campus_verification_email"]
 TerminalOperationState = Literal["finished", "uncertain"]
-_ALLOWED_KINDS = frozenset({"media_finalize_post", "media_finalize_avatar"})
+_ALLOWED_KINDS = frozenset({"media_finalize_post", "media_finalize_avatar", "campus_verification_email"})
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
