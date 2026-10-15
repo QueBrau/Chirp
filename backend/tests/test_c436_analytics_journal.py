@@ -375,7 +375,7 @@ async def test_legacy_five_step_plan_grows_then_blocks_before_provider_calls(
 
 
 @pytest.mark.asyncio
-async def test_analytics_success_is_reused_after_firebase_failure(
+async def test_analytics_receipt_is_reused_while_uncertain_firebase_stays_blocked(
     client: httpx.AsyncClient, make_user: Callable[..., Awaitable[ApiUser]]
 ) -> None:
     owner = await make_user("Analytics resume owner")
@@ -419,8 +419,10 @@ async def test_analytics_success_is_reused_after_firebase_failure(
             },
         )()
         second = await run_deletion(session, request_id, user, providers)
-        assert second.status == "completed"
+        assert second.status == "blocked" and second.failed_step == "firebase_auth"
+        assert "analytics" in second.completed_steps
         assert len(analytics.keys) == first_count
+        assert len(firebase.keys) == 1
         step = await session.scalar(
             select(models.AccountFulfillmentStep).where(
                 models.AccountFulfillmentStep.request_id == request_id,
@@ -432,6 +434,16 @@ async def test_analytics_success_is_reused_after_firebase_failure(
         assert (
             request is not None and request.provider_steps["analytics"] == "succeeded"
         )
+        firebase_step = await session.scalar(
+            select(models.AccountFulfillmentStep).where(
+                models.AccountFulfillmentStep.request_id == request_id,
+                models.AccountFulfillmentStep.step_key == "firebase_auth",
+            )
+        )
+        assert firebase_step is not None and firebase_step.status == "manual_review"
+        assert firebase_step.last_error == "firebase_outcome_unknown"
+        await session.refresh(user)
+        assert user.is_ghost is False and user.firebase_uid == owner.firebase_uid
 
 
 @pytest.mark.parametrize(

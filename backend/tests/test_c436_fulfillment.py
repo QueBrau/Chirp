@@ -13,7 +13,7 @@ from sqlalchemy import update
 from tests.conftest import ApiUser
 from app import models
 from app.db import get_session_factory
-from app.services.account_fulfillment import PROVIDER_RETENTION_REASONS, FirebaseProvider, PROVIDER_STEPS, run_deletion
+from app.services.account_fulfillment import OUTCOME_UNKNOWN_ERRORS, PROVIDER_RETENTION_REASONS, FirebaseProvider, PROVIDER_STEPS, run_deletion
 from app.services.account_cleanup import RETENTION_REASONS, cleanup_local_account
 
 _UNSET = object()
@@ -119,7 +119,7 @@ async def test_deletion_journal_blocks_without_adapters_then_retries_idempotentl
 
 
 @pytest.mark.asyncio
-async def test_retention_receipts_survive_resumed_steps_and_final_status(client: AsyncClient, make_user) -> None:
+async def test_retention_receipts_survive_but_ambiguous_provider_step_is_not_replayed(client: AsyncClient, make_user) -> None:
     owner: ApiUser = await make_user("Retention receipt owner")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
     request_id = uuid.UUID(response.json()["id"])
@@ -139,15 +139,23 @@ async def test_retention_receipts_survive_resumed_steps_and_final_status(client:
         resumed = provider_set()
         resumed[PROVIDER_STEPS[1]] = providers[PROVIDER_STEPS[1]]
         second = await run_deletion(session, request.id, user, resumed)
-        assert second.status == "completed"
+        assert second.status == "blocked"
+        assert second.failed_step == PROVIDER_STEPS[1]
+        assert len(providers[PROVIDER_STEPS[1]].keys) == 1
         await session.refresh(request)
         first_step = (await session.scalars(select(models.AccountFulfillmentStep).where(
             models.AccountFulfillmentStep.request_id == request.id,
             models.AccountFulfillmentStep.step_key == PROVIDER_STEPS[0],
         ))).one()
         assert first_step.provider_ref["retained_with_reason"] == ["stripe_deleted_customer_history"]
-        assert PROVIDER_RETENTION_REASONS["stripe_deleted_customer_history"] in request.retention_reasons
-        assert request.retention_reasons.count(PROVIDER_RETENTION_REASONS["stripe_deleted_customer_history"]) == 1
+        assert PROVIDER_RETENTION_REASONS["stripe_deleted_customer_history"] not in (request.retention_reasons or [])
+        second_step = (await session.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request.id,
+            models.AccountFulfillmentStep.step_key == PROVIDER_STEPS[1],
+        ))).one()
+        assert second_step.status == "manual_review"
+        assert second_step.last_error == "provider_outcome_unknown"
+        assert second_step.last_error in OUTCOME_UNKNOWN_ERRORS
 
 
 @pytest.mark.asyncio
@@ -218,6 +226,12 @@ async def test_durable_invalid_retention_receipt_blocks_before_local_cleanup(cli
         resumed = await run_deletion(session, request.id, user, fresh_providers)
         assert resumed.status == "blocked"
         assert resumed.failed_step == "payment_provider"
+        quarantined = (await session.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request_id,
+            models.AccountFulfillmentStep.step_key == "payment_provider",
+        ))).one()
+        assert quarantined.status == "manual_review"
+        assert quarantined.last_error == "provider_outcome_unknown"
         assert not fresh_providers["payment_provider"].keys
         assert not fresh_providers["media_storage"].keys
         assert "provider-secret-sentinel" not in json.dumps(request.provider_steps)
@@ -263,7 +277,7 @@ async def test_missing_adapters_are_preflighted_without_provider_calls(client: A
 
 
 @pytest.mark.asyncio
-async def test_failed_prefix_retries_without_replaying_confirmed_steps(client: AsyncClient, make_user) -> None:
+async def test_ambiguous_failed_prefix_is_quarantined_without_replaying_any_provider(client: AsyncClient, make_user) -> None:
     owner: ApiUser = await make_user("Retry owner")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
     async with get_session_factory()() as session:
@@ -277,11 +291,20 @@ async def test_failed_prefix_retries_without_replaying_confirmed_steps(client: A
         failed_request = await session.get(models.AccountDataRequest, request.id)
         assert failed_request is not None
         assert failed_request.provider_steps[PROVIDER_STEPS[0]] == "succeeded"
-        assert failed_request.provider_steps[PROVIDER_STEPS[1]] == "failed"
+        assert failed_request.provider_steps[PROVIDER_STEPS[1]] == "manual_review"
         assert failed_request.provider_steps[PROVIDER_STEPS[2]] == "pending"
         second = await run_deletion(session, request.id, user, flaky)
-        assert second.status == "completed"
+        assert second.status == "blocked"
+        assert second.failed_step == PROVIDER_STEPS[1]
         assert len(flaky[PROVIDER_STEPS[0]].keys) == 1
+        assert len(flaky[PROVIDER_STEPS[1]].keys) == 1
+        assert not flaky[PROVIDER_STEPS[2]].keys
+        persisted_step = (await session.scalars(select(models.AccountFulfillmentStep).where(
+            models.AccountFulfillmentStep.request_id == request.id,
+            models.AccountFulfillmentStep.step_key == PROVIDER_STEPS[1],
+        ))).one()
+        assert persisted_step.last_error == "provider_outcome_unknown"
+        assert "secret provider response" not in json.dumps(failed_request.provider_steps)
         assert "secret provider response" not in (await session.get(models.AccountDataRequest, request.id)).provider_steps
 
 
