@@ -131,11 +131,12 @@ async def test_loader_rejects_customer_shared_with_foreign_user(client, make_use
             await load_customer_references(session, uuid.UUID(owner.id))
 
 
-async def _financial_mapping(session, user_id: str, chapter_id: str, *, plan: bool = False, intent_status: str | None = None):
+async def _financial_mapping(session, user_id: str, chapter_id: str, *, plan: bool = False, intent_status: str | None = None, include_customer_mapping: bool = True):
     suffix = user_id.replace("-", "")[:12]
     account_id, customer_id = f"acct_{suffix}", f"cus_{suffix}"
     await session.execute(update(models.Chapter).where(models.Chapter.id == uuid.UUID(chapter_id)).values(stripe_account_id=account_id))
-    session.add(models.ChapterStripeCustomer(user_id=uuid.UUID(user_id), chapter_id=uuid.UUID(chapter_id), stripe_customer_id=customer_id))
+    if include_customer_mapping:
+        session.add(models.ChapterStripeCustomer(user_id=uuid.UUID(user_id), chapter_id=uuid.UUID(chapter_id), stripe_customer_id=customer_id))
     cycle_id = uuid.uuid4()
     await session.execute(text("INSERT INTO dues_cycles (id, chapter_id, name, amount_cents, due_date) VALUES (:id, :chapter, 'c436', 100, '2030-01-01')"), {"id": cycle_id, "chapter": uuid.UUID(chapter_id)})
     if plan:
@@ -144,6 +145,56 @@ async def _financial_mapping(session, user_id: str, chapter_id: str, *, plan: bo
         await session.execute(text("INSERT INTO dues_payment_intents (id, chapter_id, dues_cycle_id, user_id, rail, status, amount_cents, currency) VALUES (:id, :chapter, :cycle, :user, 'card', :status, 100, 'usd')"), {"id": uuid.uuid4(), "chapter": uuid.UUID(chapter_id), "cycle": cycle_id, "user": uuid.UUID(user_id), "status": intent_status})
     await session.commit()
     return account_id, customer_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("obligation", ("active_plan", "open_intent", "failed_intent"))
+async def test_empty_mapping_still_blocks_unresolved_financial_obligation(
+    obligation, make_user, make_chapter_with,
+):
+    user = await make_user(f"Stripe unmapped {obligation}")
+    chapter = await make_chapter_with("president")
+    async with get_session_factory()() as session:
+        await _financial_mapping(
+            session,
+            user.id,
+            chapter.chapter_id,
+            plan=obligation == "active_plan",
+            intent_status=obligation.removesuffix("_intent") if obligation.endswith("_intent") else None,
+            include_customer_mapping=False,
+        )
+        with pytest.raises(ProviderUnavailable, match="stripe_pending_financial_review_required"):
+            await provider_for_user(session, models.User(id=uuid.UUID(user.id)))
+
+
+@pytest.mark.asyncio
+async def test_unmapped_user_is_not_blocked_by_another_users_obligation(
+    make_user, make_chapter_with,
+):
+    owner = await make_user("Stripe unmapped clear")
+    other = await make_user("Stripe unmapped other obligation")
+    chapter = await make_chapter_with("president")
+    async with get_session_factory()() as session:
+        await _financial_mapping(
+            session, other.id, chapter.chapter_id, plan=True,
+            include_customer_mapping=False,
+        )
+        service = await provider_for_user(session, models.User(id=uuid.UUID(owner.id)))
+    assert service._references == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ("succeeded", "canceled"))
+async def test_unmapped_user_allows_terminal_intent_history(status, make_user, make_chapter_with):
+    user = await make_user(f"Stripe unmapped terminal {status}")
+    chapter = await make_chapter_with("president")
+    async with get_session_factory()() as session:
+        await _financial_mapping(
+            session, user.id, chapter.chapter_id, intent_status=status,
+            include_customer_mapping=False,
+        )
+        service = await provider_for_user(session, models.User(id=uuid.UUID(user.id)))
+    assert service._references == ()
 
 
 @pytest.mark.asyncio

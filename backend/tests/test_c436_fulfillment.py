@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy import update
 
 from tests.conftest import ApiUser
@@ -336,7 +336,7 @@ async def test_canceled_request_is_terminal_and_makes_no_provider_calls(client: 
 
 @pytest.mark.asyncio
 async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(
-    client: AsyncClient, make_user, make_campus, register_device
+    client: AsyncClient, make_user, make_campus, make_chapter_with, register_device
 ) -> None:
     owner: ApiUser = await make_user("Cleanup owner")
     other: ApiUser = await make_user("Cleanup other")
@@ -345,6 +345,29 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(
     async with get_session_factory()() as session:
         campus = uuid.UUID(await make_campus())
         owner_id, other_id = uuid.UUID(owner.id), uuid.UUID(other.id)
+        chapter = await make_chapter_with("president")
+        chapter_id = uuid.UUID(chapter.chapter_id)
+        session.add(models.AlumniProfile(
+            user_id=owner_id, grad_year=2020, company="Owner private company",
+            title="Owner private title", open_to_mentoring=True,
+        ))
+        intent_rows = []
+        for user_id, label in ((owner_id, "owner"), (other_id, "foreign")):
+            for status in ("succeeded", "canceled"):
+                cycle_id = uuid.uuid4()
+                intent_id = uuid.uuid4()
+                payment_id = f"pi_c436_retained_{label}_{status}"
+                await session.execute(text(
+                    "INSERT INTO dues_cycles (id, chapter_id, name, amount_cents, due_date) "
+                    "VALUES (:id, :chapter, :name, 12345, '2030-01-01')"
+                ), {"id": cycle_id, "chapter": chapter_id, "name": f"retained-{label}-{status}"})
+                await session.execute(text(
+                    "INSERT INTO dues_payment_intents "
+                    "(id, chapter_id, dues_cycle_id, user_id, rail, status, amount_cents, currency, stripe_payment_intent_id) "
+                    "VALUES (:id, :chapter, :cycle, :user, 'card', :status, 12345, 'usd', :payment_id)"
+                ), {"id": intent_id, "chapter": chapter_id, "cycle": cycle_id,
+                    "user": user_id, "status": status, "payment_id": payment_id})
+                intent_rows.append((intent_id, user_id, cycle_id, status, payment_id))
         session.add(models.KyberPrekey(
             device_id=uuid.UUID(owner_device["id"]), key_id=1,
             public_key=b"k" * 32, signature=b"s" * 64, is_last_resort=False,
@@ -373,6 +396,7 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(
         await session.commit()
         result = await cleanup_local_account(session, owner_id)
         await session.commit()
+        assert await session.get(models.AlumniProfile, owner_id) is None
         await session.refresh(owned_post)
         await session.refresh(foreign_post)
         assert owned_post.body == "[deleted]" and owned_post.deleted_at is not None
@@ -408,6 +432,17 @@ async def test_local_cleanup_redacts_owner_and_preserves_foreign_rows(
         ))).one()
         assert membership.left_at is not None
         assert result["retained"]["financial_history"]
+        assert "dues_payment_intents" in result["coverage"]["retained"]
+        retained_intents = (await session.execute(text(
+            "SELECT id, user_id, dues_cycle_id, status, amount_cents, currency, stripe_payment_intent_id "
+            "FROM dues_payment_intents WHERE id = ANY(CAST(:ids AS uuid[])) ORDER BY stripe_payment_intent_id"
+        ), {"ids": [row[0] for row in intent_rows]})).mappings().all()
+        assert [dict(row) for row in retained_intents] == [
+            {"id": intent_id, "user_id": user_id, "dues_cycle_id": cycle_id,
+             "status": status, "amount_cents": 12345, "currency": "usd",
+             "stripe_payment_intent_id": payment_id}
+            for intent_id, user_id, cycle_id, status, payment_id in sorted(intent_rows, key=lambda row: row[4])
+        ]
         assert "post_likes" in result["coverage"]["private"]
         assert "chirp_votes" in result["coverage"]["private"]
         assert "signed_prekeys" in result["coverage"]["private"]
