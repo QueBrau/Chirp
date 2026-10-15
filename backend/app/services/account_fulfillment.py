@@ -19,10 +19,9 @@ from app import models
 from app.services.account_cleanup import cleanup_local_account
 
 PROVIDER_STEPS = ("payment_provider", "media_storage", "email_logs_backups", "analytics", "firebase_auth")
-SAFE_PROVIDER_ERRORS = frozenset({
-    "provider_not_configured", "provider_confirmation_missing", "provider_error",
-    "firebase_delete_failed", "firebase_readback_failed", "firebase_delete_not_confirmed",
-})
+# Shared with deletion preflight: these markers mean an external call may have
+# taken effect, so automatic takeover is never safe.
+OUTCOME_UNKNOWN_ERRORS = frozenset({"provider_outcome_unknown", "firebase_outcome_unknown"})
 PROVIDER_RETENTION_REASONS = {
     "stripe_deleted_customer_history": "Stripe's deleted-customer history remains subject to provider retention; expiry is not measured",
     "gcs_soft_deleted_versions": "Object-storage soft-deleted versions remain subject to provider retention; expiry is not measured",
@@ -124,6 +123,24 @@ def _now() -> datetime:
 
 def _key(request_id: uuid.UUID, step: str) -> str:
     return f"account-deletion:{request_id}:{step}"
+
+
+def provider_attempt_may_have_started(step: models.AccountFulfillmentStep) -> bool:
+    """Return true when journal evidence forbids automatically replaying a step.
+
+    A clean pending row has no attempt evidence and can resume after missing
+    adapters are configured. Legacy or partially written rows fail closed.
+    """
+    return bool(
+        step.attempt_count != 0
+        or step.status in {"running", "failed"}
+        or step.started_at is not None
+        or step.completed_at is not None
+        or step.lease_token is not None
+        or step.lease_expires_at is not None
+        or step.provider_ref is not None
+        or step.last_error in OUTCOME_UNKNOWN_ERRORS
+    )
 
 
 def _retention_receipt(step_key: str, result: dict[str, object]) -> list[str]:
@@ -269,6 +286,8 @@ async def run_deletion(
             if step.step_key == "database_tombstone":
                 continue
             try:
+                if step.last_error in OUTCOME_UNKNOWN_ERRORS:
+                    raise ProviderUnavailable("provider_confirmation_missing")
                 validate_provider_receipt(step.step_key, user.id, step.provider_ref, expected_request_id=request.id)
                 valid_terminal = valid_terminal and step.status == "succeeded" and step.completed_at is not None and step.idempotency_key == _key(request.id, step.step_key)
             except ProviderUnavailable:
@@ -318,12 +337,16 @@ async def run_deletion(
             # A legacy or manually altered receipt must not silently authorize
             # continuation. Validate it before invoking any later provider.
             try:
-                if step.completed_at is None or step.idempotency_key != _key(request.id, step_key):
+                if (step.completed_at is None or step.idempotency_key != _key(request.id, step_key)
+                        or step.last_error in OUTCOME_UNKNOWN_ERRORS
+                        or step.lease_token is not None or step.lease_expires_at is not None):
                     raise ProviderUnavailable("provider_confirmation_missing")
                 validate_provider_receipt(step_key, user.id, step.provider_ref, expected_request_id=request.id)
             except ProviderUnavailable:
                 step.status = "manual_review"
-                step.last_error = "provider_confirmation_missing"
+                # A succeeded state itself records an earlier provider action,
+                # even if a legacy row has a missing attempt counter.
+                step.last_error = "firebase_outcome_unknown" if step_key == "firebase_auth" else "provider_outcome_unknown"
                 provider_steps = dict(request.provider_steps or {})
                 provider_steps[step_key] = "manual_review"
                 request.status = "blocked"
@@ -331,19 +354,23 @@ async def run_deletion(
                 request.provider_steps = provider_steps
                 request.fulfillment_lease_token = None
                 request.fulfillment_lease_expires_at = None
+                step.lease_token = None
+                step.lease_expires_at = None
                 await session.commit()
                 return DeletionRun("blocked", tuple(completed), step_key)
             completed.append(step_key)
             continue
-        if step_key == "firebase_auth" and (
-            step.status == "running"
-            or (step.status == "manual_review" and step.last_error == "firebase_outcome_unknown")
-        ):
-            # A previous Firebase worker may still be finishing after its
-            # request and step leases expired. Do not invoke Firebase again;
-            # persist the uncertain outcome before releasing this runner.
+        if provider_attempt_may_have_started(step):
+            # An attempted provider operation without a validated durable
+            # receipt is ambiguous. In particular, expired leases and legacy
+            # failed/manual-review rows do not prove the prior worker stopped.
+            # Quarantine rather than replaying an irreversible provider call.
+            unknown_error = (
+                "firebase_outcome_unknown" if step_key == "firebase_auth"
+                else "provider_outcome_unknown"
+            )
             step.status = "manual_review"
-            step.last_error = "firebase_outcome_unknown"
+            step.last_error = unknown_error
             provider_steps = dict(request.provider_steps or {})
             provider_steps[step_key] = "manual_review"
             request.status = "blocked"
@@ -380,10 +407,14 @@ async def run_deletion(
         try:
             result = await provider.delete_account_data(user=user, idempotency_key=step.idempotency_key)
             retained_with_reason = validate_provider_receipt(step_key, user.id, result, expected_request_id=request.id)
-        except Exception as exc:
-            code = str(exc) if isinstance(exc, ProviderUnavailable) else "provider_error"
-            step_status = "manual_review" if isinstance(exc, ProviderUnavailable) else "failed"
-            safe_error = code if code in SAFE_PROVIDER_ERRORS else "provider_error"
+        except Exception:
+            # Provider invocation began. Even an exception or malformed
+            # receipt cannot establish that the external effect did not occur.
+            step_status = "manual_review"
+            safe_error = (
+                "firebase_outcome_unknown" if step_key == "firebase_auth"
+                else "provider_outcome_unknown"
+            )
             failed_step = await session.execute(update(models.AccountFulfillmentStep).where(
                 models.AccountFulfillmentStep.id == step.id,
                 models.AccountFulfillmentStep.status == "running",
@@ -455,7 +486,9 @@ async def run_deletion(
             continue
         try:
             if (durable_step.status != "succeeded" or durable_step.completed_at is None
-                    or durable_step.idempotency_key != _key(request.id, durable_step.step_key)):
+                    or durable_step.idempotency_key != _key(request.id, durable_step.step_key)
+                    or durable_step.last_error in OUTCOME_UNKNOWN_ERRORS
+                    or durable_step.lease_token is not None or durable_step.lease_expires_at is not None):
                 raise ProviderUnavailable("provider_confirmation_missing")
             provider_retention_codes[durable_step.step_key] = validate_provider_receipt(
                 durable_step.step_key, user.id, durable_step.provider_ref,
