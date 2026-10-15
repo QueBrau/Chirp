@@ -275,10 +275,11 @@ recomputed after commit or rollback; stale eligibility or a changed scope fails
 closed. This filtered batch API has a separate 500-candidate bound and does not
 expand the strict 257-account guard used by messaging.
 
-These changes only fence SQL. An already admitted avatar/feed media copy, verification
-email, Redis rate-limit operation or analytics emission can outlive its SQL
-transaction. Provider operations and ingestion still need durable fencing/drain;
-an active hold blocking a later SQL write does not undo an earlier external effect.
+These route guards fence SQL. Avatar/feed finalizers also have the durable
+operation tracking described below. Verification email, Redis rate-limit work
+and analytics emissions can still outlive their SQL transactions; those producers
+and ingestion need separate drain integration. An active hold blocking a later
+SQL write does not undo an earlier external effect.
 
 ## Financial records and payment plans
 
@@ -329,12 +330,56 @@ status and existing export downloads retain their existing owner and authenticat
 checks during a hold. These read paths do not create new artifacts. System expiry
 of old artifacts remains a separate bounded retention job.
 
+## Avatar and feed media operations (migration 0045)
+
+With the same admission flag enabled, avatar updates, chapter/campus post creation
+and post editing register each media finalizer before its storage worker starts.
+Migration 0045 adds `account_external_operations` and account-scope links. A fresh
+short transaction uses the existing sorted shared account gates, revalidates
+identity and holds, and commits the operation plus its exact scope. No request
+or journal database connection is held across storage I/O.
+
+Each operation has a private owner token and a stable digest of the validated
+caller-owned temporary object name, unique per actor and operation kind. Retrying
+an existing effect returns HTTP 409 (`media_operation_already_started`) without
+another provider call, including after success. This is attempt deduplication,
+not a cached successful HTTP response. A new upload has a new temporary object
+name. Tokens, filenames, image data and signed URLs are not exported or logged by
+this registry; only the digest, account scope, kind, state and timestamps are kept.
+The minimal control rows remain through local account cleanup.
+
+The wrapper awaits the actual threaded finalizer. A successful return permits a
+fresh token-fenced transition from `running` to `finished`. Any raised exception
+is conservatively `uncertain`; this includes errors for which the current storage
+adapter does not provide separate proof of no remote effect. A failed journal
+update or process crash leaves `running`, which also blocks deletion. Neither
+age nor a lease deadline clears these states, and an uncertain result cannot be
+upgraded by blindly retrying. Provider readback and a separately reviewed recovery
+procedure remain necessary to resolve abandoned or ambiguous work.
+
+Request cancellation shields and drains the worker, including repeated cancels,
+before propagating cancellation. It does not stop a thread or claim that remote
+work stopped. A successful storage result still passes the route's ordinary
+guarded authorization before any profile/post write: if SQL wins the shared gate,
+hold activation waits for that transaction; if the hold wins, SQL is rejected.
+No owner-token bypass permits a late domain write. A permanent object whose SQL
+write is rejected is an orphan, so deletion must enumerate owned media after the
+operation drain, including unreferenced objects.
+
+`inspect_registered_operation_drain()` requires the exact active deletion hold
+under an exclusive account gate and reports running/uncertain counts for that
+account. Its `registered_operations_drained` value describes this registry only;
+it does not attest complete producer enrollment or trigger cleanup. Signed PUT
+capabilities can remain usable after issuance and are explicitly not covered by
+finalizer completion. Delivery, payment, email, analytics ingestion, bootstrap,
+WebSocket access and executor integration remain separate requirements.
+
 ## Remaining rollout gates
 
 This flag neither activates a hold nor adds an activation endpoint. Ordinary
 deletion intake still does not create a hold. Keep the flag disabled until migration
-0044 and the runtime's required read permission have been separately reviewed and
-applied. With the default flag off, these dependencies use the existing auth path
+0044 and 0045 plus the runtime's exact hold-read and operation-registry
+permissions have been separately reviewed and applied. With the default flag off, these dependencies use the existing auth path
 and do not query the new table, preserving compatibility with deployed schema 0043.
 
 Before any production deletion, inventory and enroll the remaining HTTP writers

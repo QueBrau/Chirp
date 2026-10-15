@@ -28,6 +28,7 @@ EXPORT_EXCLUDED = [
     "message plaintext that the server never stores",
     "prekey byte material and dormant client-only SQLite data",
     "installment details, delivery-outbox records, and role history changed by other officers",
+    "internal operation ownership tokens and coordination records",
 ]
 RETENTION_REASONS = [
     "shared organization and safety records may need attribution or legal preservation",
