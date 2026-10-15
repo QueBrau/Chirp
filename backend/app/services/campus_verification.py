@@ -25,6 +25,7 @@ import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from functools import partial
 
 from fastapi import HTTPException
 from sqlalchemy import select, update
@@ -34,6 +35,7 @@ from app import models
 from app.core.errors import forbidden, not_found, too_many_requests
 from app.core.rate_limits import CAMPUS_VERIFY_TARGET_LIMIT, enforce_limit
 from app.services import email_service
+from app.services.account_email_operations import send_account_verification_email
 
 logger = logging.getLogger(__name__)
 
@@ -178,21 +180,26 @@ async def start_verification(
     # Sent AFTER the commit: a delivered code whose row failed to persist is
     # unredeemable, and the student has no way to know that is why.
     try:
-        await email_service.send_email(
-            to=address,
-            subject=f"Your {campus.name} verification code",
-            html=(
-                f"<p>Your Chirp verification code is <strong>{code}</strong>.</p>"
-                f"<p>It expires in {int(CODE_TTL.total_seconds() // 60)} minutes. "
-                f"If you did not ask for this, you can ignore it.</p>"
+        await send_account_verification_email(
+            user.id, user.firebase_uid, verification.id,
+            send=partial(
+                email_service.send_email,
+                to=address,
+                subject=f"Your {campus.name} verification code",
+                html=(
+                    f"<p>Your Chirp verification code is <strong>{code}</strong>.</p>"
+                    f"<p>It expires in {int(CODE_TTL.total_seconds() // 60)} minutes. "
+                    f"If you did not ask for this, you can ignore it.</p>"
+                ),
+                text=f"Your Chirp verification code is {code}. "
+                f"It expires in {int(CODE_TTL.total_seconds() // 60)} minutes.",
             ),
-            text=f"Your Chirp verification code is {code}. "
-            f"It expires in {int(CODE_TTL.total_seconds() // 60)} minutes.",
         )
     except Exception as exc:
         # c214: the row above already committed, so a provider failure here must not
-        # leave it looking like a normal live code for the next CODE_TTL minutes — no
-        # one holds this code, since it never left this process.
+        # leave it looking like a normal live code for the next CODE_TTL minutes.
+        # A transport failure does not prove the provider never accepted it;
+        # retiring the challenge makes any subsequently delivered code unusable.
         #
         # Retiring it is not a new idea bolted on: _consume_pending already sets
         # consumed_at on a row for a reason OTHER than redemption (superseded by a

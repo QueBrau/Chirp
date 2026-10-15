@@ -105,7 +105,7 @@ transaction, including transactions after commit/rollback, without activating an
 hold. Consuming key requests additionally bind the actor and authorized target
 accounts before request SQL; their immutable scope is revalidated before key
 consumption. Existing reads and privacy status remain available. Leave the flag off until
-migrations 0044/0045 and the runtime hold-read and operation-registry grants have
+migrations 0044 through 0046 and the runtime hold-read and operation-registry grants have
 separate review and rollout.
 Conversation creation/reuse and legacy/v2 message SQL also bind their participant
 scope. Conversation-row locks serialize enrolled membership changes with sends,
@@ -182,3 +182,23 @@ Review a provider-readback recovery path for ambiguous records, including failur
 before a remote write. Local registered-work counts alone cannot attest complete
 quiescence. The deletion executor still needs to require the matching active hold
 and complete producer coverage before any provider cleanup or local tombstone.
+
+## Verification-email registration (migration 0046)
+
+Migration 0046 adds `campus_verification_email` to the existing operation-kind
+constraint. It preserves existing rows and privileges. Downgrade fails atomically
+if email-operation rows remain; it does not discard safety evidence. Apply this
+schema change only in a separately reviewed rollout before enabling admission.
+
+The registered send uses a digest of the committed verification challenge ID and
+the authenticated owner's scope. No raw address, code, body or provider message ID
+is added to the registry. A hold prevents new registration, while already-admitted
+sends remain visible until their local provider call finishes. Errors and canceled
+calls remain uncertain; failures recording completion leave running work. Both
+states block the registry drain without automatic expiry or retry. Provider
+acceptance is not proof of inbox delivery or provider-side retention expiry.
+
+The same default-off flag preserves the deployed email path without registry
+queries. No real email, production migration, permission change or deletion is
+included. The executor and all other producer/ingestion boundaries still require
+integration before a complete deletion can be accepted.
