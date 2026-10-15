@@ -13,7 +13,7 @@ import pytest
 from redis.asyncio import Redis
 from sqlalchemy import event, text
 import websockets
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from app.config import get_settings
 from app.ws import gateway, pubsub
@@ -87,6 +87,12 @@ async def connected(base, uid):
     except BaseException:
         await socket.close()
         raise
+
+
+async def connect_cohort_sequential(sockets, count, base, uid):
+    """Open a cohort serially while retaining partial successes for caller cleanup."""
+    for _ in range(count):
+        sockets.append(await connected(base, uid))
 
 
 async def own_channel_subscribers(broker, user_id) -> int:
@@ -250,7 +256,8 @@ async def test_churn_delivery_sql_and_memory(client, make_user, broker, monkeypa
     rounds = int(os.environ.get("CHIRP_WS_ROUNDS", "3"))
     hold = float(os.environ.get("CHIRP_WS_HOLD_SECONDS", ".12"))
     assert 1 <= count <= 32 and 1 <= rounds <= 5 and 0 < hold <= 60
-    if "CHIRP_WS_HOLD_SECONDS" not in os.environ:
+    exercise_periodic_sql = "CHIRP_WS_HOLD_SECONDS" not in os.environ
+    if exercise_periodic_sql:
         monkeypatch.setattr(gateway, "WS_SUSPENSION_POLL_SECONDS", .04)
         monkeypatch.setattr(gateway, "WS_SUSPENSION_POLL_JITTER", 0)
     user = await make_user()
@@ -290,13 +297,17 @@ async def test_churn_delivery_sql_and_memory(client, make_user, broker, monkeypa
                 sockets = []
                 try:
                     connect_started = time.monotonic()
-                    outcomes = await asyncio.gather(*(connected(base, user.firebase_uid) for _ in range(count)), return_exceptions=True)
-                    sockets = [value for value in outcomes if not isinstance(value, BaseException)]
-                    if len(sockets) != count:
+                    # Setup is sequential because each accepted websocket performs
+                    # an identity lookup through the intentionally single-connection
+                    # pool. The resource assertion below is for 16 simultaneous
+                    # ACTIVE sockets and their ongoing churn, not for an artificial
+                    # burst of 16 first-time SQL checkouts inside the 1s pool timeout.
+                    try:
+                        await connect_cohort_sequential(sockets, count, base, user.firebase_uid)
+                    except BaseException:
                         record_result({"case": "connect_failure", "connected": len(sockets), "attempted": count,
                             "elapsed_ms": (time.monotonic() - connect_started) * 1000, **metrics})
-                    for value in outcomes:
-                        if isinstance(value, BaseException): raise value
+                        raise
                     assert await own_channel_subscribers(broker, user.id) == count
                     # Server-wide totals still feed the recorded memory/bytes metrics
                     # below; deliberately NOT the correctness assertion above, which
@@ -313,6 +324,8 @@ async def test_churn_delivery_sql_and_memory(client, make_user, broker, monkeypa
                     before_sql = metrics["user_selects"]
                     await asyncio.sleep(hold if round_no == 0 else .12)
                     periodic = metrics["user_selects"] - before_sql
+                    if exercise_periodic_sql:
+                        assert periodic > 0, "the accelerated 40ms suspension poll must run during each hold"
                     result = await client.get("/auth/me", headers=user.headers)
                     assert result.status_code == 200
                     assert metrics["max_checked_out"] == 1
@@ -340,6 +353,157 @@ async def test_churn_delivery_sql_and_memory(client, make_user, broker, monkeypa
         event.remove(engine, "checkout", checkout)
         event.remove(engine, "checkin", checkin)
         event.remove(engine, "before_cursor_execute", query)
+
+
+@needs_redis
+async def test_sequential_slow_auth_setup_keeps_full_socket_cohort(client, make_user, broker, monkeypatch):
+    """Sixteen active sockets remain viable when each identity query is slow.
+
+    Each lookup holds the only pooled connection for 120ms. Serial setup makes every
+    handshake complete within the existing 1s checkout timeout; the cohort is still
+    concurrent for subscription, delivery and cleanup.
+    """
+    from app.db import get_engine
+    from app.main import create_app
+
+    user = await make_user()
+    engine = get_engine().sync_engine
+    assert engine.pool.checkedout() == 0
+    monkeypatch.setattr(gateway, "WS_SUSPENSION_POLL_SECONDS", .04)
+    monkeypatch.setattr(gateway, "WS_SUSPENSION_POLL_JITTER", 0)
+    original_lookup = gateway.get_user_by_uid
+
+    async def slow_lookup(session, uid):
+        result = await original_lookup(session, uid)
+        await asyncio.sleep(.12)
+        return result
+
+    monkeypatch.setattr(gateway, "get_user_by_uid", slow_lookup)
+    sockets = []
+    checkout_records = set()
+    max_checked_out = 0
+
+    def checkout(connection, record, proxy):
+        nonlocal max_checked_out
+        checkout_records.add(id(record))
+        max_checked_out = max(max_checked_out, len(checkout_records))
+
+    def checkin(connection, record):
+        checkout_records.discard(id(record))
+
+    event.listen(engine, "checkout", checkout)
+    event.listen(engine, "checkin", checkin)
+    try:
+        async with local_server(create_app()) as (base, server):
+            try:
+                started = time.monotonic()
+                await connect_cohort_sequential(sockets, 16, base, user.firebase_uid)
+                assert len(sockets) == 16
+                assert await own_channel_subscribers(broker, user.id) == 16
+                await pubsub.publish_to_user(user.id, {"type": "slow-auth-probe"})
+                deliveries = await asyncio.gather(*(asyncio.wait_for(socket.recv(), 3) for socket in sockets))
+                assert all(json.loads(delivery) == {"type": "slow-auth-probe"} for delivery in deliveries)
+                assert max_checked_out == 1
+                record_result({"case": "sequential_slow_auth_setup", "sockets": len(sockets),
+                    "lookup_hold_ms": 120, "setup_elapsed_ms": (time.monotonic() - started) * 1000,
+                    "max_db_checked_out": max_checked_out})
+            finally:
+                await asyncio.gather(*(socket.close() for socket in sockets), return_exceptions=True)
+                await no_own_subscribers(broker, user.id)
+    finally:
+        event.remove(engine, "checkout", checkout)
+        event.remove(engine, "checkin", checkin)
+    assert engine.pool.checkedout() == 0
+
+
+@needs_redis
+async def test_simultaneous_slow_auth_burst_reproduces_bounded_pool_rejections(client, make_user, broker, monkeypatch):
+    """Negative control: the old 16-way handshake burst exceeds a 1-connection pool."""
+    from app.db import get_engine
+    from app.main import create_app
+
+    user = await make_user()
+    engine = get_engine().sync_engine
+    assert engine.pool.checkedout() == 0
+    monkeypatch.setattr(gateway, "WS_SUSPENSION_POLL_SECONDS", 30)
+    monkeypatch.setattr(gateway, "WS_SUSPENSION_POLL_JITTER", 0)
+    original_lookup = gateway.get_user_by_uid
+    capacity_events = []
+    monkeypatch.setattr(gateway, "observe", lambda name: capacity_events.append(name))
+
+    async def slow_lookup(session, uid):
+        result = await original_lookup(session, uid)
+        await asyncio.sleep(.12)
+        return result
+
+    monkeypatch.setattr(gateway, "get_user_by_uid", slow_lookup)
+    sockets = []
+    checkout_records = set()
+    max_checked_out = 0
+
+    def checkout(connection, record, proxy):
+        nonlocal max_checked_out
+        checkout_records.add(id(record))
+        max_checked_out = max(max_checked_out, len(checkout_records))
+
+    def checkin(connection, record):
+        checkout_records.discard(id(record))
+
+    event.listen(engine, "checkout", checkout)
+    event.listen(engine, "checkin", checkin)
+    try:
+        async with local_server(create_app()) as (base, server):
+            try:
+                outcomes = await asyncio.gather(
+                    *(connected(base, user.firebase_uid) for _ in range(16)),
+                    return_exceptions=True,
+                )
+                sockets = [value for value in outcomes if not isinstance(value, BaseException)]
+                rejected = [value for value in outcomes if isinstance(value, InvalidStatus)]
+                unexpected = [value for value in outcomes if isinstance(value, BaseException) and not isinstance(value, InvalidStatus)]
+                assert not unexpected, f"unexpected handshake failures: {unexpected!r}"
+                assert sockets, "the bounded pool should still serve some handshakes"
+                assert rejected, "the delayed 16-way burst should exercise checkout timeout"
+                assert all(value.response.status_code == 403 for value in rejected)
+                assert "ws_connect_capacity_rejected" in capacity_events
+                assert engine.pool.checkedout() == 0
+                assert max_checked_out == 1
+                record_result({"case": "concurrent_slow_auth_negative_control", "connected": len(sockets),
+                    "rejected": len(rejected), "lookup_hold_ms": 120,
+                    "pool_timeout_seconds": 1, "max_db_checked_out": max_checked_out})
+            finally:
+                await asyncio.gather(*(socket.close() for socket in sockets), return_exceptions=True)
+                await no_own_subscribers(broker, user.id)
+    finally:
+        event.remove(engine, "checkout", checkout)
+        event.remove(engine, "checkin", checkin)
+    assert engine.pool.checkedout() == 0
+
+
+async def test_single_connection_checkout_timeout_is_observed_and_released(client, make_user, monkeypatch):
+    """Capacity rejection remains explicit when the sole checkout is genuinely held."""
+    from app.db import get_engine, get_session_factory
+    from app.main import create_app
+
+    user = await make_user()
+    engine = get_engine().sync_engine
+    assert engine.pool.checkedout() == 0
+    capacity_events = []
+    monkeypatch.setattr(gateway, "observe", lambda name: capacity_events.append(name))
+
+    async with get_session_factory()() as held_session:
+        await held_session.execute(text("SELECT 1"))
+        assert engine.pool.checkedout() == 1
+        async with local_server(create_app()) as (base, server):
+            with pytest.raises(InvalidStatus) as rejected:
+                await websockets.connect(
+                    base + "/ws", subprotocols=[user.firebase_uid],
+                    open_timeout=3, close_timeout=.2, proxy=None,
+                )
+            assert rejected.value.response.status_code == 403
+            assert "ws_connect_capacity_rejected" in capacity_events
+            assert engine.pool.checkedout() == 1
+    assert engine.pool.checkedout() == 0
 
 
 @needs_redis
