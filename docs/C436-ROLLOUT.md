@@ -57,7 +57,11 @@ by the request executor and makes no provider call by default. Its input is a
 bounded, caller-owned set of `chapter_stripe_customers` rows joined to the exact
 chapter connected account. It rejects malformed IDs, duplicate or foreign
 ownership, and active payment plans or in-flight payment intents before any
-Stripe call. A stable step key is accepted for the surrounding journal; Stripe
+Stripe call. The financial-review gate applies even when the account has no
+local Stripe customer mapping: an empty mapping does not resolve an active plan
+or an open, failed, or otherwise nonterminal payment intent. Settled and canceled
+intent history remains locally retained and is named in the cleanup receipt's
+retained coverage. A stable step key is accepted for the surrounding journal; Stripe
 customer deletion itself is retried only through exact readback.
 
 The adapter requires complete `Subscription.list(status=all)` results with no

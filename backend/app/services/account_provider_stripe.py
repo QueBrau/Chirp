@@ -60,7 +60,8 @@ async def load_customer_references(
 
     A missing connected account, malformed provider ID, duplicate provider
     customer across accounts, or over-cap result is a manual-review failure.
-    An empty owned mapping is valid and produces an explicit empty scope.
+    An empty owned mapping is valid only when the caller has no unresolved
+    financial obligations; it produces an explicit empty provider scope.
     """
     if isinstance(max_customers, bool) or not isinstance(max_customers, int) or not 0 < max_customers <= MAX_CUSTOMERS:
         raise ValueError("invalid_customer_cap")
@@ -101,24 +102,27 @@ async def load_customer_references(
         )).scalar_one_or_none()
         if foreign_mapping is not None:
             raise _invalid("stripe_customer_mapping_foreign_owner")
-        pending_plan = (await session.execute(
-            select(models.DuesPaymentPlan.id)
-            .where(models.DuesPaymentPlan.user_id == user_id, models.DuesPaymentPlan.status == "active")
-            .limit(1)
-        )).scalar_one_or_none()
-        pending_intent = (await session.execute(
-            select(models.DuesPaymentIntent.id)
-            .where(
-                models.DuesPaymentIntent.user_id == user_id,
-                or_(
-                    models.DuesPaymentIntent.status.not_in(("succeeded", "canceled")),
-                    models.DuesPaymentIntent.status.is_(None),
-                ),
-            )
-            .limit(1)
-        )).scalar_one_or_none()
-        if pending_plan is not None or pending_intent is not None:
-            raise _invalid("stripe_pending_financial_review_required")
+    # Financial obligations are independent of whether this account currently
+    # has a Stripe Customer mapping. An empty mapping is a valid provider scope
+    # only after the caller-owned plan/intent rows have also been ruled out.
+    pending_plan = (await session.execute(
+        select(models.DuesPaymentPlan.id)
+        .where(models.DuesPaymentPlan.user_id == user_id, models.DuesPaymentPlan.status == "active")
+        .limit(1)
+    )).scalar_one_or_none()
+    pending_intent = (await session.execute(
+        select(models.DuesPaymentIntent.id)
+        .where(
+            models.DuesPaymentIntent.user_id == user_id,
+            or_(
+                models.DuesPaymentIntent.status.not_in(("succeeded", "canceled")),
+                models.DuesPaymentIntent.status.is_(None),
+            ),
+        )
+        .limit(1)
+    )).scalar_one_or_none()
+    if pending_plan is not None or pending_intent is not None:
+        raise _invalid("stripe_pending_financial_review_required")
     return tuple(refs)
 
 
