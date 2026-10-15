@@ -48,6 +48,8 @@ _LOCAL_MAX_WINDOW_SECONDS: dict[str, float] = {}
 _LOCAL_RECENCY: OrderedDict[str, None] = OrderedDict()
 LOCAL_MAX_WINDOWS = 4096
 LOCAL_SWEEP_BATCH = 64
+# Rate limiting must not hold a request open while Redis is unavailable.
+REDIS_TIMEOUT_SECONDS = 0.5
 
 # Increment and repair expiry in one Redis operation. Redis `TTL` returns -1 when
 # the key exists without an expiry. A live expiry is left alone, so traffic cannot
@@ -193,7 +195,6 @@ async def allow(key: str, *, max_calls: int, window_seconds: float) -> bool:
 
     bucket = int(time.time() // window_seconds)
     redis_key = f"chirp:ratelimit:{key}:{bucket}"
-    timeout = 0.5
     started_epoch = _fallback_epoch
     try:
         from app.ws.pubsub import get_redis
@@ -207,7 +208,7 @@ async def allow(key: str, *, max_calls: int, window_seconds: float) -> bool:
                     redis_key,
                     max(1, math.ceil(window_seconds)),
                 ),
-                timeout=timeout,
+                timeout=REDIS_TIMEOUT_SECONDS,
             )
         )
         if started_epoch is not None and started_epoch is _fallback_epoch:
