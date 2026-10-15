@@ -68,6 +68,8 @@ async def test_fallback_then_success_has_structured_observations(monkeypatch, ca
             if self.down:
                 raise ConnectionError("redis://private-user:private-password@example")
             return 2
+        async def eval(self, script, numkeys, key, expiry_seconds):
+            return await self.incr(key)
     redis = Redis()
     monkeypatch.setattr(pubsub, "get_redis", lambda: redis)
     with caplog.at_level(logging.INFO):
@@ -96,6 +98,8 @@ async def test_in_flight_success_cannot_recover_a_newer_failure(monkeypatch, cap
                 started.set()
                 await release.wait()
             return 2
+        async def eval(self, script, numkeys, key, expiry_seconds):
+            return await self.incr(key)
     redis = Redis()
     monkeypatch.setattr(pubsub, "get_redis", lambda: redis)
     async def call():
@@ -135,6 +139,8 @@ async def test_later_failure_overrides_a_completed_success_observation(monkeypat
             if mode != "ok":
                 raise ConnectionError("private-error")
             return 2
+        async def eval(self, script, numkeys, key, expiry_seconds):
+            return await self.incr(key)
     redis = Redis()
     monkeypatch.setattr(pubsub, "get_redis", lambda: redis)
     async def call():
@@ -168,8 +174,14 @@ async def test_expiry_failure_and_redis_budget_denial_are_observed_correctly(mon
     monkeypatch.setattr(config, "get_settings", lambda: Settings(_env_file=None, env="production"))
     class Redis:
         count = 1
+        fail_expiry = True
         async def incr(self, key): return self.count
-        async def expire(self, key, seconds): raise TimeoutError("private-expiry")
+        async def eval(self, script, numkeys, key, expiry_seconds):
+            await self.incr(key)
+            if self.fail_expiry:
+                self.fail_expiry = False
+                raise TimeoutError("private-expiry")
+            return self.count
     redis = Redis()
     monkeypatch.setattr(pubsub, "get_redis", lambda: redis)
     with caplog.at_level(logging.INFO):
@@ -186,7 +198,7 @@ async def test_cancellation_is_not_a_health_observation(monkeypatch, caplog):
 
     monkeypatch.setattr(config, "get_settings", lambda: Settings(_env_file=None, env="production"))
     class Redis:
-        async def incr(self, key): raise asyncio.CancelledError()
+        async def eval(self, *args): raise asyncio.CancelledError()
     monkeypatch.setattr(pubsub, "get_redis", Redis)
     with pytest.raises(asyncio.CancelledError):
         await rate_limit.allow("scope:subject", max_calls=1, window_seconds=60)
