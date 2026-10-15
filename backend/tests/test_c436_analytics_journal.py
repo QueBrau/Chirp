@@ -1,5 +1,8 @@
 """Real PostgreSQL journal wiring test for the injected analytics provider."""
+
 from __future__ import annotations
+
+from tests.c436_executor_helpers import activate_executor_hold
 import json
 import time, uuid
 from collections.abc import Awaitable, Callable
@@ -91,6 +94,7 @@ async def test_actual_analytics_provider_is_journaled_with_exact_request_key(
     async with get_session_factory()() as session:
         user = await session.get(models.User, user_id)
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         result = await run_deletion(session, request_id, user, providers)
         assert result.status == "blocked" and result.failed_step == "analytics"
         step = await session.scalar(
@@ -261,6 +265,7 @@ async def test_successful_actual_analytics_receipt_survives_reload(client, make_
     async with get_session_factory()() as session:
         user = await session.get(models.User, user_id)
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         result = await run_deletion(session, request_id, user, providers)
         failed = await session.scalar(
             select(models.AccountFulfillmentStep).where(
@@ -331,6 +336,7 @@ async def test_missing_analytics_adapter_calls_no_other_provider(
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         result = await run_deletion(session, request_id, user, providers)
     assert result.status == "blocked" and result.failed_step == "analytics"
     assert calls == []
@@ -367,6 +373,7 @@ async def test_legacy_five_step_plan_grows_then_blocks_before_provider_calls(
             provider.keys = calls
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         result = await run_deletion(session, request_id, user, providers)
         await session.refresh(request)
         assert result.status == "blocked" and result.failed_step == "analytics"
@@ -406,6 +413,7 @@ async def test_analytics_receipt_is_reused_while_uncertain_firebase_stays_blocke
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         first = await run_deletion(session, request_id, user, providers)
         assert first.status == "blocked" and analytics.keys
         first_count = len(analytics.keys)
@@ -536,6 +544,7 @@ async def test_foreign_analytics_receipt_during_firebase_blocks_tombstone(
         assert user is not None
         providers = {key: ConfirmingProvider(key) for key in PROVIDER_STEPS}
         providers["firebase_auth"] = TamperingFirebase(session)
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         result = await run_deletion(session, request_id, user, providers)
         await session.refresh(user)
         assert result.status == "blocked" and result.failed_step == "analytics"

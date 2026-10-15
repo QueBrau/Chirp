@@ -34,13 +34,13 @@ def _redis_reachable() -> bool:
 needs_redis = pytest.mark.skipif(not _redis_reachable(), reason="local Redis required for c460 shared-bucket tests")
 
 
-async def _stable_bucket(window: int) -> int:
+async def _stable_bucket(window: int, *, minimum_remaining: float = 2) -> int:
     """Start with enough time before rollover for one bounded Redis assertion."""
     while True:
         now = time.time()
         bucket = int(now // window)
         remaining = (bucket + 1) * window - now
-        if remaining > 2:
+        if remaining > minimum_remaining:
             return bucket
         await asyncio.sleep(remaining + .05)
 
@@ -72,10 +72,19 @@ async def redis_backend(monkeypatch):
 
 
 @needs_redis
-async def test_real_redis_counter_is_atomic_and_expiry_does_not_slide(redis_backend):
+async def test_real_redis_counter_is_atomic_and_expiry_does_not_slide(redis_backend, monkeypatch):
     redis, prefix = redis_backend
     key = f"{prefix}:atomic"
-    bucket = await _stable_bucket(60)
+    # This proves Redis atomicity, independently of the short production deadline
+    # tested below. Cold concurrent connections on a busy runner must not mix in
+    # the separate local budget and turn that into a false atomicity failure.
+    monkeypatch.setattr(rate_limit, "REDIS_TIMEOUT_SECONDS", 5.0)
+
+    def forbid_fallback(*args, **kwargs):
+        pytest.fail("Redis atomicity proof must not use the local fallback")
+
+    monkeypatch.setattr(rate_limit, "_allow_local", forbid_fallback)
+    bucket = await _stable_bucket(60, minimum_remaining=10)
     calls = await asyncio.gather(*(
         rate_limit.allow(key, max_calls=7, window_seconds=60) for _ in range(24)
     ))
@@ -138,6 +147,7 @@ async def test_redis_timeout_uses_fallback_within_the_existing_short_budget(monk
     import app.config as config
     import app.ws.pubsub as pubsub
 
+    assert rate_limit.REDIS_TIMEOUT_SECONDS == 0.5
     monkeypatch.setattr(config, "get_settings", lambda: Settings(_env_file=None, env="production"))
 
     class StalledRedis:
