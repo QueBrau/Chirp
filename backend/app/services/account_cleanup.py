@@ -12,6 +12,7 @@ RETENTION_REASONS = {
     "financial_history": "append-only ledger and payment history remains for accounting and disputes",
     "safety_legal": "reports, moderation, legal acceptance, and safety records remain for audit and holds",
     "message_history": "encrypted message history remains for other participants; server cannot decrypt it",
+    "deletion_control": "minimal operational records remain to prevent incomplete or repeated account deletion",
     "provider_retention": "provider, backup, log, and unresolved media retention requires provider confirmation",
 }
 PRIVATE_COVERAGE = ("alumni_profiles", "campus_verifications", "account_data_artifacts", "job_posts", "post_likes", "chirp_votes", "poll_votes", "house_ballots", "own_user_blocks", "conversation_memberships_left", "signed_prekeys", "one_time_prekeys", "kyber_prekeys", "devices_revoke")
@@ -20,6 +21,7 @@ RETAINED_COVERAGE = (
     "dues_plan_installments", "chapter_stripe_customers", "legal_acceptances",
     "organization_authority_acceptances", "moderation_actions", "content_reports",
     "messages_and_conversation_history", "incoming_user_blocks", "provider_backups_logs",
+    "account_external_operations", "account_external_operation_scopes",
 )
 
 
