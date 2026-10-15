@@ -1,6 +1,9 @@
 """Dormant Stripe customer adapter tests; no Stripe network calls."""
+
 from __future__ import annotations
 
+
+from tests.c436_executor_helpers import activate_executor_hold
 import asyncio
 import uuid
 from types import SimpleNamespace
@@ -386,6 +389,7 @@ async def test_real_stripe_adapter_receipt_reaches_durable_fulfillment_result(cl
     providers["payment_provider"] = provider(owner, customer)
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         result = await run_deletion(session, request_id, user, providers)
         assert result.status == "completed"
     async with get_session_factory()() as observer:

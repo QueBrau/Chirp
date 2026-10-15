@@ -2,8 +2,12 @@
 
 This migration adds `account_deletion_holds` and the transaction-scoped primitive
 in `backend/app/services/account_deletion_hold.py`. The HTTP enrollment below
-is disabled by default. WebSocket, outbox, and deletion-executor paths are not yet
-enrolled. The primitive and partial enrollment do not freeze the product.
+is disabled by default. WebSocket and outbox paths remain outside HTTP enrollment.
+The deletion executor now requires the exact active hold and a drained operation
+registry before nonterminal work and again before local cleanup/tombstoning.
+No production caller or activation workflow is wired, and this gate does not prove
+complete producer coverage. The primitive and partial enrollment do not freeze the
+product.
 
 `activate_deletion_hold()` takes the per-user PostgreSQL transaction advisory lock
 exclusively, refreshes the user and deletion-request columns under row locks, and
@@ -18,8 +22,20 @@ session guard below so each new transaction checks admission automatically.
 That call acquires the same per-user advisory lock in shared mode and performs a
 fresh active-hold query. It must be the first database operation in the transaction;
 pending ORM changes are rejected. The lock remains until the caller commits or rolls
-back. Deletion's internal journal and final cleanup will need a separately reviewed
-hold-owner path; ordinary routes must never bypass the admission check.
+back. The deletion executor is an internal hold owner: it checks the exact active
+user/request hold and registered-operation drain before provider work, then repeats
+the hold/drain check under the exclusive gate held through the tombstone commit.
+Ordinary routes must never bypass the admission check.
+
+`run_deletion()` requires a dedicated executor-owned `READ COMMITTED` session
+with only prior unlocked reads. It rejects pending ORM changes and an unsupported
+isolation level before provider calls, but cannot detect earlier flushed/raw-SQL
+writes or pre-acquired locks. The caller must satisfy that session contract.
+The initial hold/drain check precedes request-row locking. Final cleanup takes the
+exclusive advisory gate, then the user and request row locks, and retains the gate
+through commit; reused provider receipts commit their previous request fence first.
+Validated completed requests remain read-only and do not require a new hold.
+The executor never activates or releases a hold.
 
 `activate_deletion_hold()` is also a first-operation API. A transaction that already
 holds a shared admission lock cannot upgrade to the exclusive activation lock; it
@@ -372,8 +388,9 @@ under an exclusive account gate and reports running/uncertain counts for that
 account. Its `registered_operations_drained` value describes this registry only;
 it does not attest complete producer enrollment or trigger cleanup. Signed PUT
 capabilities can remain usable after issuance and are explicitly not covered by
-finalizer completion. Delivery, payment, analytics ingestion, bootstrap,
-WebSocket access and executor integration remain separate requirements.
+finalizer completion. Delivery, payment, analytics ingestion, bootstrap, WebSocket
+access and production runner/activation wiring remain separate requirements. The
+executor's journal count only covers registrations already present in that registry.
 
 ## Campus verification email operations (migration 0046)
 
@@ -404,7 +421,7 @@ still uses the guarded request session; a hold can refuse that later write.
 
 With the flag disabled, email follows the original path and does not query the
 registry. This slice does not send a real email or enable deletion. Provider-side
-delivery, retention/readback and the remaining producer/executor work still need
+delivery and retention/readback, plus the remaining producer work, still need
 separate acceptance.
 
 ## Remaining rollout gates
@@ -422,7 +439,7 @@ need sorted admission keys before row locks; consuming key requests and the enro
 conversation/message writes, membership updates, lineage creation/replacement and
 unsuspension bind multiple accounts. Event invitations use filtered multi-account
 admission without weakening the other routes' strict target holds.
-Drain in-flight uploads, exports, provider calls and analytics ingestion
-and review the executor's hold-owner path. SQL admission alone proves none of
-those external boundaries. No production migration, grants, enablement or deletion
-is authorized by this source change.
+Drain in-flight uploads, exports, provider calls and analytics ingestion. SQL
+admission and the executor's registry count prove none of the uncovered external
+boundaries. No production migration, grants, enablement or deletion is authorized
+by this source change.

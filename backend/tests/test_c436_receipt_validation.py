@@ -1,5 +1,8 @@
 """Durable provider receipts must still authorize the same account on resume."""
 
+
+
+from tests.c436_executor_helpers import activate_executor_hold
 import uuid
 from datetime import date, timedelta
 from collections.abc import Awaitable, Callable
@@ -28,6 +31,7 @@ async def test_invalid_resumed_receipt_blocks_all_later_work(
     providers["media_storage"] = FailOnceProvider("media_storage")
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         assert (await run_deletion(session, request_id, user, providers)).status == "blocked"
     async with get_session_factory()() as session:
         step = (await session.scalars(select(models.AccountFulfillmentStep).where(
@@ -95,6 +99,7 @@ async def test_changed_durable_receipt_blocks_final_cleanup(
     providers[PROVIDER_STEPS[-1]] = JournalChangingProvider(PROVIDER_STEPS[-1])
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         result = await run_deletion(session, request_id, user, providers)
         assert result.status == "blocked"
         assert result.failed_step == (None if damage.startswith("missing_") else "payment_provider")

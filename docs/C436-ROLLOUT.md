@@ -144,14 +144,15 @@ privacy authorization rules; intake still cannot activate a hold or run cleanup.
 
 Unlisted writers still require review, including payment/webhook paths and
 upload capabilities. Avatar/feed finalizers are registered and awaited as described
-below; their caller SQL still requires fresh admission. Campus verification
-delivery and analytics emission still need external fencing/drain.
-Bootstrap identity recreation also needs its provider-boundary review.
-WebSocket, outbox and executor paths are not enrolled. A complete release must
-enroll every writer and drain provider
-operations, uploads, exports and analytics ingestion
-before an operator uses provider cleanup. This source change does not establish
-that quiescence or authorize running the migration or deletion in production.
+below; their caller SQL still requires fresh admission. Campus verification sends
+are registered, but provider-side queued delivery and retention are not drained;
+analytics emission still needs external fencing/drain. Bootstrap identity
+recreation also needs its provider-boundary review. WebSocket, outbox and analytics-
+ingestion paths remain un-enrolled, and no production caller or activation/run
+workflow is wired. A complete release must enroll every writer and drain provider
+operations, uploads, exports and analytics ingestion before an operator uses
+provider cleanup. The executor gate is necessary but does not establish that
+quiescence or authorize running the migration or deletion in production.
 
 The journal now requires five providers, including account-linked analytics,
 and a sixth local tombstone step. Successful analytics receipts preserve the
@@ -180,8 +181,10 @@ Before using this registry for deletion, integrate all external producers, drain
 signed-upload capabilities, and take the immutable media snapshot after drain.
 Review a provider-readback recovery path for ambiguous records, including failure
 before a remote write. Local registered-work counts alone cannot attest complete
-quiescence. The deletion executor still needs to require the matching active hold
-and complete producer coverage before any provider cleanup or local tombstone.
+quiescence. The executor now requires the matching active hold and a zero count of
+running/uncertain registered operations before provider cleanup and again before
+the local tombstone. This necessary gate does not establish complete producer
+coverage or prove that an issued signed upload capability has stopped working.
 
 ## Verification-email registration (migration 0046)
 
@@ -200,5 +203,7 @@ acceptance is not proof of inbox delivery or provider-side retention expiry.
 
 The same default-off flag preserves the deployed email path without registry
 queries. No real email, production migration, permission change or deletion is
-included. The executor and all other producer/ingestion boundaries still require
-integration before a complete deletion can be accepted.
+included. The executor enforces its hold and registry-count prerequisite when
+called, but no production caller or activation workflow is wired. Other
+producer/ingestion boundaries still require integration before a complete deletion
+can be accepted.

@@ -1,6 +1,9 @@
 """Firebase worker cancellation stays inside the deletion lease boundary."""
+
 from __future__ import annotations
 
+
+from tests.c436_executor_helpers import activate_executor_hold
 import asyncio
 import threading
 import uuid
@@ -181,6 +184,7 @@ async def test_real_deletion_lease_remains_until_firebase_worker_drains(
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         task = asyncio.create_task(run_deletion(session, request_id, user, providers))
         try:
             assert await asyncio.to_thread(started.wait, 5)
@@ -258,6 +262,7 @@ async def test_expired_firebase_attempt_is_manual_review_and_never_reinvoked(
         async with get_session_factory()() as first:
             user = await first.get(models.User, uuid.UUID(owner.id))
             assert user is not None
+            await activate_executor_hold(user_id=user.id, request_id=request_id)
             first_task = asyncio.create_task(run_deletion(first, request_id, user, providers))
             assert await asyncio.to_thread(started.wait, 5)
             async with get_session_factory()() as expire:

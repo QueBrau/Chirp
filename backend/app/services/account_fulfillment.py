@@ -12,11 +12,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.db import get_session_factory
 from app.services.account_cleanup import cleanup_local_account
+from app.services.account_deletion_hold import DeletionHoldInvalid, _lock_exclusive
+from app.services.account_external_operations import inspect_registered_operation_drain
 
 PROVIDER_STEPS = ("payment_provider", "media_storage", "email_logs_backups", "analytics", "firebase_auth")
 # Shared with deletion preflight: these markers mean an external call may have
@@ -244,6 +247,55 @@ async def prepare_deletion_plan(session: AsyncSession, request: models.AccountDa
     return sorted(steps, key=lambda step: step.step_key)
 
 
+async def _executor_admission_blocker(
+    user_id: uuid.UUID, request_id: uuid.UUID,
+) -> str | None:
+    """Require the exact committed hold and a drained registered-operation set."""
+    try:
+        drain = await inspect_registered_operation_drain(
+            user_id=user_id, request_id=request_id,
+        )
+    except DeletionHoldInvalid:
+        return "deletion_admission"
+    if not drain.registered_operations_drained:
+        return "registered_external_operations"
+    return None
+
+
+async def _lock_executor_finalization(session: AsyncSession, user_id: uuid.UUID,
+                                     request_id: uuid.UUID) -> bool:
+    """Take final locks in the same order as hold activation and recheck drain.
+
+    This exclusive gate must be the first SQL action in the final transaction.
+    It prevents an idempotent concurrent hold activation from locking the user
+    while this runner already owns the request row, and keeps new registrations
+    out until the tombstone commit.
+    """
+    await _lock_exclusive(session, user_id)
+    active_hold = await session.scalar(
+        select(models.AccountDeletionHold.id).where(
+            models.AccountDeletionHold.user_id == user_id,
+            models.AccountDeletionHold.request_id == request_id,
+            models.AccountDeletionHold.state == "active",
+        )
+    )
+    if active_hold is None:
+        return False
+    running = await session.scalar(
+        select(func.count(models.AccountExternalOperation.id))
+        .join(
+            models.AccountExternalOperationScope,
+            models.AccountExternalOperationScope.operation_id
+            == models.AccountExternalOperation.id,
+        )
+        .where(
+            models.AccountExternalOperationScope.user_id == user_id,
+            models.AccountExternalOperation.state.in_(("running", "uncertain")),
+        )
+    )
+    return running == 0
+
+
 async def run_deletion(
     session: AsyncSession,
     request_id: uuid.UUID,
@@ -252,15 +304,60 @@ async def run_deletion(
 ) -> DeletionRun:
     """Run injected provider steps, then retain shared rows and tombstone identity.
 
+    Every nonterminal run requires the exact active account-deletion hold and a
+    drained registered-operation journal before any plan, provider call, or cleanup.
     Each provider step is committed before and after its external call. A missing
     adapter, exception, or ambiguous result leaves the account and remaining steps
-    intact for retry/manual review.
+    intact for retry/manual review. Callers must not enter with pending ORM changes
+    or hold request/user row locks; the executor owns its commit/lock ordering.
+    Callers must provide a dedicated executor-owned READ COMMITTED session with
+    only prior unlocked reads: flushed/raw-SQL writes and any pre-acquired row or
+    advisory lock cannot be detected reliably here.
     """
+    # Do not let a query autoflush caller changes before the hold/drain gate. This
+    # executor owns commits across irreversible provider calls, so a dirty session
+    # cannot be safely accepted or silently committed/rolled back here.
+    if session.new or session.dirty or session.deleted:
+        return DeletionRun("blocked", (), "executor_session_not_clean")
+    try:
+        isolation = await session.scalar(text("SELECT current_setting('transaction_isolation')"))
+    except Exception:
+        await session.rollback()
+        return DeletionRun("blocked", (), "executor_session_unavailable")
+    if isolation != "read committed":
+        await session.rollback()
+        return DeletionRun("blocked", (), "executor_isolation_invalid")
+
+    # Use a fresh, unlocked identity/status peek to preserve valid terminal history
+    # without requiring a new hold for old completed requests. Nonterminal execution
+    # acquires the hold/drain gate before this session takes any request row lock.
+    async with get_session_factory()() as probe:
+        hint = (await probe.execute(
+            select(
+                models.AccountDataRequest.user_id,
+                models.AccountDataRequest.kind,
+                models.AccountDataRequest.status,
+            ).where(models.AccountDataRequest.id == request_id)
+        )).one_or_none()
+    if hint is None or hint.user_id != user.id or hint.kind != "deletion":
+        raise LookupError("deletion_request_not_found")
+    terminal_hint = hint.status in {"completed", "canceled", "failed"}
+    if not terminal_hint:
+        blocker = await _executor_admission_blocker(user.id, request_id)
+        if blocker is not None:
+            await session.rollback()
+            return DeletionRun("blocked", (), blocker)
+
     request = await session.get(
         models.AccountDataRequest, request_id, with_for_update=True, populate_existing=True,
     )
     if request is None or request.user_id != user.id or request.kind != "deletion":
         raise LookupError("deletion_request_not_found")
+    if terminal_hint and request.status not in {"completed", "canceled", "failed"}:
+        # A terminal request should not be reopened between the unlocked peek and
+        # row lock. Restarting would require acquiring the hold gate before locking.
+        await session.rollback()
+        return DeletionRun("blocked", (), "deletion_request_state_changed")
     if request.status == "completed":
         durable = list((await session.scalars(select(models.AccountFulfillmentStep).where(
             models.AccountFulfillmentStep.request_id == request.id)
@@ -297,6 +394,7 @@ async def run_deletion(
             return DeletionRun("blocked", (), "analytics")
         return DeletionRun("completed", tuple(PROVIDER_STEPS) + ("database_tombstone",))
     if request.status in {"canceled", "failed"}:
+        await session.rollback()
         return DeletionRun("blocked", (), None)
     steps = await prepare_deletion_plan(session, request)
     missing = [key for key in PROVIDER_STEPS if key not in providers or isinstance(providers[key], UnconfiguredProvider)]
@@ -359,6 +457,10 @@ async def run_deletion(
                 await session.commit()
                 return DeletionRun("blocked", tuple(completed), step_key)
             completed.append(step_key)
+            # Release the request-fence row lock before the next phase. In
+            # particular, the last reused receipt must leave a fresh transaction
+            # for the final exclusive gate, whose first SQL must precede row locks.
+            await session.commit()
             continue
         if provider_attempt_may_have_started(step):
             # An attempted provider operation without a validated durable
@@ -465,10 +567,34 @@ async def run_deletion(
         await session.commit()
     # Reacquire the request fence before local mutation. A concurrent runner or
     # stale lease cannot clean up after the request has become terminal.
+    # All provider receipts are committed, but local cleanup/tombstoning is still
+    # destructive. Match hold activation's order: exclusive advisory gate, user
+    # row, request row. Holding the gate through commit also excludes new admitted
+    # operations while the identity transition is finalized.
+    if session.new or session.dirty or session.deleted:
+        await session.rollback()
+        return DeletionRun("blocked", tuple(completed), "executor_session_not_clean")
+    try:
+        final_admitted = await _lock_executor_finalization(session, user.id, request.id)
+    except DeletionHoldInvalid:
+        await session.rollback()
+        return DeletionRun("blocked", tuple(completed), "deletion_admission")
+    if not final_admitted:
+        await session.rollback()
+        return DeletionRun("blocked", tuple(completed), "registered_external_operations")
+    locked_user = (await session.scalars(
+        select(models.User).where(models.User.id == user.id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).one_or_none()
+    if locked_user is None:
+        await session.rollback()
+        return DeletionRun("blocked", tuple(completed), "deletion_user_missing")
+    user = locked_user
     request = (await session.scalars(select(models.AccountDataRequest).where(
         models.AccountDataRequest.id == request_id,
     ).execution_options(populate_existing=True).with_for_update())).one_or_none()
     if request is None or request.status != "processing" or request.user_id != user.id or request.fulfillment_lease_token != request_lease or request.fulfillment_lease_expires_at is None or request.fulfillment_lease_expires_at <= _now():
+        await session.rollback()
         return DeletionRun("blocked", tuple(completed), None)
     durable_steps = list((await session.scalars(select(models.AccountFulfillmentStep).where(
         models.AccountFulfillmentStep.request_id == request.id,

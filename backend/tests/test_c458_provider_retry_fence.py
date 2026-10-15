@@ -1,6 +1,9 @@
 """Two-runner retry fencing for account-deletion provider calls."""
+
 from __future__ import annotations
 
+
+from tests.c436_executor_helpers import activate_executor_hold
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -103,6 +106,7 @@ async def test_expired_running_provider_step_is_quarantined_across_runners(
         async with first_session:
             first_user = await first_session.get(models.User, uuid.UUID(owner.id))
             assert first_user is not None
+            await activate_executor_hold(user_id=first_user.id, request_id=request_id)
             first_task = asyncio.create_task(
                 run_deletion(first_session, request_id, first_user, providers)
             )
@@ -219,6 +223,7 @@ async def test_canceled_provider_call_stays_running_then_retry_quarantines_witho
         async with get_session_factory()() as first:
             user = await first.get(models.User, uuid.UUID(owner.id))
             assert user is not None
+            await activate_executor_hold(user_id=user.id, request_id=request_id)
             first_task = asyncio.create_task(run_deletion(first, request_id, user, providers))
             await asyncio.wait_for(gate.first_started.wait(), timeout=5)
             first_task.cancel()
@@ -284,6 +289,7 @@ async def test_unknown_exception_is_quarantined_and_valid_prefix_receipt_is_reus
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         first = await run_deletion(session, request_id, user, providers)
         second = await run_deletion(session, request_id, user, providers)
     assert first.status == second.status == "blocked"
@@ -315,6 +321,7 @@ async def test_invalid_provider_receipt_is_quarantined_and_not_reinvoked(client,
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         first = await run_deletion(session, request_id, user, providers)
         second = await run_deletion(session, request_id, user, providers)
     assert first.status == second.status == "blocked"
@@ -337,6 +344,7 @@ async def test_missing_provider_pending_plan_stays_resumable(client, make_user):
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         missing = await run_deletion(session, request_id, user, {})
         pending = (await session.scalars(select(models.AccountFulfillmentStep).where(
             models.AccountFulfillmentStep.request_id == request_id,
@@ -371,6 +379,7 @@ async def test_legacy_attempted_nonterminal_step_is_quarantined(client, make_use
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         result = await run_deletion(session, request_id, user, providers)
     assert result.status == "blocked"
     assert providers["email_logs_backups"].calls == 0
@@ -439,6 +448,7 @@ async def test_count_zero_or_malformed_legacy_state_is_never_replayed(
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         first = await run_deletion(session, request_id, user, providers)
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
@@ -505,6 +515,7 @@ async def test_valid_succeeded_receipt_with_unknown_fence_cannot_authorize_next_
         async with get_session_factory()() as session:
             user = await session.get(models.User, uuid.UUID(owner.id))
             assert user is not None
+            await activate_executor_hold(user_id=user.id, request_id=request_id)
             results.append(await run_deletion(session, request_id, user, providers))
     assert [result.status for result in results] == ["blocked", "blocked"]
     assert all(provider.calls == 0 for provider in providers.values())
@@ -535,6 +546,7 @@ async def test_completed_request_with_later_unknown_marker_stays_historical_and_
     async with get_session_factory()() as session:
         user = await session.get(models.User, uuid.UUID(owner.id))
         assert user is not None
+        await activate_executor_hold(user_id=user.id, request_id=request_id)
         completed = await run_deletion(session, request_id, user, providers)
     assert completed.status == "completed"
     assert all(provider.calls == 1 for provider in providers.values())

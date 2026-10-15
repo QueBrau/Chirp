@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy import update
 
 from tests.conftest import ApiUser
+from tests.c436_executor_helpers import activate_executor_hold
 from app import models
 from app.db import get_session_factory
 from app.services.account_fulfillment import OUTCOME_UNKNOWN_ERRORS, PROVIDER_RETENTION_REASONS, FirebaseProvider, PROVIDER_STEPS, run_deletion
@@ -82,6 +83,9 @@ async def test_deletion_journal_blocks_without_adapters_then_retries_idempotentl
     created = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
     assert created.status_code == 201, created.text
     body = created.json()
+    await activate_executor_hold(
+        user_id=uuid.UUID(owner.id), request_id=uuid.UUID(body["id"]),
+    )
     assert body["status"] == "blocked"
     assert set(body["provider_steps"]) == set((*PROVIDER_STEPS, "database_tombstone"))
 
@@ -123,6 +127,7 @@ async def test_retention_receipts_survive_but_ambiguous_provider_step_is_not_rep
     owner: ApiUser = await make_user("Retention receipt owner")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
     request_id = uuid.UUID(response.json()["id"])
+    await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=request_id)
     providers = provider_set()
     providers[PROVIDER_STEPS[0]] = ConfirmingProvider(PROVIDER_STEPS[0], ["stripe_deleted_customer_history"])
     providers[PROVIDER_STEPS[1]] = FailOnceProvider(PROVIDER_STEPS[1])
@@ -162,6 +167,7 @@ async def test_retention_receipts_survive_but_ambiguous_provider_step_is_not_rep
 async def test_provider_retention_receipt_is_disclosed_only_when_returned(client: AsyncClient, make_user) -> None:
     owner: ApiUser = await make_user("No retention receipt")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=uuid.UUID(response.json()["id"]))
     async with get_session_factory()() as session:
         request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
         user = await session.get(models.User, uuid.UUID(owner.id))
@@ -176,6 +182,7 @@ async def test_provider_retention_receipt_is_disclosed_only_when_returned(client
 async def test_provider_retention_receipt_cannot_cross_step_allowlist(client: AsyncClient, make_user) -> None:
     owner: ApiUser = await make_user("Cross-step retention receipt")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=uuid.UUID(response.json()["id"]))
     async with get_session_factory()() as session:
         request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
         user = await session.get(models.User, uuid.UUID(owner.id))
@@ -201,6 +208,7 @@ async def test_durable_invalid_retention_receipt_blocks_before_local_cleanup(cli
     owner: ApiUser = await make_user("Durable invalid retention receipt")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
     request_id = uuid.UUID(response.json()["id"])
+    await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=request_id)
     providers = provider_set()
     providers["payment_provider"] = ConfirmingProvider(
         "payment_provider", ["stripe_deleted_customer_history"]
@@ -244,6 +252,7 @@ async def test_durable_invalid_retention_receipt_blocks_before_local_cleanup(cli
 async def test_invalid_retention_receipts_fail_closed_without_persisting_details(client: AsyncClient, make_user, retained) -> None:
     owner: ApiUser = await make_user("Invalid retention receipt")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=uuid.UUID(response.json()["id"]))
     async with get_session_factory()() as session:
         request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
         user = await session.get(models.User, uuid.UUID(owner.id))
@@ -266,6 +275,7 @@ async def test_invalid_retention_receipts_fail_closed_without_persisting_details
 async def test_missing_adapters_are_preflighted_without_provider_calls(client: AsyncClient, make_user) -> None:
     owner: ApiUser = await make_user("Preflight owner")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=uuid.UUID(response.json()["id"]))
     async with get_session_factory()() as session:
         request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
         user = await session.get(models.User, uuid.UUID(owner.id))
@@ -280,6 +290,7 @@ async def test_missing_adapters_are_preflighted_without_provider_calls(client: A
 async def test_ambiguous_failed_prefix_is_quarantined_without_replaying_any_provider(client: AsyncClient, make_user) -> None:
     owner: ApiUser = await make_user("Retry owner")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
+    await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=uuid.UUID(response.json()["id"]))
     async with get_session_factory()() as session:
         request = await session.get(models.AccountDataRequest, uuid.UUID(response.json()["id"]))
         user = await session.get(models.User, uuid.UUID(owner.id))
@@ -436,6 +447,7 @@ async def test_two_sessions_have_one_provider_owner(client: AsyncClient, make_us
     owner: ApiUser = await make_user("Race owner")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
     request_id = uuid.UUID(response.json()["id"])
+    await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=request_id)
     gate = GatedProvider()
     providers = provider_set()
     providers[PROVIDER_STEPS[0]] = gate
@@ -458,6 +470,7 @@ async def test_cancellation_during_provider_call_cannot_tombstone(client: AsyncC
     owner: ApiUser = await make_user("Cancellation owner")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
     request_id = uuid.UUID(response.json()["id"])
+    await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=request_id)
     gate = GatedProvider(PROVIDER_STEPS[0])
     providers = provider_set()
     providers[PROVIDER_STEPS[0]] = gate
@@ -482,6 +495,7 @@ async def test_expired_lease_cannot_be_overwritten_by_stale_owner(client: AsyncC
     owner: ApiUser = await make_user("Lease owner")
     response = await client.post("/me/data-requests", json={"kind": "deletion"}, headers=owner.headers)
     request_id = uuid.UUID(response.json()["id"])
+    await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=request_id)
     async with get_session_factory()() as session:
         step = (await session.scalars(select(models.AccountFulfillmentStep).where(
             models.AccountFulfillmentStep.request_id == request_id,
