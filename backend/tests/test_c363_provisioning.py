@@ -9,6 +9,7 @@ import uuid
 
 import pytest
 from sqlalchemy import delete, select, update
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from loadtest import provisioning
@@ -123,6 +124,39 @@ def test_firebase_rest_creator_is_single_attempt_and_uid_bound() -> None:
                             display_name="Synthetic", project_id="chirps-prod")
     assert len(session.calls) == 1
     assert session.calls[0][1]["allow_redirects"] is False
+
+
+def test_refresh_updates_bound_harness_manifest(tmp_path: Path) -> None:
+    p = plan(1)
+    user = provisioning.users_for_plan(p)[0]
+    manifest = {
+        "kind": "c363_synthetic_firebase_manifest", "status": "COMPLETE",
+        "fixture_provenance": "synthetic_only", "plan_digest": p.plan_digest,
+        "campus_id": OWNERSHIP["campus_id"], "chapter_id": OWNERSHIP["chapter_id"],
+        "users": [{"uid": user.uid, "email": user.email, "user_id": str(uuid.uuid4()),
+                   "id_token": "old", "expires_at": "old"}],
+    }
+    credentials = [{"uid": user.uid, "email": user.email, "user_id": manifest["users"][0]["user_id"],
+                    "password": "private", "refresh_token": "refresh", "status": "bootstrapped"}]
+    manifest_path, credentials_path = tmp_path / "manifest.json", tmp_path / "credentials.json"
+    provisioning._atomic_private_json(manifest_path, manifest)
+    provisioning._atomic_private_json(credentials_path, {"schema_version": 1, "project_id": "chirps-prod",
+                                                          "plan_digest": p.plan_digest, "credentials": credentials})
+
+    def refresh(value: str):
+        assert value == "refresh"
+        return {"id_token": "fresh", "user_id": user.uid, "expires_in": 3600,
+                "refresh_token": "rotated"}
+
+    def verify(value: str):
+        assert value == "fresh"
+        return {"uid": user.uid, "aud": "chirps-prod", "exp": int(NOW.timestamp()) + 3600}
+
+    result = provisioning.refresh_credentials(credentials_path=credentials_path, plan=p,
+                                              refresh_client=refresh, token_verifier=verify,
+                                              manifest_path=manifest_path, now=NOW)
+    assert result["campus_id"] == OWNERSHIP["campus_id"]
+    assert json.loads(manifest_path.read_text())["users"][0]["id_token"] == "fresh"
 
 
 @dataclass
@@ -270,18 +304,21 @@ async def test_real_postgres_enrollment_binds_uid_and_reads_back(migrated_db: st
     )
     uid = provisioning.users_for_plan(p)[0].uid
     user_id = uuid.uuid4()
-    engine = create_async_engine(migrated_db)
+    engine = create_async_engine(migrated_db, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        async with factory() as session:
-            async with session.begin():
-                session.add(User(id=user_id, firebase_uid=uid, email=f"{uid}@loadtest.invalid",
-                                 display_name="C363 test", account_type="non_greek"))
         verifier = provisioning.postgres_fixture_ownership(
             database_url=migrated_db, plan=p, allow_test_database=True)
 
         class Firebase:
             def create_user(self, **kwargs):
+                async def insert_user():
+                    async with factory() as session:
+                        async with session.begin():
+                            session.add(User(id=user_id, firebase_uid=uid,
+                                             email=f"{uid}@loadtest.invalid",
+                                             display_name="C363 test", account_type="non_greek"))
+                asyncio.run(insert_user())
                 return type("Record", (), {"uid": kwargs["uid"]})()
 
         def token_client(**kwargs):

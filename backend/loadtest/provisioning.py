@@ -19,12 +19,11 @@ import os
 from pathlib import Path
 import re
 import secrets
-import sys
 import tempfile
 from typing import Any, Callable, Iterator, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import Request, build_opener, HTTPRedirectHandler, urlopen
+from urllib.request import Request, build_opener, HTTPRedirectHandler
 import uuid
 
 MAX_USERS = 200
@@ -57,15 +56,6 @@ class BootstrapClient(Protocol):
 
 class OwnershipVerifier(Protocol):
     def __call__(self, *, plan: "Plan", users: list[Mapping[str, Any]]) -> Mapping[str, str]: ...
-
-
-class _FirebaseAdminAdapter:
-    def __init__(self, auth_module: Any) -> None:
-        self._auth = auth_module
-
-    def create_user(self, **kwargs: Any) -> Any:
-        kwargs.pop("project_id", None)
-        return self._auth.create_user(**kwargs)
 
 
 class _FirebaseRestAdapter:
@@ -106,9 +96,9 @@ class _FirebaseRestAdapter:
 def _google_authorized_session(*, credentials_path: str | None) -> Any:
     try:
         import google.auth
-        from google.auth.transport.requests import AuthorizedSession
         from google.auth.transport.requests import Request as GoogleRequest
         from requests.adapters import HTTPAdapter
+        import requests
     except ImportError:
         raise ProvisioningError("google_auth_unavailable") from None
     try:
@@ -122,7 +112,11 @@ def _google_authorized_session(*, credentials_path: str | None) -> Any:
             if detected_project not in {None, PROJECT_ID}:
                 raise ProvisioningError("firebase_project_mismatch")
         credentials.refresh(GoogleRequest())
-        session = AuthorizedSession(credentials)
+        # Use a plain session instead of AuthorizedSession: the latter installs
+        # auth refresh/retry behavior that can repeat a mutating request.
+        session = requests.Session()
+        session.trust_env = False
+        session.headers.update({"Authorization": f"Bearer {credentials.token}"})
         session.mount("https://", HTTPAdapter(max_retries=0))
         return session
     except ProvisioningError:
@@ -225,8 +219,11 @@ def _json_bytes(value: Mapping[str, Any]) -> bytes:
 
 
 def _atomic_private_json(path: Path, value: Mapping[str, Any], *, refuse_existing: bool = True) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(path.parent, 0o700)
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    parent_stat = path.parent.stat()
+    if not path.parent.is_dir() or parent_stat.st_uid != os.getuid() or parent_stat.st_mode & 0o777 != 0o700:
+        raise ProvisioningError("private_parent_permissions")
     if path.exists() and (path.is_symlink() or not path.is_file()):
         raise ProvisioningError("private_path_invalid")
     if refuse_existing and path.exists():
@@ -298,6 +295,8 @@ def load_plan(path: Path) -> Plan:
         expected = canonical.plan_digest
         if raw.get("plan_digest") != expected:
             raise ProvisioningError("plan_digest_invalid")
+        if raw != plan_document(canonical):
+            raise ProvisioningError("plan_document_invalid")
         return canonical
     except ProvisioningError:
         raise
@@ -306,7 +305,10 @@ def load_plan(path: Path) -> Plan:
 
 
 def postgres_fixture_ownership(*, database_url: str, plan: Plan,
-                               allow_test_database: bool = False) -> OwnershipVerifier:
+                               allow_test_database: bool = False,
+                               expected_database: str | None = None,
+                               expected_role: str | None = None,
+                               expected_schema_head: str = "0049") -> OwnershipVerifier:
     """Return a local/proxy-only transactional synthetic enrollment verifier."""
     parsed = urlsplit(database_url)
     if parsed.scheme != "postgresql+asyncpg" or parsed.hostname not in {"127.0.0.1", "localhost"}:
@@ -346,12 +348,17 @@ def postgres_fixture_ownership(*, database_url: str, plan: Plan,
                             row = (await session.execute(
                                 select(User).where(User.firebase_uid == item.get("uid")).with_for_update()
                             )).scalar_one_or_none()
-                            if row is None or row.campus_id is not None or row.is_ghost:
+                            if (row is None or row.campus_id is not None or row.is_ghost
+                                    or row.is_platform_admin or row.suspended_at is not None):
                                 raise ProvisioningError("synthetic_user_binding_invalid")
                             if item.get("user_id") is not None and str(row.id) != str(item["user_id"]):
                                 raise ProvisioningError("synthetic_user_binding_invalid")
                             if item.get("email") is not None and row.email != item["email"]:
                                 raise ProvisioningError("synthetic_user_binding_invalid")
+                            if (await session.execute(
+                                select(Membership.id).where(Membership.user_id == row.id).limit(1)
+                            )).first() is not None:
+                                raise ProvisioningError("synthetic_user_membership_collision")
                             row.campus_id = campus.id
                             row.campus_verified_at = now
                             session.add(Membership(user_id=row.id, chapter_id=chapter.id,
@@ -380,24 +387,39 @@ def postgres_fixture_ownership(*, database_url: str, plan: Plan,
         except Exception:
             raise ProvisioningError("synthetic_enrollment_failed") from None
 
-    async def _preflight_async() -> None:
-        from sqlalchemy import select
+    async def _preflight_async(expected_users: list[UserPlan]) -> None:
+        from sqlalchemy import select, text
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-        from app.models import Campus
+        from app.models import Campus, User
         engine = create_async_engine(database_url, pool_pre_ping=True, pool_timeout=10)
         try:
             factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
             async with factory() as session:
+                identity = (await session.execute(text(
+                    "SELECT current_database(), current_user, "
+                    "(SELECT version_num FROM alembic_version)"))).one()
+                if expected_database and identity[0] != expected_database:
+                    raise ProvisioningError("ownership_database_mismatch")
+                if expected_role and identity[1] != expected_role:
+                    raise ProvisioningError("ownership_role_mismatch")
+                if identity[2] != expected_schema_head:
+                    raise ProvisioningError("ownership_schema_mismatch")
                 row = (await session.execute(select(Campus.id).where(Campus.slug == plan.campus_slug))).first()
                 if row is not None:
                     raise ProvisioningError("synthetic_campus_collision")
+                for user in expected_users:
+                    collision = (await session.execute(
+                        select(User.id).where((User.firebase_uid == user.uid) | (User.email == user.email))
+                    )).first()
+                    if collision is not None:
+                        raise ProvisioningError("synthetic_user_collision")
         finally:
             await engine.dispose()
 
-    def preflight() -> None:
+    def preflight(expected_users: list[UserPlan]) -> None:
         import asyncio
         try:
-            asyncio.run(_preflight_async())
+            asyncio.run(_preflight_async(expected_users))
         except ProvisioningError:
             raise
         except Exception:
@@ -488,6 +510,33 @@ def refresh_credentials(*, credentials_path: Path, plan: Plan,
         raise
     except (OSError, ValueError, TypeError, KeyError):
         raise ProvisioningError("credentials_unreadable") from None
+    if manifest_path is None:
+        raise ProvisioningError("manifest_required")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (manifest.get("kind") != "c363_synthetic_firebase_manifest"
+                or manifest.get("status") != "COMPLETE"
+                or manifest.get("fixture_provenance") != "synthetic_only"
+                or manifest.get("plan_digest") != plan.plan_digest
+                or not isinstance(manifest.get("campus_id"), str)
+                or not isinstance(manifest.get("chapter_id"), str)):
+            raise ProvisioningError("manifest_plan_mismatch")
+        users = manifest.get("users")
+        if not isinstance(users, list) or len(users) != len(entries):
+            raise ProvisioningError("manifest_users_mismatch")
+        manifest_users = {entry.get("uid"): entry for entry in users}
+        if set(manifest_users) != {entry.get("uid") for entry in entries}:
+            raise ProvisioningError("manifest_users_mismatch")
+        for entry in entries:
+            user = manifest_users.get(entry.get("uid"))
+            if (not isinstance(user, dict) or user.get("email") != entry.get("email")
+                    or user.get("user_id") != entry.get("user_id")
+                    or entry.get("status") != "bootstrapped"):
+                raise ProvisioningError("manifest_users_mismatch")
+    except ProvisioningError:
+        raise
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ProvisioningError("manifest_unreadable") from None
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     updated: list[dict[str, Any]] = []
     for entry in entries:
@@ -513,19 +562,15 @@ def refresh_credentials(*, credentials_path: Path, plan: Plan,
         if isinstance(result.get("refresh_token"), str) and result["refresh_token"]:
             replacement["refresh_token"] = result["refresh_token"]
         updated.append(replacement)
+        _atomic_private_json(credentials_path, {"schema_version": 1, "project_id": PROJECT_ID,
+                                                 "plan_digest": plan.plan_digest,
+                                                 "credentials": updated + entries[len(updated):]},
+                             refuse_existing=False)
     document = {"schema_version": 1, "project_id": PROJECT_ID,
                 "plan_digest": plan.plan_digest, "credentials": updated}
     _atomic_private_json(credentials_path, document, refuse_existing=False)
-    if manifest_path is None:
-        raise ProvisioningError("manifest_required")
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("plan_digest") != plan.plan_digest or not manifest.get("campus_id") or not manifest.get("chapter_id"):
-            raise ProvisioningError("manifest_plan_mismatch")
         by_uid = {entry["uid"]: entry for entry in updated}
-        users = manifest.get("users")
-        if not isinstance(users, list) or {entry.get("uid") for entry in users} != set(by_uid):
-            raise ProvisioningError("manifest_users_mismatch")
         for user in users:
             replacement = by_uid[user["uid"]]
             user["id_token"] = replacement["id_token"]
@@ -603,7 +648,7 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
     if preflight is not None:
         if not callable(preflight):
             raise ProvisioningError("ownership_preflight_invalid")
-        preflight()
+        preflight(users)
     created: list[dict[str, Any]] = []
     credential_state: list[dict[str, Any]] = []
     manifest_base = {"schema_version": 1, "kind": "c363_synthetic_firebase_manifest",
@@ -767,7 +812,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(refreshed))
                 return 0
             database_url = os.environ.get("C363_DATABASE_URL")
-            if args.database_url or not args.manifest or not args.credentials or not database_url or not args.identity_tool_api_key_file:
+            expected_database = os.environ.get("C363_EXPECTED_DATABASE")
+            expected_role = os.environ.get("C363_EXPECTED_DB_ROLE")
+            if (args.database_url or not args.manifest or not args.credentials or not database_url
+                    or not expected_database or not expected_role or not args.identity_tool_api_key_file):
                 raise ProvisioningError("execution_inputs_required")
             key_path = Path(args.identity_tool_api_key_file)
             try:
@@ -782,7 +830,9 @@ def main(argv: list[str] | None = None) -> int:
             verifier = firebase_token_verifier()
             bootstrap = bootstrap_http_client(base_url=args.bootstrap_url)
             ownership = postgres_fixture_ownership(database_url=database_url, plan=plan,
-                                                   allow_test_database=args.allow_test_database)
+                                                   allow_test_database=args.allow_test_database,
+                                                   expected_database=expected_database,
+                                                   expected_role=expected_role)
             result = provision_users(plan=plan, firebase=firebase, token_client=token_client,
                                      token_verifier=verifier, bootstrap=bootstrap,
                                      verify_ownership=ownership, manifest_path=Path(args.manifest),
