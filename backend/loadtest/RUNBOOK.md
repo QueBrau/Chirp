@@ -361,6 +361,58 @@ an explicitly reviewed operator adapter. Each issued ID token is checked for a
 15-minute minimum remaining lifetime and its expiry is recorded; the harness
 operator must refresh or re-provision before a later phase rather than assume a
 multi-hour token lifetime. Tokens are never printed or logged.
+
+For an approved run, keep the exact values from the plan and private operator
+inputs in the protected shell/session. The API key and Firebase Admin credential
+must be separate private files; never put either value in shell history. The
+following is the execute invocation shape after the plan digest and database
+identity have been independently checked:
+
+```sh
+export C363_DATABASE_URL="$REVIEWED_DATABASE_URL"
+export C363_EXPECTED_DATABASE="$REVIEWED_DATABASE_NAME"
+export C363_EXPECTED_DB_ROLE="$REVIEWED_DATABASE_ROLE"
+export C363_EXPECTED_SCHEMA_HEAD="$REVIEWED_SCHEMA_HEAD"
+python -m loadtest.provisioning \
+  --execute --confirm-plan-digest REVIEWED_PLAN_SHA256 \
+  --run-id REVIEWED_RUN_UUID --users 200 \
+  --campus-slug REVIEWED_CAMPUS_SLUG --chapter-slug REVIEWED_CHAPTER_SLUG \
+  --source-digest REVIEWED_SOURCE_SHA256 --image-digest REVIEWED_IMAGE_SHA256 \
+  --config-digest REVIEWED_CONFIG_SHA256 --plan /private/path/c363-plan.json \
+  --manifest /private/path/c363-manifest.json \
+  --credentials /private/path/c363-credentials.json \
+  --firebase-credentials /private/path/firebase-admin.json \
+  --identity-tool-api-key-file /private/path/identity-tool-api-key
+```
+
+`--allow-test-database` is only for a disposable local/test database and must
+not be used for a production proxy. The verifier checks the live database name,
+role and Alembic head in its own connection before binding the exact synthetic
+users to the new campus/chapter. The fake adapters used by local tests do not
+create Firebase users or issue network requests.
+
+Refresh short-lived tokens close to the authorized phase using the same plan,
+manifest, credentials and private key files. This only refreshes credentials; it
+does not start the harness:
+
+```sh
+python -m loadtest.provisioning \
+  --refresh --confirm-plan-digest REVIEWED_PLAN_SHA256 \
+  --run-id REVIEWED_RUN_UUID --users 200 \
+  --campus-slug REVIEWED_CAMPUS_SLUG --chapter-slug REVIEWED_CHAPTER_SLUG \
+  --source-digest REVIEWED_SOURCE_SHA256 --image-digest REVIEWED_IMAGE_SHA256 \
+  --config-digest REVIEWED_CONFIG_SHA256 --plan /private/path/c363-plan.json \
+  --manifest /private/path/c363-manifest.json \
+  --credentials /private/path/c363-credentials.json \
+  --firebase-credentials /private/path/firebase-admin.json \
+  --identity-tool-api-key-file /private/path/identity-tool-api-key
+```
+
+This preparation and local test coverage do not authorize Firebase enrollment,
+credential refresh, harness traffic, or an Oct 17 load run. Do not execute those
+steps for Oct 17 without a separate explicit run decision and the full quiet-window
+watcher and baseline prerequisites below.
+
 An interrupted or ambiguous create/bootstrap/token response is quarantined for
 manual reconciliation. Cleanup must use the pinned manifest and fresh ownership
 readback, and may not delete outside the exact synthetic campus/chapter/account

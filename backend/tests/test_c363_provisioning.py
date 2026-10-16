@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import asyncio
 from pathlib import Path
 import uuid
 
 import pytest
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -117,12 +117,13 @@ def test_firebase_rest_creator_is_single_attempt_and_uid_bound() -> None:
             raise TimeoutError("ambiguous")
 
     session = Session()
-    adapter = provisioning._FirebaseRestAdapter(session)
+    adapter = provisioning._FirebaseRestAdapter(session, api_key="A" * 24)
     with pytest.raises(provisioning.QuarantineRequired, match="unknown"):
         adapter.create_user(uid="uid-1", email="u@loadtest.invalid", password="secret",
                             display_name="Synthetic", project_id="chirps-prod")
     assert len(session.calls) == 1
     assert session.calls[0][1]["allow_redirects"] is False
+    assert session.calls[0][1]["params"] == {"key": "A" * 24}
 
 
 def test_refresh_updates_bound_harness_manifest(tmp_path: Path) -> None:
@@ -186,9 +187,17 @@ def test_two_user_credentials_journal_replaces_after_first_create(tmp_path: Path
     assert len(saved["credentials"]) == 2
 
 
-def test_cli_execute_two_users_then_refreshes_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                                       capsys: pytest.CaptureFixture[str]) -> None:
-    p = plan(2)
+@pytest.mark.asyncio
+async def test_cli_execute_two_users_then_refreshes_manifest(
+    migrated_db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from app.models import Campus, Chapter, Membership, User
+
+    p = provisioning.make_plan(
+        run_id=str(uuid.uuid4()), user_count=2, campus_slug=f"c363-{uuid.uuid4().hex[:12]}",
+        chapter_slug="alpha", source_digest=D, image_digest="b" * 64, config_digest="c" * 64,
+    )
     plan_path = tmp_path / "plan.json"
     provisioning._atomic_private_json(plan_path, provisioning.plan_document(p))
     manifest_path, credentials_path, key_path = (tmp_path / name for name in
@@ -196,52 +205,163 @@ def test_cli_execute_two_users_then_refreshes_manifest(tmp_path: Path, monkeypat
     key_path.write_text("A" * 24)
     key_path.chmod(0o600)
     users = provisioning.users_for_plan(p)
+    user_ids = {user.uid: uuid.uuid4() for user in users}
+    engine = create_async_engine(migrated_db, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        database, role, schema_head = (await session.execute(
+            text(
+                "SELECT current_database(), current_user, (SELECT version_num FROM alembic_version)"
+            )
+        )).one()
 
     class Firebase:
         def create_user(self, **kwargs):
             return type("Record", (), {"uid": kwargs["uid"]})()
 
-    monkeypatch.setattr(provisioning, "firebase_admin_client", lambda **_: Firebase())
-    monkeypatch.setattr(provisioning, "firebase_token_verifier",
-                        lambda **_: lambda token: {"uid": token.removeprefix("token-"),
-                                                   "aud": "chirps-prod", "exp": int(NOW.timestamp()) + 3600})
-    monkeypatch.setattr(provisioning, "postgres_fixture_ownership", lambda **_: lambda **__: OWNERSHIP)
-    monkeypatch.setattr(provisioning, "bootstrap_http_client",
-                        lambda **_: lambda **kwargs: {"id": str(uuid.uuid4()),
-                                                      "firebase_uid": kwargs["token"].removeprefix("token-")})
+    async def insert_bootstrap_user(*, uid: str, email: str, display_name: str) -> str:
+        async with factory() as session:
+            async with session.begin():
+                session.add(User(id=user_ids[uid], firebase_uid=uid, email=email,
+                                 display_name=display_name, account_type="non_greek"))
+        return str(user_ids[uid])
 
     def token_client(*, email: str, password: str):
         uid = email.split("@")[0]
         return {"idToken": f"token-{uid}", "localId": uid, "refreshToken": f"refresh-{uid}"}
 
+    def verify_initial(token: str):
+        now = datetime.now(timezone.utc)
+        return {"uid": token.removeprefix("token-"), "aud": "chirps-prod",
+                "exp": int(now.timestamp()) + 3600}
+
+    def bootstrap(**kwargs):
+        uid = kwargs["token"].removeprefix("token-")
+        user_id = asyncio.run(insert_bootstrap_user(uid=uid, email=kwargs["email"],
+                                                    display_name=kwargs["display_name"]))
+        return {"id": user_id, "firebase_uid": uid}
+
+    monkeypatch.setattr(provisioning, "firebase_admin_client", lambda **_: Firebase())
+    monkeypatch.setattr(provisioning, "firebase_token_verifier", lambda **_: verify_initial)
+    monkeypatch.setattr(provisioning, "bootstrap_http_client", lambda **_: bootstrap)
     monkeypatch.setattr(provisioning, "identity_toolkit_token_client", lambda **_: token_client)
-    execute_args = ["--execute", "--confirm-plan-digest", p.plan_digest, "--run-id", p.run_id,
-                    "--users", str(p.user_count), "--campus-slug", p.campus_slug,
+    monkeypatch.setenv("C363_DATABASE_URL", migrated_db)
+    monkeypatch.setenv("C363_EXPECTED_DATABASE", database)
+    monkeypatch.setenv("C363_EXPECTED_DB_ROLE", role)
+    monkeypatch.setenv("C363_EXPECTED_SCHEMA_HEAD", schema_head)
+    execute_args = ["--execute", "--allow-test-database", "--confirm-plan-digest", p.plan_digest,
+                    "--run-id", p.run_id, "--users", str(p.user_count), "--campus-slug", p.campus_slug,
                     "--chapter-slug", p.chapter_slug, "--source-digest", p.source_digest,
                     "--image-digest", p.image_digest, "--config-digest", p.config_digest,
                     "--plan", str(plan_path), "--manifest", str(manifest_path),
                     "--credentials", str(credentials_path), "--firebase-credentials", str(key_path),
                     "--identity-tool-api-key-file", str(key_path)]
-    monkeypatch.setenv("C363_DATABASE_URL", "postgresql+asyncpg://local/db")
-    monkeypatch.setenv("C363_EXPECTED_DATABASE", "db")
-    monkeypatch.setenv("C363_EXPECTED_DB_ROLE", "operator")
-    monkeypatch.setenv("C363_EXPECTED_SCHEMA_HEAD", "0049")
-    assert provisioning.main(execute_args) == 0
-    assert json.loads(manifest_path.read_text())["status"] == "COMPLETE"
+    try:
+        assert await asyncio.to_thread(provisioning.main, execute_args) == 0
+        executed = json.loads(manifest_path.read_text())
+        assert executed["status"] == "COMPLETE"
+        assert executed["fixture_provenance"] == "synthetic_only"
+        assert len(executed["users"]) == 2
+        assert {row["uid"] for row in executed["users"]} == {user.uid for user in users}
+        assert all(row["status"] == "bootstrapped" for row in
+                   json.loads(credentials_path.read_text())["credentials"])
 
-    def refresh_client(value: str):
-        uid = value.removeprefix("refresh-")
-        return {"id_token": f"fresh-{uid}", "user_id": uid, "expires_in": "3600",
-                "refresh_token": f"rotated-{uid}"}
+        async with factory() as session:
+            memberships = (await session.execute(
+                select(User.firebase_uid, User.id, Membership.chapter_id,
+                       User.campus_id, User.campus_verified_at)
+                .join(Membership, Membership.user_id == User.id)
+                .where(User.firebase_uid.in_([user.uid for user in users]),
+                       Membership.status == "active")
+            )).all()
+        assert len(memberships) == 2
+        assert {row.firebase_uid for row in memberships} == {user.uid for user in users}
+        assert {str(row.id) for row in memberships} == {str(user_ids[user.uid]) for user in users}
+        assert len({row.campus_id for row in memberships}) == 1
+        assert len({row.chapter_id for row in memberships}) == 1
+        assert all(row.campus_verified_at is not None for row in memberships)
 
-    monkeypatch.setattr(provisioning, "identity_toolkit_refresh_client", lambda **_: refresh_client)
-    monkeypatch.setattr(provisioning, "firebase_token_verifier",
-                        lambda **_: lambda token: {"uid": token.removeprefix("fresh-"),
-                                                   "aud": "chirps-prod", "exp": int(NOW.timestamp()) + 3600})
-    assert provisioning.main(["--refresh"] + execute_args[1:]) == 0
-    assert all(user["id_token"].startswith("fresh-")
-               for user in json.loads(manifest_path.read_text())["users"])
-    assert "password" not in capsys.readouterr().out
+        def refresh_client(value: str):
+            uid = value.removeprefix("refresh-")
+            return {"id_token": f"fresh-{uid}", "user_id": uid, "expires_in": "3600",
+                    "refresh_token": f"rotated-{uid}"}
+
+        def verify_fresh(token: str):
+            now = datetime.now(timezone.utc)
+            return {"uid": token.removeprefix("fresh-"), "aud": "chirps-prod",
+                    "exp": int(now.timestamp()) + 3600}
+
+        monkeypatch.setattr(provisioning, "identity_toolkit_refresh_client", lambda **_: refresh_client)
+        monkeypatch.setattr(provisioning, "firebase_token_verifier", lambda **_: verify_fresh)
+        assert await asyncio.to_thread(provisioning.main, ["--refresh"] + execute_args[1:]) == 0
+        from loadtest.accounts import load_manifest
+        loaded = load_manifest(str(manifest_path), auth_mode="firebase")
+        assert {user.uid for user in loaded.users} == {user.uid for user in users}
+        assert all(user.id_token.startswith("fresh-") for user in loaded.users)
+        assert "password" not in capsys.readouterr().out
+    finally:
+        async with factory() as session:
+            async with session.begin():
+                await session.execute(delete(Membership).where(Membership.user_id.in_(list(user_ids.values()))))
+                await session.execute(delete(User).where(User.id.in_(list(user_ids.values()))))
+                campus = (await session.execute(select(Campus).where(Campus.slug == p.campus_slug))).scalar_one_or_none()
+                if campus is not None:
+                    await session.execute(delete(Chapter).where(Chapter.campus_id == campus.id))
+                    await session.flush()
+                    await session.execute(delete(Campus).where(Campus.id == campus.id))
+        await engine.dispose()
+
+
+def test_existing_credentials_are_preserved_before_firebase_calls(tmp_path: Path) -> None:
+    credentials = tmp_path / "credentials.json"
+    original = b'{"private":"existing"}\n'
+    credentials.write_bytes(original)
+    firebase = FakeFirebase()
+    with pytest.raises(provisioning.ProvisioningError, match="credentials_already_exist"):
+        provisioning.provision_users(
+            plan=plan(1), firebase=firebase,
+            token_client=lambda **_: pytest.fail("token client must not be called"),
+            token_verifier=lambda _: {}, bootstrap=lambda **_: pytest.fail("bootstrap must not be called"),
+            verify_ownership=lambda **_: pytest.fail("ownership must not be called"),
+            manifest_path=tmp_path / "manifest.json", credentials_path=credentials,
+            now=datetime.now(timezone.utc),
+        )
+    assert credentials.read_bytes() == original
+    assert firebase.calls == []
+
+
+def test_refresh_rejects_expiry_that_advances_during_refresh(tmp_path: Path) -> None:
+    p = plan(1)
+    user = provisioning.users_for_plan(p)[0]
+    user_id = str(uuid.uuid4())
+    manifest_path = tmp_path / "manifest.json"
+    credentials_path = tmp_path / "credentials.json"
+    manifest = {
+        "kind": "c363_synthetic_firebase_manifest", "status": "COMPLETE",
+        "fixture_provenance": "synthetic_only", "plan_digest": p.plan_digest,
+        "campus_id": OWNERSHIP["campus_id"], "chapter_id": OWNERSHIP["chapter_id"],
+        "users": [{"uid": user.uid, "email": user.email, "user_id": user_id,
+                   "id_token": "old", "expires_at": "old"}],
+    }
+    credentials = {"schema_version": 1, "project_id": "chirps-prod", "plan_digest": p.plan_digest,
+                   "credentials": [{"uid": user.uid, "email": user.email, "user_id": user_id,
+                                    "password": "private", "refresh_token": "refresh",
+                                    "status": "bootstrapped"}]}
+    provisioning._atomic_private_json(manifest_path, manifest)
+    provisioning._atomic_private_json(credentials_path, credentials)
+    start = datetime.now(timezone.utc)
+    ticks = iter([start, start + timedelta(hours=1)])
+    with pytest.raises(provisioning.ProvisioningError, match="token_expiry_window_too_short"):
+        provisioning.refresh_credentials(
+            credentials_path=credentials_path, plan=p,
+            refresh_client=lambda _: {"id_token": "fresh", "user_id": user.uid,
+                                     "expires_in": "3600", "refresh_token": "rotated"},
+            token_verifier=lambda _: {"uid": user.uid, "aud": "chirps-prod",
+                                      "exp": int((start + timedelta(minutes=30)).timestamp())},
+            manifest_path=manifest_path, clock=lambda: next(ticks),
+        )
+    assert json.loads(manifest_path.read_text())["status"] == "REFRESHING"
 
 
 def test_provision_rechecks_expiry_with_advancing_clock(tmp_path: Path) -> None:
@@ -410,8 +530,13 @@ async def test_real_postgres_enrollment_binds_uid_and_reads_back(migrated_db: st
     engine = create_async_engine(migrated_db, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
+        async with factory() as session:
+            database, role, schema_head = (await session.execute(text(
+                "SELECT current_database(), current_user, (SELECT version_num FROM alembic_version)"
+            ))).one()
         verifier = provisioning.postgres_fixture_ownership(
-            database_url=migrated_db, plan=p, allow_test_database=True)
+            database_url=migrated_db, plan=p, expected_schema_head=schema_head,
+            expected_database=database, expected_role=role, allow_test_database=True)
 
         class Firebase:
             def create_user(self, **kwargs):
@@ -448,7 +573,8 @@ async def test_real_postgres_enrollment_binds_uid_and_reads_back(migrated_db: st
             chapter_slug="alpha", source_digest=D, image_digest=D, config_digest=D,
         )
         bad_verifier = provisioning.postgres_fixture_ownership(
-            database_url=migrated_db, plan=bad_plan, allow_test_database=True)
+            database_url=migrated_db, plan=bad_plan, expected_schema_head=schema_head,
+            expected_database=database, expected_role=role, allow_test_database=True)
         with pytest.raises(provisioning.ProvisioningError, match="synthetic_user_binding_invalid"):
             await asyncio.to_thread(bad_verifier, plan=bad_plan, users=[{"uid": "c363-deadbeefdeadbeef-001"}])
         async with factory() as session:
@@ -465,10 +591,9 @@ async def test_real_postgres_enrollment_binds_uid_and_reads_back(migrated_db: st
             await session.rollback()
             async with session.begin():
                 await session.execute(delete(Membership).where(Membership.user_id == user_id))
-                await session.execute(update(User).where(User.id == user_id).values(campus_id=None,
-                                                                                       campus_verified_at=None))
                 await session.execute(delete(User).where(User.id == user_id))
                 await session.execute(delete(Chapter).where(Chapter.id == chapter_id))
+                await session.flush()
                 await session.execute(delete(Campus).where(Campus.id == campus_id))
     finally:
         await engine.dispose()
