@@ -91,27 +91,39 @@ def intent_error_detail(error: Exception) -> str:
     return "payment_outcome_unconfirmed"
 
 
-async def create_express_account(chapter_id: uuid.UUID, org_name: str) -> str:
+async def create_express_account(
+    chapter_id: uuid.UUID, org_name: str, *, idempotency_key: str | None = None,
+    return_resource: bool = False,
+) -> str | stripe.Account:
     """Create an Express connected account for a chapter; returns the account id."""
-    account = await stripe.Account.create_async(
+    params = dict(
         api_key=_secret_key(),
         type="express",
         country="US",
         business_profile={"name": org_name},
         metadata={"chirp_chapter_id": str(chapter_id)},
     )
-    return account.id
+    if idempotency_key is not None:
+        params["idempotency_key"] = idempotency_key
+    account = await stripe.Account.create_async(**params)
+    return account if return_resource else account.id
 
 
-async def create_account_link(account_id: str, return_url: str, refresh_url: str) -> stripe.AccountLink:
+async def create_account_link(
+    account_id: str, return_url: str, refresh_url: str, *,
+    idempotency_key: str | None = None,
+) -> stripe.AccountLink:
     """Create a single-use Stripe-hosted onboarding link for a connected account."""
-    return await stripe.AccountLink.create_async(
+    params = dict(
         api_key=_secret_key(),
         account=account_id,
         type="account_onboarding",
         return_url=return_url,
         refresh_url=refresh_url,
     )
+    if idempotency_key is not None:
+        params["idempotency_key"] = idempotency_key
+    return await stripe.AccountLink.create_async(**params)
 
 
 async def retrieve_account(account_id: str) -> stripe.Account:
@@ -122,20 +134,30 @@ async def retrieve_account(account_id: str) -> stripe.Account:
     return account
 
 
-async def create_customer(account_id: str, email: str, display_name: str) -> str:
+async def create_customer(
+    account_id: str, email: str, display_name: str, *,
+    idempotency_key: str | None = None,
+    return_resource: bool = False,
+) -> str | stripe.Customer:
     """Create a Customer ON the connected account (direct charges); returns its id."""
-    customer = await stripe.Customer.create_async(
+    params = dict(
         api_key=_secret_key(),
         stripe_account=account_id,
         email=email,
         name=display_name,
     )
-    return customer.id
+    if idempotency_key is not None:
+        params["idempotency_key"] = idempotency_key
+    customer = await stripe.Customer.create_async(**params)
+    return customer if return_resource else customer.id
 
 
-async def create_customer_session(account_id: str, customer_id: str) -> str:
+async def create_customer_session(
+    account_id: str, customer_id: str, *, idempotency_key: str | None = None,
+    return_resource: bool = False,
+) -> str | stripe.CustomerSession:
     """Create a CustomerSession client secret enabling saved cards in PaymentSheet."""
-    session = await stripe.CustomerSession.create_async(
+    params = dict(
         api_key=_secret_key(),
         stripe_account=account_id,
         customer=customer_id,
@@ -150,7 +172,10 @@ async def create_customer_session(account_id: str, customer_id: str) -> str:
             }
         },
     )
-    return session.client_secret
+    if idempotency_key is not None:
+        params["idempotency_key"] = idempotency_key
+    session = await stripe.CustomerSession.create_async(**params)
+    return session if return_resource else session.client_secret
 
 
 async def create_dues_payment_intent(
@@ -181,7 +206,7 @@ async def create_dues_payment_intent(
     minimum 24h retention expires; they never replace an unresolved reservation
     or silently mint a new key.
     """
-    return await stripe.PaymentIntent.create_async(
+    params = dict(
         api_key=_secret_key(),
         stripe_account=account_id,
         idempotency_key=f"dues:{cycle_id}:{user_id}:{rail}:{reservation_id}",
@@ -199,6 +224,7 @@ async def create_dues_payment_intent(
             "chirp_rail": rail,
         },
     )
+    return await stripe.PaymentIntent.create_async(**params)
 
 
 async def retrieve_payment_intent(account_id: str, intent_id: str) -> stripe.PaymentIntent:
@@ -220,16 +246,19 @@ async def retrieve_payment_intent(account_id: str, intent_id: str) -> stripe.Pay
     return intent
 
 
-async def cancel_payment_intent(account_id: str, intent_id: str) -> stripe.PaymentIntent:
+async def cancel_payment_intent(
+    account_id: str, intent_id: str, *, idempotency_key: str | None = None,
+) -> stripe.PaymentIntent:
     """Ask Stripe to cancel an aged intent (board c234).
 
     Only a confirmed canceled status releases its reservation. Refusal, a
     transport failure or an unknown outcome keeps the rail locked because
     a still-usable intent or money in motion must never allow a second charge.
     """
-    intent = await stripe.PaymentIntent.cancel_async(
-        intent_id, api_key=_secret_key(), stripe_account=account_id
-    )
+    params = {"api_key": _secret_key(), "stripe_account": account_id}
+    if idempotency_key is not None:
+        params["idempotency_key"] = idempotency_key
+    intent = await stripe.PaymentIntent.cancel_async(intent_id, **params)
     if getattr(intent, "id", None) != intent_id:
         raise UnexpectedPaymentIntent()
     return intent

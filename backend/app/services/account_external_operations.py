@@ -20,9 +20,9 @@ from app.services.account_write_guard import (
     bind_account_write_guard,
 )
 
-OperationKind = Literal["media_finalize_post", "media_finalize_avatar", "campus_verification_email"]
+OperationKind = Literal["media_finalize_post", "media_finalize_avatar", "campus_verification_email", "payment_request"]
 TerminalOperationState = Literal["finished", "uncertain"]
-_ALLOWED_KINDS = frozenset({"media_finalize_post", "media_finalize_avatar", "campus_verification_email"})
+_ALLOWED_KINDS = frozenset({"media_finalize_post", "media_finalize_avatar", "campus_verification_email", "payment_request"})
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -243,6 +243,21 @@ async def finish_external_operation(
             if row.state != "running" or row.completed_at is not None:
                 raise DeletionHoldInvalid("external_operation_terminal_state")
 
+            if kind == "payment_request":
+                # Child registration takes this same parent row lock. Once the
+                # parent finishes, no late provider attempt can slip behind the
+                # deletion drain. Unknown completed I/O remains separately
+                # blocking in the child journal and may be reconciled by an
+                # exact same-effect retry under a later admitted request.
+                running_children = await session.scalar(
+                    select(func.count(models.AccountPaymentAttempt.id)).where(
+                        models.AccountPaymentAttempt.parent_operation_id == operation_id,
+                        models.AccountPaymentAttempt.state == "running",
+                    )
+                )
+                if running_children:
+                    raise DeletionHoldInvalid("payment_request_not_drained")
+
             changed_id = await session.scalar(
                 update(models.AccountExternalOperation)
                 .where(
@@ -333,6 +348,20 @@ async def inspect_registered_operation_drain(
                 ).group_by(models.AccountDeliveryAttempt.state)
             )).all())
             for state, count in delivery_counts.items():
+                counts[state] = int(counts.get(state, 0)) + int(count)
+            # A drained HTTP request may still have an uncertain Stripe effect.
+            # Its durable child attempts remain blockers until the exact same
+            # effect is confirmed and bound to retained financial records.
+            payment_counts = dict((await session.execute(
+                select(
+                    models.AccountPaymentAttempt.state,
+                    func.count(models.AccountPaymentAttempt.id),
+                ).where(
+                    models.AccountPaymentAttempt.actor_user_id == actor_id,
+                    models.AccountPaymentAttempt.state.in_(("running", "uncertain")),
+                ).group_by(models.AccountPaymentAttempt.state)
+            )).all())
+            for state, count in payment_counts.items():
                 counts[state] = int(counts.get(state, 0)) + int(count)
             await session.commit()
         except DeletionHoldInvalid:

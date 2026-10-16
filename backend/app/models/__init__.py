@@ -10,6 +10,7 @@ from app.models.account_external_operations import (
 )
 from app.models.account_ws_connections import AccountWsConnection
 from app.models.account_delivery_attempts import AccountDeliveryAttempt
+from app.models.account_payment_operations import AccountPaymentEffect, AccountPaymentAttempt
 from app.models.e2ee import Device, KyberPrekey, OneTimePrekey, SignedPrekey
 from app.models.events import Event, EventInvite, EventRsvp
 from app.models.finance import (
@@ -51,6 +52,8 @@ from app.models.chirp import ContentReport, UserBlock, Chirp, ChirpVote
 
 __all__ = [
     "AccountDeliveryAttempt",
+    "AccountPaymentEffect",
+    "AccountPaymentAttempt",
     "AlumniProfile",
     "Campus",
     "CampusVerification",

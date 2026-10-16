@@ -305,7 +305,13 @@ async def _lock_executor_finalization(session: AsyncSession, user_id: uuid.UUID,
             models.AccountDeliveryAttempt.state.in_(("running", "uncertain")),
         )
     )
-    return running == 0 and ws_connections == 0 and deliveries == 0
+    payments = await session.scalar(
+        select(func.count(models.AccountPaymentAttempt.id)).where(
+            models.AccountPaymentAttempt.actor_user_id == user_id,
+            models.AccountPaymentAttempt.state.in_(("running", "uncertain")),
+        )
+    )
+    return running == 0 and ws_connections == 0 and deliveries == 0 and payments == 0
 
 
 async def run_deletion(
