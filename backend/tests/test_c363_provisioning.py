@@ -186,6 +186,82 @@ def test_two_user_credentials_journal_replaces_after_first_create(tmp_path: Path
     assert len(saved["credentials"]) == 2
 
 
+def test_cli_execute_two_users_then_refreshes_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                       capsys: pytest.CaptureFixture[str]) -> None:
+    p = plan(2)
+    plan_path = tmp_path / "plan.json"
+    provisioning._atomic_private_json(plan_path, provisioning.plan_document(p))
+    manifest_path, credentials_path, key_path = (tmp_path / name for name in
+                                                  ("manifest.json", "credentials.json", "api-key"))
+    key_path.write_text("A" * 24)
+    key_path.chmod(0o600)
+    users = provisioning.users_for_plan(p)
+
+    class Firebase:
+        def create_user(self, **kwargs):
+            return type("Record", (), {"uid": kwargs["uid"]})()
+
+    monkeypatch.setattr(provisioning, "firebase_admin_client", lambda **_: Firebase())
+    monkeypatch.setattr(provisioning, "firebase_token_verifier",
+                        lambda **_: lambda token: {"uid": token.removeprefix("token-"),
+                                                   "aud": "chirps-prod", "exp": int(NOW.timestamp()) + 3600})
+    monkeypatch.setattr(provisioning, "postgres_fixture_ownership", lambda **_: lambda **__: OWNERSHIP)
+    monkeypatch.setattr(provisioning, "bootstrap_http_client",
+                        lambda **_: lambda **kwargs: {"id": str(uuid.uuid4()),
+                                                      "firebase_uid": kwargs["token"].removeprefix("token-")})
+
+    def token_client(*, email: str, password: str):
+        uid = email.split("@")[0]
+        return {"idToken": f"token-{uid}", "localId": uid, "refreshToken": f"refresh-{uid}"}
+
+    monkeypatch.setattr(provisioning, "identity_toolkit_token_client", lambda **_: token_client)
+    execute_args = ["--execute", "--confirm-plan-digest", p.plan_digest, "--run-id", p.run_id,
+                    "--users", str(p.user_count), "--campus-slug", p.campus_slug,
+                    "--chapter-slug", p.chapter_slug, "--source-digest", p.source_digest,
+                    "--image-digest", p.image_digest, "--config-digest", p.config_digest,
+                    "--plan", str(plan_path), "--manifest", str(manifest_path),
+                    "--credentials", str(credentials_path), "--firebase-credentials", str(key_path),
+                    "--identity-tool-api-key-file", str(key_path)]
+    monkeypatch.setenv("C363_DATABASE_URL", "postgresql+asyncpg://local/db")
+    monkeypatch.setenv("C363_EXPECTED_DATABASE", "db")
+    monkeypatch.setenv("C363_EXPECTED_DB_ROLE", "operator")
+    monkeypatch.setenv("C363_EXPECTED_SCHEMA_HEAD", "0049")
+    assert provisioning.main(execute_args) == 0
+    assert json.loads(manifest_path.read_text())["status"] == "COMPLETE"
+
+    def refresh_client(value: str):
+        uid = value.removeprefix("refresh-")
+        return {"id_token": f"fresh-{uid}", "user_id": uid, "expires_in": "3600",
+                "refresh_token": f"rotated-{uid}"}
+
+    monkeypatch.setattr(provisioning, "identity_toolkit_refresh_client", lambda **_: refresh_client)
+    monkeypatch.setattr(provisioning, "firebase_token_verifier",
+                        lambda **_: lambda token: {"uid": token.removeprefix("fresh-"),
+                                                   "aud": "chirps-prod", "exp": int(NOW.timestamp()) + 3600})
+    assert provisioning.main(["--refresh"] + execute_args[1:]) == 0
+    assert all(user["id_token"].startswith("fresh-")
+               for user in json.loads(manifest_path.read_text())["users"])
+    assert "password" not in capsys.readouterr().out
+
+
+def test_provision_rechecks_expiry_with_advancing_clock(tmp_path: Path) -> None:
+    p = plan(1)
+    user = provisioning.users_for_plan(p)[0]
+    ticks = iter([NOW, NOW, NOW.replace(hour=7)])
+
+    with pytest.raises(provisioning.ProvisioningError, match="expiry_window"):
+        provisioning.provision_users(
+            plan=p, firebase=FakeFirebase(),
+            token_client=lambda **_: {"idToken": "token", "localId": user.uid},
+            token_verifier=lambda _: {"uid": user.uid, "aud": "chirps-prod",
+                                      "exp": int(NOW.timestamp()) + 3600},
+            bootstrap=lambda **_: {"id": str(uuid.uuid4()), "firebase_uid": user.uid},
+            verify_ownership=lambda **_: OWNERSHIP,
+            manifest_path=tmp_path / "manifest.json", credentials_path=tmp_path / "credentials.json",
+            clock=lambda: next(ticks),
+        )
+
+
 @dataclass
 class Record:
     uid: str
