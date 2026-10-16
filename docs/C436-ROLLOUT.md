@@ -109,7 +109,7 @@ transaction, including transactions after commit/rollback, without activating an
 hold. Consuming key requests additionally bind the actor and authorized target
 accounts before request SQL; their immutable scope is revalidated before key
 consumption. Existing reads and privacy status remain available. Leave the flag off until
-migrations 0044 through 0048 and the runtime hold-read and registry grants have
+migrations 0044 through 0049 and the runtime hold-read and registry grants have
 separate review and rollout.
 Conversation creation/reuse and legacy/v2 message SQL also bind their participant
 scope. Conversation-row locks serialize enrolled membership changes with sends,
@@ -146,8 +146,9 @@ generation. Fresh-auth privacy access for suspended users is preserved. Deletion
 intake/retries, request status and existing downloads remain available under their
 privacy authorization rules; intake still cannot activate a hold or run cleanup.
 
-Unlisted writers still require review, including payment/webhook paths and
-upload capabilities. Avatar/feed finalizers are registered and awaited as described
+Payment-provider mutations now have disabled enrollment described below; signed
+upload capabilities still require review. Settlement webhooks remain available
+for retained financial history during a hold. Avatar/feed finalizers are registered and awaited as described
 below; their caller SQL still requires fresh admission. Campus verification sends
 are registered, but provider-side queued delivery and retention are not drained;
 analytics emission still needs external fencing/drain. Bootstrap identity
@@ -260,6 +261,79 @@ alone do not establish production quiescence. Local PostgreSQL/Redis regressions
 prove source behavior; they do not attest device receipt or real push delivery.
 No deployment, provider request, migration application, grant or deletion is
 included here.
+
+## Payment request and provider-attempt registry (migration 0049)
+
+Migration 0049 follows 0048. It permits `payment_request` in the existing external
+operation registry and adds `account_payment_effects` plus
+`account_payment_attempts`. Enrollment uses the existing
+`ACCOUNT_DELETION_HTTP_ADMISSION_ENABLED=false` flag. With that flag false, the
+payment routes retain their existing behavior without reading the new tables.
+The deletion executor requires SELECT access to both registries and schema 0049;
+a missing table or grant fails its drain check closed.
+Downgrade refuses to discard payment effects or payment-request parent history,
+including completed records; do not erase evidence to force a downgrade.
+
+The admitted parent represents the entire authorized request, before authority
+records, Customer mappings or dues reservations are mutated. Each actual Stripe
+mutation or capability issuance has a separate durable attempt registered before
+I/O. Finishing the parent only means its coroutine and SQL transaction drained.
+An uncertain child still blocks both the pre-provider and final tombstone gates.
+Parent completion and child registration serialize on the parent row; a child
+cannot start after its parent has finished. No lease or elapsed-time rule clears
+an uncertain attempt or takes over a running attempt.
+
+Connect-account creation uses one logical effect per chapter, shared across
+permitted officers. Customer creation binds the user, chapter and exact connected
+account. Request fingerprints prevent changed parameters from silently reusing an
+unresolved key. Retries reuse the original Stripe key and stop before the minimum
+provider cache lifetime can expire. Existing dues reservations keep their exact
+reservation UUID key, 23-hour create cutoff, bounded 15-second serialization and
+NOWAIT conflict behavior. Provider result binding and attempt completion commit
+in the same database transaction. Confirming the same effect can reconcile older
+uncertain attempts, preserving their audit rows; it cannot retire a live attempt.
+A competing legacy Customer mapping that differs from the newly returned Customer
+remains a review case, not a confirmed binding.
+
+AccountLink and CustomerSession issuance is recorded without storing URLs or
+client secrets. A final actor/hold/role/binding check protects the response.
+Successful issuance does not mean a previously issued capability was revoked.
+The existing provider step must delete each exactly mapped personal Customer and
+verify `deleted=true` before deletion proceeds; that is the permanent fence for
+its CustomerSessions. Shared chapter Express accounts, their onboarding links,
+and financial records remain organization data. Signed Stripe webhooks continue
+their existing idempotent settlement during holds, including events received after
+local identity cleanup; refusing those events would interrupt retained accounting.
+
+Prepared API grants for separate review after migration (not applied by this PR):
+
+```sql
+GRANT SELECT, INSERT ON TABLE account_payment_effects, account_payment_attempts TO chirp_api;
+GRANT UPDATE (provider_object_id) ON TABLE account_payment_effects TO chirp_api;
+GRANT UPDATE (state, completed_at) ON TABLE account_payment_attempts TO chirp_api;
+```
+
+Keep the existing parent/scope registry grants and hold reads. Review SELECT for
+the separate deletion-runner identity; give neither API nor routine runner a
+DELETE grant on payment journals. Effect fingerprints, keys, actor/parent
+bindings and attempt owner tokens are immutable. The audit contains bounded IDs,
+request fingerprints and states, never customer names/emails, capability secrets,
+provider payloads or raw errors. Local cleanup retains these operational and
+financial records and reports both tables in its retained coverage.
+
+Before activation, stop/drain old payment writers, review legacy unknown effects
+and conflicting Customer mappings, apply reviewed schema/grants, and verify the
+actual runtime role with flag-on concurrency and failure checks. All actors able
+to issue payment capabilities must use enrolled code. Turning admission off again
+requires stopping deletion execution first. Upload capabilities, analytics and
+other provider drains, operator wiring and production evidence still gate c436;
+source tests do not establish those facts. This change does not apply migrations,
+grants, deploy services, call Stripe, activate a hold or delete an account.
+
+Stripe's [idempotent request contract](https://docs.stripe.com/api/idempotent_requests)
+allows key removal after at least 24 hours and compares retry parameters. The
+23-hour local bound preserves a margin; expiration never counts as evidence that
+an unknown effect failed.
 
 ## Verification-email registration (migration 0046)
 

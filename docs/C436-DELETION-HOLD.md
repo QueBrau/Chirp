@@ -327,10 +327,38 @@ is loaded before the final commit so a newly activated hold cannot turn a
 successfully committed financial action into a failed response refresh. Read and
 CSV-export routes retain their existing authorization.
 
-This is SQL admission only. Stripe onboarding, payment creation and provider
-webhooks require separate integration. A webhook must still account for money
-already captured while preventing new provider work during deletion; an ordinary
-actor dependency is not an appropriate substitute for that settlement policy.
+The seven routes above use SQL admission. The separate payment enrollment below
+tracks outbound Stripe work; signed webhooks continue accounting for money already
+captured under the existing idempotent settlement rules. An actor's deletion hold
+must not discard a financial event or prevent another officer maintaining retained
+organization history.
+
+## Outbound payment operations (migration 0049)
+
+With HTTP admission enabled, `POST /payments/connect/onboarding-link` and
+`POST /payments/dues/{cycle_id}/intent` authorize their actor and domain scope,
+then commit a durable `payment_request` parent before their first mutation.
+This request marker replaces a transaction-spanning shared advisory lock: the
+request may finish admitted work during a hold, while the executor waits for it.
+Individual Account, Customer, PaymentIntent create/cancel, AccountLink and
+CustomerSession calls register owned child attempts before provider I/O.
+Read-only Stripe retrievals stay covered by the parent marker and final response
+guard; they do not create another remote effect.
+
+The final actor/hold and current membership/resource binding checks run under a
+fresh, short SQL guard before payment capabilities are returned. The existing
+dues-row NOWAIT serialization and 15-second provider budget remain unchanged.
+Unknown child outcomes block deletion even after their request drains. Only an
+exact same-effect confirmation and atomic domain binding can reconcile older
+uncertain attempts; time passing never clears them. Journal rows intentionally
+have no reservation foreign key, so child registration cannot deadlock on its
+own caller's locked dues row. Parent completion and child registration share the
+parent row lock to prevent late registration after request completion.
+
+See `C436-ROLLOUT.md` for stable creation keys, retry bounds, reviewed grant
+preparation and capability retention boundaries. This source enrollment does not
+stop legacy writers, revoke previously issued capabilities, activate the feature
+flag or authorize a production deletion.
 
 ## Privacy requests
 
@@ -533,7 +561,7 @@ increment makes no provider-delivery or phone-verification claim.
 
 This flag neither activates a hold nor adds an activation endpoint. Ordinary
 deletion intake still does not create a hold. Keep the flag disabled until migration
-0044 through 0048 plus the runtime's exact hold-read and registry
+0044 through 0049 plus the runtime's exact hold-read and registry
 permissions have been separately reviewed and applied. Keep the separate WS and
 delivery flags off until their own rollout requirements above are satisfied.
 With all three flags off, request/socket/delivery paths retain their existing

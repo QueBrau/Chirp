@@ -10,7 +10,7 @@ from sqlalchemy import select, text
 
 from app import models
 from app.db import get_session_factory
-from app.services.account_deletion_hold import activate_deletion_hold, advisory_key
+from app.services.account_deletion_hold import DeletionHoldInvalid, activate_deletion_hold, advisory_key
 from app.services.account_external_operations import (
     finish_external_operation,
     inspect_registered_operation_drain,
@@ -19,6 +19,12 @@ from app.services.account_external_operations import (
 from app.services.account_ws_connections import (
     finish_ws_connection,
     register_ws_connection,
+)
+from app.services.account_payment_operations import (
+    finish_payment_attempt,
+    mark_payment_attempt_uncertain,
+    register_payment_attempt,
+    register_payment_effect,
 )
 from app.services.account_fulfillment import (
     PROVIDER_STEPS, _lock_executor_finalization, run_deletion, validate_provider_receipt,
@@ -33,6 +39,99 @@ async def _create_request(client, owner) -> uuid.UUID:
     )
     assert response.status_code == 201, response.text
     return uuid.UUID(response.json()["id"])
+
+
+async def _payment_attempt(owner):
+    parent = await register_external_operation(
+        user_id=uuid.UUID(owner.id), firebase_uid=owner.firebase_uid,
+        kind="payment_request", effect_key="f" * 64,
+    )
+    effect = await register_payment_effect(
+        parent, kind="connect_account_link", effect_key="e" * 64,
+        request_fingerprint="d" * 64, idempotency_key="test-account-link",
+        connected_account_id="acct_Executor",
+    )
+    attempt = await register_payment_attempt(parent, effect)
+    return parent, effect, attempt
+
+
+async def test_uncertain_payment_blocks_both_gates_after_http_parent_drains(
+    client, make_user,
+):
+    owner = await make_user("Payment executor admission owner")
+    user_id = uuid.UUID(owner.id)
+    request_id = await _create_request(client, owner)
+    parent, effect, attempt = await _payment_attempt(owner)
+    # Merely ending a request cannot erase a live child. Once its coroutine has
+    # drained with an unknown result, the durable child carries that uncertainty.
+    with pytest.raises(DeletionHoldInvalid, match="payment_request_not_drained"):
+        await finish_external_operation(parent)
+    await mark_payment_attempt_uncertain(parent, effect, attempt)
+    await finish_external_operation(parent)
+    await activate_executor_hold(user_id=user_id, request_id=request_id)
+    drain = await inspect_registered_operation_drain(user_id=user_id, request_id=request_id)
+    assert (drain.running_count, drain.uncertain_count) == (0, 1)
+    providers = provider_set()
+    async with get_session_factory()() as session:
+        assert not await _lock_executor_finalization(session, user_id, request_id)
+    async with get_session_factory()() as session:
+        user = await session.get(models.User, user_id)
+        blocked = await run_deletion(session, request_id, user, providers)
+        assert blocked.status == "blocked"
+        assert blocked.failed_step == "registered_external_operations"
+        assert all(not provider.keys for provider in providers.values())
+        await session.refresh(user)
+        assert not user.is_ghost
+        child = await session.get(models.AccountPaymentAttempt, attempt.attempt_id)
+        assert child is not None and child.state == "uncertain"
+
+
+async def test_payment_completion_rollback_cannot_release_parent_or_drain(
+    client, make_user,
+):
+    owner = await make_user("Payment atomic completion owner")
+    user_id = uuid.UUID(owner.id)
+    request_id = await _create_request(client, owner)
+    parent, effect, attempt = await _payment_attempt(owner)
+    async with get_session_factory()() as session:
+        await finish_payment_attempt(session, parent, effect, attempt)
+        await session.rollback()
+    with pytest.raises(DeletionHoldInvalid, match="payment_request_not_drained"):
+        await finish_external_operation(parent)
+    await activate_executor_hold(user_id=user_id, request_id=request_id)
+    drain = await inspect_registered_operation_drain(user_id=user_id, request_id=request_id)
+    assert drain.running_count == 2  # Parent request plus its rolled-back child.
+    async with get_session_factory()() as session:
+        assert not await _lock_executor_finalization(session, user_id, request_id)
+
+
+async def test_resolved_payment_audit_survives_cleanup_and_foreign_work_is_isolated(
+    client, make_user,
+):
+    owner = await make_user("Resolved payment owner")
+    other = await make_user("Unrelated payment owner")
+    user_id = uuid.UUID(owner.id)
+    request_id = await _create_request(client, owner)
+    parent, effect, attempt = await _payment_attempt(owner)
+    async with get_session_factory()() as session:
+        await finish_payment_attempt(session, parent, effect, attempt)
+        await session.commit()
+    await finish_external_operation(parent)
+    # A separate person's unfinished request must not freeze this owner.
+    await register_external_operation(
+        user_id=uuid.UUID(other.id), firebase_uid=other.firebase_uid,
+        kind="payment_request", effect_key="c" * 64,
+    )
+    await activate_executor_hold(user_id=user_id, request_id=request_id)
+    async with get_session_factory()() as session:
+        user = await session.get(models.User, user_id)
+        result = await run_deletion(session, request_id, user, provider_set())
+        assert result.status == "completed"
+        audit = await session.get(models.AccountPaymentAttempt, attempt.attempt_id)
+        assert audit is not None and audit.state == "finished"
+        assert await session.get(models.AccountPaymentEffect, effect.effect_id) is not None
+        from app.services.account_cleanup import RETAINED_COVERAGE
+        assert {"account_payment_effects", "account_payment_attempts"} <= set(RETAINED_COVERAGE)
 
 
 @pytest.mark.asyncio

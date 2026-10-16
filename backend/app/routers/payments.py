@@ -1,9 +1,15 @@
 """Payments: Stripe Connect onboarding, dues PaymentIntents, and the webhook sink."""
 import asyncio
+import contextvars
+import hashlib
+import json
 import logging
 import re
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import stripe
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -29,9 +35,27 @@ from app.schemas.payments import (
     DuesIntentOut,
 )
 from app.services import stripe_service
-from app.schemas.authority import PaymentAuthorityContext
+from app.schemas.authority import PaymentAuthorityContext, PaymentAuthorityInput
 from app.services.organization_authority import check_payment_declaration, payment_context, record_authority
 from app.services.settlement_binding import BoundSettlement, bind_settlement
+from app.services.account_external_operations import (
+    ExternalOperationConflict,
+    ExternalOperationHandle,
+    finish_external_operation,
+    register_external_operation,
+)
+from app.services.account_deletion_hold import DeletionHoldActive, DeletionHoldInvalid
+from app.services.account_payment_operations import (
+    PaymentOperationConflict,
+    PaymentOperationInvalid,
+    PaymentEffectHandle,
+    PaymentAttemptHandle,
+    finish_payment_attempt,
+    mark_payment_attempt_uncertain,
+    register_payment_attempt,
+    register_payment_effect,
+)
+from app.services.account_write_guard import bind_account_write_guard
 
 router = APIRouter(tags=["payments"])
 logger = logging.getLogger(__name__)
@@ -47,6 +71,223 @@ RESERVATION_PROVIDER_TIMEOUT_SECONDS = 15.0
 # member" — a same-rail retrieve landing on one of these must not hand the client
 # a client_secret that LOOKS like a fresh checkout.
 _INTENT_NOT_AWAITING_PAYMENT = {"processing", "succeeded"}
+_ACTIVE_PAYMENT_ATTEMPTS: contextvars.ContextVar[list[tuple[
+    ExternalOperationHandle, PaymentEffectHandle, PaymentAttemptHandle,
+]] | None] = contextvars.ContextVar("active_payment_attempts", default=None)
+
+
+def _payment_fingerprint(**parameters: object) -> str:
+    """Hash exact Stripe parameters; never persist email/name or capability data."""
+    encoded = json.dumps(parameters, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _payment_identity(kind: str, stable_identity: str) -> tuple[str, str]:
+    digest = hashlib.sha256(f"{kind}:{stable_identity}".encode("utf-8")).hexdigest()
+    return digest, f"chirp:{kind}:{digest[:40]}"
+
+
+def _idempotency_kwargs(key: str | None) -> dict[str, str]:
+    # Preserve exact legacy adapter call signatures while flag-off.
+    return {"idempotency_key": key} if key is not None else {}
+
+
+def _valid_provider_id(value: object, prefix: str) -> bool:
+    return (
+        isinstance(value, str)
+        and re.fullmatch(rf"{re.escape(prefix)}_[A-Za-z0-9]{{1,240}}", value) is not None
+    )
+
+
+def _capability_http_url(value: object) -> bool:
+    if not isinstance(value, str) or len(value) > 2048:
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    try:
+        port = parsed.port  # Reject malformed ports even though the host is provider-owned.
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname == "connect.stripe.com"
+            and port in (None, 443)
+            and parsed.username is None
+            and parsed.password is None
+            and bool(parsed.path)
+        )
+    except ValueError:
+        return False
+
+
+@asynccontextmanager
+async def _admitted_payment_request(
+    session: AsyncSession, user: models.User,
+) -> AsyncIterator[ExternalOperationHandle | None]:
+    """Keep the admitted request visible until route SQL and provider awaits drain."""
+    if not get_settings().account_deletion_http_admission_enabled:
+        yield None
+        return
+
+    user_id, firebase_uid = user.id, user.firebase_uid
+    # Finish the read-only authorization transaction before the fresh admission
+    # transaction. Registration commits before any payment-domain write or Stripe IO.
+    await session.commit()
+    session.expire_all()
+    request_id = uuid.uuid4()
+    try:
+        parent = await register_external_operation(
+            user_id=user_id,
+            firebase_uid=firebase_uid,
+            kind="payment_request",
+            effect_key=hashlib.sha256(request_id.bytes).hexdigest(),
+        )
+    except DeletionHoldActive:
+        raise
+    except DeletionHoldInvalid as exc:
+        if str(exc) == "account_deletion_hold_active":
+            raise DeletionHoldActive(str(exc)) from None
+        raise HTTPException(status_code=503, detail="payment_unavailable") from None
+    except ExternalOperationConflict:
+        raise HTTPException(status_code=409, detail="payment_request_already_started") from None
+
+    active: list[tuple[ExternalOperationHandle, PaymentEffectHandle, PaymentAttemptHandle]] = []
+    token = _ACTIVE_PAYMENT_ATTEMPTS.set(active)
+
+    async def cleanup_failed_request() -> None:
+        # The route/provider coroutine has unwound before this runs. Release SQL
+        # first, then fence any result that never reached its atomic domain commit.
+        try:
+            await session.rollback()
+        except BaseException:
+            return
+        for attempt_parent, effect, attempt in active:
+            try:
+                await mark_payment_attempt_uncertain(attempt_parent, effect, attempt)
+            except BaseException:
+                # Finished/reconciled children reject this transition; a failed
+                # journal write remains running and the parent finish then fails.
+                pass
+        try:
+            await finish_external_operation(parent, state="finished")
+        except BaseException:
+            # A still-running child or DB failure leaves the parent blocking.
+            pass
+
+    try:
+        yield parent
+        await session.commit()
+        await finish_external_operation(parent, state="finished")
+    except BaseException:
+        cleanup = asyncio.create_task(cleanup_failed_request())
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                # Repeated request cancellation cannot detach uncertainty writes.
+                continue
+            except BaseException:
+                break
+        if cleanup.done():
+            try:
+                cleanup.result()
+            except BaseException:
+                pass
+        raise
+    finally:
+        _ACTIVE_PAYMENT_ATTEMPTS.reset(token)
+
+
+async def _register_effect_attempt(
+    parent: ExternalOperationHandle | None,
+    *,
+    kind: str,
+    stable_identity: str,
+    parameters: dict[str, object],
+    connected_account_id: str | None,
+    reservation_id: uuid.UUID | None = None,
+    idempotency_key_override: str | None = None,
+) -> tuple[PaymentEffectHandle | None, PaymentAttemptHandle | None]:
+    """Register a stable logical effect and owned attempt before Stripe IO."""
+    if parent is None:
+        return None, None
+    effect_key, generated_idempotency_key = _payment_identity(kind, stable_identity)
+    idempotency_key = idempotency_key_override or generated_idempotency_key
+    try:
+        effect = await register_payment_effect(
+            parent,
+            kind=kind,
+            effect_key=effect_key,
+            request_fingerprint=_payment_fingerprint(**parameters),
+            idempotency_key=idempotency_key,
+            connected_account_id=connected_account_id,
+            reservation_id=reservation_id,
+        )
+        attempt = await register_payment_attempt(parent, effect)
+    except PaymentOperationConflict:
+        raise HTTPException(status_code=409, detail="payment_reconciliation_required") from None
+    except PaymentOperationInvalid:
+        raise HTTPException(status_code=503, detail="payment_unavailable") from None
+    active = _ACTIVE_PAYMENT_ATTEMPTS.get()
+    if active is not None:
+        active.append((parent, effect, attempt))
+    return effect, attempt
+
+
+async def _run_payment_effect(
+    parent: ExternalOperationHandle | None,
+    *,
+    kind: str,
+    stable_identity: str,
+    parameters: dict[str, object],
+    connected_account_id: str | None,
+    reservation_id: uuid.UUID | None = None,
+    idempotency_key_override: str | None = None,
+    invoke: Callable[[str | None], Awaitable[object]],
+) -> tuple[object, PaymentEffectHandle | None, PaymentAttemptHandle | None]:
+    effect, attempt = await _register_effect_attempt(
+        parent, kind=kind, stable_identity=stable_identity,
+        parameters=parameters, connected_account_id=connected_account_id,
+        reservation_id=reservation_id,
+        idempotency_key_override=idempotency_key_override,
+    )
+    if parent is None:
+        return await invoke(None), None, None
+    try:
+        result = await invoke(effect.idempotency_key)
+    except BaseException:
+        # The provider may have accepted the operation before raising or being
+        # canceled. If this write fails, the committed running row still blocks.
+        try:
+            await mark_payment_attempt_uncertain(parent, effect, attempt)
+        except BaseException:
+            pass
+        raise
+    return result, effect, attempt
+
+
+async def _finish_payment_effect(
+    session: AsyncSession,
+    parent: ExternalOperationHandle | None,
+    effect: PaymentEffectHandle | None,
+    attempt: PaymentAttemptHandle | None,
+    *,
+    provider_id: str | None = None,
+) -> None:
+    if parent is not None and effect is not None and attempt is not None:
+        await finish_payment_attempt(
+            session, parent, effect, attempt, provider_id=provider_id
+        )
+
+
+async def _final_payment_actor_check(
+    session: AsyncSession, *, user_id: uuid.UUID, firebase_uid: str,
+) -> models.User:
+    """Use the normal SQL write gate only for the final capability handoff."""
+    bind_account_write_guard(
+        session, user_id=user_id, firebase_uid=firebase_uid
+    )
+    return await get_current_user(uid=firebase_uid, session=session)
 
 
 # c427: this route was the ONLY provider I/O in payments.py with no handler on it.
@@ -186,57 +427,148 @@ async def create_connect_onboarding_link(
     """
     chapter = await _onboarding_chapter(session, user, body.chapter_id)
     context = await check_payment_declaration(session, user, chapter, body.authority)
+    uid, user_id, chapter_id = user.firebase_uid, user.id, chapter.id
     declaration = body.authority
+    if get_settings().account_deletion_http_admission_enabled:
+        async with _admitted_payment_request(session, user) as parent:
+            # The request was admitted only after ordinary role/declaration auth.
+            # Refresh within the admitted operation before recording authority.
+            user = await get_current_user(uid=uid, session=session)
+            chapter = await _onboarding_chapter(session, user, chapter_id)
+            context = await check_payment_declaration(session, user, chapter, declaration)
+            return await _connect_onboarding_flow(
+                session, user, chapter, declaration, context, parent
+            )
+
+    return await _connect_onboarding_flow(session, user, chapter, declaration, context, None)
+
+
+async def _connect_onboarding_flow(
+    session: AsyncSession,
+    user: models.User,
+    chapter: models.Chapter,
+    declaration: PaymentAuthorityInput | None,
+    context: PaymentAuthorityContext | None,
+    parent: ExternalOperationHandle | None,
+) -> ConnectOnboardingOut:
     if context is not None:
-        await record_authority(session, user_id=user.id, chapter_id=chapter.id,
+        await record_authority(
+            session, user_id=user.id, chapter_id=chapter.id,
             membership_id=context.membership_id, role_term_id=context.role_term_id,
-            role=context.role, purpose="payment_setup", stripe_account_id=chapter.stripe_account_id)
-    uid, chapter_id, org_name = user.firebase_uid, chapter.id, chapter.org_name
+            role=context.role, purpose="payment_setup", stripe_account_id=chapter.stripe_account_id,
+        )
+    uid, user_id, chapter_id, org_name = user.firebase_uid, user.id, chapter.id, chapter.org_name
     account_id = chapter.stripe_account_id
     return_url, refresh_url = _onboarding_urls()
     await session.commit()
     session.expire_all()
 
     if account_id is None:
+        stable = str(chapter_id)
         try:
-            candidate = await stripe_service.create_express_account(chapter_id, org_name)
+            candidate_result, effect, attempt = await _run_payment_effect(
+                parent,
+                kind="connect_account_create",
+                stable_identity=stable,
+                parameters={"chapter_id": str(chapter_id), "org_name": org_name, "type": "express", "country": "US"},
+                connected_account_id=None,
+                invoke=lambda key: stripe_service.create_express_account(
+                    chapter_id, org_name,
+                    **_idempotency_kwargs(key),
+                    **({"return_resource": True} if parent is not None else {}),
+                ),
+            )
         except stripe.StripeError as exc:
             raise _onboarding_provider_failure(exc, chapter_id, "create_account") from None
-        user = await get_current_user(uid=uid, session=session)
-        chapter = await _onboarding_chapter(session, user, chapter_id)
-        await check_payment_declaration(session, user, chapter, declaration)
-        # Never overwrite a competing onboarding winner's account association.
-        await session.execute(
-            update(models.Chapter).where(
-                models.Chapter.id == chapter_id, models.Chapter.stripe_account_id.is_(None),
-            ).values(stripe_account_id=candidate).execution_options(synchronize_session=False)
+        candidate = (
+            getattr(candidate_result, "id", None)
+            if parent is not None else str(candidate_result)
         )
-        account_id = (await session.execute(
-            select(models.Chapter.stripe_account_id).where(models.Chapter.id == chapter_id)
-        )).scalar_one()
-        if declaration is not None:
-            # The user authorized creation; bind that same declaration to the
-            # resulting provider identity without carrying it to another account.
-            declaration = declaration.model_copy(update={"stripe_account_id": account_id})
-            await record_authority(session, user_id=user.id, chapter_id=chapter.id,
-                membership_id=declaration.membership_id, role_term_id=declaration.role_term_id,
-                role=declaration.role, purpose="payment_setup", stripe_account_id=account_id)
-        await session.commit()
-        session.expire_all()
+        if parent is not None and (
+            getattr(candidate_result, "object", None) != "account"
+            or not _valid_provider_id(candidate, "acct")
+        ):
+            if effect is not None and attempt is not None:
+                await mark_payment_attempt_uncertain(parent, effect, attempt)
+            raise HTTPException(status_code=503, detail="payment_outcome_unconfirmed")
+        try:
+            user = await get_current_user(uid=uid, session=session)
+            chapter = await _onboarding_chapter(session, user, chapter_id)
+            await check_payment_declaration(session, user, chapter, declaration)
+            await session.execute(
+                update(models.Chapter).where(
+                    models.Chapter.id == chapter_id, models.Chapter.stripe_account_id.is_(None),
+                ).values(stripe_account_id=candidate).execution_options(synchronize_session=False)
+            )
+            winner = (await session.execute(
+                select(models.Chapter.stripe_account_id).where(models.Chapter.id == chapter_id)
+            )).scalar_one()
+            if winner != candidate:
+                if parent is not None:
+                    await session.rollback()
+                    if effect is not None and attempt is not None:
+                        await mark_payment_attempt_uncertain(parent, effect, attempt)
+                    raise HTTPException(status_code=503, detail="payment_outcome_unconfirmed")
+                # Legacy behavior: the competing association wins and the newly
+                # created but unused provider account remains inert.
+                account_id = winner
+            else:
+                account_id = winner
+            if declaration is not None:
+                declaration = declaration.model_copy(update={"stripe_account_id": account_id})
+                await record_authority(
+                    session, user_id=user.id, chapter_id=chapter.id,
+                    membership_id=declaration.membership_id, role_term_id=declaration.role_term_id,
+                    role=declaration.role, purpose="payment_setup", stripe_account_id=account_id,
+                )
+            await _finish_payment_effect(session, parent, effect, attempt, provider_id=candidate)
+            await session.commit()
+            session.expire_all()
+        except BaseException:
+            await session.rollback()
+            raise
 
     try:
-        link = await stripe_service.create_account_link(account_id, return_url, refresh_url)
+        link_result, effect, attempt = await _run_payment_effect(
+            parent,
+            kind="connect_account_link",
+            stable_identity=f"{parent.operation_id if parent else uuid.uuid4()}:{account_id}",
+            parameters={"account_id": account_id, "return_url": return_url, "refresh_url": refresh_url},
+            connected_account_id=account_id,
+            invoke=lambda key: stripe_service.create_account_link(
+                account_id, return_url, refresh_url, **_idempotency_kwargs(key)
+            ),
+        )
     except stripe.StripeError as exc:
         raise _onboarding_provider_failure(exc, chapter_id, "account_link") from None
-    user = await get_current_user(uid=uid, session=session)
+    link = link_result
+    if parent is not None and (
+        getattr(link, "object", None) != "account_link"
+        or not _capability_http_url(getattr(link, "url", None))
+        or isinstance(getattr(link, "expires_at", None), bool)
+        or not isinstance(getattr(link, "expires_at", None), int)
+        or getattr(link, "expires_at") <= int(datetime.now(timezone.utc).timestamp())
+    ):
+        if effect is not None and attempt is not None:
+            await mark_payment_attempt_uncertain(parent, effect, attempt)
+        raise HTTPException(status_code=503, detail="payment_outcome_unconfirmed")
+    await _finish_payment_effect(session, parent, effect, attempt)
+    await session.commit()
+    if parent is not None:
+        user = await _final_payment_actor_check(session, user_id=user_id, firebase_uid=uid)
+    else:
+        user = await get_current_user(uid=uid, session=session)
     chapter = await _onboarding_chapter(session, user, chapter_id)
     if chapter.stripe_account_id != account_id:
         raise conflict("chapter_not_onboarded")
     await check_payment_declaration(session, user, chapter, declaration)
-    return ConnectOnboardingOut(
+    response = ConnectOnboardingOut(
         url=link.url,
         expires_at=datetime.fromtimestamp(link.expires_at, tz=timezone.utc),
     )
+    if parent is not None:
+        await session.commit()
+    return response
 
 
 @router.get("/chapters/{chapter_id}/payments/status")
@@ -282,6 +614,9 @@ async def get_chapter_payments_status(
 
 async def _bind_customer(
     session: AsyncSession, user_id: uuid.UUID, chapter_id: uuid.UUID, candidate_id: str,
+    *, parent: ExternalOperationHandle | None = None,
+    effect: PaymentEffectHandle | None = None,
+    attempt: PaymentAttemptHandle | None = None,
 ) -> tuple[str, bool]:
     """Bind a provider result after revalidation, retaining a concurrent winner.
 
@@ -295,6 +630,17 @@ async def _bind_customer(
     )
     existing = await session.scalar(lookup)
     if existing is not None:
+        if existing != candidate_id:
+            if parent is not None:
+                await session.rollback()
+                if effect is not None and attempt is not None:
+                    await mark_payment_attempt_uncertain(parent, effect, attempt)
+                raise HTTPException(status_code=503, detail="payment_outcome_unconfirmed")
+            return existing, False
+        await _finish_payment_effect(session, parent, effect, attempt, provider_id=candidate_id)
+        if parent is not None:
+            await session.commit()
+            session.expire_all()
         return existing, False
     await session.execute(
         pg_insert(models.ChapterStripeCustomer)
@@ -302,6 +648,13 @@ async def _bind_customer(
         .on_conflict_do_nothing(index_elements=["user_id", "chapter_id"])
     )
     winner = (await session.execute(lookup)).scalar_one()
+    if winner != candidate_id:
+        if parent is not None:
+            await session.rollback()
+            if effect is not None and attempt is not None:
+                await mark_payment_attempt_uncertain(parent, effect, attempt)
+            raise HTTPException(status_code=503, detail="payment_outcome_unconfirmed")
+    await _finish_payment_effect(session, parent, effect, attempt, provider_id=candidate_id)
     await session.commit()
     session.expire_all()
     return winner, True
@@ -419,72 +772,157 @@ async def create_dues_payment_intent(
     """
     cycle, chapter = await _load_dues_context(session, user, cycle_id)
     chapter_id, account_id = chapter.id, chapter.stripe_account_id
-    uid, email, display_name = user.firebase_uid, user.email, user.display_name
-    customer_id = await session.scalar(
-        select(models.ChapterStripeCustomer.stripe_customer_id).where(
-            models.ChapterStripeCustomer.user_id == user.id,
-            models.ChapterStripeCustomer.chapter_id == chapter_id,
+    uid, actor_user_id = user.firebase_uid, user.id
+    async with _admitted_payment_request(session, user) as parent:
+        if parent is not None:
+            user = await get_current_user(uid=uid, session=session)
+            cycle, chapter = await _load_dues_context(session, user, cycle_id)
+            if chapter.id != chapter_id or chapter.stripe_account_id != account_id:
+                raise conflict("chapter_not_onboarded")
+        email, display_name = user.email, user.display_name
+        customer_id = await session.scalar(
+            select(models.ChapterStripeCustomer.stripe_customer_id).where(
+                models.ChapterStripeCustomer.user_id == actor_user_id,
+                models.ChapterStripeCustomer.chapter_id == chapter_id,
+            )
         )
-    )
-    await session.commit()  # only eligibility reads precede external preparation
-    session.expire_all()
-    account = await stripe_service.retrieve_account(account_id)
-    if not account.charges_enabled:
-        raise conflict("chapter_not_onboarded")
-
-    if customer_id is None:
-        customer_id = await stripe_service.create_customer(account_id, email, display_name)
-
-    # Permissions, obligations and routing may have changed while no transaction
-    # was held. Expired ORM state must not authorize a write after that gap.
-    user = await get_current_user(uid=uid, session=session)
-    cycle, chapter = await _load_dues_context(session, user, cycle_id)
-    if chapter.id != chapter_id or chapter.stripe_account_id != account_id:
-        raise conflict("chapter_not_onboarded")
-    customer_id, committed_binding = await _bind_customer(session, user.id, chapter_id, customer_id)
-    if committed_binding:
-        user = await get_current_user(uid=uid, session=session)
-        cycle, chapter = await _load_dues_context(session, user, cycle_id)
-        if chapter.id != chapter_id or chapter.stripe_account_id != account_id:
+        await session.commit()  # eligibility and mapping reads precede provider preparation
+        session.expire_all()
+        account = await stripe_service.retrieve_account(account_id)
+        if not account.charges_enabled:
             raise conflict("chapter_not_onboarded")
 
-    # Customer/account setup above precedes reservation ownership. The bounded
-    # section below owns a money row across provider I/O; this is deliberately
-    # narrower than a global request deadline (c366).
-    bound_user_id = user.id
-    try:
-        async with asyncio.timeout(RESERVATION_PROVIDER_TIMEOUT_SECONDS):
-            intent, amount_cents, payment_intent_status = await _prepare_reserved_intent(
-                session, cycle, user, chapter, body.rail, account_id, customer_id
+        customer_effect = customer_attempt = None
+        if customer_id is None:
+            candidate_result, customer_effect, customer_attempt = await _run_payment_effect(
+                parent,
+                kind="customer_create",
+                stable_identity=f"{actor_user_id}:{chapter_id}:{account_id}",
+                parameters={
+                    "account_id": account_id,
+                    "email": email,
+                    "display_name": display_name,
+                    "user_id": str(actor_user_id),
+                    "chapter_id": str(chapter_id),
+                },
+                connected_account_id=account_id,
+                invoke=lambda key: stripe_service.create_customer(
+                    account_id, email, display_name,
+                    **_idempotency_kwargs(key),
+                    **({"return_resource": True} if parent is not None else {}),
+                ),
             )
-    except DBAPIError:
-        await session.rollback()
-        raise
-    except (stripe.StripeError, stripe_service.UnexpectedPaymentIntent, TimeoutError) as exc:
-        await session.rollback()
-        detail = stripe_service.intent_error_detail(exc)
-        logger.warning(
-            "c366: intent preparation stopped cycle=%s user=%s outcome=%s",
-            cycle_id, bound_user_id, detail,
-        )
-        raise HTTPException(status_code=503, detail=detail) from None
+            candidate_id = (
+                getattr(candidate_result, "id", None)
+                if parent is not None else str(candidate_result)
+            )
+            if parent is not None and (
+                getattr(candidate_result, "object", None) != "customer"
+                or not _valid_provider_id(candidate_id, "cus")
+            ):
+                if customer_effect is not None and customer_attempt is not None:
+                    await mark_payment_attempt_uncertain(parent, customer_effect, customer_attempt)
+                raise HTTPException(status_code=503, detail="payment_outcome_unconfirmed")
+            user = await get_current_user(uid=uid, session=session)
+            cycle, chapter = await _load_dues_context(session, user, cycle_id)
+            if chapter.id != chapter_id or chapter.stripe_account_id != account_id:
+                if parent is not None and customer_effect is not None and customer_attempt is not None:
+                    await mark_payment_attempt_uncertain(parent, customer_effect, customer_attempt)
+                raise conflict("chapter_not_onboarded")
+            customer_id, _committed_binding = await _bind_customer(
+                session, user.id, chapter_id, candidate_id,
+                parent=parent, effect=customer_effect, attempt=customer_attempt,
+            )
+            user = await get_current_user(uid=uid, session=session)
+            cycle, chapter = await _load_dues_context(session, user, cycle_id)
+            if chapter.id != chapter_id or chapter.stripe_account_id != account_id:
+                raise conflict("chapter_not_onboarded")
+        else:
+            # Revalidate current eligibility after the read-only account lookup.
+            user = await get_current_user(uid=uid, session=session)
+            cycle, chapter = await _load_dues_context(session, user, cycle_id)
+            if chapter.id != chapter_id or chapter.stripe_account_id != account_id:
+                raise conflict("chapter_not_onboarded")
 
-    customer_session_secret = await stripe_service.create_customer_session(
-        account_id, customer_id
-    )
-    return DuesIntentOut(
-        payment_intent_client_secret=intent.client_secret,
-        customer_session_client_secret=customer_session_secret,
-        customer_id=customer_id,
-        publishable_key=stripe_service.publishable_key(),
-        stripe_account_id=account_id,
-        amount_cents=amount_cents,
-        application_fee_cents=stripe_service.platform_fee_cents(
-            amount_cents, body.rail
-        ),
-        rail=body.rail,
-        payment_intent_status=payment_intent_status,
-    )
+        # Customer/account setup above precedes reservation ownership. The bounded
+        # section below retains c366's existing money-row lock and deadline.
+        bound_user_id = user.id
+        try:
+            async with asyncio.timeout(RESERVATION_PROVIDER_TIMEOUT_SECONDS):
+                intent, amount_cents, payment_intent_status = await _prepare_reserved_intent(
+                    session, cycle, user, chapter, body.rail, account_id, customer_id, parent
+                )
+        except DBAPIError:
+            await session.rollback()
+            raise
+        except (stripe.StripeError, stripe_service.UnexpectedPaymentIntent, TimeoutError) as exc:
+            await session.rollback()
+            detail = stripe_service.intent_error_detail(exc)
+            logger.warning(
+                "c366: intent preparation stopped cycle=%s user=%s outcome=%s",
+                cycle_id, bound_user_id, detail,
+            )
+            raise HTTPException(status_code=503, detail=detail) from None
+
+        session_effect_key = str(parent.operation_id) if parent is not None else str(uuid.uuid4())
+        session_secret_result, session_effect, session_attempt = await _run_payment_effect(
+            parent,
+            kind="customer_session_create",
+            stable_identity=f"{session_effect_key}:{customer_id}:{account_id}",
+            parameters={"account_id": account_id, "customer_id": customer_id},
+            connected_account_id=account_id,
+            invoke=lambda key: stripe_service.create_customer_session(
+                account_id, customer_id,
+                **_idempotency_kwargs(key),
+                **({"return_resource": True} if parent is not None else {}),
+            ),
+        )
+        if parent is not None and (
+            getattr(session_secret_result, "object", None) != "customer_session"
+            or getattr(session_secret_result, "customer", None) != customer_id
+            or not isinstance(getattr(session_secret_result, "client_secret", None), str)
+            or not getattr(session_secret_result, "client_secret", "")
+        ):
+            if session_effect is not None and session_attempt is not None:
+                await mark_payment_attempt_uncertain(parent, session_effect, session_attempt)
+            raise HTTPException(status_code=503, detail="payment_outcome_unconfirmed")
+        await _finish_payment_effect(session, parent, session_effect, session_attempt)
+        await session.commit()
+
+        if parent is not None:
+            user = await _final_payment_actor_check(
+                session, user_id=actor_user_id, firebase_uid=uid
+            )
+            cycle, chapter = await _load_dues_context(session, user, cycle_id)
+            if chapter.id != chapter_id or chapter.stripe_account_id != account_id:
+                raise conflict("chapter_not_onboarded")
+            current_customer = await session.scalar(
+                select(models.ChapterStripeCustomer.stripe_customer_id).where(
+                    models.ChapterStripeCustomer.user_id == actor_user_id,
+                    models.ChapterStripeCustomer.chapter_id == chapter_id,
+                )
+            )
+            if current_customer != customer_id:
+                raise conflict("payment_outcome_unconfirmed")
+
+        response = DuesIntentOut(
+            payment_intent_client_secret=intent.client_secret,
+            customer_session_client_secret=(
+                session_secret_result.client_secret if parent is not None
+                else str(session_secret_result)
+            ),
+            customer_id=customer_id,
+            publishable_key=stripe_service.publishable_key(),
+            stripe_account_id=account_id,
+            amount_cents=amount_cents,
+            application_fee_cents=stripe_service.platform_fee_cents(
+                amount_cents, body.rail
+            ),
+            rail=body.rail,
+            payment_intent_status=payment_intent_status,
+        )
+        await session.commit()
+        return response
 
 
 async def _lock_reservation(
@@ -505,6 +943,7 @@ async def _lock_reservation(
 async def _prepare_reserved_intent(
     session: AsyncSession, cycle: models.DuesCycle, user: models.User,
     chapter: models.Chapter, rail: str, account_id: str, customer_id: str,
+    parent: ExternalOperationHandle | None = None,
 ) -> tuple[stripe.PaymentIntent, int, str]:
     """One serialized money-row transition; caller bounds ALL its provider awaits."""
     # RESERVE BEFORE CHARGING (c51). The already_paid check above can only see
@@ -541,20 +980,52 @@ async def _prepare_reserved_intent(
         # already canceled, releases this reservation. Anything else keeps it.
         expire = False
         if reservation.stripe_payment_intent_id is not None:
+            cancellation_effect, cancellation_attempt = await _register_effect_attempt(
+                parent,
+                kind="payment_intent_cancel",
+                stable_identity=reservation.stripe_payment_intent_id,
+                parameters={
+                    "account_id": account_id,
+                    "payment_intent_id": reservation.stripe_payment_intent_id,
+                },
+                connected_account_id=account_id,
+                reservation_id=reservation.id,
+            )
             try:
                 canceled = await stripe_service.cancel_payment_intent(
-                    account_id, reservation.stripe_payment_intent_id
+                    account_id,
+                    reservation.stripe_payment_intent_id,
+                    **_idempotency_kwargs(
+                        cancellation_effect.idempotency_key
+                        if cancellation_effect is not None else None
+                    ),
                 )
                 expire = canceled.status == "canceled"
-            except Exception:
+            except BaseException as cancel_error:
                 expire = False
+                if isinstance(cancel_error, asyncio.CancelledError):
+                    if parent is not None and cancellation_effect is not None and cancellation_attempt is not None:
+                        try:
+                            await mark_payment_attempt_uncertain(
+                                parent, cancellation_effect, cancellation_attempt
+                            )
+                        except BaseException:
+                            pass
+                    raise
+                # A follow-up retrieve can resolve a lost cancel response. Keep
+                # the attempt running until that read has completed so its exact
+                # result can terminalize the same owner without guessing.
                 try:
                     stale = await stripe_service.retrieve_payment_intent(
                         account_id, reservation.stripe_payment_intent_id
                     )
                     if stale.status == "canceled":
+                        canceled = stale
                         expire = True
+                    else:
+                        canceled = stale
                 except Exception:
+                    canceled = None
                     logger.warning(
                         "c234: could not determine state of aged intent %s "
                         "(reservation %s); keeping the reservation - erring "
@@ -562,6 +1033,40 @@ async def _prepare_reserved_intent(
                         reservation.stripe_payment_intent_id,
                         reservation.id,
                     )
+                if canceled is None:
+                    if parent is not None and cancellation_effect is not None and cancellation_attempt is not None:
+                        try:
+                            await mark_payment_attempt_uncertain(
+                                parent, cancellation_effect, cancellation_attempt
+                            )
+                        except BaseException:
+                            pass
+                elif parent is not None:
+                    if expire:
+                        await _finish_payment_effect(
+                            session, parent, cancellation_effect, cancellation_attempt,
+                            provider_id=reservation.stripe_payment_intent_id,
+                        )
+                    elif cancellation_effect is not None and cancellation_attempt is not None:
+                        # A read showing the PI is still non-canceled does not
+                        # prove the failed cancel request had no later effect.
+                        await mark_payment_attempt_uncertain(
+                            parent, cancellation_effect, cancellation_attempt
+                        )
+            else:
+                if parent is not None:
+                    if expire:
+                        await _finish_payment_effect(
+                            session, parent, cancellation_effect, cancellation_attempt,
+                            provider_id=reservation.stripe_payment_intent_id,
+                        )
+                    elif cancellation_effect is not None and cancellation_attempt is not None:
+                        # A successful API response with a non-canceled status is
+                        # still an unresolved cancellation outcome. It must not
+                        # reconcile an earlier uncertain attempt.
+                        await mark_payment_attempt_uncertain(
+                            parent, cancellation_effect, cancellation_attempt
+                        )
         if expire:
             # 'expired' is not a value the status CHECK constraint allows
             # (migration 0010), so confirmed cancellation uses 'canceled'. A
@@ -661,21 +1166,53 @@ async def _prepare_reserved_intent(
         if reservation.created_at <= datetime.now(timezone.utc) - CREATE_RETRY_WINDOW:
             logger.warning("c366: unresolved intent needs reconciliation reservation=%s", reservation.id)
             raise conflict("payment_reconciliation_required")
-        intent = await stripe_service.create_dues_payment_intent(
-            account_id=account_id,
-            customer_id=customer_id,
-            amount_cents=reservation.amount_cents,
-            currency=reservation.currency,
-            rail=rail,
-            cycle_id=cycle.id,
-            user_id=user.id,
-            chapter_id=chapter.id,
+        intent_result, intent_effect, intent_attempt = await _run_payment_effect(
+            parent,
+            kind="payment_intent_create",
+            stable_identity=str(reservation.id),
+            parameters={
+                "account_id": account_id,
+                "customer_id": customer_id,
+                "amount_cents": reservation.amount_cents,
+                "currency": reservation.currency,
+                "rail": rail,
+                "cycle_id": str(cycle.id),
+                "user_id": str(user.id),
+                "chapter_id": str(chapter.id),
+                "reservation_id": str(reservation.id),
+            },
+            connected_account_id=account_id,
             reservation_id=reservation.id,
+            idempotency_key_override=(
+                f"dues:{cycle.id}:{user.id}:{rail}:{reservation.id}"
+            ),
+            invoke=lambda _key: stripe_service.create_dues_payment_intent(
+                account_id=account_id,
+                customer_id=customer_id,
+                amount_cents=reservation.amount_cents,
+                currency=reservation.currency,
+                rail=rail,
+                cycle_id=cycle.id,
+                user_id=user.id,
+                chapter_id=chapter.id,
+                reservation_id=reservation.id,
+            ),
         )
+        intent = intent_result
+        if parent is not None and (
+            getattr(intent, "object", None) != "payment_intent"
+            or not _valid_provider_id(getattr(intent, "id", None), "pi")
+            or not isinstance(getattr(intent, "client_secret", None), str)
+            or not getattr(intent, "client_secret", "")
+        ):
+            raise HTTPException(status_code=503, detail="payment_outcome_unconfirmed")
 
         reservation_id = reservation.id
         try:
             reservation.stripe_payment_intent_id = intent.id
+            await _finish_payment_effect(
+                session, parent, intent_effect, intent_attempt, provider_id=intent.id
+            )
             await session.commit()
         except IntegrityError as exc:
             # Belt, not the primary fix (c231): uq_dues_intent_stripe_id spans every
