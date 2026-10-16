@@ -3,10 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import asyncio
 from pathlib import Path
 import uuid
 
 import pytest
+from sqlalchemy import delete, select, update
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from loadtest import provisioning
 
@@ -229,3 +232,67 @@ def test_bootstrap_url_refuses_redirect_prone_or_non_https_targets() -> None:
         provisioning.bootstrap_http_client(base_url="http://127.0.0.1:8000")
     with pytest.raises(provisioning.ProvisioningError, match="bootstrap_url"):
         provisioning.bootstrap_http_client(base_url="https://example.test/bootstrap?token=secret")
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_enrollment_binds_uid_and_reads_back(migrated_db: str, tmp_path: Path) -> None:
+    from app.models import Campus, Chapter, Membership, User
+
+    p = provisioning.make_plan(
+        run_id=str(uuid.uuid4()), user_count=1, campus_slug=f"c363-{uuid.uuid4().hex[:12]}",
+        chapter_slug="alpha", source_digest=D, image_digest=D, config_digest=D,
+    )
+    uid = provisioning.users_for_plan(p)[0].uid
+    user_id = uuid.uuid4()
+    engine = create_async_engine(migrated_db)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            async with session.begin():
+                session.add(User(id=user_id, firebase_uid=uid, email=f"{uid}@loadtest.invalid",
+                                 display_name="C363 test", account_type="non_greek"))
+        verifier = provisioning.postgres_fixture_ownership(
+            database_url=migrated_db, plan=p, allow_test_database=True)
+
+        class Firebase:
+            def create_user(self, **kwargs):
+                return type("Record", (), {"uid": kwargs["uid"]})()
+
+        def token_client(**kwargs):
+            return {"idToken": "local-token", "localId": uid, "refreshToken": "local-refresh"}
+
+        def token_verifier(token: str):
+            assert token == "local-token"
+            return {"uid": uid, "aud": "chirps-prod", "exp": int(NOW.timestamp()) + 3600}
+
+        def bootstrap(**kwargs):
+            assert kwargs["token"] == "local-token"
+            return {"id": str(user_id), "firebase_uid": uid}
+
+        result = await asyncio.to_thread(
+            provisioning.provision_users, plan=p, firebase=Firebase(), token_client=token_client,
+            token_verifier=token_verifier, bootstrap=bootstrap, verify_ownership=verifier,
+            manifest_path=tmp_path / "manifest.json", credentials_path=tmp_path / "credentials.json",
+            now=NOW,
+        )
+        assert result["status"] == "COMPLETE"
+        assert result["campus_id"] and result["chapter_id"]
+        async with factory() as session:
+            campus = (await session.execute(select(Campus).where(Campus.slug == p.campus_slug))).scalar_one()
+            chapter = (await session.execute(select(Chapter).where(Chapter.campus_id == campus.id))).scalar_one()
+            campus_id, chapter_id = campus.id, chapter.id
+            row = (await session.execute(select(User).where(User.id == user_id))).scalar_one()
+            member = (await session.execute(select(Membership).where(Membership.user_id == user_id,
+                                                                       Membership.chapter_id == chapter.id))).scalar_one()
+            assert row.campus_id == campus.id and row.campus_verified_at is not None
+            assert member.status == "active" and member.role == "member"
+            await session.rollback()
+            async with session.begin():
+                await session.execute(delete(Membership).where(Membership.user_id == user_id))
+                await session.execute(update(User).where(User.id == user_id).values(campus_id=None,
+                                                                                       campus_verified_at=None))
+                await session.execute(delete(User).where(User.id == user_id))
+                await session.execute(delete(Chapter).where(Chapter.id == chapter_id))
+                await session.execute(delete(Campus).where(Campus.id == campus_id))
+    finally:
+        await engine.dispose()

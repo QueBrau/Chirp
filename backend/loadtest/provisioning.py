@@ -20,6 +20,7 @@ from pathlib import Path
 import re
 import secrets
 import sys
+import tempfile
 from typing import Any, Callable, Iterator, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
@@ -176,17 +177,33 @@ def _json_bytes(value: Mapping[str, Any]) -> bytes:
 
 
 def _atomic_private_json(path: Path, value: Mapping[str, Any], *, refuse_existing: bool = True) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_EXCL if refuse_existing else os.O_TRUNC)
-    fd = os.open(path, flags, 0o600)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    if path.exists() and (path.is_symlink() or not path.is_file()):
+        raise ProvisioningError("private_path_invalid")
+    if refuse_existing and path.exists():
+        raise FileExistsError(path)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary)
     try:
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "wb") as handle:
             handle.write(_json_bytes(value))
             handle.flush()
             os.fsync(handle.fileno())
+        if refuse_existing:
+            os.link(temporary_path, path)
+            temporary_path.unlink()
+        else:
+            os.replace(temporary_path, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     except BaseException:
         try:
-            path.unlink()
+            temporary_path.unlink()
         except OSError:
             pass
         raise
@@ -211,7 +228,7 @@ def plan_document(plan: Plan) -> dict[str, Any]:
     return {"kind": "c363_synthetic_firebase_plan", **asdict(plan),
             "users": [asdict(u) for u in users_for_plan(plan)],
             "execute_requires": ["--execute", "--confirm-plan-digest", plan.plan_digest,
-                                 "chirps-prod", "--manifest", "--database-url",
+                                 "chirps-prod", "C363_DATABASE_URL", "--manifest", "--credentials",
                                  "--identity-tool-api-key-file"]}
 
 
@@ -223,10 +240,17 @@ def load_plan(path: Path) -> Plan:
                                             "config_digest", "created_at")}
         if fields["schema_version"] != 1 or raw.get("project_id") != PROJECT_ID:
             raise KeyError("plan")
-        expected = hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        timestamp = datetime.fromisoformat(fields["created_at"])
+        canonical = make_plan(run_id=fields["run_id"], user_count=fields["user_count"],
+                              campus_slug=fields["campus_slug"], chapter_slug=fields["chapter_slug"],
+                              source_digest=fields["source_digest"], image_digest=fields["image_digest"],
+                              config_digest=fields["config_digest"], now=timestamp)
+        if canonical.created_at != fields["created_at"]:
+            raise ProvisioningError("plan_timestamp_invalid")
+        expected = canonical.plan_digest
         if raw.get("plan_digest") != expected:
             raise ProvisioningError("plan_digest_invalid")
-        return Plan(**fields, plan_digest=expected)
+        return canonical
     except ProvisioningError:
         raise
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -304,6 +328,30 @@ def postgres_fixture_ownership(*, database_url: str, plan: Plan,
         except Exception:
             raise ProvisioningError("synthetic_enrollment_failed") from None
 
+    async def _preflight_async() -> None:
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from app.models import Campus
+        engine = create_async_engine(database_url, pool_pre_ping=True, pool_timeout=10)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+            async with factory() as session:
+                row = (await session.execute(select(Campus.id).where(Campus.slug == plan.campus_slug))).first()
+                if row is not None:
+                    raise ProvisioningError("synthetic_campus_collision")
+        finally:
+            await engine.dispose()
+
+    def preflight() -> None:
+        import asyncio
+        try:
+            asyncio.run(_preflight_async())
+        except ProvisioningError:
+            raise
+        except Exception:
+            raise ProvisioningError("ownership_preflight_failed") from None
+
+    setattr(verify, "preflight", preflight)
     return verify
 
 
@@ -345,6 +393,77 @@ def identity_toolkit_token_client(*, api_key: str, project_id: str = PROJECT_ID,
         except (URLError, TimeoutError):
             raise ProvisioningError("identity_tool_request_unavailable") from None
     return issue
+
+
+def identity_toolkit_refresh_client(*, api_key: str, project_id: str = PROJECT_ID,
+                                    timeout_seconds: float = 15.0) -> Callable[[str], Mapping[str, Any]]:
+    if not api_key or not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", api_key):
+        raise ProvisioningError("identity_tool_api_key_invalid")
+    if project_id != PROJECT_ID:
+        raise ProvisioningError("firebase_project_mismatch")
+
+    def refresh(refresh_token: str) -> Mapping[str, Any]:
+        if not isinstance(refresh_token, str) or not refresh_token:
+            raise ProvisioningError("refresh_token_missing")
+        body = urlencode({"grant_type": "refresh_token", "refresh_token": refresh_token}).encode()
+        request = Request("https://securetoken.googleapis.com/v1/token?" + urlencode({"key": api_key}),
+                          data=body, method="POST",
+                          headers={"Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            with _no_redirect_opener().open(request, timeout=timeout_seconds) as response:
+                return _read_json(response)
+        except HTTPError:
+            raise ProvisioningError("identity_tool_refresh_failed") from None
+        except (URLError, TimeoutError):
+            raise ProvisioningError("identity_tool_refresh_unavailable") from None
+    return refresh
+
+
+def refresh_credentials(*, credentials_path: Path, plan: Plan,
+                         refresh_client: Callable[[str], Mapping[str, Any]],
+                         token_verifier: Callable[[str], Mapping[str, Any]],
+                         now: datetime | None = None) -> dict[str, Any]:
+    """Refresh every confirmed manifest token without changing Firebase identities."""
+    try:
+        raw = json.loads(credentials_path.read_text(encoding="utf-8"))
+        if raw.get("project_id") != PROJECT_ID or raw.get("plan_digest") != plan.plan_digest:
+            raise ProvisioningError("credentials_plan_mismatch")
+        entries = raw["credentials"]
+        if not isinstance(entries, list) or not entries:
+            raise ProvisioningError("credentials_invalid")
+    except ProvisioningError:
+        raise
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ProvisioningError("credentials_unreadable") from None
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    updated: list[dict[str, Any]] = []
+    for entry in entries:
+        uid = entry.get("uid")
+        refresh_token = entry.get("refresh_token")
+        if not isinstance(uid, str) or not UID_RE.fullmatch(uid) or not isinstance(refresh_token, str):
+            raise ProvisioningError("credentials_entry_invalid")
+        result = refresh_client(refresh_token)
+        token = result.get("id_token")
+        returned_uid = result.get("user_id")
+        expires_in = result.get("expires_in")
+        if not isinstance(token, str) or returned_uid != uid or type(expires_in) is not int:
+            raise QuarantineRequired("refresh_identity_mismatch")
+        verified = token_verifier(token)
+        exp = verified.get("exp")
+        if verified.get("uid") != uid or verified.get("aud") != PROJECT_ID or type(exp) is not int:
+            raise QuarantineRequired("refresh_token_verification_failed")
+        if exp < int(current.timestamp()) + TOKEN_MIN_REMAINING_SECONDS:
+            raise ProvisioningError("token_expiry_window_too_short")
+        replacement = dict(entry)
+        replacement.update({"id_token": token,
+                            "expires_at": datetime.fromtimestamp(exp, timezone.utc).isoformat()})
+        if isinstance(result.get("refresh_token"), str) and result["refresh_token"]:
+            replacement["refresh_token"] = result["refresh_token"]
+        updated.append(replacement)
+    document = {"schema_version": 1, "project_id": PROJECT_ID,
+                "plan_digest": plan.plan_digest, "credentials": updated}
+    _atomic_private_json(credentials_path, document, refuse_existing=False)
+    return {"status": "REFRESHED", "plan_digest": plan.plan_digest, "users": len(updated)}
 
 
 def firebase_token_verifier(*, project_id: str = PROJECT_ID) -> Callable[[str], Mapping[str, Any]]:
@@ -395,6 +514,7 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
                     token_verifier: Callable[[str], Mapping[str, Any]],
                     bootstrap: BootstrapClient, verify_ownership: OwnershipVerifier,
                     manifest_path: Path | None = None,
+                    credentials_path: Path | None = None,
                     now: datetime | None = None) -> dict[str, Any]:
     if plan.project_id != PROJECT_ID:
         raise ProvisioningError("firebase_project_mismatch")
@@ -404,7 +524,13 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     if not callable(verify_ownership):
         raise ProvisioningError("ownership_verifier_required")
+    preflight = getattr(verify_ownership, "preflight", None)
+    if preflight is not None:
+        if not callable(preflight):
+            raise ProvisioningError("ownership_preflight_invalid")
+        preflight()
     created: list[dict[str, Any]] = []
+    credential_state: list[dict[str, Any]] = []
     manifest_base = {"schema_version": 1, "kind": "c363_synthetic_firebase_manifest",
                      "project_id": PROJECT_ID, "plan_digest": plan.plan_digest,
                      "run_id": plan.run_id, "campus_slug": plan.campus_slug,
@@ -417,32 +543,58 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
         for user in users:
             state = next(row for row in row_state if row["uid"] == user.uid)
             password = secrets.token_urlsafe(32)
+            credential_state.append({"uid": user.uid, "email": user.email, "password": password,
+                                     "status": "create_pending"})
+            if credentials_path is not None:
+                _atomic_private_json(credentials_path, {"schema_version": 1, "project_id": PROJECT_ID,
+                                                         "plan_digest": plan.plan_digest,
+                                                         "credentials": credential_state})
             try:
                 record = firebase.create_user(uid=user.uid, email=user.email, password=password,
                                               display_name=user.display_name, project_id=PROJECT_ID)
-            except Exception:
+            except BaseException:
                 # A network/SDK exception may follow a successful provider write. Never lookup
                 # and adopt or retry: quarantine the run for operator reconciliation.
+                state["status"] = "firebase_create_unknown"
+                if manifest_path is not None:
+                    _atomic_private_json(manifest_path, {**manifest_base, "status": "QUARANTINED",
+                                                         "users": row_state}, refuse_existing=False)
                 raise QuarantineRequired("firebase_create_unknown") from None
             if getattr(record, "uid", None) != user.uid:
                 raise QuarantineRequired("firebase_create_identity_mismatch")
             state["status"] = "firebase_created"
+            credential_state[-1]["status"] = "firebase_created"
             if manifest_path is not None:
                 _atomic_private_json(manifest_path, {**manifest_base, "status": "RUNNING", "users": row_state}, refuse_existing=False)
             result = token_client(email=user.email, password=password)
             token, expires_at = _verify_token(result, expected_uid=user.uid, now=current, verifier=token_verifier)
+            refresh_token = result.get("refreshToken")
+            if isinstance(refresh_token, str) and refresh_token:
+                credential_state[-1]["refresh_token"] = refresh_token
+            credential_state[-1].update({"status": "token_issued", "id_token": token,
+                                         "expires_at": expires_at})
+            if credentials_path is not None:
+                _atomic_private_json(credentials_path, {"schema_version": 1, "project_id": PROJECT_ID,
+                                                         "plan_digest": plan.plan_digest,
+                                                         "credentials": credential_state}, refuse_existing=False)
             state.update({"status": "token_issued", "expires_at": expires_at})
             if manifest_path is not None:
                 _atomic_private_json(manifest_path, {**manifest_base, "status": "RUNNING", "users": row_state}, refuse_existing=False)
             try:
                 response = bootstrap(token=token, email=user.email, display_name=user.display_name)
-            except Exception:
+            except BaseException:
+                state["status"] = "bootstrap_unknown"
+                if manifest_path is not None:
+                    _atomic_private_json(manifest_path, {**manifest_base, "status": "QUARANTINED",
+                                                         "users": row_state, "credentials": created},
+                                         refuse_existing=False)
                 raise QuarantineRequired("bootstrap_unknown") from None
             if response.get("firebase_uid") != user.uid or not response.get("id"):
                 raise QuarantineRequired("bootstrap_identity_mismatch")
             created.append({"uid": user.uid, "id_token": token, "expires_at": expires_at,
                            "user_id": str(response["id"])})
             state.update({"status": "bootstrapped", "user_id": str(response["id"])})
+            credential_state[-1].update({"status": "bootstrapped", "user_id": str(response["id"])})
             if manifest_path is not None:
                 _atomic_private_json(manifest_path, {**manifest_base, "status": "RUNNING", "users": row_state,
                                                      "credentials": created}, refuse_existing=False)
@@ -456,7 +608,7 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
                                                  "reason": str(exc), "users": row_state,
                                                  "credentials": created}, refuse_existing=False)
         raise
-    except Exception:
+    except BaseException:
         if manifest_path is not None:
             _atomic_private_json(manifest_path, {**manifest_base, "status": "QUARANTINED",
                                                  "reason": "ownership_or_provisioning_failed", "users": row_state,
@@ -500,18 +652,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config-digest", required=True)
     parser.add_argument("--plan", required=True)
     parser.add_argument("--manifest")
-    parser.add_argument("--database-url")
+    parser.add_argument("--database-url", help=argparse.SUPPRESS)
+    parser.add_argument("--credentials")
     parser.add_argument("--firebase-credentials")
     parser.add_argument("--identity-tool-api-key-file")
     parser.add_argument("--bootstrap-url", default=BOOTSTRAP_ORIGIN)
     parser.add_argument("--allow-test-database", action="store_true")
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--confirm-plan-digest")
     args = parser.parse_args(argv)
     try:
         plan_path = Path(args.plan)
         with _run_lock(plan_path):
-            if not args.execute:
+            if not args.execute and not args.refresh:
                 plan = make_plan(run_id=args.run_id, user_count=args.users, campus_slug=args.campus_slug,
                                  chapter_slug=args.chapter_slug, source_digest=args.source_digest,
                                  image_digest=args.image_digest, config_digest=args.config_digest)
@@ -522,7 +676,20 @@ def main(argv: list[str] | None = None) -> int:
             plan = load_plan(plan_path)
             if args.confirm_plan_digest != plan.plan_digest:
                 raise ProvisioningError("plan_digest_confirmation_required")
-            if not args.manifest or not args.database_url or not args.identity_tool_api_key_file:
+            if args.refresh:
+                if not args.credentials or not args.identity_tool_api_key_file:
+                    raise ProvisioningError("refresh_inputs_required")
+                key_path = Path(args.identity_tool_api_key_file)
+                if key_path.stat().st_mode & 0o077:
+                    raise ProvisioningError("identity_tool_api_key_permissions")
+                api_key = key_path.read_text(encoding="utf-8").strip()
+                refreshed = refresh_credentials(credentials_path=Path(args.credentials), plan=plan,
+                                                refresh_client=identity_toolkit_refresh_client(api_key=api_key),
+                                                token_verifier=firebase_token_verifier())
+                print(json.dumps(refreshed))
+                return 0
+            database_url = os.environ.get("C363_DATABASE_URL")
+            if args.database_url or not args.manifest or not args.credentials or not database_url or not args.identity_tool_api_key_file:
                 raise ProvisioningError("execution_inputs_required")
             key_path = Path(args.identity_tool_api_key_file)
             try:
@@ -536,11 +703,12 @@ def main(argv: list[str] | None = None) -> int:
             token_client = identity_toolkit_token_client(api_key=api_key)
             verifier = firebase_token_verifier()
             bootstrap = bootstrap_http_client(base_url=args.bootstrap_url)
-            ownership = postgres_fixture_ownership(database_url=args.database_url, plan=plan,
+            ownership = postgres_fixture_ownership(database_url=database_url, plan=plan,
                                                    allow_test_database=args.allow_test_database)
             result = provision_users(plan=plan, firebase=firebase, token_client=token_client,
                                      token_verifier=verifier, bootstrap=bootstrap,
-                                     verify_ownership=ownership, manifest_path=Path(args.manifest))
+                                     verify_ownership=ownership, manifest_path=Path(args.manifest),
+                                     credentials_path=Path(args.credentials))
             print(json.dumps({"status": result["status"], "plan_digest": plan.plan_digest,
                               "users": len(result["users"]), "project": PROJECT_ID}))
             return 0
