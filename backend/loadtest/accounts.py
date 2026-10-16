@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 
 @dataclass(frozen=True)
@@ -23,9 +24,26 @@ class Manifest:
 
 def load_manifest(path: str, *, auth_mode: str) -> Manifest:
     """Load and validate the users manifest produced by scripts/seed_loadtest.py
-    (locally) or by the prod provisioning step (never this repo's code)."""
+    (locally) or by the explicit production QA provisioning tool."""
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
+    if raw.get("kind") == "c363_synthetic_firebase_manifest":
+        if (raw.get("status") != "COMPLETE" or raw.get("fixture_provenance") != "synthetic_only"
+                or raw.get("project_id") != "chirps-prod" or auth_mode != "firebase"):
+            raise SystemExit("synthetic provisioning manifest is not ready")
+        entries = raw.get("users")
+        if not isinstance(entries, list) or not 1 <= len(entries) <= 200:
+            raise SystemExit("synthetic provisioning manifest has invalid users")
+        try:
+            if len({entry["uid"] for entry in entries}) != len(entries):
+                raise ValueError("duplicate subject")
+            required_expiry = datetime.now(timezone.utc) + timedelta(minutes=15)
+            for entry in entries:
+                expiry = datetime.fromisoformat(entry["expires_at"])
+                if expiry.tzinfo is None or expiry < required_expiry:
+                    raise ValueError("stale expiry")
+        except (KeyError, TypeError, ValueError):
+            raise SystemExit("synthetic tokens require a fresh complete refresh") from None
     users = [
         VirtualUser(uid=str(u["uid"]), id_token=str(u.get("id_token", "")))
         for u in raw.get("users", [])

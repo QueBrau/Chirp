@@ -385,6 +385,11 @@ python -m loadtest.provisioning \
   --identity-tool-api-key-file /private/path/identity-tool-api-key
 ```
 
+The `--firebase-credentials` option is optional when the operator already has the
+reviewed Application Default Credentials for `chirps-prod`; omit it in both
+commands in that case. Do not create or download a new service-account key just
+for this tool. The existing private Identity Toolkit API key file is still required.
+
 `--allow-test-database` is only for a disposable local/test database and must
 not be used for a production proxy. The verifier checks the live database name,
 role and Alembic head in its own connection before binding the exact synthetic

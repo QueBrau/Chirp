@@ -61,8 +61,11 @@ class OwnershipVerifier(Protocol):
 class _FirebaseRestAdapter:
     """Single-attempt Identity Toolkit Admin REST creator."""
 
-    def __init__(self, session: Any, project_id: str = PROJECT_ID, timeout_seconds: float = 15.0) -> None:
+    def __init__(self, session: Any, *, api_key: str, project_id: str = PROJECT_ID, timeout_seconds: float = 15.0) -> None:
+        if not isinstance(api_key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", api_key):
+            raise ProvisioningError("identity_tool_api_key_invalid")
         self._session = session
+        self._api_key = api_key
         self._project_id = project_id
         self._timeout = timeout_seconds
 
@@ -76,7 +79,8 @@ class _FirebaseRestAdapter:
         try:
             response = self._session.request(
                 "POST", f"https://identitytoolkit.googleapis.com/v1/projects/{self._project_id}/accounts",
-                json=payload, timeout=self._timeout, allow_redirects=False)
+                params={"key": self._api_key}, json=payload,
+                timeout=self._timeout, allow_redirects=False)
         except Exception:
             raise QuarantineRequired("firebase_create_unknown") from None
         if getattr(response, "is_redirect", False) or getattr(response, "status_code", 0) in {301, 302, 303, 307, 308}:
@@ -111,7 +115,19 @@ def _google_authorized_session(*, credentials_path: str | None) -> Any:
                 scopes=["https://www.googleapis.com/auth/cloud-platform"])
             if detected_project not in {None, PROJECT_ID}:
                 raise ProvisioningError("firebase_project_mismatch")
-        credentials.refresh(GoogleRequest())
+        # Bound credential discovery refresh separately; the mutation session
+        # below never retries a failed POST after refreshing authentication.
+        refresh_session = requests.Session()
+        refresh_session.trust_env = False
+        refresh_session.mount("https://", HTTPAdapter(max_retries=0))
+        transport = GoogleRequest(session=refresh_session)
+        def bounded_refresh(*args, **kwargs):
+            kwargs["timeout"] = 15.0
+            return transport(*args, **kwargs)
+        try:
+            credentials.refresh(bounded_refresh)
+        finally:
+            refresh_session.close()
         # Use a plain session instead of AuthorizedSession: the latter installs
         # auth refresh/retry behavior that can repeat a mutating request.
         session = requests.Session()
@@ -125,7 +141,7 @@ def _google_authorized_session(*, credentials_path: str | None) -> Any:
         raise ProvisioningError("firebase_credentials_unavailable") from None
 
 
-def firebase_admin_client(*, project_id: str = PROJECT_ID,
+def firebase_admin_client(*, api_key: str, project_id: str = PROJECT_ID,
                           credentials_path: str | None = None) -> FirebaseClient:
     """Create an explicit Firebase Admin client pinned to the deployed project.
 
@@ -137,7 +153,7 @@ def firebase_admin_client(*, project_id: str = PROJECT_ID,
         raise ProvisioningError("firebase_project_mismatch")
     if os.environ.get("FIREBASE_AUTH_EMULATOR_HOST"):
         raise ProvisioningError("firebase_emulator_forbidden")
-    return _FirebaseRestAdapter(_google_authorized_session(credentials_path=credentials_path))
+    return _FirebaseRestAdapter(_google_authorized_session(credentials_path=credentials_path), api_key=api_key)
 
 
 @dataclass(frozen=True)
@@ -218,14 +234,34 @@ def _json_bytes(value: Mapping[str, Any]) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def _read_private_json(path: Path) -> dict[str, Any]:
+    parent = path.parent.stat()
+    if (parent.st_uid != os.getuid() or parent.st_mode & 0o777 != 0o700
+            or path.is_symlink() or not path.is_file()):
+        raise ProvisioningError("private_path_invalid")
+    info = path.stat()
+    if info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o600 or info.st_size > 4 * 1024 * 1024:
+        raise ProvisioningError("private_file_permissions")
+    with path.open("rb") as handle:
+        raw = handle.read(4 * 1024 * 1024 + 1)
+    if len(raw) > 4 * 1024 * 1024:
+        raise ProvisioningError("private_file_too_large")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ProvisioningError("private_file_invalid")
+    return value
+
+
 def _atomic_private_json(path: Path, value: Mapping[str, Any], *, refuse_existing: bool = True) -> None:
     if not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     parent_stat = path.parent.stat()
     if not path.parent.is_dir() or parent_stat.st_uid != os.getuid() or parent_stat.st_mode & 0o777 != 0o700:
         raise ProvisioningError("private_parent_permissions")
-    if path.exists() and (path.is_symlink() or not path.is_file()):
+    if path.is_symlink() or (path.exists() and not path.is_file()):
         raise ProvisioningError("private_path_invalid")
+    if path.exists() and (path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o777 != 0o600):
+        raise ProvisioningError("private_file_permissions")
     if refuse_existing and path.exists():
         raise FileExistsError(path)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -257,7 +293,10 @@ def _atomic_private_json(path: Path, value: Mapping[str, Any], *, refuse_existin
 @contextmanager
 def _run_lock(path: Path) -> Iterator[None]:
     lock = path.with_name(path.name + ".lock")
-    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    parent = lock.parent.stat()
+    if parent.st_uid != os.getuid() or parent.st_mode & 0o777 != 0o700 or lock.is_symlink():
+        raise ProvisioningError("private_parent_permissions")
     with open(lock, "a+", encoding="utf-8") as handle:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -279,7 +318,7 @@ def plan_document(plan: Plan) -> dict[str, Any]:
 
 def load_plan(path: Path) -> Plan:
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = _read_private_json(path)
         fields = {key: raw[key] for key in ("schema_version", "run_id", "project_id", "campus_slug",
                                             "chapter_slug", "user_count", "source_digest", "image_digest",
                                             "config_digest", "created_at")}
@@ -305,16 +344,18 @@ def load_plan(path: Path) -> Plan:
 
 
 def postgres_fixture_ownership(*, database_url: str, plan: Plan,
+                               expected_schema_head: str,
                                allow_test_database: bool = False,
                                expected_database: str | None = None,
-                               expected_role: str | None = None,
-                               expected_schema_head: str = "0049") -> OwnershipVerifier:
+                               expected_role: str | None = None) -> OwnershipVerifier:
     """Return a local/proxy-only transactional synthetic enrollment verifier."""
     parsed = urlsplit(database_url)
     if parsed.scheme != "postgresql+asyncpg" or parsed.hostname not in {"127.0.0.1", "localhost"}:
         raise ProvisioningError("ownership_database_must_be_local_proxy")
     if (parsed.port or 5432) != 5433 and not allow_test_database:
         raise ProvisioningError("ownership_database_requires_test_opt_in")
+    if not isinstance(expected_schema_head, str) or not re.fullmatch(r"[0-9]{4}", expected_schema_head):
+        raise ProvisioningError("ownership_schema_required")
 
     def verify(*, plan: Plan, users: list[Mapping[str, Any]]) -> Mapping[str, str]:
         try:
@@ -507,14 +548,15 @@ def refresh_credentials(*, credentials_path: Path, plan: Plan,
                          refresh_client: Callable[[str], Mapping[str, Any]],
                          token_verifier: Callable[[str], Mapping[str, Any]],
                          manifest_path: Path | None = None,
-                         now: datetime | None = None) -> dict[str, Any]:
+                         now: datetime | None = None,
+                         clock: Callable[[], datetime] | None = None) -> dict[str, Any]:
     """Refresh every confirmed manifest token without changing Firebase identities."""
     try:
-        raw = json.loads(credentials_path.read_text(encoding="utf-8"))
+        raw = _read_private_json(credentials_path)
         if raw.get("project_id") != PROJECT_ID or raw.get("plan_digest") != plan.plan_digest:
             raise ProvisioningError("credentials_plan_mismatch")
         entries = raw["credentials"]
-        if not isinstance(entries, list) or not entries:
+        if not isinstance(entries, list) or len(entries) != plan.user_count:
             raise ProvisioningError("credentials_invalid")
     except ProvisioningError:
         raise
@@ -523,7 +565,7 @@ def refresh_credentials(*, credentials_path: Path, plan: Plan,
     if manifest_path is None:
         raise ProvisioningError("manifest_required")
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = _read_private_json(manifest_path)
         if (manifest.get("kind") != "c363_synthetic_firebase_manifest"
                 or manifest.get("status") != "COMPLETE"
                 or manifest.get("fixture_provenance") != "synthetic_only"
@@ -535,20 +577,28 @@ def refresh_credentials(*, credentials_path: Path, plan: Plan,
         if not isinstance(users, list) or len(users) != len(entries):
             raise ProvisioningError("manifest_users_mismatch")
         manifest_users = {entry.get("uid"): entry for entry in users}
-        if set(manifest_users) != {entry.get("uid") for entry in entries}:
+        planned_users = {user.uid: user for user in users_for_plan(plan)}
+        if (len(manifest_users) != plan.user_count or set(manifest_users) != set(planned_users)
+                or {entry.get("uid") for entry in entries} != set(planned_users)):
             raise ProvisioningError("manifest_users_mismatch")
         for entry in entries:
             user = manifest_users.get(entry.get("uid"))
             if (not isinstance(user, dict) or user.get("email") != entry.get("email")
                     or user.get("user_id") != entry.get("user_id")
-                    or entry.get("status") != "bootstrapped"):
+                    or entry.get("status") != "bootstrapped"
+                    or entry.get("email") != planned_users[entry["uid"]].email
+                    or str(uuid.UUID(entry["user_id"])) != entry["user_id"]):
                 raise ProvisioningError("manifest_users_mismatch")
     except ProvisioningError:
         raise
     except (OSError, ValueError, TypeError, KeyError):
         raise ProvisioningError("manifest_unreadable") from None
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    read_clock = _clock(now, clock)
     updated: list[dict[str, Any]] = []
+    # A partial refresh must never leave a ready-looking harness manifest. Its
+    # already-rotated credentials stay durable for explicit manual reconciliation.
+    manifest["status"] = "REFRESHING"
+    _atomic_private_json(manifest_path, manifest, refuse_existing=False)
     for entry in entries:
         uid = entry.get("uid")
         refresh_token = entry.get("refresh_token")
@@ -566,7 +616,7 @@ def refresh_credentials(*, credentials_path: Path, plan: Plan,
         exp = verified.get("exp")
         if verified.get("uid") != uid or verified.get("aud") != PROJECT_ID or type(exp) is not int:
             raise QuarantineRequired("refresh_token_verification_failed")
-        if exp < int(current.timestamp()) + TOKEN_MIN_REMAINING_SECONDS:
+        if exp < int(read_clock().timestamp()) + TOKEN_MIN_REMAINING_SECONDS:
             raise ProvisioningError("token_expiry_window_too_short")
         replacement = dict(entry)
         replacement.update({"id_token": token,
@@ -582,12 +632,15 @@ def refresh_credentials(*, credentials_path: Path, plan: Plan,
                 "plan_digest": plan.plan_digest, "credentials": updated}
     _atomic_private_json(credentials_path, document, refuse_existing=False)
     try:
+        current = read_clock()
+        _assert_token_window(updated, current)
         by_uid = {entry["uid"]: entry for entry in updated}
         for user in users:
             replacement = by_uid[user["uid"]]
             user["id_token"] = replacement["id_token"]
             user["expires_at"] = replacement["expires_at"]
         manifest["refreshed_at"] = current.isoformat()
+        manifest["status"] = "COMPLETE"
         _atomic_private_json(manifest_path, manifest, refuse_existing=False)
     except ProvisioningError:
         raise
@@ -609,11 +662,14 @@ def firebase_token_verifier(*, project_id: str = PROJECT_ID,
     except ImportError:
         raise ProvisioningError("firebase_admin_unavailable") from None
     try:
-        app = firebase_admin.get_app()
+        app = firebase_admin.get_app("c363-provisioning-verifier")
     except ValueError:
         try:
             credential = credentials.Certificate(credentials_path) if credentials_path else None
-            app = firebase_admin.initialize_app(credential, options={"projectId": PROJECT_ID})
+            app = firebase_admin.initialize_app(
+                credential, options={"projectId": PROJECT_ID, "httpTimeout": 15},
+                name="c363-provisioning-verifier",
+            )
         except Exception:
             raise ProvisioningError("firebase_verifier_unavailable") from None
     if getattr(app, "project_id", None) != PROJECT_ID:
@@ -625,6 +681,27 @@ def firebase_token_verifier(*, project_id: str = PROJECT_ID,
         except Exception:
             raise ProvisioningError("token_verification_failed") from None
     return verify
+
+
+def _clock(now: datetime | None, clock: Callable[[], datetime] | None) -> Callable[[], datetime]:
+    if now is not None and clock is not None:
+        raise ProvisioningError("clock_inputs_invalid")
+    def read() -> datetime:
+        value = clock() if clock is not None else now or datetime.now(timezone.utc)
+        if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+            raise ProvisioningError("clock_invalid")
+        return value.astimezone(timezone.utc)
+    return read
+
+
+def _assert_token_window(users: list[dict[str, Any]], now: datetime) -> None:
+    for user in users:
+        try:
+            expiry = datetime.fromisoformat(user["expires_at"])
+            if expiry.tzinfo is None or expiry < now + timedelta(seconds=TOKEN_MIN_REMAINING_SECONDS):
+                raise ProvisioningError("token_expiry_window_too_short")
+        except (KeyError, TypeError, ValueError):
+            raise ProvisioningError("token_expiry_window_invalid") from None
 
 
 def _verify_token(result: Mapping[str, Any], *, expected_uid: str, now: datetime,
@@ -652,13 +729,17 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
                     bootstrap: BootstrapClient, verify_ownership: OwnershipVerifier,
                     manifest_path: Path | None = None,
                     credentials_path: Path | None = None,
-                    now: datetime | None = None) -> dict[str, Any]:
+                    now: datetime | None = None,
+                    clock: Callable[[], datetime] | None = None) -> dict[str, Any]:
     if plan.project_id != PROJECT_ID:
         raise ProvisioningError("firebase_project_mismatch")
     if manifest_path is None:
         raise ProvisioningError("manifest_required")
     users = users_for_plan(plan)
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    read_clock = _clock(now, clock)
+    current = read_clock()
+    if credentials_path is not None and (credentials_path.exists() or credentials_path.is_symlink()):
+        raise ProvisioningError("credentials_already_exist")
     if not callable(verify_ownership):
         raise ProvisioningError("ownership_verifier_required")
     preflight = getattr(verify_ownership, "preflight", None)
@@ -676,6 +757,9 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
     row_state = [{"uid": user.uid, "status": "pending"} for user in users]
     if manifest_path is not None:
         _atomic_private_json(manifest_path, {**manifest_base, "status": "RUNNING", "users": row_state})
+    if credentials_path is not None:
+        _atomic_private_json(credentials_path, {"schema_version": 1, "project_id": PROJECT_ID,
+                                               "plan_digest": plan.plan_digest, "credentials": []})
     try:
         for user in users:
             state = next(row for row in row_state if row["uid"] == user.uid)
@@ -686,7 +770,7 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
                 _atomic_private_json(credentials_path, {"schema_version": 1, "project_id": PROJECT_ID,
                                                          "plan_digest": plan.plan_digest,
                                                          "credentials": credential_state},
-                                     refuse_existing=not credentials_path.exists())
+                                     refuse_existing=False)
             try:
                 record = firebase.create_user(uid=user.uid, email=user.email, password=password,
                                               display_name=user.display_name, project_id=PROJECT_ID)
@@ -705,7 +789,7 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
             if manifest_path is not None:
                 _atomic_private_json(manifest_path, {**manifest_base, "status": "RUNNING", "users": row_state}, refuse_existing=False)
             result = token_client(email=user.email, password=password)
-            token, expires_at = _verify_token(result, expected_uid=user.uid, now=current, verifier=token_verifier)
+            token, expires_at = _verify_token(result, expected_uid=user.uid, now=read_clock(), verifier=token_verifier)
             refresh_token = result.get("refreshToken")
             if isinstance(refresh_token, str) and refresh_token:
                 credential_state[-1]["refresh_token"] = refresh_token
@@ -733,6 +817,10 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
                            "user_id": str(response["id"])})
             state.update({"status": "bootstrapped", "user_id": str(response["id"])})
             credential_state[-1].update({"status": "bootstrapped", "user_id": str(response["id"])})
+            if credentials_path is not None:
+                _atomic_private_json(credentials_path, {"schema_version": 1, "project_id": PROJECT_ID,
+                                                       "plan_digest": plan.plan_digest,
+                                                       "credentials": credential_state}, refuse_existing=False)
             if manifest_path is not None:
                 _atomic_private_json(manifest_path, {**manifest_base, "status": "RUNNING", "users": row_state,
                                                      "credentials": created}, refuse_existing=False)
@@ -740,6 +828,7 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
         if not isinstance(ownership, Mapping) or not re.fullmatch(r"[0-9a-f-]{36}", str(ownership.get("campus_id", ""))) or not re.fullmatch(r"[0-9a-f-]{36}", str(ownership.get("chapter_id", ""))):
             raise ProvisioningError("ownership_ids_invalid")
         manifest_base.update({"campus_id": str(ownership["campus_id"]), "chapter_id": str(ownership["chapter_id"])})
+        _assert_token_window(created, read_clock())
     except ProvisioningError as exc:
         if manifest_path is not None:
             _atomic_private_json(manifest_path, {**manifest_base, "status": "QUARANTINED",
@@ -796,8 +885,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--identity-tool-api-key-file")
     parser.add_argument("--bootstrap-url", default=BOOTSTRAP_ORIGIN)
     parser.add_argument("--allow-test-database", action="store_true")
-    parser.add_argument("--execute", action="store_true")
-    parser.add_argument("--refresh", action="store_true")
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("--execute", action="store_true")
+    actions.add_argument("--refresh", action="store_true")
     parser.add_argument("--confirm-plan-digest")
     args = parser.parse_args(argv)
     try:
@@ -836,8 +926,10 @@ def main(argv: list[str] | None = None) -> int:
             database_url = os.environ.get("C363_DATABASE_URL")
             expected_database = os.environ.get("C363_EXPECTED_DATABASE")
             expected_role = os.environ.get("C363_EXPECTED_DB_ROLE")
+            expected_schema = os.environ.get("C363_EXPECTED_SCHEMA_HEAD")
             if (args.database_url or not args.manifest or not args.credentials or not database_url
-                    or not expected_database or not expected_role or not args.identity_tool_api_key_file):
+                    or not expected_database or not expected_role or not args.identity_tool_api_key_file
+                    or not expected_schema or not re.fullmatch(r"[0-9]{4}", expected_schema)):
                 raise ProvisioningError("execution_inputs_required")
             key_path = Path(args.identity_tool_api_key_file)
             try:
@@ -847,14 +939,15 @@ def main(argv: list[str] | None = None) -> int:
                 raise ProvisioningError("identity_tool_api_key_unreadable") from None
             if mode & 0o077 or not api_key:
                 raise ProvisioningError("identity_tool_api_key_permissions")
-            firebase = firebase_admin_client(credentials_path=args.firebase_credentials)
+            firebase = firebase_admin_client(api_key=api_key, credentials_path=args.firebase_credentials)
             token_client = identity_toolkit_token_client(api_key=api_key)
             verifier = firebase_token_verifier(credentials_path=args.firebase_credentials)
             bootstrap = bootstrap_http_client(base_url=args.bootstrap_url)
             ownership = postgres_fixture_ownership(database_url=database_url, plan=plan,
                                                    allow_test_database=args.allow_test_database,
                                                    expected_database=expected_database,
-                                                   expected_role=expected_role)
+                                                   expected_role=expected_role,
+                                                   expected_schema_head=expected_schema)
             result = provision_users(plan=plan, firebase=firebase, token_client=token_client,
                                      token_verifier=verifier, bootstrap=bootstrap,
                                      verify_ownership=ownership, manifest_path=Path(args.manifest),
