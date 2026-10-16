@@ -365,6 +365,9 @@ An interrupted or ambiguous create/bootstrap/token response is quarantined for
 manual reconciliation. Cleanup must use the pinned manifest and fresh ownership
 readback, and may not delete outside the exact synthetic campus/chapter/account
 set.
+The provisioner does not auto-resume a partial or quarantined manifest; an
+operator must reconcile confirmed provider state and create a separately
+reviewed plan before any later phase.
 
 The Oct 17 02:00–05:00 America/New_York window remains gated on a named
 independent watcher, fresh T-30 baseline, final source/image/config binding, and

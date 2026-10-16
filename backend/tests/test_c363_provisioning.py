@@ -80,14 +80,13 @@ def test_execute_loads_existing_plan_and_requires_private_inputs(tmp_path: Path,
     plan_path = tmp_path / "plan.json"
     provisioning._atomic_private_json(plan_path, provisioning.plan_document(p))
     assert provisioning.main([
-        "--run-id", str(uuid.uuid4()), "--users", "200", "--campus-slug", "wrong",
-        "--chapter-slug", "wrong", "--source-digest", D, "--image-digest", D,
-        "--config-digest", D, "--plan", str(plan_path), "--execute",
+        "--run-id", str(uuid.uuid4()), "--users", "200", "--campus-slug", p.campus_slug,
+        "--chapter-slug", p.chapter_slug, "--source-digest", p.source_digest, "--image-digest", p.image_digest,
+        "--config-digest", p.config_digest, "--plan", str(plan_path), "--execute",
         "--confirm-plan-digest", p.plan_digest,
     ]) == 2
     output = capsys.readouterr().out
     assert "execution_inputs_required" in output
-    assert "wrong" not in output
 
 
 def test_real_execution_requires_durable_manifest(tmp_path: Path) -> None:
@@ -145,7 +144,7 @@ def test_refresh_updates_bound_harness_manifest(tmp_path: Path) -> None:
 
     def refresh(value: str):
         assert value == "refresh"
-        return {"id_token": "fresh", "user_id": user.uid, "expires_in": 3600,
+        return {"id_token": "fresh", "user_id": user.uid, "expires_in": "3600",
                 "refresh_token": "rotated"}
 
     def verify(value: str):
@@ -157,6 +156,34 @@ def test_refresh_updates_bound_harness_manifest(tmp_path: Path) -> None:
                                               manifest_path=manifest_path, now=NOW)
     assert result["campus_id"] == OWNERSHIP["campus_id"]
     assert json.loads(manifest_path.read_text())["users"][0]["id_token"] == "fresh"
+
+
+def test_two_user_credentials_journal_replaces_after_first_create(tmp_path: Path) -> None:
+    p = plan(2)
+    users = provisioning.users_for_plan(p)
+
+    class Firebase:
+        def create_user(self, **kwargs):
+            return type("Record", (), {"uid": kwargs["uid"]})()
+
+    def token_client(*, email: str, password: str):
+        user = next(item for item in users if item.email == email)
+        return {"idToken": f"token-{user.uid}", "localId": user.uid,
+                "refreshToken": f"refresh-{user.uid}"}
+
+    def verify(token: str):
+        uid = token.removeprefix("token-")
+        return {"uid": uid, "aud": "chirps-prod", "exp": int(NOW.timestamp()) + 3600}
+
+    result = provisioning.provision_users(
+        plan=p, firebase=Firebase(), token_client=token_client, token_verifier=verify,
+        bootstrap=lambda **kw: {"id": str(uuid.uuid4()), "firebase_uid": kw["email"].split("@")[0]},
+        verify_ownership=lambda **_: OWNERSHIP, manifest_path=tmp_path / "manifest.json",
+        credentials_path=tmp_path / "credentials.json", now=NOW,
+    )
+    assert result["status"] == "COMPLETE"
+    saved = json.loads((tmp_path / "credentials.json").read_text())
+    assert len(saved["credentials"]) == 2
 
 
 @dataclass

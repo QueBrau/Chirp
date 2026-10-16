@@ -330,6 +330,16 @@ def postgres_fixture_ownership(*, database_url: str, plan: Plan,
                 factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
                 async with factory() as session:
                     async with session.begin():
+                        from sqlalchemy import text
+                        identity = (await session.execute(text(
+                            "SELECT current_database(), current_user, "
+                            "(SELECT version_num FROM alembic_version)"))).one()
+                        if expected_database and identity[0] != expected_database:
+                            raise ProvisioningError("ownership_database_mismatch")
+                        if expected_role and identity[1] != expected_role:
+                            raise ProvisioningError("ownership_role_mismatch")
+                        if identity[2] != expected_schema_head:
+                            raise ProvisioningError("ownership_schema_mismatch")
                         existing = (await session.execute(
                             select(Campus).where(Campus.slug == plan.campus_slug).with_for_update()
                         )).scalar_one_or_none()
@@ -351,9 +361,9 @@ def postgres_fixture_ownership(*, database_url: str, plan: Plan,
                             if (row is None or row.campus_id is not None or row.is_ghost
                                     or row.is_platform_admin or row.suspended_at is not None):
                                 raise ProvisioningError("synthetic_user_binding_invalid")
-                            if item.get("user_id") is not None and str(row.id) != str(item["user_id"]):
+                            if not isinstance(item.get("user_id"), str) or str(row.id) != item["user_id"]:
                                 raise ProvisioningError("synthetic_user_binding_invalid")
-                            if item.get("email") is not None and row.email != item["email"]:
+                            if not isinstance(item.get("email"), str) or row.email != item["email"]:
                                 raise ProvisioningError("synthetic_user_binding_invalid")
                             if (await session.execute(
                                 select(Membership.id).where(Membership.user_id == row.id).limit(1)
@@ -548,7 +558,9 @@ def refresh_credentials(*, credentials_path: Path, plan: Plan,
         token = result.get("id_token")
         returned_uid = result.get("user_id")
         expires_in = result.get("expires_in")
-        if not isinstance(token, str) or returned_uid != uid or type(expires_in) is not int:
+        if (not isinstance(token, str) or returned_uid != uid
+                or not isinstance(expires_in, str) or not re.fullmatch(r"[1-9][0-9]{0,3}", expires_in)
+                or not 1 <= int(expires_in) <= 3600):
             raise QuarantineRequired("refresh_identity_mismatch")
         verified = token_verifier(token)
         exp = verified.get("exp")
@@ -586,19 +598,24 @@ def refresh_credentials(*, credentials_path: Path, plan: Plan,
             "users": len(updated)}
 
 
-def firebase_token_verifier(*, project_id: str = PROJECT_ID) -> Callable[[str], Mapping[str, Any]]:
+def firebase_token_verifier(*, project_id: str = PROJECT_ID,
+                            credentials_path: str | None = None) -> Callable[[str], Mapping[str, Any]]:
     """Return the Admin SDK verifier pinned to the same existing project."""
     if project_id != PROJECT_ID:
         raise ProvisioningError("firebase_project_mismatch")
     try:
         import firebase_admin
-        from firebase_admin import auth
+        from firebase_admin import auth, credentials
     except ImportError:
         raise ProvisioningError("firebase_admin_unavailable") from None
     try:
         app = firebase_admin.get_app()
     except ValueError:
-        raise ProvisioningError("firebase_admin_not_initialized") from None
+        try:
+            credential = credentials.Certificate(credentials_path) if credentials_path else None
+            app = firebase_admin.initialize_app(credential, options={"projectId": PROJECT_ID})
+        except Exception:
+            raise ProvisioningError("firebase_verifier_unavailable") from None
     if getattr(app, "project_id", None) != PROJECT_ID:
         raise ProvisioningError("firebase_project_mismatch")
 
@@ -668,7 +685,8 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
             if credentials_path is not None:
                 _atomic_private_json(credentials_path, {"schema_version": 1, "project_id": PROJECT_ID,
                                                          "plan_digest": plan.plan_digest,
-                                                         "credentials": credential_state})
+                                                         "credentials": credential_state},
+                                     refuse_existing=not credentials_path.exists())
             try:
                 record = firebase.create_user(uid=user.uid, email=user.email, password=password,
                                               display_name=user.display_name, project_id=PROJECT_ID)
@@ -794,6 +812,10 @@ def main(argv: list[str] | None = None) -> int:
                                   "users": plan.user_count, "project": PROJECT_ID}))
                 return 0
             plan = load_plan(plan_path)
+            if (args.campus_slug != plan.campus_slug or args.chapter_slug != plan.chapter_slug
+                    or args.source_digest != plan.source_digest or args.image_digest != plan.image_digest
+                    or args.config_digest != plan.config_digest):
+                raise ProvisioningError("plan_argument_mismatch")
             if args.confirm_plan_digest != plan.plan_digest:
                 raise ProvisioningError("plan_digest_confirmation_required")
             if args.refresh:
@@ -807,7 +829,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise ProvisioningError("refresh_inputs_required")
                 refreshed = refresh_credentials(credentials_path=Path(args.credentials), plan=plan,
                                                 refresh_client=identity_toolkit_refresh_client(api_key=api_key),
-                                                token_verifier=firebase_token_verifier(),
+                                                token_verifier=firebase_token_verifier(credentials_path=args.firebase_credentials),
                                                 manifest_path=Path(args.manifest))
                 print(json.dumps(refreshed))
                 return 0
@@ -827,7 +849,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ProvisioningError("identity_tool_api_key_permissions")
             firebase = firebase_admin_client(credentials_path=args.firebase_credentials)
             token_client = identity_toolkit_token_client(api_key=api_key)
-            verifier = firebase_token_verifier()
+            verifier = firebase_token_verifier(credentials_path=args.firebase_credentials)
             bootstrap = bootstrap_http_client(base_url=args.bootstrap_url)
             ownership = postgres_fixture_ownership(database_url=database_url, plan=plan,
                                                    allow_test_database=args.allow_test_database,
