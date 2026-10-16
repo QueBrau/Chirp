@@ -369,8 +369,9 @@ async def test_sequential_slow_auth_setup_keeps_full_socket_cohort(client, make_
     user = await make_user()
     engine = get_engine().sync_engine
     assert engine.pool.checkedout() == 0
-    monkeypatch.setattr(gateway, "WS_SUSPENSION_POLL_SECONDS", .04)
-    monkeypatch.setattr(gateway, "WS_SUSPENSION_POLL_JITTER", 0)
+    # Keep the production suspension-poll cadence here so this test isolates
+    # serial handshake capacity. The churn test above deliberately accelerates
+    # periodic SQL and owns that separate full-cohort assertion.
     original_lookup = gateway.get_user_by_uid
 
     async def slow_lookup(session, uid):
