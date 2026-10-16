@@ -36,9 +36,10 @@ def manifest_data(recipients=2):
 def config_for(tmp_path, api_port=12345, ws_port=12346, **changes):
     config = load_config(_write(tmp_path, _config_dict()))
     mix_weights = changes.pop("mix_weights", {"me": 1})
+    ramp_in_seconds = changes.pop("ramp_in_seconds", 0)
     return replace(config, base_url=f"http://127.0.0.1:{api_port}",
                    ws_url=f"ws://127.0.0.1:{ws_port}/ws", duration_seconds=.35,
-                   ramp_in_seconds=0, think_seconds=.015, mix_weights=mix_weights,
+                   ramp_in_seconds=ramp_in_seconds, think_seconds=.015, mix_weights=mix_weights,
                    caps=replace(config.caps, max_rps=20, max_concurrent_requests=10),
                    ws=replace(config.ws, connects_per_second=10), **changes)
 
@@ -215,7 +216,8 @@ async def run_peer(tmp_path, mode="normal", **options):
         peer.active_http_delay_seconds = options.get("active_http_delay_seconds", 0)
         peer.active_http_delay_remaining = options.get("active_http_delay_requests", 1)
         config = config_for(tmp_path, peer.http_port, peer.ws_port,
-                            mix_weights=options.get("mix_weights", {"me": 1}))
+                            mix_weights=options.get("mix_weights", {"me": 1}),
+                            ramp_in_seconds=options.get("ramp_in_seconds", 0))
         if mode == "late":
             config = replace(config, duration_seconds=1)
         elif mode in {"normal", "duplicate"}:
@@ -313,13 +315,12 @@ async def test_fixed_denominator_and_duplicates_are_not_new_receipts(tmp_path, m
 
 @pytest.mark.asyncio
 async def test_duplicate_positive_cohort_completes_after_slow_active_mix_response(tmp_path):
-    # Reproduce CI startup/phase pressure inside the active mix. The .45-second
-    # test-only first response makes the default .35-second phase insufficient;
-    # the established 1-second positive fixture has room to produce and observe
-    # both duplicate frames without changing any production budget.
+    # Reproduce CI phase pressure inside the active mix. The .34s ramp puts the
+    # three users' first requests inside the phase; delay each response so none
+    # can bypass the first-mix readiness transition with a fast response.
     result, peer, _ = await run_peer(
         tmp_path, "duplicate", duration_seconds=1, active_http_delay_seconds=.45,
-        active_http_delay_requests=3,
+        active_http_delay_requests=3, ramp_in_seconds=.34,
         mix_weights={"posts_list": 1},
     )
     assert result["status"] == "LOCAL_RECEIPTS_OBSERVED", result
