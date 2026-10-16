@@ -331,3 +331,42 @@ percentiles. Use the separate c354 gateway proofs for their stated local scope;
 representative mixed receipts, reconnect/recovery, fixed deployment/pool budgets
 and staging/production capacity remain c363 follow-up acceptance. No production
 load or cloud modification was executed for this correction.
+# c363 automated synthetic Firebase enrollment (Oct 17)
+
+`loadtest.provisioning` is a separate production-QA operator tool. Its default
+mode is plan-only and performs no Firebase, database, HTTP bootstrap, or load
+operation. The existing `scripts/seed_loadtest.py` remains local-only and must
+not be bypassed.
+
+The approved staged run uses the existing `chirps-prod` Firebase issuer and one
+new run-owned throwaway campus/chapter. The operator must use a private
+credential adapter and the reviewed bootstrap path; a separate Firebase
+project, real student identity, `.edu` consent, or fake token is invalid. The
+tool caps enrollment at 200 users, derives a deterministic `c363-<run>-<index>`
+UID namespace, rejects collisions and foreign ownership, and refuses unknown
+provider responses rather than looking up or retrying them.
+
+Plan first, with three source/image/config SHA-256 digests:
+
+```sh
+python -m loadtest.provisioning \
+  --users 200 --campus-slug c363-oct17 --chapter-slug alpha \
+  --source-digest "$SOURCE_DIGEST" --image-digest "$IMAGE_DIGEST" \
+  --config-digest "$CONFIG_DIGEST" --plan /private/path/c363-plan.json
+```
+
+Plans and manifests are created atomically with mode `0600`; a process lock
+prevents concurrent runs. Execution requires the exact printed plan digest and
+an explicitly reviewed operator adapter. Each issued ID token is checked for a
+15-minute minimum remaining lifetime and its expiry is recorded; the harness
+operator must refresh or re-provision before a later phase rather than assume a
+multi-hour token lifetime. Tokens are never printed or logged.
+An interrupted or ambiguous create/bootstrap/token response is quarantined for
+manual reconciliation. Cleanup must use the pinned manifest and fresh ownership
+readback, and may not delete outside the exact synthetic campus/chapter/account
+set.
+
+The Oct 17 02:00–05:00 America/New_York window remains gated on a named
+independent watcher, fresh T-30 baseline, final source/image/config binding, and
+the approved run sequence WS25/50/100, HTTP50/100/200, then combined. A plan or
+manifest is not load evidence and does not authorize execution by itself.
