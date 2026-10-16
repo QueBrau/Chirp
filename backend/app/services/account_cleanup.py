@@ -27,6 +27,7 @@ RETAINED_COVERAGE = (
     "account_ws_connections",
     "account_delivery_attempts",
     "account_payment_effects", "account_payment_attempts",
+    "account_post_deletion_cleanup",
 )
 
 
