@@ -19,7 +19,7 @@ from app.middleware.auth import (
     get_current_user_for_privacy_write,
     get_fresh_verified_uid,
 )
-from app.schemas.data_requests import DataRequestCreate, DataRequestOut
+from app.schemas.data_requests import DataRequestCreate, DataRequestOut, PostDeletionCleanupOut
 from app.services.account_data import fulfill_request
 from app.services.account_fulfillment import prepare_deletion_plan
 
@@ -37,7 +37,11 @@ async def get_data_request_user(
     return await get_current_user_for_privacy(uid=uid, session=session)
 
 
-def _out(row: models.AccountDataRequest, artifact: models.AccountDataArtifact | datetime | None = None) -> DataRequestOut:
+def _out(
+    row: models.AccountDataRequest,
+    artifact: models.AccountDataArtifact | datetime | None = None,
+    post_deletion_cleanup: list[PostDeletionCleanupOut] | None = None,
+) -> DataRequestOut:
     expires_at = artifact.expires_at if isinstance(artifact, models.AccountDataArtifact) else artifact
     return DataRequestOut(
         id=row.id,
@@ -54,8 +58,29 @@ def _out(row: models.AccountDataRequest, artifact: models.AccountDataArtifact | 
         excluded=row.excluded or [],
         retention_reasons=row.retention_reasons or [],
         provider_steps=row.provider_steps or {},
+        post_deletion_cleanup=post_deletion_cleanup or [],
         failure_code=row.failure_code,
     )
+
+
+async def _cleanup_statuses(
+    session: AsyncSession, request_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[PostDeletionCleanupOut]]:
+    if not get_settings().account_deletion_deferred_cleanup_enabled or not request_ids:
+        return {}
+    rows = (await session.execute(
+        select(models.AccountPostDeletionCleanup.request_id,
+               models.AccountPostDeletionCleanup.category,
+               models.AccountPostDeletionCleanup.state)
+        .where(models.AccountPostDeletionCleanup.request_id.in_(request_ids))
+        .order_by(models.AccountPostDeletionCleanup.category)
+    )).all()
+    result: dict[uuid.UUID, list[PostDeletionCleanupOut]] = {}
+    for request_id, category, state in rows:
+        result.setdefault(request_id, []).append(
+            PostDeletionCleanupOut(category=category, state=state)
+        )
+    return result
 
 
 async def _owned(
@@ -95,7 +120,8 @@ async def list_data_requests(
         ).where(models.AccountDataRequest.user_id == user.id)
     )).all()
     by_request = {request_id: expires_at for request_id, expires_at in artifacts}
-    return [_out(row, by_request.get(row.id)) for row in rows]
+    cleanup = await _cleanup_statuses(session, [row.id for row in rows])
+    return [_out(row, by_request.get(row.id), cleanup.get(row.id)) for row in rows]
 
 
 @router.post("/me/data-requests", response_model=DataRequestOut, status_code=201)
@@ -164,7 +190,8 @@ async def get_data_request(
     session: AsyncSession = Depends(get_session),
 ) -> DataRequestOut:
     row, artifact = await _owned(request_id, user, session)
-    return _out(row, artifact)
+    cleanup = await _cleanup_statuses(session, [row.id])
+    return _out(row, artifact, cleanup.get(row.id))
 
 
 @router.get("/me/data-requests/{request_id}/download")

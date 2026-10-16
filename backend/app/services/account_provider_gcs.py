@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import time
 import asyncio
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.services.account_fulfillment import ProviderUnavailable
+from app.services.account_post_deletion_cleanup import DeferredCleanupReceipt
 
 
 PREFIXES = ("tmp/", "posts/", "avatars/")
@@ -297,15 +299,24 @@ async def snapshot_user_media(
     session: AsyncSession,
     user_id: UUID,
     reader: MediaReader,
-    freeze: FreezeReceipt,
+    freeze: FreezeReceipt | None,
     *,
     bucket: str,
     max_objects: int = MAX_OBJECTS,
     deadline_seconds: float = 120.0,
+    deferred_cleanup: bool = False,
 ) -> MediaSnapshot:
     if not isinstance(bucket, str) or not bucket or getattr(reader, "bucket_name", None) != bucket:
         raise MediaProviderUnavailable("media_reader_bucket_mismatch")
-    freeze.validate(user_id, bucket)
+    if type(deferred_cleanup) is not bool:
+        raise ValueError("media_deferred_mode_invalid")
+    if deferred_cleanup:
+        if freeze is not None:
+            raise MediaProviderUnavailable("media_deferred_freeze_mismatch")
+    elif freeze is None:
+        raise MediaProviderUnavailable("media_freeze_invalid")
+    else:
+        freeze.validate(user_id, bucket)
     if isinstance(max_objects, bool) or not isinstance(max_objects, int) or not 1 <= max_objects <= MAX_OBJECTS:
         raise ValueError("media_object_cap_invalid")
     if not math.isfinite(deadline_seconds) or not 1 <= deadline_seconds <= MAX_SECONDS:
@@ -319,7 +330,8 @@ async def snapshot_user_media(
         await _owned_references(session, user_id, bucket)
     found: dict[tuple[str, str], MediaObject] = {}
     for prefix in PREFIXES:
-        freeze.validate(user_id, bucket)
+        if freeze is not None:
+            freeze.validate(user_id, bucket)
         scoped_prefix = f"{prefix}{user_id}/"
         rows = await _list_bounded(reader, scoped_prefix, deadline=deadline, limit=max_objects - len(found))
         for raw in rows:
@@ -332,15 +344,17 @@ async def snapshot_user_media(
     objects = tuple(sorted(found.values(), key=lambda item: (item.name, item.generation)))
     if len({item.name for item in objects}) != len(objects):
         raise MediaProviderUnavailable("media_snapshot_drift")
-    freeze.validate(user_id, bucket)
+    if freeze is not None:
+        freeze.validate(user_id, bucket)
+    freeze_id = freeze.freeze_id if freeze is not None else "deferred"
     payload = {
         "user_id": str(user_id),
         "bucket": bucket,
         "prefixes": list(PREFIXES),
         "objects": [item.payload() for item in objects],
-        "freeze_id": freeze.freeze_id,
+        "freeze_id": freeze_id,
     }
-    return MediaSnapshot(str(user_id), bucket, PREFIXES, objects, freeze.freeze_id, _digest(payload))
+    return MediaSnapshot(str(user_id), bucket, PREFIXES, objects, freeze_id, _digest(payload))
 
 
 class GCSMediaReader:
@@ -415,8 +429,8 @@ class GCSMediaReader:
 class GCSMediaProvider:
     """Operator-only provider applying one verified snapshot, never auto-wired."""
 
-    def __init__(self, reader: MediaReader, *, bucket: str, snapshot: MediaSnapshot, freeze: FreezeReceipt,
-                 retention: MediaRetentionReview | None = None):
+    def __init__(self, reader: MediaReader, *, bucket: str, snapshot: MediaSnapshot, freeze: FreezeReceipt | None,
+                 retention: MediaRetentionReview | None = None, deferred_cleanup: bool = False):
         if not isinstance(bucket, str) or not bucket or getattr(reader, "bucket_name", None) != bucket:
             raise MediaProviderUnavailable("media_reader_bucket_mismatch")
         if not isinstance(retention, MediaRetentionReview):
@@ -427,6 +441,11 @@ class GCSMediaProvider:
         self._snapshot = snapshot
         self._freeze = freeze
         self._retention = retention
+        if type(deferred_cleanup) is not bool:
+            raise MediaProviderUnavailable("media_deferred_mode_invalid")
+        if deferred_cleanup != (freeze is None):
+            raise MediaProviderUnavailable("media_deferred_freeze_mismatch")
+        self._deferred_cleanup = deferred_cleanup
 
     def _validate_snapshot(self, user: models.User) -> None:
         try:
@@ -447,9 +466,22 @@ class GCSMediaProvider:
                 raise MediaProviderUnavailable("media_snapshot_scope_invalid")
         if _digest(self._snapshot.payload()) != self._snapshot.snapshot_digest:
             raise MediaProviderUnavailable("media_snapshot_digest_invalid")
-        self._freeze.validate(canonical_user, self.bucket)
-        if self._freeze.freeze_id != self._snapshot.freeze_id:
+        if self._freeze is not None:
+            self._freeze.validate(canonical_user, self.bucket)
+        elif not self._deferred_cleanup or self._snapshot.freeze_id != "deferred":
+            raise MediaProviderUnavailable("media_freeze_invalid")
+        if self._freeze is not None and self._freeze.freeze_id != self._snapshot.freeze_id:
             raise MediaProviderUnavailable("media_freeze_mismatch")
+
+    def _check_freeze(self, user_id: UUID | str) -> None:
+        if self._freeze is not None:
+            self._freeze.validate(user_id, self.bucket)
+        elif not self._deferred_cleanup:
+            raise MediaProviderUnavailable("media_freeze_invalid")
+
+    @property
+    def deferred_cleanup(self) -> bool:
+        return self._deferred_cleanup
 
     async def delete_account_data(
         self,
@@ -460,10 +492,18 @@ class GCSMediaProvider:
     ) -> dict[str, object]:
         if not isinstance(idempotency_key, str) or not idempotency_key:
             raise MediaProviderUnavailable("media_idempotency_key_invalid")
+        request_id = ""
+        if self._deferred_cleanup:
+            match = re.fullmatch(r"account-deletion:([0-9a-f-]{36}):media_storage", idempotency_key)
+            if match is None:
+                raise MediaProviderUnavailable("media_idempotency_key_invalid")
+            try:
+                request_id = str(UUID(match.group(1)))
+            except (ValueError, AttributeError):
+                raise MediaProviderUnavailable("media_idempotency_key_invalid") from None
         self._validate_snapshot(user)
         retention_codes = self._retention.receipt_codes(self.bucket)
         snapshot = self._snapshot
-        freeze = self._freeze
         if not math.isfinite(deadline_seconds) or not 1 <= deadline_seconds <= MAX_SECONDS:
             raise ValueError("media_deadline_invalid")
         deadline = time.monotonic() + deadline_seconds
@@ -475,39 +515,59 @@ class GCSMediaProvider:
                 item = _metadata(raw)
                 current[item.name] = MediaObject(item.name, item.generation)
         expected_names = {name for name, _ in expected}
-        if set(current) - expected_names:
+        added = set(current) - expected_names
+        if added and (not self._deferred_cleanup or any(not name.startswith(f"tmp/{user.id}/") for name in added)):
             raise MediaProviderUnavailable("media_snapshot_drift")
         if any(
             name in current and generation != current[name].generation
             for name, generation in expected
+            if not self._deferred_cleanup or name.startswith(f"tmp/{user.id}/")
         ):
             raise MediaProviderUnavailable("media_snapshot_drift")
         for item in snapshot.objects:
-            self._freeze.validate(user.id, self.bucket)
+            self._check_freeze(user.id)
             observed = await _reader_call(self._reader, "read", item.name, deadline=deadline)
             if observed is not None and (observed.name, observed.generation) != (item.name, item.generation):
                 raise MediaProviderUnavailable("media_generation_mismatch")
         for item in snapshot.objects:
-            self._freeze.validate(user.id, self.bucket)
+            self._check_freeze(user.id)
             observed = await _reader_call(self._reader, "read", item.name, deadline=deadline)
             if observed is None:
                 continue
             if (observed.name, observed.generation) != (item.name, item.generation):
                 raise MediaProviderUnavailable("media_generation_mismatch")
-            self._freeze.validate(user.id, self.bucket)
+            self._check_freeze(user.id)
             await _reader_call(self._reader, "delete", item.name, item.generation, deadline=deadline)
             after = await _reader_call(self._reader, "read", item.name, deadline=deadline)
             if after is not None:
                 raise MediaProviderUnavailable("media_readback_failed")
-        self._freeze.validate(user.id, self.bucket)
+        self._check_freeze(user.id)
         final = {}
         for prefix in PREFIXES:
             for raw in await _list_bounded(self._reader, f"{prefix}{user.id}/", deadline=deadline, limit=MAX_OBJECTS - len(final)):
                 item = _metadata(raw)
                 final[item.name] = item.generation
-        if final:
+        remaining_tmp = {
+            name: generation for name, generation in final.items()
+            if name.startswith(f"tmp/{user.id}/")
+        }
+        if final and (not self._deferred_cleanup or set(final) != set(remaining_tmp)):
             raise MediaProviderUnavailable("media_reappeared")
-        self._freeze.validate(user.id, self.bucket)
+        self._check_freeze(user.id)
+        if self._deferred_cleanup:
+            descriptor = {
+                "bucket": self.bucket,
+                "tmp_prefix": f"tmp/{user.id}/",
+                "initial_snapshot_digest": snapshot.snapshot_digest,
+            }
+            return DeferredCleanupReceipt(
+                category="temporary_media", provider="media_storage", subject=str(user.id),
+                request_id=request_id,
+                scope=descriptor, scope_sha256=_digest(descriptor),
+                pass_digest=_digest(sorted(remaining_tmp.items())), readback=True,
+                remaining_count=len(remaining_tmp),
+                retained_with_reason=tuple(retention_codes),
+            )
         return {
             "confirmed": True,
             "provider": "media_storage",

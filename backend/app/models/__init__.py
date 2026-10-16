@@ -3,6 +3,7 @@
 from app.models.alumni import AlumniProfile, JobPost
 from app.models.delivery import DeliveryOutbox
 from app.models.data_requests import AccountDataArtifact, AccountDataRequest, AccountFulfillmentStep
+from app.models.account_post_deletion_cleanup import AccountPostDeletionCleanup
 from app.models.account_deletion_holds import AccountDeletionHold
 from app.models.account_external_operations import (
     AccountExternalOperation,
@@ -69,6 +70,7 @@ __all__ = [
     "AccountDataArtifact",
     "AccountDataRequest",
     "AccountFulfillmentStep",
+    "AccountPostDeletionCleanup",
     "AccountDeletionHold",
     "AccountExternalOperation",
     "AccountExternalOperationScope",

@@ -20,6 +20,14 @@ from app.db import get_session_factory
 from app.services.account_cleanup import cleanup_local_account
 from app.services.account_deletion_hold import DeletionHoldInvalid, _lock_exclusive
 from app.services.account_external_operations import inspect_registered_operation_drain
+from app.config import get_settings
+from app.services.account_post_deletion_cleanup import (
+    CATEGORIES as DEFERRED_CLEANUP_CATEGORIES,
+    PUBLIC_DISCLOSURES as DEFERRED_CLEANUP_DISCLOSURES,
+    DeferredCleanupReceipt,
+    deferred_receipt_from_journal,
+    make_obligation,
+)
 
 PROVIDER_STEPS = ("payment_provider", "media_storage", "email_logs_backups", "analytics", "firebase_auth")
 # Shared with deletion preflight: these markers mean an external call may have
@@ -221,6 +229,37 @@ def validate_provider_receipt(
     return _retention_receipt(step_key, result)
 
 
+def _validate_step_receipt(step_key: str, subject: uuid.UUID, value: object,
+                           request_id: uuid.UUID) -> tuple[list[str], DeferredCleanupReceipt | None]:
+    """Validate an ordinary provider confirmation or the explicit deferred variant."""
+    if isinstance(value, DeferredCleanupReceipt):
+        deferred = value
+        if not get_settings().account_deletion_deferred_cleanup_enabled or step_key not in {"media_storage", "analytics"}:
+            raise ProviderUnavailable("provider_confirmation_missing")
+    elif isinstance(value, dict) and value.get("receipt_type") == "deferred_cleanup":
+        if step_key not in {"media_storage", "analytics"}:
+            raise ProviderUnavailable("provider_confirmation_missing")
+        try:
+            deferred = deferred_receipt_from_journal(value, step_key=step_key,
+                                                     subject=subject, request_id=request_id)
+        except ValueError:
+            raise ProviderUnavailable("provider_confirmation_missing") from None
+    else:
+        return validate_provider_receipt(step_key, subject, value,
+                                         expected_request_id=request_id), None
+    try:
+        category = "temporary_media" if step_key == "media_storage" else "identifiable_analytics"
+        deferred.validate(expected_category=category, subject=subject, request_id=request_id)
+    except ValueError:
+        raise ProviderUnavailable("provider_confirmation_missing") from None
+    return list(deferred.retained_with_reason), deferred
+
+
+def _receipt_from_step(step_key: str, subject: uuid.UUID, provider_ref: object,
+                       request_id: uuid.UUID) -> tuple[list[str], DeferredCleanupReceipt | None]:
+    return _validate_step_receipt(step_key, subject, provider_ref, request_id)
+
+
 async def prepare_deletion_plan(session: AsyncSession, request: models.AccountDataRequest) -> list[models.AccountFulfillmentStep]:
     """Create the complete provider plan before any irreversible work."""
     if request.kind != "deletion":
@@ -403,7 +442,18 @@ async def run_deletion(
             try:
                 if step.last_error in OUTCOME_UNKNOWN_ERRORS:
                     raise ProviderUnavailable("provider_confirmation_missing")
-                validate_provider_receipt(step.step_key, user.id, step.provider_ref, expected_request_id=request.id)
+                retention_codes, deferred = _receipt_from_step(
+                    step.step_key, user.id, step.provider_ref, request.id,
+                )
+                if deferred is not None and get_settings().account_deletion_deferred_cleanup_enabled:
+                    obligations = list((await session.scalars(select(models.AccountPostDeletionCleanup).where(
+                        models.AccountPostDeletionCleanup.request_id == request.id,
+                        models.AccountPostDeletionCleanup.category == deferred.category,
+                    ))).all())
+                    if (len(obligations) != 1 or obligations[0].user_id != user.id
+                            or obligations[0].scope_sha256 != deferred.scope_sha256
+                            or obligations[0].scope != deferred.scope):
+                        valid_terminal = False
                 valid_terminal = valid_terminal and step.status == "succeeded" and step.completed_at is not None and step.idempotency_key == _key(request.id, step.step_key)
             except ProviderUnavailable:
                 valid_terminal = False
@@ -457,7 +507,7 @@ async def run_deletion(
                         or step.last_error in OUTCOME_UNKNOWN_ERRORS
                         or step.lease_token is not None or step.lease_expires_at is not None):
                     raise ProviderUnavailable("provider_confirmation_missing")
-                validate_provider_receipt(step_key, user.id, step.provider_ref, expected_request_id=request.id)
+                _receipt_from_step(step_key, user.id, step.provider_ref, request.id)
             except ProviderUnavailable:
                 step.status = "manual_review"
                 # A succeeded state itself records an earlier provider action,
@@ -511,6 +561,14 @@ async def run_deletion(
             request.provider_steps = {s.step_key: s.status for s in steps}
             await session.commit()
             return DeletionRun("blocked", tuple(completed), step_key)
+        if (getattr(provider, "deferred_cleanup", False)
+                and (not get_settings().account_deletion_deferred_cleanup_enabled
+                     or step_key not in {"media_storage", "analytics"})):
+            request.status = "blocked"
+            request.failure_code = "deferred_cleanup_disabled"
+            request.provider_steps = {s.step_key: s.status for s in steps}
+            await session.commit()
+            return DeletionRun("blocked", tuple(completed), step_key)
         token = uuid.uuid4()
         lease_until = _now() + timedelta(minutes=5)
         claimed = await session.execute(update(models.AccountFulfillmentStep).where(
@@ -526,7 +584,9 @@ async def run_deletion(
         await session.commit()
         try:
             result = await provider.delete_account_data(user=user, idempotency_key=step.idempotency_key)
-            retained_with_reason = validate_provider_receipt(step_key, user.id, result, expected_request_id=request.id)
+            retained_with_reason, deferred_receipt = _validate_step_receipt(
+                step_key, user.id, result, request.id,
+            )
         except Exception:
             # Provider invocation began. Even an exception or malformed
             # receipt cannot establish that the external effect did not occur.
@@ -561,15 +621,18 @@ async def run_deletion(
                 return DeletionRun("blocked", tuple(completed), step_key)
             await session.commit()
             return DeletionRun("blocked", tuple(completed), step_key)
-        provider_ref = {"confirmed": True, "provider": result["provider"],
-                        "subject": result["subject"], "scope": result["scope"],
-                        "readback": True, "retained_with_reason": retained_with_reason}
-        if step_key == "analytics":
-            provider_ref.update({"time_travel_hours": result["time_travel_hours"],
-                                 "fail_safe_days": result["fail_safe_days"],
-                                 "excluded_scope": result["excluded_scope"],
-                                 "request_id": result["request_id"],
-                                 "snapshot_digest": result["snapshot_digest"]})
+        if deferred_receipt is not None:
+            provider_ref = deferred_receipt.journal_value()
+        else:
+            provider_ref = {"confirmed": True, "provider": result["provider"],
+                            "subject": result["subject"], "scope": result["scope"],
+                            "readback": True, "retained_with_reason": retained_with_reason}
+            if step_key == "analytics":
+                provider_ref.update({"time_travel_hours": result["time_travel_hours"],
+                                     "fail_safe_days": result["fail_safe_days"],
+                                     "excluded_scope": result["excluded_scope"],
+                                     "request_id": result["request_id"],
+                                     "snapshot_digest": result["snapshot_digest"]})
         fenced = await session.execute(update(models.AccountFulfillmentStep).where(
             models.AccountFulfillmentStep.id == step.id,
             models.AccountFulfillmentStep.status == "running",
@@ -625,6 +688,7 @@ async def run_deletion(
         await session.commit()
         return DeletionRun("blocked", tuple(completed), None)
     provider_retention_codes: dict[str, list[str]] = {}
+    deferred_receipts: list[DeferredCleanupReceipt] = []
     for durable_step in durable_steps:
         if durable_step.step_key == "database_tombstone":
             continue
@@ -634,10 +698,20 @@ async def run_deletion(
                     or durable_step.last_error in OUTCOME_UNKNOWN_ERRORS
                     or durable_step.lease_token is not None or durable_step.lease_expires_at is not None):
                 raise ProviderUnavailable("provider_confirmation_missing")
-            provider_retention_codes[durable_step.step_key] = validate_provider_receipt(
-                durable_step.step_key, user.id, durable_step.provider_ref,
-                expected_request_id=request.id,
+            provider_retention_codes[durable_step.step_key], deferred = _receipt_from_step(
+                durable_step.step_key, user.id, durable_step.provider_ref, request.id,
             )
+            if deferred is not None:
+                if not get_settings().account_deletion_deferred_cleanup_enabled:
+                    raise ProviderUnavailable("provider_confirmation_missing")
+                existing = (await session.scalars(select(models.AccountPostDeletionCleanup).where(
+                    models.AccountPostDeletionCleanup.request_id == request.id,
+                    models.AccountPostDeletionCleanup.category == deferred.category,
+                ))).one_or_none()
+                if existing is not None and (existing.scope_sha256 != deferred.scope_sha256
+                                              or existing.scope != deferred.scope):
+                    raise ProviderUnavailable("provider_confirmation_missing")
+                deferred_receipts.append(deferred)
         except ProviderUnavailable:
             request.status = "blocked"
             request.failure_code = "provider_step_incomplete"
@@ -651,6 +725,18 @@ async def run_deletion(
     for retained_with_reason in provider_retention_codes.values():
         for code in retained_with_reason:
             retention_reasons[code] = PROVIDER_RETENTION_REASONS[code]
+    for deferred in deferred_receipts:
+        retention_reasons[f"post_deletion_cleanup_{deferred.category}"] = DEFERRED_CLEANUP_DISCLOSURES[deferred.category]
+        existing = (await session.scalars(select(models.AccountPostDeletionCleanup).where(
+            models.AccountPostDeletionCleanup.request_id == request.id,
+            models.AccountPostDeletionCleanup.category == deferred.category,
+        ).with_for_update())).one_or_none()
+        if existing is None:
+            session.add(make_obligation(request_id=request.id, user_id=user.id, receipt=deferred))
+        elif (existing.user_id != user.id or existing.scope_sha256 != deferred.scope_sha256
+              or existing.scope != deferred.scope):
+            await session.rollback()
+            return DeletionRun("blocked", tuple(completed), deferred.category)
     request.retention_reasons = list(retention_reasons.values())
     await session.flush()
     # Keep shared organization, authored encrypted message, legal, safety, and

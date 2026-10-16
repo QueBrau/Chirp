@@ -12,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.config import get_settings
+from app.services.account_post_deletion_cleanup import PUBLIC_DISCLOSURES
 
 
 EXPORT_SCOPE = [
@@ -29,6 +31,7 @@ EXPORT_EXCLUDED = [
     "prekey byte material and dormant client-only SQLite data",
     "installment details, delivery-outbox records, and role history changed by other officers",
     "internal operation ownership tokens and coordination records",
+    "post-deletion cleanup coordination and provider-scope records",
 ]
 RETENTION_REASONS = [
     "shared organization and safety records may need attribution or legal preservation",
@@ -359,7 +362,12 @@ async def fulfill_request(session: AsyncSession, request: models.AccountDataRequ
         "Stripe customer and payment-provider deletion requires provider confirmation",
         "email, object-storage, logging, and backup copies require separate operator steps",
     ]
-    request.retention_reasons = RETENTION_REASONS
+    retention_reasons = list(RETENTION_REASONS)
+    if get_settings().account_deletion_deferred_cleanup_enabled:
+        # Disclose the approved residual categories at intake, while the user can
+        # still authenticate; the post-tombstone status route may be inaccessible.
+        retention_reasons.extend(PUBLIC_DISCLOSURES.values())
+    request.retention_reasons = retention_reasons
     request.status = "blocked"
     request.failure_code = "manual_processing_required"
     request.updated_at = datetime.now(timezone.utc)
