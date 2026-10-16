@@ -203,10 +203,10 @@ async def run_peer(tmp_path, mode="normal", **options):
         config = config_for(tmp_path, peer.http_port, peer.ws_port)
         if mode == "late":
             config = replace(config, duration_seconds=1)
-        elif mode == "normal":
-            # The synchronization below waits for the real recorder transition;
-            # give that event and the synthetic POST a finite test-only window;
-            # this changes no production setting or harness implementation.
+        elif mode in {"normal", "duplicate"}:
+            # Both positive cohorts need a finite window for the real HTTP-mix
+            # transition and synthetic POST. Negative cases retain the shorter
+            # default; no production setting or harness implementation changes.
             config = replace(config, duration_seconds=1)
         peer.observation = workload.Observation(config,
                                                parse_manifest(json.dumps(raw)),
@@ -290,7 +290,7 @@ async def test_fixed_denominator_and_duplicates_are_not_new_receipts(tmp_path, m
     assert result["receipts"]["expected"] == 2
     assert result["receipts"]["unique"] == unique and result["receipts"]["missing"] == missing
     assert result["receipts"]["duplicates"] == (2 if mode == "duplicate" else 0)
-    assert result["status"] == ("LOCAL_RECEIPTS_OBSERVED" if mode == "duplicate" else "NOT_PROVEN")
+    assert result["status"] == ("LOCAL_RECEIPTS_OBSERVED" if mode == "duplicate" else "NOT_PROVEN"), result
     assert "exactly_once_delivery" in result["not_proven"]
 
 
