@@ -187,16 +187,62 @@ case closure reference. The synthetic fixture also writes a private cleanup side
 on failure; that evidence lists only generations created by that run and records
 failed cleanup without exposing provider exception details.
 
-For root review, use a disposable bucket and a harmless non-sensitive fixture under
-`posts/synthetic-c437/`: create two objects with different names and identical
-synthetic bytes, capture their provider generations, run the bounded inventory with
-the target generation, review the printed manifest digest, build the posts-only plan,
-and execute it with a private receipt path. Read back both names, then recreate one
-name to obtain a new generation and run `verify_removal`; the receipt must become
-`reappeared` and no second delete may be sent. Repeat with a stale generation and a
-forced provider failure to prove conditional refusal and same-plan retry. Root must
-approve the bucket, fixture names, service identity, retention and deletion window
-before any provider call; this worktree performed no such call.
+The c437 synthetic fixture is limited to a pre-existing, dedicated disposable bucket
+named `chirps-c437-fixture-593616178468-<nonce>` in project `chirps-prod`. The nonce
+is an explicit 8–24 character lowercase alphanumeric value. Never substitute
+`chirps-prod-media` or another serving bucket. Before the operator considers execution,
+the bucket must be empty, labeled `purpose=c437-synthetic`, use uniform bucket-level
+access and enforced public-access prevention, have versioning disabled, soft-delete
+retention set to zero, and have no event hold or retention policy. The script only
+verifies these settings; it never creates a bucket, changes bucket settings, or grants
+IAM access.
+
+Run these commands from the repository root with the backend environment active. The
+fixture imports the application from `backend/`; set `PYTHONPATH=backend` explicitly.
+Create a private directory for receipts and evidence before execution:
+
+```sh
+umask 077
+mkdir -p "$HOME/c437-private"
+chmod 700 "$HOME/c437-private"
+```
+
+Print and review the fixture plan first:
+
+```sh
+PYTHONPATH=backend python scripts/c437_synthetic_fixture.py \
+  --project chirps-prod --project-number 593616178468 --nonce <reviewed-nonce> --cleanup
+```
+
+The plan digest binds the project, dedicated bucket, nonce, object names and synthetic
+body hash. Execution requires the exact digest, the existing synthetic-only approval,
+`--cleanup`, and a new absolute receipt path inside a private directory owned by the
+operator. Set
+`DISABLE_GCS_PYTHON_CLIENT_OTEL_BUCKET_METADATA=true` for this command. The script
+checks the complete bucket metadata and emptiness before its first upload, then writes
+private generation-bound inventory, plan, receipt and cleanup evidence. It restores
+the application storage client it temporarily uses. A lost upload response remains
+unresolved even if readback matches the marker and fixture bytes, because that does
+not prove this request created the object. Unresolved names are never deleted by name
+alone. Cleanup deletes only generations whose
+ownership was confirmed and writes a private sidecar. A failed or unknown cleanup
+must be reviewed; do not retry a broad deletion or assume the bucket is empty.
+
+After reviewing the print-only plan and separately confirming the dedicated bucket,
+the operator may run the exact plan with its printed digest:
+
+```sh
+DISABLE_GCS_PYTHON_CLIENT_OTEL_BUCKET_METADATA=true \
+PYTHONPATH=backend python scripts/c437_synthetic_fixture.py \
+  --project chirps-prod --project-number 593616178468 --nonce <same-reviewed-nonce> \
+  --execute --approval I_UNDERSTAND_SYNTHETIC_ONLY --cleanup \
+  --confirm-plan-digest <printed-plan-digest> \
+  --receipt "$HOME/c437-private/c437-fixture-receipt.json"
+```
+
+Root must separately approve the dedicated bucket, exact nonce and execution window
+before any provider call. This source change and its local tests perform no provider
+call and do not prove live bucket configuration or fixture provenance.
 
 The adapter follows the documented Google Cloud Storage Python APIs for paginated
 listing and `Blob.download_to_file(..., if_generation_match=...)`:
