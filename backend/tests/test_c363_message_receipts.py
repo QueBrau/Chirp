@@ -35,9 +35,10 @@ def manifest_data(recipients=2):
 
 def config_for(tmp_path, api_port=12345, ws_port=12346, **changes):
     config = load_config(_write(tmp_path, _config_dict()))
+    mix_weights = changes.pop("mix_weights", {"me": 1})
     return replace(config, base_url=f"http://127.0.0.1:{api_port}",
                    ws_url=f"ws://127.0.0.1:{ws_port}/ws", duration_seconds=.35,
-                   ramp_in_seconds=0, think_seconds=.015, mix_weights={"me": 1},
+                   ramp_in_seconds=0, think_seconds=.015, mix_weights=mix_weights,
                    caps=replace(config.caps, max_rps=20, max_concurrent_requests=10),
                    ws=replace(config.ws, connects_per_second=10), **changes)
 
@@ -45,6 +46,10 @@ def config_for(tmp_path, api_port=12345, ws_port=12346, **changes):
 class Peer:
     def __init__(self, raw, mode="normal"):
         self.raw, self.mode = raw, mode
+        self.active_http_delay_seconds = 0
+        self.active_http_delay_remaining = 1
+        self.active_http_delay_observed = False
+        self.active_http_delayed_requests = 0
         self.sockets = {}
         self.requests = []
         self.payloads = []
@@ -120,6 +125,13 @@ class Peer:
             self.requests.append((method, path, headers))
             status = 200
             if method == "GET" and path.endswith("/posts"):
+                if (self.active_http_delay_seconds and self.active_http_delay_remaining
+                        and self.http_mix_active is not None and self.http_mix_active.is_set()):
+                    delay = self.active_http_delay_seconds
+                    self.active_http_delay_remaining -= 1
+                    self.active_http_delay_observed = True
+                    self.active_http_delayed_requests += 1
+                    await asyncio.sleep(delay)
                 result = [{"id": str(uuid4())} for _ in range(5)]
             elif method == "POST" and path.endswith("/messages"):
                 self.post_starts.append(time.monotonic())
@@ -200,14 +212,19 @@ async def peers(raw, mode="normal"):
 async def run_peer(tmp_path, mode="normal", **options):
     raw = manifest_data()
     async with peers(raw, mode) as peer:
-        config = config_for(tmp_path, peer.http_port, peer.ws_port)
+        peer.active_http_delay_seconds = options.get("active_http_delay_seconds", 0)
+        peer.active_http_delay_remaining = options.get("active_http_delay_requests", 1)
+        config = config_for(tmp_path, peer.http_port, peer.ws_port,
+                            mix_weights=options.get("mix_weights", {"me": 1}))
         if mode == "late":
             config = replace(config, duration_seconds=1)
-        elif mode == "normal":
+        elif mode in {"normal", "duplicate"}:
             # The synchronization below waits for the real recorder transition;
-            # give that event and the synthetic POST a finite test-only window;
-            # this changes no production setting or harness implementation.
+            # give the positive cohort and synthetic POST a finite test-only
+            # window. The shorter default remains for negative cases.
             config = replace(config, duration_seconds=1)
+        if "duration_seconds" in options:
+            config = replace(config, duration_seconds=options["duration_seconds"])
         peer.observation = workload.Observation(config,
                                                parse_manifest(json.dumps(raw)),
                                                options.get("messages", 1), options.get("interval_seconds", 4), .1)
@@ -290,8 +307,29 @@ async def test_fixed_denominator_and_duplicates_are_not_new_receipts(tmp_path, m
     assert result["receipts"]["expected"] == 2
     assert result["receipts"]["unique"] == unique and result["receipts"]["missing"] == missing
     assert result["receipts"]["duplicates"] == (2 if mode == "duplicate" else 0)
-    assert result["status"] == ("LOCAL_RECEIPTS_OBSERVED" if mode == "duplicate" else "NOT_PROVEN")
+    assert result["status"] == ("LOCAL_RECEIPTS_OBSERVED" if mode == "duplicate" else "NOT_PROVEN"), result
     assert "exactly_once_delivery" in result["not_proven"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_positive_cohort_completes_after_slow_active_mix_response(tmp_path):
+    # Reproduce CI startup/phase pressure inside the active mix. The .45-second
+    # test-only first response makes the default .35-second phase insufficient;
+    # the established 1-second positive fixture has room to produce and observe
+    # both duplicate frames without changing any production budget.
+    result, peer, _ = await run_peer(
+        tmp_path, "duplicate", duration_seconds=1, active_http_delay_seconds=.45,
+        active_http_delay_requests=3,
+        mix_weights={"posts_list": 1},
+    )
+    assert result["status"] == "LOCAL_RECEIPTS_OBSERVED", result
+    assert peer.active_http_delay_observed
+    assert result["errors"] == []
+    assert result["receipts"]["expected"] == result["receipts"]["unique"] == 2
+    assert result["receipts"]["duplicates"] == 2 and result["receipts"]["missing"] == 0
+    assert result["http_ready_ws_overlap"]["mix_2xx"] > 0
+    assert result["receipt_during_http"]["observed"]
+    assert peer.active_http_delayed_requests == 3
 
 
 @pytest.mark.asyncio
