@@ -99,6 +99,32 @@ def test_real_execution_requires_durable_manifest(tmp_path: Path) -> None:
         )
 
 
+def test_firebase_rest_creator_is_single_attempt_and_uid_bound() -> None:
+    class Response:
+        status_code = 200
+        is_redirect = False
+
+        @staticmethod
+        def json():
+            return {"localId": "uid-1"}
+
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            raise TimeoutError("ambiguous")
+
+    session = Session()
+    adapter = provisioning._FirebaseRestAdapter(session)
+    with pytest.raises(provisioning.QuarantineRequired, match="unknown"):
+        adapter.create_user(uid="uid-1", email="u@loadtest.invalid", password="secret",
+                            display_name="Synthetic", project_id="chirps-prod")
+    assert len(session.calls) == 1
+    assert session.calls[0][1]["allow_redirects"] is False
+
+
 @dataclass
 class Record:
     uid: str
@@ -277,6 +303,16 @@ async def test_real_postgres_enrollment_binds_uid_and_reads_back(migrated_db: st
         )
         assert result["status"] == "COMPLETE"
         assert result["campus_id"] and result["chapter_id"]
+        bad_plan = provisioning.make_plan(
+            run_id=str(uuid.uuid4()), user_count=1, campus_slug=f"c363-{uuid.uuid4().hex[:12]}",
+            chapter_slug="alpha", source_digest=D, image_digest=D, config_digest=D,
+        )
+        bad_verifier = provisioning.postgres_fixture_ownership(
+            database_url=migrated_db, plan=bad_plan, allow_test_database=True)
+        with pytest.raises(provisioning.ProvisioningError, match="synthetic_user_binding_invalid"):
+            await asyncio.to_thread(bad_verifier, plan=bad_plan, users=[{"uid": "c363-deadbeefdeadbeef-001"}])
+        async with factory() as session:
+            assert (await session.execute(select(Campus).where(Campus.slug == bad_plan.campus_slug))).scalar_one_or_none() is None
         async with factory() as session:
             campus = (await session.execute(select(Campus).where(Campus.slug == p.campus_slug))).scalar_one()
             chapter = (await session.execute(select(Chapter).where(Chapter.campus_id == campus.id))).scalar_one()

@@ -68,6 +68,69 @@ class _FirebaseAdminAdapter:
         return self._auth.create_user(**kwargs)
 
 
+class _FirebaseRestAdapter:
+    """Single-attempt Identity Toolkit Admin REST creator."""
+
+    def __init__(self, session: Any, project_id: str = PROJECT_ID, timeout_seconds: float = 15.0) -> None:
+        self._session = session
+        self._project_id = project_id
+        self._timeout = timeout_seconds
+
+    def create_user(self, **kwargs: Any) -> Any:
+        if kwargs.pop("project_id", None) != self._project_id:
+            raise ProvisioningError("firebase_project_mismatch")
+        payload = {"localId": kwargs.get("uid"), "email": kwargs.get("email"),
+                   "password": kwargs.get("password"), "displayName": kwargs.get("display_name")}
+        if set(payload) != {"localId", "email", "password", "displayName"}:
+            raise ProvisioningError("firebase_create_request_invalid")
+        try:
+            response = self._session.request(
+                "POST", f"https://identitytoolkit.googleapis.com/v1/projects/{self._project_id}/accounts",
+                json=payload, timeout=self._timeout, allow_redirects=False)
+        except Exception:
+            raise QuarantineRequired("firebase_create_unknown") from None
+        if getattr(response, "is_redirect", False) or getattr(response, "status_code", 0) in {301, 302, 303, 307, 308}:
+            raise QuarantineRequired("firebase_create_redirect")
+        if getattr(response, "status_code", 0) != 200:
+            raise ProvisioningError("firebase_create_rejected")
+        try:
+            body = response.json()
+            returned = body.get("localId")
+        except Exception:
+            raise QuarantineRequired("firebase_create_response_invalid") from None
+        if not isinstance(returned, str):
+            raise QuarantineRequired("firebase_create_response_invalid")
+        return type("FirebaseRecord", (), {"uid": returned})()
+
+
+def _google_authorized_session(*, credentials_path: str | None) -> Any:
+    try:
+        import google.auth
+        from google.auth.transport.requests import AuthorizedSession
+        from google.auth.transport.requests import Request as GoogleRequest
+        from requests.adapters import HTTPAdapter
+    except ImportError:
+        raise ProvisioningError("google_auth_unavailable") from None
+    try:
+        if credentials_path:
+            from google.oauth2 import service_account
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_path, scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        else:
+            credentials, detected_project = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            if detected_project not in {None, PROJECT_ID}:
+                raise ProvisioningError("firebase_project_mismatch")
+        credentials.refresh(GoogleRequest())
+        session = AuthorizedSession(credentials)
+        session.mount("https://", HTTPAdapter(max_retries=0))
+        return session
+    except ProvisioningError:
+        raise
+    except Exception:
+        raise ProvisioningError("firebase_credentials_unavailable") from None
+
+
 def firebase_admin_client(*, project_id: str = PROJECT_ID,
                           credentials_path: str | None = None) -> FirebaseClient:
     """Create an explicit Firebase Admin client pinned to the deployed project.
@@ -80,22 +143,7 @@ def firebase_admin_client(*, project_id: str = PROJECT_ID,
         raise ProvisioningError("firebase_project_mismatch")
     if os.environ.get("FIREBASE_AUTH_EMULATOR_HOST"):
         raise ProvisioningError("firebase_emulator_forbidden")
-    try:
-        import firebase_admin
-        from firebase_admin import auth
-        from firebase_admin import credentials
-    except ImportError:
-        raise ProvisioningError("firebase_admin_unavailable") from None
-    try:
-        app = firebase_admin.get_app()
-    except ValueError:
-        credential = credentials.Certificate(credentials_path) if credentials_path else None
-        options = {"projectId": PROJECT_ID, "httpTimeout": 15}
-        app = firebase_admin.initialize_app(credential, options=options)
-    configured = getattr(app, "project_id", None)
-    if configured != PROJECT_ID:
-        raise ProvisioningError("firebase_project_mismatch")
-    return _FirebaseAdminAdapter(auth)
+    return _FirebaseRestAdapter(_google_authorized_session(credentials_path=credentials_path))
 
 
 @dataclass(frozen=True)
@@ -298,7 +346,11 @@ def postgres_fixture_ownership(*, database_url: str, plan: Plan,
                             row = (await session.execute(
                                 select(User).where(User.firebase_uid == item.get("uid")).with_for_update()
                             )).scalar_one_or_none()
-                            if row is None or row.campus_id is not None:
+                            if row is None or row.campus_id is not None or row.is_ghost:
+                                raise ProvisioningError("synthetic_user_binding_invalid")
+                            if item.get("user_id") is not None and str(row.id) != str(item["user_id"]):
+                                raise ProvisioningError("synthetic_user_binding_invalid")
+                            if item.get("email") is not None and row.email != item["email"]:
                                 raise ProvisioningError("synthetic_user_binding_invalid")
                             row.campus_id = campus.id
                             row.campus_verified_at = now
@@ -422,6 +474,7 @@ def identity_toolkit_refresh_client(*, api_key: str, project_id: str = PROJECT_I
 def refresh_credentials(*, credentials_path: Path, plan: Plan,
                          refresh_client: Callable[[str], Mapping[str, Any]],
                          token_verifier: Callable[[str], Mapping[str, Any]],
+                         manifest_path: Path | None = None,
                          now: datetime | None = None) -> dict[str, Any]:
     """Refresh every confirmed manifest token without changing Firebase identities."""
     try:
@@ -463,7 +516,29 @@ def refresh_credentials(*, credentials_path: Path, plan: Plan,
     document = {"schema_version": 1, "project_id": PROJECT_ID,
                 "plan_digest": plan.plan_digest, "credentials": updated}
     _atomic_private_json(credentials_path, document, refuse_existing=False)
-    return {"status": "REFRESHED", "plan_digest": plan.plan_digest, "users": len(updated)}
+    if manifest_path is None:
+        raise ProvisioningError("manifest_required")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("plan_digest") != plan.plan_digest or not manifest.get("campus_id") or not manifest.get("chapter_id"):
+            raise ProvisioningError("manifest_plan_mismatch")
+        by_uid = {entry["uid"]: entry for entry in updated}
+        users = manifest.get("users")
+        if not isinstance(users, list) or {entry.get("uid") for entry in users} != set(by_uid):
+            raise ProvisioningError("manifest_users_mismatch")
+        for user in users:
+            replacement = by_uid[user["uid"]]
+            user["id_token"] = replacement["id_token"]
+            user["expires_at"] = replacement["expires_at"]
+        manifest["refreshed_at"] = current.isoformat()
+        _atomic_private_json(manifest_path, manifest, refuse_existing=False)
+    except ProvisioningError:
+        raise
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ProvisioningError("manifest_unreadable") from None
+    return {"status": "REFRESHED", "plan_digest": plan.plan_digest,
+            "campus_id": manifest["campus_id"], "chapter_id": manifest["chapter_id"],
+            "users": len(updated)}
 
 
 def firebase_token_verifier(*, project_id: str = PROJECT_ID) -> Callable[[str], Mapping[str, Any]]:
@@ -591,7 +666,7 @@ def provision_users(*, plan: Plan, firebase: FirebaseClient, token_client: Token
                 raise QuarantineRequired("bootstrap_unknown") from None
             if response.get("firebase_uid") != user.uid or not response.get("id"):
                 raise QuarantineRequired("bootstrap_identity_mismatch")
-            created.append({"uid": user.uid, "id_token": token, "expires_at": expires_at,
+            created.append({"uid": user.uid, "email": user.email, "id_token": token, "expires_at": expires_at,
                            "user_id": str(response["id"])})
             state.update({"status": "bootstrapped", "user_id": str(response["id"])})
             credential_state[-1].update({"status": "bootstrapped", "user_id": str(response["id"])})
@@ -683,9 +758,12 @@ def main(argv: list[str] | None = None) -> int:
                 if key_path.stat().st_mode & 0o077:
                     raise ProvisioningError("identity_tool_api_key_permissions")
                 api_key = key_path.read_text(encoding="utf-8").strip()
+                if not args.manifest:
+                    raise ProvisioningError("refresh_inputs_required")
                 refreshed = refresh_credentials(credentials_path=Path(args.credentials), plan=plan,
                                                 refresh_client=identity_toolkit_refresh_client(api_key=api_key),
-                                                token_verifier=firebase_token_verifier())
+                                                token_verifier=firebase_token_verifier(),
+                                                manifest_path=Path(args.manifest))
                 print(json.dumps(refreshed))
                 return 0
             database_url = os.environ.get("C363_DATABASE_URL")
