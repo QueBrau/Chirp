@@ -146,20 +146,70 @@ honest about saturating, they do not make one Intel core faster.
    queries (below); repeat the current paired configuration and authenticated
    verification procedures; post baseline versus after evidence on the board.
 
-## Cleanup (prod, after any run)
+## Cleanup (only after an authorized run)
 
-Synthetic rows are identifiable by body marker and by author uid prefix agreed
-at provisioning time. Via the Auth Proxy, in this order (comments before posts):
+Never run a broad LOADTEST-prefix delete. The marker is not a fixture boundary:
+another author can reply to a synthetic post, and reports, likes, votes, or
+moderation history make a row unsafe to erase. The scoped cleanup command
+defaults to a read-only preview and supports only posts, comments, and chirps
+written by the exact fixture accounts in the bounded run interval.
+The tool checks that scope and generated-body pattern; it cannot independently
+prove that the listed accounts were authorized QA fixtures, so the operator must
+review the provisioning record and run report before creating the scope.
 
-```sql
-DELETE FROM post_comments WHERE body LIKE 'LOADTEST %';
-DELETE FROM chirps WHERE body LIKE 'LOADTEST %';
-DELETE FROM posts WHERE body LIKE 'LOADTEST %';
-```
+Prepare a private, token-free scope file from the run manifest and provisioning
+record. It must contain exactly these fields:
 
-Then decide with Jose whether the test accounts stay (future runs) or go.
-Ledger/dues tables are untouched by construction — the harness cannot reach
-them.
+    {
+      "schema_version": 1,
+      "campus_id": "campus UUID",
+      "chapter_id": "chapter UUID",
+      "expected_database_name": "database name",
+      "expected_database_role": "database role",
+      "run_started_at": "2026-10-16T02:00:00Z",
+      "run_ended_at": "2026-10-16T03:00:00Z",
+      "users": [
+        {"firebase_uid": "fixture UID", "user_id": "database user UUID"}
+      ]
+    }
+
+Use one explicit DATABASE_URL for the approved Auth Proxy connection; do not
+source .env or rely on application settings. Protect the scope file and plan
+as private files. Preview writes no database rows:
+
+    cd backend
+    umask 077
+    python -m loadtest.cleanup --scope /private/path/c363-scope.json \
+      --plan-out /private/path/c363-cleanup-plan.json
+
+Review the private plan's exact row IDs and fingerprints against the run
+record. Standard output contains only table counts and a SHA-256 digest. It
+does not print fixture UIDs, row bodies, or the connection URL. Preview and
+apply both verify the database name and role, the chapter/campus relationship,
+and every exact UID-to-user-ID active membership mapping.
+
+Apply only the reviewed plan, with the same scope and database binding, after
+checking its candidate IDs and digest:
+
+    python -m loadtest.cleanup --scope /private/path/c363-scope.json \
+      --apply --plan /private/path/c363-cleanup-plan.json \
+      --confirm-digest REVIEWED_SHA256
+
+The plan is exclusive-created with mode 0600 and cannot overwrite an existing
+file. Apply re-reads the plan, locks and revalidates selected rows in one
+bounded transaction, and refuses any changed candidate, stale membership,
+wrong database, excess candidate count, report/moderation reference, post
+like, chirp vote, or non-fixture comment attached to a candidate post.
+FK-less report/audit inserts are fenced for the short apply transaction.
+Comments are deleted before chirps and posts. Any timeout, cancellation,
+drift, dependency, or row-count mismatch before commit rolls back the entire
+apply. If the connection is lost while COMMIT is in flight, the result is
+unknown: do not retry from the old plan. Re-run a read-only preview against the
+same database and inspect whether the exact candidate IDs remain. It never
+deletes users, chapters, campuses, likes/votes, reports, or moderation history.
+
+Do not remove fixture accounts as part of this command. Account disposition
+remains a separate operator decision.
 
 ## Local proving (what CI of this harness means)
 
