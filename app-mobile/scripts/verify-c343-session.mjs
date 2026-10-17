@@ -338,12 +338,54 @@ await test("dismissal while OS permission is pending never opens a late picker",
 await test("late secondary fetches from A cannot repaint B, even on the same campus", async e => {
   const campusA = deferred(), verificationA = deferred(); e.emit(e.user("A"));
   const normalFetch = e.fetch;
-  e.fetch = url => url.endsWith("/campuses/campus") ? campusA.promise : url.endsWith("/auth/campus-verification") ? verificationA.promise : normalFetch(url);
+  let campusSignal;
+  e.fetch = (url, options) => {
+    if (url.endsWith("/campuses/campus")) { campusSignal = options.signal; return campusA.promise; }
+    return url.endsWith("/auth/campus-verification") ? verificationA.promise : normalFetch(url);
+  };
   await e.mountProvider(); assert.equal(e.hook.value.status, "ready");
   e.fetch = async url => url.endsWith("/auth/me") ? response(200, { user: account("B"), memberships: [] }) : response(200, { name: "B campus", verified: false });
   e.emit(e.user("B")); await flush();
+  assert.equal(campusSignal.aborted, true);
   campusA.resolve(response(200, { name: "old A campus" })); verificationA.resolve(response(200, { verified: true })); await flush();
   assert.equal(e.hook.value.campus.name, "B campus"); assert.equal(e.hook.value.campusVerification.verified, false);
+});
+
+await test("campus label retries transient failures finitely, then recovers on foreground", async e => {
+  e.emit(e.user("A")); let campusCalls = 0;
+  e.fetch = async url => {
+    if (url.endsWith("/campuses/campus")) { campusCalls++; return campusCalls <= 3 ? response(503) : response(200, { id: "campus", name: "Recovered campus", slug: "recovered" }); }
+    if (url.endsWith("/auth/me")) return response(200, { user: account("A"), memberships: [] });
+    return response(200, { verified: false });
+  };
+  await e.mountProvider(); await flush();
+  assert.equal(campusCalls, 1);
+  await e.timer.tick(250); assert.equal(campusCalls, 2);
+  await e.timer.tick(750); await flush();
+  assert.equal(campusCalls, 3); assert.equal(e.hook.value.campus, null);
+  e.setAppState("background"); await flush();
+  e.setAppState("active"); await flush();
+  assert.equal(campusCalls, 4); assert.equal(e.hook.value.campus.name, "Recovered campus");
+  await e.timer.tick(60_000); assert.equal(campusCalls, 4, "exhaustion must not become an infinite poll");
+});
+
+await test("background aborts a stalled campus request and foreground starts a fresh owned lookup", async e => {
+  e.emit(e.user("A")); const stalled = deferred(); let campusCalls = 0, oldSignal;
+  e.fetch = (url, options) => {
+    if (url.endsWith("/campuses/campus")) {
+      campusCalls++;
+      if (campusCalls === 1) { oldSignal = options.signal; return stalled.promise; }
+      return Promise.resolve(response(200, { id: "campus", name: "Foreground campus", slug: "foreground" }));
+    }
+    if (url.endsWith("/auth/me")) return Promise.resolve(response(200, { user: account("A"), memberships: [] }));
+    return Promise.resolve(response(200, { verified: false }));
+  };
+  await e.mountProvider(); await flush(); assert.equal(campusCalls, 1);
+  e.setAppState("background"); await flush(); assert.equal(oldSignal.aborted, true);
+  e.setAppState("active"); await flush();
+  assert.equal(campusCalls, 2); assert.equal(e.hook.value.campus.name, "Foreground campus");
+  stalled.resolve(response(200, { id: "campus", name: "Late background campus", slug: "late" })); await flush();
+  assert.equal(e.hook.value.campus.name, "Foreground campus");
 });
 
 await test("startup /me timeout renders an actionable recovery screen; its button retries", async e => {
