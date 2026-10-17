@@ -403,7 +403,7 @@ async def _database_identity_and_acl(
     if endpoint.get("database") != database_name or endpoint.get("username") != expected_role:
         raise ExecutorRefused("database_endpoint_mismatch")
     role_flags = (await session.execute(text(
-        "SELECT r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, "
+        "SELECT r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication, "
         "pg_has_role(r.oid, d.datdba, 'MEMBER') AS database_owner, "
         "EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "JOIN pg_roles owner_role ON owner_role.oid = c.relowner "
@@ -426,7 +426,7 @@ async def _database_identity_and_acl(
     if versions != [EXPECTED_SCHEMA_HEAD]:
         raise ExecutorRefused("database_schema_mismatch")
     missing: list[str] = []
-    write_privileges = ("INSERT", "UPDATE", "DELETE", "TRUNCATE")
+    write_privileges = ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "TRIGGER")
     allowed_table_writes = [
         f"{table}:{privilege}" for table, privileges in _ACL.items()
         for privilege in privileges if privilege in write_privileges

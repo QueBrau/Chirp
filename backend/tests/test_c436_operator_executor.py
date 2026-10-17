@@ -209,6 +209,8 @@ async def test_prepare_review_execute_is_bound_and_provider_injected(
              f'REVOKE DELETE ON TABLE public.users FROM "{role}"'),
             (f'GRANT UPDATE ON TABLE public.users TO "{role}"',
              f'REVOKE UPDATE ON TABLE public.users FROM "{role}"'),
+            (f'GRANT TRIGGER ON TABLE public.chirp_votes TO "{role}"',
+             f'REVOKE TRIGGER ON TABLE public.chirp_votes FROM "{role}"'),
         ):
             async with get_session_factory()() as admin:
                 await admin.execute(text(grant))

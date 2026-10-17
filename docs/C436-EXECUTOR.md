@@ -33,10 +33,11 @@ the CLI can infer. They must describe concrete evidence and the reviewer in the
 approval artifact. Admission flags are checked both against that artifact and the
 current process settings. The database check separately verifies actual database,
 role, schema head `0050`, connection endpoint, and the executor's exact
-table/column privilege allowlist. It refuses elevated role attributes,
-membership in database-wide privileged roles, table ownership, and unexpected
-app-table write privileges. The schema head is intentionally exact; update this
-tool after a future migration.
+table/column privilege allowlist. It refuses elevated role attributes, including
+replication capability, membership in database-wide privileged roles, table
+ownership and unexpected app-table write or trigger privileges. The schema
+head is intentionally exact; update this tool after a
+future migration.
 
 ## Private approval file
 
