@@ -2,19 +2,82 @@
 
 This change provides authenticated account-data request intake, owner-scoped status, and a downloadable export of the supported server-side records. Export artifacts are immutable, explicitly marked `partially_completed`, and served only through the authenticated download route with `Cache-Control: private, no-store`.
 
+## Activation intent and ordering
+
+`infra/deployment.json` records the reviewed final value of all four shared
+account-deletion gates as `true`: HTTP admission, WebSocket admission, delivery
+admission, and deferred cleanup. This is checked-in release intent, not proof
+that production has been deployed or that a hold may already be created. The
+source defaults remain safe for an unreviewed environment, and the phase checks
+below are required before this intent can be used.
+
+The operator must create a separate private phase intent from the exact image
+digest and reviewed configuration with the deployment generator's explicit
+`--config` input. Retain each phase intent with its byte-level diff from the
+final configuration and review it independently. The generator only prints a
+command plan; it does not execute deployment, traffic changes, scheduler
+changes, provider calls, or deletion. A generated command is never approval to
+run the phase. The generator must recognize all four account-deletion names as
+approved environment keys before this file can validate; a failed validation
+is a release blocker and must not be bypassed by hand-editing generated
+commands.
+
+Use this serialized sequence:
+
+1. **Phase A — remove the legacy race.** Use the new image with all four
+   account-deletion gates false, `OUTBOX_SWEEPER_ENABLED=false` for both API and
+   WS, and the existing purge/media jobs quiescent. Stage and promote WS, drain
+   the old WS revision, then stage and promote API and drain the old `824fe74`
+   API revision and its legacy sweeper. Verify zero old instances, direct
+   dispatch work, and in-flight sweeper activity before continuing. No account
+   hold may be created in this phase.
+2. **Phase B — admit and drain the new writers.** Keep the same image and set
+   all four account-deletion gates true while leaving the API
+   `OUTBOX_SWEEPER_ENABLED=false`; keep the WS worker false because WS has no
+   sweeper. WS may carry its final admission gates from this phase. After the
+   flag-off API direct-dispatch work has drained and the canonical API/WS
+   configuration and schema checks pass, the new admission paths may be
+   exercised. Do not start deferred cleanup yet.
+3. **Phase C — start the fenced worker.** Enable API
+   `OUTBOX_SWEEPER_ENABLED=true` on the same image only after Phase B's drain
+   evidence is fresh. Re-run the canonical API/WS, role, schema, grants, and
+   worker configuration checks, then keep purge and media-reconcile jobs
+   quiescent while active holds exist. Resume a job only after its hold-aware
+   implementation and its own drain evidence have been reviewed.
+
+Promotions are serialized by service (WS before API) and use no-traffic
+staging; a 100% traffic drain is not a prerequisite for promotion. The safety
+condition is that each old revision and its in-flight work is drained before
+the next phase relies on new admission or worker fences. These phases are
+necessary because the old direct completion path has no claim-token fence, and
+the new worker must not consume legacy direct-dispatch rows while an old
+revision can still complete or overwrite them. If any drain, canonical check,
+grant check, or phase-intent diff is missing or stale, stop with jobs paused
+and leave the final gates unused.
+
 The current export covers the account profile, memberships, authored content and interactions, events and attendance, alumni and lineage records, owned devices and message metadata, caller-owned message receipts, payment and ledger rows linked to the account, role terms, moderation/report actions authored by the caller, legal policy versions plus the caller's acceptance records, and organization/payment authority declarations made by the caller. Ciphertext remains opaque; key material and credential-shaped fields are redacted.
 
 The export explicitly omits provider-held Firebase/Auth, payment, email, object storage, logging, and backup copies; plaintext that is never stored by the server; prekey byte material; dormant client-only SQLite data; and outbox delivery payloads or recipient identifiers. Role terms are currently limited to terms changed by the caller. Installment details are represented by caller-linked payment-plan rows; provider payment records remain omitted. Shared organization, safety, append-only financial, provider-backup, and logging records have documented retention reasons. User-block export includes only blocks initiated by the caller and never exposes the other account's identifier. New tables or columns require an allowlist review before they can enter an export.
 
 Deletion requests are accepted and tracked with a durable provider-step plan (migration 0043). The request route remains blocked until an operator supplies all five reviewed provider adapters: payment provider, media storage, email/logs/backups, account-linked analytics, and Firebase/Auth. Each step has a stable idempotency key, attempt count, sanitized outcome, and manual-review state; missing or ambiguous provider confirmation cannot reach the database tombstone. The injected executor preserves shared organization, safety/legal, authored encrypted-message, and append-only financial rows, removes the caller's server-side prekey rows for revoked devices, and removes direct Firebase/email identity linkage only after every provider step is confirmed. The default deployment has no configured adapters and therefore cannot perform deletion; operator credentials, grants, and adapters must be reviewed before any enablement. Export artifacts have a bounded maintenance CLI (`python -m app.jobs.account_data`) that previews by default and requires explicit `--delete`; this release does not enable a production schedule.
 
-Rollout order:
+The activation sequence above supersedes the earlier source-only rollout order.
+Before Phase A, confirm schema 0050 and the reviewed API/WS/runtime grants are
+already present. The API request/artifact and
+`account_fulfillment_steps` SELECT/INSERT grants are needed for blocked-plan
+intake; the separate operator identity owns narrowly scoped step updates and
+owned-prekey DELETE permission. Grant no API cleanup DELETE permission and no
+client role direct table access. Run the read-only c454 privilege preflight
+against the actual API connection with `--expected-role chirp_api`, including
+the inherited column ACLs and real zero-row ORM selects. See
+`docs/C454-ROLLOUT.md`.
 
-1. Apply migration 0043 only after the c438 migrations 0040–0042 are present. Review the API role's request/artifact and `account_fulfillment_steps` SELECT/INSERT grants needed to create and report a blocked plan. Review the separate operator workflow role for narrowly scoped request/step lease updates and owned-prekey DELETE grants; grant no API cleanup DELETE permission and no client role direct table access.
-2. Deploy backend models, migrations, auth freshness dependency, request/status/download routes, export service, and focused database tests before shipping either client screen. Before accepting an export request, run the read-only c454 privilege preflight against the actual API database connection with `--expected-role chirp_api`; it verifies the inherited export column ACLs (including column-level grants), real zero-row ORM selects, and request/artifact write privileges. See `docs/C454-ROLLOUT.md`.
-3. Verify suspended users can still read their own request status while sensitive creation/download remains fresh-auth protected; verify owner isolation and rate limits. Re-run the same preflight after any schema, role, or deployment-template change; a missing column grant must block release rather than surface as an export-route 500.
-4. Ship the mobile settings screen and web support fallback after backend behavior is observable.
-5. Treat deletion as manual processing until each provider step has a durable journal, an idempotent retry contract, and provider-specific confirmation.
+Verify suspended users can still read their own request status while sensitive
+creation/download remains fresh-auth protected, then verify owner isolation and
+rate limits. Re-run the preflight after any schema, role, or deployment-template
+change; a missing column grant blocks release. Deletion remains manual until
+each provider step has a durable journal, an idempotent retry contract, and
+provider-specific confirmation.
 
 Sensitive request creation and downloads check both Firebase token revocation and
 recent authentication. Verify the API identity can read Firebase account status
