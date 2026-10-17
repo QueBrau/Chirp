@@ -360,7 +360,7 @@ async def snapshot_user_media(
 class GCSMediaReader:
     """Small production GCS reader; every operation receives a finite timeout."""
 
-    def __init__(self, bucket: str):
+    def __init__(self, bucket: str, *, project: str | None = None, credentials: Any = None):
         if not isinstance(bucket, str) or not bucket or "/" in bucket:
             raise ValueError("media_bucket_invalid")
         self._require_bounded_sdk()
@@ -368,7 +368,12 @@ class GCSMediaReader:
         self.bucket_name = bucket
         # Keep an empty, dedicated SDK metadata cache. A shared runtime client
         # may have cached buckets whose 404 handling queues background requests.
-        self._bucket = storage.Client().bucket(bucket)
+        if project is not None and (not isinstance(project, str) or not project):
+            raise MediaProviderUnavailable("media_project_invalid")
+        # The worker passes an explicitly selected ADC credential and project.
+        # The legacy no-argument form remains available to tests and dormant
+        # callers, but is never constructed by the operator job.
+        self._bucket = storage.Client(project=project, credentials=credentials).bucket(bucket)
 
     @staticmethod
     def _require_bounded_sdk() -> None:

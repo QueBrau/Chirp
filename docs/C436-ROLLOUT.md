@@ -408,3 +408,11 @@ flag or run a production worker until migration 0050, narrow grants, the provide
 identity and inventory policy, and an operator recovery process have separate
 review. No production migration, grant, provider request, deployment or deletion
 is performed here.
+
+The source now includes an explicit operator entry point at
+`python -m app.jobs.account_deferred_cleanup`. It is inspection-only by default
+and binds one obligation to its request, user, category, scope digest, database,
+role, and exact migration head before reporting state. `--apply-one` remains
+blocked unless a reviewed provider factory is supplied by an operator; importing
+the job discovers no credentials and registers no scheduler. Reconciliation also
+requires a typed proof bound to the immutable obligation scope and owner attempt.
