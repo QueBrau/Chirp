@@ -58,13 +58,16 @@ def _url(object_name: str, bucket: str = TEST_BUCKET) -> str:
 class _FakeBlob:
     """Only the surface the job actually touches: name, time_created, delete()."""
 
-    def __init__(self, name: str, time_created: datetime | None, captured: dict) -> None:
+    def __init__(self, name: str, time_created: datetime | None, captured: dict, generation: int = 1) -> None:
         self.name = name
         self.time_created = time_created
+        self.generation = generation
         self._captured = captured
 
-    def delete(self) -> None:
+    def delete(self, *, if_generation_match: int | None = None) -> None:
+        assert if_generation_match == self.generation
         self._captured.setdefault("delete_attempts", []).append(self.name)
+        self._captured.setdefault("delete_preconditions", []).append(if_generation_match)
         if self.name in self._captured.get("delete_404_names", ()):
             raise NotFound(f"simulated already-deleted {self.name}")
 
@@ -267,7 +270,8 @@ async def test_every_page_of_the_listing_is_walked(
     """A bucket bigger than one page is exactly where a wrong listing becomes a wrong
     delete set: objects on page two would look absent, not protected."""
     setup = await make_chapter_with("member")
-    page_two_referenced = "posts/u/page2-live.jpg"
+    owner_prefix = f"posts/{setup.member.id}"
+    page_two_referenced = f"{owner_prefix}/page2-live.jpg"
     await _insert_post(
         setup.chapter_id, setup.member.id, media_urls=[_url(page_two_referenced)]
     )
@@ -277,9 +281,9 @@ async def test_every_page_of_the_listing_is_walked(
     _install_fake_gcs(
         monkeypatch,
         [
-            _blobs(captured, ("posts/u/page1-a.jpg", old), ("posts/u/page1-b.jpg", old)),
-            _blobs(captured, (page_two_referenced, old), ("posts/u/page2-orphan.jpg", old)),
-            _blobs(captured, ("posts/u/page3-orphan.jpg", old)),
+            _blobs(captured, (f"{owner_prefix}/page1-a.jpg", old), (f"{owner_prefix}/page1-b.jpg", old)),
+            _blobs(captured, (page_two_referenced, old), (f"{owner_prefix}/page2-orphan.jpg", old)),
+            _blobs(captured, (f"{owner_prefix}/page3-orphan.jpg", old)),
         ],
         captured,
     )
@@ -289,10 +293,10 @@ async def test_every_page_of_the_listing_is_walked(
     assert result.scanned == 5
     assert result.referenced == 1
     assert result.deleted == (
-        "posts/u/page1-a.jpg",
-        "posts/u/page1-b.jpg",
-        "posts/u/page2-orphan.jpg",
-        "posts/u/page3-orphan.jpg",
+        f"{owner_prefix}/page1-a.jpg",
+        f"{owner_prefix}/page1-b.jpg",
+        f"{owner_prefix}/page2-orphan.jpg",
+        f"{owner_prefix}/page3-orphan.jpg",
     )
 
 
@@ -301,9 +305,10 @@ async def test_a_delete_that_404s_counts_as_success_not_failure(
 ) -> None:
     """Already gone is the state this job wanted. It must not abort the run or count
     as an error, and the objects after it in the batch must still be processed."""
-    await make_chapter_with("member")
-    gone = "posts/u/raced-away.jpg"
-    still_there = "posts/u/really-here.jpg"
+    setup = await make_chapter_with("member")
+    owner_prefix = f"posts/{setup.member.id}"
+    gone = f"{owner_prefix}/raced-away.jpg"
+    still_there = f"{owner_prefix}/really-here.jpg"
 
     old = NOW - timedelta(days=30)
     captured: dict = {"delete_404_names": {gone}}
@@ -364,7 +369,7 @@ async def test_one_row_naming_another_bucket_is_ignored_without_aborting(
     bucket is part of the identity, not decoration."""
     setup = await make_chapter_with("member")
     ours = f"posts/{setup.member.id}/ours.jpg"
-    theirs = "posts/u/theirs.jpg"
+    theirs = f"posts/{setup.member.id}/theirs.jpg"
     await _insert_post(setup.chapter_id, setup.member.id, media_urls=[_url(ours)])
     await _insert_post(
         setup.chapter_id, setup.member.id, media_urls=[_url(theirs, bucket=OTHER_BUCKET)]
@@ -410,8 +415,8 @@ async def test_an_empty_posts_table_does_not_trip_the_abort_guard(
 ) -> None:
     """No post has a photo is a legitimate state, not a misconfiguration - the guard
     keys on urls that exist and fail to resolve, not on an empty reference set."""
-    await make_chapter_with("member")
-    orphan = "posts/u/nothing-references-me.jpg"
+    setup = await make_chapter_with("member")
+    orphan = f"posts/{setup.member.id}/nothing-references-me.jpg"
 
     captured: dict = {}
     _install_fake_gcs(
@@ -905,9 +910,10 @@ async def test_default_run_omits_an_already_gone_object_name_from_logs(
     A racing delete is a normal outcome, not an error, so this line runs on ordinary
     days; it must not be the one that writes a user id into a scheduled run's logs.
     """
-    await make_chapter_with("member")
-    gone = "posts/u/raced-away.jpg"
-    still_there = "posts/u/really-here.jpg"
+    setup = await make_chapter_with("member")
+    owner_prefix = f"posts/{setup.member.id}"
+    gone = f"{owner_prefix}/raced-away.jpg"
+    still_there = f"{owner_prefix}/really-here.jpg"
 
     old = NOW - timedelta(days=30)
     captured: dict = {"delete_404_names": {gone}}

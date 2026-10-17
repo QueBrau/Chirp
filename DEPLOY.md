@@ -406,7 +406,10 @@ explicitly supplied. This job must never use the API runtime service account:
 The reconciler requires a dedicated identity and a dedicated read-only database
 credential. Do not reuse the application's `DATABASE_URL`: doing so would give a
 compromised cleanup container the application's write privileges even though the
-current job code only issues a `SELECT`.
+dry-run path only issues a `SELECT`. Delete mode also writes one narrowly scoped
+external-operation registration per owner/object generation so account deletion
+can drain the provider effect. It must continue using this dedicated database role;
+do not grant these privileges to the API or WebSocket runtime roles.
 
 The commands in this section change production infrastructure. They are manager
 steps, not part of a normal backend deploy. Run them from a reviewed shell with the
@@ -426,6 +429,29 @@ PGPASSWORD="$PGPASS" psql -h 127.0.0.1 -p 5433 -U chirp -d chirp -c "GRANT SELEC
 printf 'postgresql+asyncpg://chirp_media_reconcile:%s@/chirp?host=/cloudsql/%s:%s:chirp-db' "$RECONCILE_DBPASS" "$PROJECT" "$REGION" | gcloud secrets create MEDIA_RECONCILE_DATABASE_URL --project=$PROJECT --data-file=-
 unset RECONCILE_DBPASS
 ```
+
+After migration `0051`, delete mode additionally needs the exact registry
+privileges below. The dry-run command does not query these tables and remains
+available with only the original `posts.media_urls` read grant. The registry
+permissions let this job bind the canonical owner UUID, reject active holds, record
+and finish only its operation state, and retain unknown outcomes. They do not permit
+hold activation or changes to user/deletion-request data. Do not run `--delete`
+until migration `0051` and these grants are present.
+
+```sql
+GRANT SELECT (id, firebase_uid) ON TABLE users TO chirp_media_reconcile;
+GRANT SELECT (user_id, state) ON TABLE account_deletion_holds TO chirp_media_reconcile;
+GRANT SELECT ON TABLE account_external_operations TO chirp_media_reconcile;
+GRANT INSERT (id, actor_user_id, kind, effect_key, owner_token, state)
+  ON TABLE account_external_operations TO chirp_media_reconcile;
+GRANT UPDATE (state, completed_at)
+  ON TABLE account_external_operations TO chirp_media_reconcile;
+GRANT SELECT, INSERT ON TABLE account_external_operation_scopes TO chirp_media_reconcile;
+```
+
+The UUIDs are supplied by the application, so this role needs no sequence
+privileges. Preserve the existing bucket-scoped `storage.objects.list` grant and
+`posts/`-conditioned `storage.objects.delete` grant; do not widen either binding.
 
 Create a dedicated service account. Use custom roles because the predefined
 Storage object-admin roles also authorize object creation and replacement. Listing

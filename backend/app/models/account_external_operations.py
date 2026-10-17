@@ -17,7 +17,7 @@ class AccountExternalOperation(Base):
             name="uq_account_external_operation_effect",
         ),
         CheckConstraint(
-            "kind IN ('media_finalize_post', 'media_finalize_avatar', 'campus_verification_email', 'payment_request')",
+            "kind IN ('media_finalize_post', 'media_finalize_avatar', 'campus_verification_email', 'payment_request', 'media_reconcile_post')",
             name="ck_account_external_operation_kind",
         ),
         CheckConstraint(

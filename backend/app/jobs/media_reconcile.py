@@ -59,7 +59,9 @@ at which point this job sees it unreferenced on a later pass and reclaims it. Th
 jobs compose in that order without either knowing about the other.
 
 DRY RUN IS THE DEFAULT. Nothing is deleted unless the caller passes delete=True
-(`--delete` on the CLI). A plain run reports what it would remove.
+(`--delete` on the CLI). A plain run reports what it would remove and never reads
+the account-hold or external-operation tables. Delete mode registers each account-
+owned object generation in the deletion-drain journal before its GCS call.
 
 NO OBJECT NAME OR STORED VALUE IN LOGS BY DEFAULT (board c414). This job is meant to
 run on a daily schedule (dry run only — see DEPLOY.md section 8), and every posts/
@@ -84,20 +86,29 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote, urlsplit
 
-from google.api_core.exceptions import NotFound
+from google.api_core.exceptions import NotFound, PreconditionFailed
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app import models
 from app.models.social import Post
 from app.services import storage_service
 from app.services.storage_service import PERMANENT_PREFIX
+from app.services.account_deletion_hold import DeletionHoldActive
+from app.services.account_external_operations import (
+    ExternalOperationConflict,
+    register_external_operation,
+    finish_external_operation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +317,25 @@ async def collect_referenced_object_names(
     )
 
 
+def _media_owner_id(object_name: str) -> uuid.UUID | None:
+    """Return the canonical account UUID embedded in a permanent object path."""
+    prefix = f"{PERMANENT_PREFIX}/"
+    if not object_name.startswith(prefix):
+        return None
+    owner_text = object_name[len(prefix):].partition("/")[0]
+    try:
+        owner_id = uuid.UUID(owner_text)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return owner_id if str(owner_id) == owner_text else None
+
+
+def _media_delete_effect_key(bucket_name: str, object_name: str, generation: int) -> str:
+    """Namespace each generation so a recreated object is a distinct effect."""
+    material = f"media_reconcile_post\0{bucket_name}\0{object_name}\0{generation}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 def list_permanent_blobs(bucket_name: str) -> list:
     """Every object under posts/, walked page by page.
 
@@ -390,11 +420,13 @@ async def reconcile_orphaned_media(
     `now` is injectable so the age boundary is deterministic in tests, the same
     reason app.jobs.purge.purge_expired_soft_deletes takes it.
 
-    Deletes nothing unless delete=True. A delete that 404s counts as success: the
-    object was already gone, which is the state this job wanted. blob.delete() sends
-    the generation it was listed with (it forwards generation=self.generation to
-    bucket.delete_blob, read off blob.py), so an object replaced between the listing
-    and the delete 404s rather than having its replacement removed.
+    Deletes nothing unless delete=True. Each delete is registered against the UUID
+    owner embedded in the canonical posts/{user_id}/ path, and requires an existing,
+    non-tombstoned account plus a concrete listed generation. A hold activated before
+    registration blocks that object; a hold activated after registration sees the
+    running row in the drain. The provider call uses if_generation_match so a replaced
+    object is never removed. A 404 for that generation counts as success; any other
+    ambiguous provider outcome is durably marked uncertain and never retried.
 
     list_eligible (board c414) gates every per-object or per-value log line — see the
     module docstring. It never changes what is scanned, protected, aged out or
@@ -443,6 +475,10 @@ async def reconcile_orphaned_media(
         )
         raise ReconcileAborted(message)
 
+    # The reference snapshot is complete. Release its read-only SQL transaction
+    # before listing or deleting provider objects; deletion admission uses fresh,
+    # short sessions in the external-operation registry.
+    await session.rollback()
     blobs = list_permanent_blobs(bucket_name)
     referenced = 0
     protected_by_raw_match = 0
@@ -493,16 +529,79 @@ async def reconcile_orphaned_media(
             unresolved_values=references.unresolved,
         )
 
+    candidate_owners = {
+        owner_id
+        for blob in candidates
+        if (owner_id := _media_owner_id(blob.name)) is not None
+    }
+    owner_uids: dict[uuid.UUID, str] = {}
+    if candidate_owners:
+        result = await session.execute(
+            select(models.User.id, models.User.firebase_uid).where(
+                models.User.id.in_(candidate_owners)
+            )
+        )
+        owner_uids = {row.id: row.firebase_uid for row in result}
+        # Do not retain a connection while making any provider call.
+        await session.rollback()
+
     deleted: list[str] = []
     already_gone: list[str] = []
     for blob in candidates:
+        owner_id = _media_owner_id(blob.name)
+        generation = getattr(blob, "generation", None)
+        # Only canonical account-owned paths with a concrete GCS generation can
+        # enter the admission journal. A malformed/legacy path is safer left for
+        # explicit review than deleted without an account hold fence.
+        if (
+            owner_id is None
+            or owner_id not in owner_uids
+            or owner_uids[owner_id] == f"deleted:{owner_id}"
+            or type(generation) is not int
+            or generation <= 0
+        ):
+            continue
+
         try:
-            blob.delete()
+            handle = await register_external_operation(
+                user_id=owner_id,
+                firebase_uid=owner_uids[owner_id],
+                kind="media_reconcile_post",
+                effect_key=_media_delete_effect_key(bucket_name, blob.name, generation),
+            )
+        except DeletionHoldActive:
+            # A hold may have activated after reference collection. Leave this
+            # object untouched and continue with unrelated account owners.
+            continue
+        except ExternalOperationConflict:
+            # A prior attempt, including an unknown one, is never replayed.
+            continue
+
+        try:
+            # The GCS SDK is synchronous; keep its network wait off the async
+            # runner while the external-operation row remains in `running`.
+            await asyncio.to_thread(
+                blob.delete, if_generation_match=generation
+            )
         except NotFound:
+            await finish_external_operation(handle, state="finished")
             already_gone.append(blob.name)
             if list_eligible:
                 logger.info("media_reconcile: object=%s was already gone", blob.name)
+        except PreconditionFailed:
+            # A newer generation replaced the listed candidate. The explicit
+            # precondition proves this delete did not remove that replacement.
+            await finish_external_operation(handle, state="finished")
+            if list_eligible:
+                logger.info("media_reconcile: object=%s changed generation; skipped", blob.name)
+        except BaseException:
+            # A provider error or cancellation after registration can have an
+            # ambiguous outcome. Persist that uncertainty before propagating;
+            # if this write also fails, the durable running row still blocks drain.
+            await finish_external_operation(handle, state="uncertain")
+            raise
         else:
+            await finish_external_operation(handle, state="finished")
             deleted.append(blob.name)
             if list_eligible:
                 logger.info(
@@ -529,10 +628,10 @@ async def reconcile_orphaned_media(
 async def _run_and_report(
     *, delete: bool, min_age_hours: int, list_eligible: bool
 ) -> ReconcileResult:
-    """Open one read-only session against the configured DB and reconcile.
+    """Open the reference session and reconcile without holding SQL over GCS I/O.
 
-    No commit: this job only ever SELECTs from the database. Everything it changes
-    lives in the bucket.
+    Dry runs only read posts. Delete mode also uses the external-operation journal
+    through short fresh sessions so account deletion can drain these GCS effects.
     """
     from app.db import get_session_factory
 
