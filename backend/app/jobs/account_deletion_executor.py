@@ -43,7 +43,7 @@ from app.services.account_deletion_provider_factory import (
     deserialize_media_snapshot,
 )
 
-EXPECTED_SCHEMA_HEAD = "0050"
+EXPECTED_SCHEMA_HEAD = "0051"
 PLAN_VERSION = 1
 MAX_PLAN_BYTES = 2 * 1024 * 1024
 MAX_PLAN_AGE_SECONDS = 900

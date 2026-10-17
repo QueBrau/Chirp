@@ -34,7 +34,7 @@ from app.services.account_post_deletion_providers import PostDeletionProviders
 from app.services.account_provider_gcs import MediaRetentionReview
 from app.services.account_provider_gcs import GCSMediaReader
 
-EXPECTED_SCHEMA = "0050"
+EXPECTED_SCHEMA = "0051"
 EXPECTED_GCS_PROJECT = "chirps-prod"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAX_TIMEOUT_SECONDS = 120.0

@@ -92,7 +92,7 @@ def _approval(request_id: uuid.UUID, user_id: uuid.UUID, database_name: str, rol
     return {
         "type": "c436_operator_approval_v1",
         "request_id": str(request_id), "user_id": str(user_id),
-        "database_name": database_name, "database_role": role, "schema_head": "0050",
+        "database_name": database_name, "database_role": role, "schema_head": "0051",
         "reviewed_by": "test operator", "reviewed_at": now.isoformat(),
         "expires_at": (now + timedelta(minutes=45)).isoformat(),
         "old_revisions_drained": True,

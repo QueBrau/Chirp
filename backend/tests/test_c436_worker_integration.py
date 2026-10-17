@@ -23,7 +23,7 @@ from app.services.account_post_deletion_cleanup import DeferredCleanupReceipt
 
 @pytest.mark.asyncio
 async def test_inspect_fails_closed_before_claim_on_unprepared_schema(monkeypatch) -> None:
-    # CI and the local shared database are normally already at 0050.  Simulate
+    # CI and the local shared database are normally already at 0051. Simulate
     # an operator compiled against the pre-worker 0049 head without mutating
     # the shared migration state.
     monkeypatch.setattr(cleanup_job, "EXPECTED_SCHEMA", "0049")
@@ -57,7 +57,7 @@ def test_apply_manifest_is_blocked_by_default_before_provider_construction(tmp_p
     obligation_id, request_id, user_id = (str(uuid.uuid4()) for _ in range(3))
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({
-        "schema": "0050", "obligation_id": obligation_id,
+        "schema": "0051", "obligation_id": obligation_id,
         "request_id": request_id, "user_id": user_id,
         "category": "temporary_media", "scope_sha256": "0" * 64,
         "media": {"project": "chirps-prod", "bucket": "chirp-media",
@@ -85,7 +85,7 @@ def test_media_factory_requires_explicit_project_and_selection() -> None:
 
 @pytest.mark.asyncio
 async def test_positive_pg_dispatch_updates_only_bound_obligation() -> None:
-    """Create a disposable 0050 DB and run the real least-privilege path."""
+    """Create a disposable 0051 DB and run the real least-privilege path."""
     import asyncio
     import os
     from tests.test_c436_external_operations_migration import _admin_execute, _alembic, _swap_database
@@ -103,7 +103,7 @@ async def test_positive_pg_dispatch_updates_only_bound_obligation() -> None:
     original_flag = os.environ.get("ACCOUNT_DELETION_DEFERRED_CLEANUP_ENABLED")
     try:
         await _admin_execute(admin_url, [f'CREATE DATABASE "{db_name}"'])
-        await asyncio.to_thread(_alembic, url, "0050")
+        await asyncio.to_thread(_alembic, url, "0051")
         await _admin_execute(admin_url, [
             f"CREATE ROLE {role} LOGIN PASSWORD '{password}'",
         ])
