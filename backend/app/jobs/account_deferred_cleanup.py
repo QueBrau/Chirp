@@ -347,6 +347,13 @@ def main(argv: list[str] | None = None) -> int:
                             await connection.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"))
                             session = AsyncSession(bind=connection, autoflush=False, expire_on_commit=False)
                             try:
+                                # Privilege and ownership checks are read-only,
+                                # but must happen before constructing any SDK
+                                # provider or reading its live policy.
+                                await _preflight(
+                                    session, expected_role=args.expected_role,
+                                    expected_database=args.expected_database, write=True,
+                                )
                                 info = await inspect_one(session, binding, expected_role=args.expected_role, expected_database=args.expected_database)
                             finally:
                                 await session.close()
@@ -404,6 +411,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, sort_keys=True))
         return 0
     except (CleanupOperatorError, OSError, RuntimeError):
+        print(json.dumps({"status": "blocked", "error": "cleanup_preflight_failed"}))
+        return 2
+    except Exception:
+        # Provider/driver failures are intentionally reduced to the same
+        # operator-safe result; details stay in the process-local diagnostics.
         print(json.dumps({"status": "blocked", "error": "cleanup_preflight_failed"}))
         return 2
 

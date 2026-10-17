@@ -5,7 +5,8 @@ import uuid
 import json
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import make_url, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import get_session_factory
 from app.jobs.account_deferred_cleanup import (
@@ -90,12 +91,9 @@ async def test_positive_pg_dispatch_updates_only_bound_obligation(monkeypatch) -
     from tests.test_c436_external_operations_migration import _admin_execute, _alembic, _swap_database
 
     requested = os.environ.get("TEST_DATABASE_URL", "postgresql+asyncpg://chirp:chirp@localhost:5432/chirp_test")
-    # The worker role must be non-owner, while the disposable role/database
-    # cleanup needs a local administrator.  CI may provide its own admin URL;
-    # the repository's local PostgreSQL service uses joseperdomo.
-    admin_requested = os.environ.get(
-        "C436_TEST_ADMIN_URL", "postgresql+asyncpg://joseperdomo@localhost:5432/postgres"
-    )
+    # The worker role must be non-owner. CI can provide a privileged URL for
+    # disposable role cleanup; otherwise use the configured test connection.
+    admin_requested = os.environ.get("C436_TEST_ADMIN_URL", requested)
     admin_url = _swap_database(admin_requested, "postgres")
     db_name = f"chirp_c436_worker_{uuid.uuid4().hex[:10]}"
     url = _swap_database(requested, db_name)
@@ -120,7 +118,7 @@ async def test_positive_pg_dispatch_updates_only_bound_obligation(monkeypatch) -
         user_id, request_id, obligation_id, foreign_id = (uuid.uuid4() for _ in range(4))
         scope["tmp_prefix"] = f"tmp/{user_id}/"
         scope_digest = hashlib.sha256(json.dumps(scope, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        foreign_scope = {**scope, "tmp_prefix": f"tmp/{uuid.uuid4()}/"}
+        foreign_scope = {**scope, "tmp_prefix": f"tmp/{foreign_id}/"}
         foreign_digest = hashlib.sha256(json.dumps(foreign_scope, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         async def seed():
             from sqlalchemy.ext.asyncio import create_async_engine
@@ -128,43 +126,37 @@ async def test_positive_pg_dispatch_updates_only_bound_obligation(monkeypatch) -
             async with engine.begin() as conn:
                 for uid in (user_id,):
                     await conn.execute(text("INSERT INTO users(id,firebase_uid,email,display_name,account_type,is_ghost) VALUES (:id,:f,:e,'Deleted','greek',true)"), {"id": uid, "f": f"deleted:{uid}", "e": f"deleted+{uid}@invalid.chirp"})
-                await conn.execute(text("INSERT INTO users(id,firebase_uid,email,display_name,account_type,is_ghost) VALUES (:id,:f,:e,'Deleted foreign','greek',true)"), {"id": foreign_id, "f": f"deleted:foreign-{foreign_id}", "e": f"foreign-{foreign_id}@invalid.chirp"})
+                await conn.execute(text("INSERT INTO users(id,firebase_uid,email,display_name,account_type,is_ghost) VALUES (:id,:f,:e,'Deleted foreign','greek',true)"), {"id": foreign_id, "f": f"deleted:{foreign_id}", "e": f"deleted+{foreign_id}@invalid.chirp"})
                 foreign_request_id = uuid.uuid4()
                 for rid, uid, oid, sc, dg in ((request_id, user_id, obligation_id, scope, scope_digest), (foreign_request_id, foreign_id, uuid.uuid4(), foreign_scope, foreign_digest)):
                     await conn.execute(text("INSERT INTO account_data_requests(id,user_id,kind,status,scope,excluded,retention_reasons,provider_steps,completed_at) VALUES (:id,:uid,'deletion','completed',ARRAY[]::text[],ARRAY[]::text[],ARRAY[]::text[],'{}'::jsonb,now())"), {"id": rid, "uid": uid})
                     await conn.execute(text("INSERT INTO account_post_deletion_cleanup(id,request_id,user_id,category,state,scope,scope_sha256,last_pass_digest,next_attempt_at) VALUES (:oid,:rid,:uid,'temporary_media','pending',:scope,:dg,:pass,now())"), {"oid": oid, "rid": rid, "uid": uid, "scope": json.dumps(sc), "dg": dg, "pass": "0" * 64})
             await engine.dispose()
         await seed()
-        monkeypatch.setenv("DATABASE_URL", f"postgresql+asyncpg://{role}:{password}@localhost:5432/{db_name}")
+        worker_url = make_url(url).set(username=role, password=password).render_as_string(hide_password=False)
+        monkeypatch.setenv("DATABASE_URL", worker_url)
         monkeypatch.setenv("ACCOUNT_DELETION_DEFERRED_CLEANUP_ENABLED", "true")
         from app.config import get_settings
         get_settings.cache_clear()
-        import app.db as db_module
-        # The preceding async inspection test may have initialized the lazy
-        # shared engine against the shared database.  Reset the lazy handles
-        # after switching DATABASE_URL so this test's session is bound to the
-        # disposable database and current event loop.
-        db_module._engine = None
-        db_module._session_factory = None
+        worker_engine = create_async_engine(worker_url)
+        worker_factory = async_sessionmaker(worker_engine, expire_on_commit=False, autoflush=False)
         binding = CleanupBinding(obligation_id, request_id, user_id, "temporary_media", scope_digest)
         calls: list[uuid.UUID] = []
         async def provider(claim):
             calls.append(claim.id)
             return DeferredCleanupReceipt(category="temporary_media", provider="media_storage", subject=str(claim.user_id), request_id=str(claim.request_id), scope=scope, scope_sha256=claim.scope_sha256, pass_digest="1" * 64, readback=True, retained_with_reason=(), remaining_count=1)
-        counts = await run_one_batch(get_session_factory(), provider, binding, expected_role=role, expected_database=db_name, timeout_seconds=10)
+        counts = await run_one_batch(worker_factory, provider, binding, expected_role=role, expected_database=db_name, timeout_seconds=10)
         assert counts == {"claimed": 1, "rescheduled": 1, "completed": 0, "uncertain": 0}
         assert calls == [obligation_id]
         async def read_states():
-            from sqlalchemy.ext.asyncio import create_async_engine
-            engine = create_async_engine(url)
             try:
-                async with engine.connect() as conn:
+                async with worker_engine.connect() as conn:
                     return (await conn.execute(text(
                         "SELECT id, user_id, state, attempt_count FROM account_post_deletion_cleanup "
                         "ORDER BY id"
                     ))).mappings().all()
             finally:
-                await engine.dispose()
+                pass
         states = await read_states()
         target = next(row for row in states if row["id"] == obligation_id)
         foreign = next(row for row in states if row["user_id"] == foreign_id)
@@ -181,11 +173,8 @@ async def test_positive_pg_dispatch_updates_only_bound_obligation(monkeypatch) -
             os.environ["ACCOUNT_DELETION_DEFERRED_CLEANUP_ENABLED"] = original_flag
         from app.config import get_settings
         get_settings.cache_clear()
-        import app.db as db_module
-        if db_module._engine is not None:
-            await db_module._engine.dispose()
-        db_module._engine = None
-        db_module._session_factory = None
+        if "worker_engine" in locals():
+            await worker_engine.dispose()
         await _admin_execute(admin_url, [
             f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)',
             (
