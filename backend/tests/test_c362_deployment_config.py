@@ -568,6 +568,31 @@ def test_account_deletion_flags_cannot_diverge_by_service(config):
         C.validate(config)
 
 
+@pytest.mark.parametrize(
+    ("phase", "account_flags", "api_sweeper"),
+    [
+        ("A", "false", "false"),
+        ("B", "true", "false"),
+        ("C", "true", "true"),
+    ],
+)
+def test_c436_activation_phases_render_valid_serialized_intents(config, release, phase, account_flags, api_sweeper):
+    phase_config = copy.deepcopy(config)
+    for name in C.ACCOUNT_DELETION_FLAGS:
+        phase_config["shared"]["env"][name] = account_flags
+    phase_config["services"]["api"]["env"]["OUTBOX_SWEEPER_ENABLED"] = api_sweeper
+    phase_config["services"]["ws"]["env"]["OUTBOX_SWEEPER_ENABLED"] = "false"
+
+    steps = {step["service"]: planned_env(shlex.split(step["stage_command"]))
+             for step in C.plan(phase_config, release, "gcloud")["steps"]}
+    for env in steps.values():
+        assert {name: env[name] for name in C.ACCOUNT_DELETION_FLAGS} == {
+            name: account_flags for name in C.ACCOUNT_DELETION_FLAGS
+        }
+    assert steps["api"]["OUTBOX_SWEEPER_ENABLED"] == api_sweeper
+    assert steps["ws"]["OUTBOX_SWEEPER_ENABLED"] == "false"
+
+
 def test_missing_environment_name_projection_is_not_proven(config, snap, release):
     snap["environment_names"] = {"services": {}, "revisions": {}}
     report = run_compare(config, snap, release)
