@@ -98,7 +98,8 @@ def retention_only_receipt_from_journal(
     """Parse the exact JSON form stored in a fulfillment step."""
     expected_subject = _canonical_uuid(subject)
     expected_request = _canonical_uuid(request_id)
-    if type(value) is not dict or set(value) != _JOURNAL_FIELDS:
+    if (type(value) is not dict or set(value) != _JOURNAL_FIELDS
+            or value.get("receipt_type") != "retention_only"):
         raise ValueError("retention_receipt_invalid")
     scope = value.get("scope")
     retained = value.get("retained_with_reason")

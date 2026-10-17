@@ -176,3 +176,85 @@ async def test_prepare_review_execute_is_bound_and_provider_injected(
     assert built == [True]
     for key, provider in providers.items():
         assert provider.calls == [f"account-deletion:{request_id}:{key}"]
+
+
+@pytest.mark.asyncio
+async def test_real_factory_pins_project_and_rereads_bucket_retention(monkeypatch) -> None:
+    factory = executor_factory
+    request_id, user_id = uuid.uuid4(), uuid.uuid4()
+    settings = SimpleNamespace(
+        media_bucket_name="chirp-test-bucket", stripe_secret_key="sk_test_placeholder",
+        email_provider="smtp",
+    )
+    monkeypatch.setattr(factory, "get_settings", lambda: settings)
+
+    class Credential:
+        token = "test-token"
+
+        def refresh(self, _request):
+            return None
+
+    credential = Credential()
+    import google.auth
+    import google.auth.transport.requests
+    monkeypatch.setattr(google.auth, "default", lambda **_kwargs: (credential, "chirps-prod"))
+    monkeypatch.setattr(google.auth.transport.requests, "Request", lambda: object())
+
+    retention = media.MediaRetentionReview(
+        bucket="chirp-test-bucket", versioning_enabled=False,
+        soft_delete_seconds=604800, verified=True,
+    )
+    reader_calls: list[tuple[str, str, object]] = []
+
+    class Reader:
+        bucket_name = "chirp-test-bucket"
+
+        def __init__(self, bucket, *, project=None, credentials=None):
+            reader_calls.append((bucket, project, credentials))
+
+        def reviewed_retention(self, *, expected_soft_delete_seconds, expected_versioning_enabled):
+            assert expected_soft_delete_seconds == 604800
+            assert expected_versioning_enabled is False
+            return retention
+
+    monkeypatch.setattr(factory.media, "GCSMediaReader", Reader)
+    initialized: list[tuple[object, dict[str, object], str]] = []
+    firebase_credential = object()
+    import firebase_admin
+    import firebase_admin.credentials
+    monkeypatch.setattr(firebase_admin.credentials, "ApplicationDefault", lambda: firebase_credential)
+
+    def initialize_app(credential_arg, *, options, name):
+        initialized.append((credential_arg, options, name))
+        return object()
+
+    monkeypatch.setattr(firebase_admin, "initialize_app", initialize_app)
+    firebase_provider_apps: list[object] = []
+
+    class FakeFirebaseProvider:
+        def __init__(self, *, app):
+            firebase_provider_apps.append(app)
+
+    monkeypatch.setattr(factory, "FirebaseProvider", FakeFirebaseProvider)
+
+    class Provider:
+        def __init__(self, *args, **kwargs):
+            self.args, self.kwargs = args, kwargs
+
+    monkeypatch.setattr(factory, "StripeCustomerProvider", Provider)
+    monkeypatch.setattr(factory, "EmailLogsBackupsRetentionProvider", Provider)
+    monkeypatch.setattr(factory.media, "GCSMediaProvider", Provider)
+    monkeypatch.setattr(factory.analytics, "BigQueryAnalyticsProvider", Provider)
+
+    bundle = _snapshots(request_id, user_id)
+    providers, app = await factory.build_deletion_providers(
+        user_id=user_id, request_id=request_id, snapshot_bundle=bundle,
+    )
+    assert set(providers) == set(PROVIDER_STEPS)
+    assert reader_calls == [("chirp-test-bucket", "chirps-prod", credential)]
+    assert initialized == [(
+        firebase_credential,
+        {"projectId": "chirps-prod", "httpTimeout": 30},
+        f"c436-{request_id.hex[:12]}",
+    )]
+    assert firebase_provider_apps == [app]

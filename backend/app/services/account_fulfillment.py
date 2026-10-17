@@ -478,7 +478,8 @@ async def run_deletion(
                 retention_codes, deferred = _receipt_from_step(
                     step.step_key, user.id, step.provider_ref, request.id,
                 )
-                if deferred is not None and get_settings().account_deletion_deferred_cleanup_enabled:
+                if (isinstance(deferred, DeferredCleanupReceipt)
+                        and get_settings().account_deletion_deferred_cleanup_enabled):
                     obligations = list((await session.scalars(select(models.AccountPostDeletionCleanup).where(
                         models.AccountPostDeletionCleanup.request_id == request.id,
                         models.AccountPostDeletionCleanup.category == deferred.category,

@@ -83,6 +83,7 @@ async def test_retention_provider_rejects_wrong_request_and_noncanonical_receipt
     base = _receipt_value(user_id, request_id)
     invalid_values = []
     for field, value in (
+        ("receipt_type", "provider_confirmation"),
         ("subject", str(uuid.uuid4())),
         ("request_id", str(uuid.uuid4())),
         ("action", "deleted"),
@@ -153,9 +154,12 @@ async def test_firebase_provider_binds_named_app_only_when_supplied(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_retention_receipt_is_journaled_in_successful_deletion(
-    client, make_user,
+async def test_retention_receipt_is_journaled_and_terminal_replay_accepts_it(
+    client, make_user, monkeypatch,
 ) -> None:
+    from app import config
+    import app.services.account_fulfillment as fulfillment
+
     from tests.c436_executor_helpers import activate_executor_hold
     from tests.test_c436_fulfillment import provider_set
 
@@ -166,6 +170,12 @@ async def test_retention_receipt_is_journaled_in_successful_deletion(
     assert response.status_code == 201, response.text
     request_id = uuid.UUID(response.json()["id"])
     await activate_executor_hold(user_id=uuid.UUID(owner.id), request_id=request_id)
+    monkeypatch.setattr(
+        fulfillment, "get_settings",
+        lambda: config.get_settings().model_copy(update={
+            "account_deletion_deferred_cleanup_enabled": True,
+        }),
+    )
     providers = provider_set()
     providers["email_logs_backups"] = EmailLogsBackupsRetentionProvider(
         request_id=request_id, email_backend="log",
@@ -191,3 +201,5 @@ async def test_retention_receipt_is_journaled_in_successful_deletion(
             provider.keys == [f"account-deletion:{request_id}:{key}"]
             for key, provider in providers.items() if key != "email_logs_backups"
         )
+        replay = await run_deletion(session, request_id, user, providers)
+        assert replay.status == "completed"
