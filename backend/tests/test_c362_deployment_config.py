@@ -544,6 +544,30 @@ def test_peer_close_delay_rejects_ambiguous_release_values(config, value):
         C.validate(config)
 
 
+def test_account_deletion_flags_are_shared_and_rendered_for_both_services(config, release):
+    names = sorted(C.ACCOUNT_DELETION_FLAGS)
+    assert set(names).issubset(config["shared"]["env"])
+    assert all(config["shared"]["env"][name] == "true" for name in names)
+    steps = {step["service"]: planned_env(shlex.split(step["stage_command"]))
+             for step in C.plan(config, release, "gcloud")["steps"]}
+    for env in steps.values():
+        assert {name: env[name] for name in names} == {name: "true" for name in names}
+
+
+@pytest.mark.parametrize("name", sorted(C.ACCOUNT_DELETION_FLAGS))
+@pytest.mark.parametrize("value", ["TRUE", "1", "yes", ""])
+def test_account_deletion_flags_require_literal_boolean_values(config, name, value):
+    config["shared"]["env"][name] = value
+    with pytest.raises(C.ConfigError, match="invalid_account_deletion_setting"):
+        C.validate(config)
+
+
+def test_account_deletion_flags_cannot_diverge_by_service(config):
+    config["services"]["api"]["env"]["ACCOUNT_DELETION_HTTP_ADMISSION_ENABLED"] = "false"
+    with pytest.raises(C.ConfigError, match="account_deletion_flags_must_be_shared"):
+        C.validate(config)
+
+
 def test_missing_environment_name_projection_is_not_proven(config, snap, release):
     snap["environment_names"] = {"services": {}, "revisions": {}}
     report = run_compare(config, snap, release)

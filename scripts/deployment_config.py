@@ -20,7 +20,13 @@ from deploy_verify import ready_and_observed
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "infra/deployment.json"
 MAX_BYTES = 1024 * 1024
-ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE", "OUTBOX_SWEEPER_ENABLED", "APP_PUBLIC_BASE_URL", "CORS_ORIGINS", "EMAIL_FROM", "EMAIL_PROVIDER", "MEDIA_BUCKET_NAME", "WS_PEER_CLOSE_DELAY_ENABLED")
+ENV_NAMES = ("ENV", "AUTH_MODE", "FIREBASE_PROJECT_ID", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "WEB_CONCURRENCY", "SERVICE_ROLE", "OUTBOX_SWEEPER_ENABLED", "APP_PUBLIC_BASE_URL", "CORS_ORIGINS", "EMAIL_FROM", "EMAIL_PROVIDER", "MEDIA_BUCKET_NAME", "WS_PEER_CLOSE_DELAY_ENABLED", "ACCOUNT_DELETION_HTTP_ADMISSION_ENABLED", "ACCOUNT_DELETION_WS_ADMISSION_ENABLED", "ACCOUNT_DELETION_DELIVERY_ADMISSION_ENABLED", "ACCOUNT_DELETION_DEFERRED_CLEANUP_ENABLED")
+ACCOUNT_DELETION_FLAGS = frozenset({
+    "ACCOUNT_DELETION_HTTP_ADMISSION_ENABLED",
+    "ACCOUNT_DELETION_WS_ADMISSION_ENABLED",
+    "ACCOUNT_DELETION_DELIVERY_ADMISSION_ENABLED",
+    "ACCOUNT_DELETION_DEFERRED_CLEANUP_ENABLED",
+})
 POOL_NAMES = {"DB_POOL_SIZE": "size", "DB_MAX_OVERFLOW": "max_overflow"}
 JOB_POOL_EVIDENCE_SCOPE = "operator_inspected_immutable_image_pool"
 JOB_POOL_EVIDENCE_MAX_AGE_HOURS = 24
@@ -192,10 +198,14 @@ def validate(config: dict) -> None:
         shared = config["shared"]
         if "APP_PUBLIC_BASE_URL" in shared["env"]:
             raise ConfigError("invalid_public_base_url")
+        if any(ACCOUNT_DELETION_FLAGS & set(service["env"]) for service in config["services"].values()):
+            raise ConfigError("account_deletion_flags_must_be_shared")
         if set(shared["env"]) - set(ENV_NAMES) or any(set(s["env"]) - set(ENV_NAMES) for s in config["services"].values()):
             raise ConfigError("unapproved_environment_key")
         for env in [shared["env"], *[s["env"] for s in config["services"].values()]]:
             for key, value in env.items():
+                if key in ACCOUNT_DELETION_FLAGS and value not in ("true", "false"):
+                    raise ConfigError("invalid_account_deletion_setting")
                 if key == "APP_PUBLIC_BASE_URL" and not public_https_origin(value):
                     raise ConfigError("invalid_public_base_url")
                 if key != "APP_PUBLIC_BASE_URL" and not environment_value(key, value):
