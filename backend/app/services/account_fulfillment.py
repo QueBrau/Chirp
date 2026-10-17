@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 import asyncio
 import re
+from functools import partial
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
@@ -27,6 +28,10 @@ from app.services.account_post_deletion_cleanup import (
     DeferredCleanupReceipt,
     deferred_receipt_from_journal,
     make_obligation,
+)
+from app.services.account_provider_retention import (
+    RetentionOnlyReceipt,
+    retention_only_receipt_from_journal,
 )
 
 PROVIDER_STEPS = ("payment_provider", "media_storage", "email_logs_backups", "analytics", "firebase_auth")
@@ -61,7 +66,9 @@ class ProviderUnavailable(RuntimeError):
 
 
 class DeletionProvider(Protocol):
-    async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]: ...
+    async def delete_account_data(
+        self, *, user: models.User, idempotency_key: str,
+    ) -> dict[str, object] | RetentionOnlyReceipt: ...
 
 
 class UnconfiguredProvider:
@@ -71,6 +78,11 @@ class UnconfiguredProvider:
 
 class FirebaseProvider:
     """Firebase Auth deletion with readback; never treats a malformed response as success."""
+    def __init__(self, *, app=None) -> None:
+        # Production executor pins an explicitly initialized Firebase app. Keeping
+        # this optional preserves the legacy adapter and its tests/callers.
+        self.app = app
+
     async def delete_account_data(self, *, user: models.User, idempotency_key: str) -> dict[str, object]:
         from firebase_admin import auth
 
@@ -90,7 +102,8 @@ class FirebaseProvider:
                     pass
 
         async def call(operation, *args):
-            worker = asyncio.create_task(asyncio.to_thread(operation, *args))
+            target = partial(operation, *args, app=self.app) if self.app is not None else partial(operation, *args)
+            worker = asyncio.create_task(asyncio.to_thread(target))
             try:
                 return await asyncio.wait_for(
                     asyncio.shield(worker), timeout=FIREBASE_CALL_TIMEOUT_SECONDS
@@ -230,8 +243,28 @@ def validate_provider_receipt(
 
 
 def _validate_step_receipt(step_key: str, subject: uuid.UUID, value: object,
-                           request_id: uuid.UUID) -> tuple[list[str], DeferredCleanupReceipt | None]:
-    """Validate an ordinary provider confirmation or the explicit deferred variant."""
+                           request_id: uuid.UUID) -> tuple[list[str], DeferredCleanupReceipt | RetentionOnlyReceipt | None]:
+    """Validate ordinary deletion proof or one of the explicit typed variants."""
+    if isinstance(value, RetentionOnlyReceipt):
+        if step_key != "email_logs_backups":
+            raise ProviderUnavailable("provider_confirmation_missing")
+        retained = value.retained_with_reason
+        receipt = value
+        try:
+            receipt.validate(subject=subject, request_id=request_id)
+        except (TypeError, ValueError):
+            raise ProviderUnavailable("provider_confirmation_missing") from None
+        return list(retained), receipt
+    if isinstance(value, dict) and value.get("receipt_type") == "retention_only":
+        if step_key != "email_logs_backups":
+            raise ProviderUnavailable("provider_confirmation_missing")
+        try:
+            receipt = retention_only_receipt_from_journal(
+                value, subject=subject, request_id=request_id,
+            )
+        except (TypeError, ValueError):
+            raise ProviderUnavailable("provider_confirmation_missing") from None
+        return list(receipt.retained_with_reason), receipt
     if isinstance(value, DeferredCleanupReceipt):
         deferred = value
         if not get_settings().account_deletion_deferred_cleanup_enabled or step_key not in {"media_storage", "analytics"}:
@@ -256,7 +289,7 @@ def _validate_step_receipt(step_key: str, subject: uuid.UUID, value: object,
 
 
 def _receipt_from_step(step_key: str, subject: uuid.UUID, provider_ref: object,
-                       request_id: uuid.UUID) -> tuple[list[str], DeferredCleanupReceipt | None]:
+                       request_id: uuid.UUID) -> tuple[list[str], DeferredCleanupReceipt | RetentionOnlyReceipt | None]:
     return _validate_step_receipt(step_key, subject, provider_ref, request_id)
 
 
@@ -621,7 +654,9 @@ async def run_deletion(
                 return DeletionRun("blocked", tuple(completed), step_key)
             await session.commit()
             return DeletionRun("blocked", tuple(completed), step_key)
-        if deferred_receipt is not None:
+        if isinstance(deferred_receipt, RetentionOnlyReceipt):
+            provider_ref = deferred_receipt.journal_value()
+        elif deferred_receipt is not None:
             provider_ref = deferred_receipt.journal_value()
         else:
             provider_ref = {"confirmed": True, "provider": result["provider"],
@@ -701,7 +736,7 @@ async def run_deletion(
             provider_retention_codes[durable_step.step_key], deferred = _receipt_from_step(
                 durable_step.step_key, user.id, durable_step.provider_ref, request.id,
             )
-            if deferred is not None:
+            if isinstance(deferred, DeferredCleanupReceipt):
                 if not get_settings().account_deletion_deferred_cleanup_enabled:
                     raise ProviderUnavailable("provider_confirmation_missing")
                 existing = (await session.scalars(select(models.AccountPostDeletionCleanup).where(

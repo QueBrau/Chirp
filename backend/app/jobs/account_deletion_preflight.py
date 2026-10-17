@@ -26,6 +26,7 @@ from app.services.account_fulfillment import (
     provider_attempt_may_have_started,
     validate_provider_receipt,
 )
+from app.services.account_provider_retention import retention_only_receipt_from_journal
 
 REQUIRED_STEPS = PROVIDER_STEPS + ("database_tombstone",)
 SAFE_FAILURE_CODES = frozenset({
@@ -70,6 +71,23 @@ def _lease_state(token: object, expires_at: datetime | None, now: datetime) -> s
 
 def _receipt(step_key: str, value: object, expected_user_id: uuid.UUID, request_id: uuid.UUID) -> tuple[bool, dict[str, object], str | None]:
     """Validate a receipt while returning only structural, non-sensitive facts."""
+    if isinstance(value, dict) and value.get("receipt_type") == "retention_only":
+        try:
+            if step_key != "email_logs_backups":
+                raise ValueError("retention_receipt_invalid")
+            receipt = retention_only_receipt_from_journal(
+                value, subject=expected_user_id, request_id=request_id,
+            )
+        except (TypeError, ValueError):
+            return False, {"present": True}, "provider_confirmation_invalid"
+        return True, {
+            "present": True,
+            "disposition": receipt.action,
+            "expiry": receipt.expiry,
+            "email_backend": receipt.email_backend,
+            "scope_count": len(receipt.scope),
+            "retention_code_count": len(receipt.retained_with_reason),
+        }, None
     try:
         retained = validate_provider_receipt(step_key, expected_user_id, value, expected_request_id=request_id)
     except (ProviderUnavailable, TypeError, ValueError):
