@@ -323,13 +323,18 @@ def test_actual_gcs_sdk_pagination_and_generation_preconditions(monkeypatch):
             return None
         return {"name": name, "generation": "7", "size": "3"}
     monkeypatch.setattr(client._connection, "api_request", api_request)
-    monkeypatch.setattr(storage, "Client", lambda: client)
+    created = []
+    def selected_client(**kwargs):
+        created.append(kwargs)
+        return client
+    monkeypatch.setattr(storage, "Client", selected_client)
     background_starts = []
     def unexpected_background_start(self):
         background_starts.append(self)
         raise AssertionError("SDK must not start background metadata requests")
     monkeypatch.setattr(threading.Thread, "start", unexpected_background_start)
-    reader = GCSMediaReader("chirp-media")
+    reader = GCSMediaReader("chirp-media", project="offline-fixture", credentials=client._credentials)
+    assert created == [{"project": "offline-fixture", "credentials": client._credentials}]
     deadlines = iter([20.0, 10.0])
     monkeypatch.setattr(module, "_remaining", lambda deadline: next(deadlines))
     listed = list(reader.list("posts/", deadline=100))

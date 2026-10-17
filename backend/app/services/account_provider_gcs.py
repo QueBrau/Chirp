@@ -360,7 +360,7 @@ async def snapshot_user_media(
 class GCSMediaReader:
     """Small production GCS reader; every operation receives a finite timeout."""
 
-    def __init__(self, bucket: str):
+    def __init__(self, bucket: str, *, project: str | None = None, credentials: Any = None):
         if not isinstance(bucket, str) or not bucket or "/" in bucket:
             raise ValueError("media_bucket_invalid")
         self._require_bounded_sdk()
@@ -368,7 +368,12 @@ class GCSMediaReader:
         self.bucket_name = bucket
         # Keep an empty, dedicated SDK metadata cache. A shared runtime client
         # may have cached buckets whose 404 handling queues background requests.
-        self._bucket = storage.Client().bucket(bucket)
+        if project is not None and (not isinstance(project, str) or not project):
+            raise MediaProviderUnavailable("media_project_invalid")
+        # The worker passes an explicitly selected ADC credential and project.
+        # The legacy no-argument form remains available to tests and dormant
+        # callers, but is never constructed by the operator job.
+        self._bucket = storage.Client(project=project, credentials=credentials).bucket(bucket)
 
     @staticmethod
     def _require_bounded_sdk() -> None:
@@ -377,6 +382,27 @@ class GCSMediaReader:
         # process-start configuration; never mutate a shared process environment.
         if os.environ.get(DISABLE_BUCKET_METADATA, "").strip().lower() not in {"1", "true", "yes", "on"}:
             raise MediaProviderUnavailable("media_sdk_background_requests_enabled")
+
+    def reviewed_retention(self, *, expected_soft_delete_seconds: int,
+                           expected_versioning_enabled: bool = False) -> MediaRetentionReview:
+        """Read the live bucket policy once and require the reviewed values."""
+        self._require_bounded_sdk()
+        try:
+            self._bucket.reload(timeout=10, retry=None)
+            policy = getattr(self._bucket, "soft_delete_policy", None)
+            actual_soft_delete = getattr(policy, "retention_duration_seconds", 0) if policy else 0
+            actual_versioning = bool(getattr(self._bucket, "versioning_enabled", False))
+        except Exception:
+            raise MediaProviderUnavailable("media_retention_readback_failed") from None
+        if (type(expected_soft_delete_seconds) is not int
+                or type(expected_versioning_enabled) is not bool
+                or actual_soft_delete != expected_soft_delete_seconds
+                or actual_versioning != expected_versioning_enabled):
+            raise MediaProviderUnavailable("media_retention_policy_mismatch")
+        return MediaRetentionReview(
+            bucket=self.bucket_name, versioning_enabled=actual_versioning,
+            soft_delete_seconds=actual_soft_delete, verified=True,
+        )
 
     def list(self, prefix: str, *, deadline: float) -> Iterable[Any]:
         token = None
