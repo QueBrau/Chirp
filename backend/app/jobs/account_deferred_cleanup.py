@@ -185,6 +185,21 @@ async def _preflight(session: AsyncSession, *, expected_role: str,
     actual_database, actual_role = str(identity[0]), str(identity[1])
     if actual_database != expected_database or actual_role != expected_role:
         raise CleanupOperatorError("database_identity_mismatch")
+    if write:
+        role_flags = (await session.execute(text(
+            """SELECT r.rolsuper, r.rolbypassrls,
+                      d.datdba = r.oid AS database_owner,
+                      EXISTS (SELECT 1 FROM pg_class c
+                              JOIN pg_namespace n ON n.oid = c.relnamespace
+                              JOIN pg_roles owner_role ON owner_role.oid = c.relowner
+                              WHERE n.nspname = 'public'
+                                AND c.relname = 'account_post_deletion_cleanup'
+                                AND owner_role.rolname = current_user) AS table_owner
+               FROM pg_roles r JOIN pg_database d ON d.datname = current_database()
+              WHERE r.rolname = current_user"""
+        ))).one_or_none()
+        if role_flags is None or any(bool(value) for value in role_flags):
+            raise CleanupOperatorError("cleanup_operator_role_too_privileged")
     versions = (await session.scalars(text(
         "SELECT version_num FROM alembic_version ORDER BY version_num"
     ))).all()
@@ -272,7 +287,7 @@ async def run_one_batch(session_factory: Callable[[], Any], provider: Callable[.
 async def reconcile_one(session: AsyncSession, binding: CleanupBinding,
                         proof: CleanupCompletionProof, *, expected_role: str,
                         expected_database: str) -> bool:
-    await _preflight(session, expected_role=expected_role, expected_database=expected_database)
+    await _preflight(session, expected_role=expected_role, expected_database=expected_database, write=True)
     if proof.category != binding.category or proof.request_id != str(binding.request_id) or proof.subject != str(binding.user_id):
         raise CleanupOperatorError("cleanup_proof_binding_invalid")
     row = await session.scalar(select(models.AccountPostDeletionCleanup).where(
@@ -317,6 +332,10 @@ def main(argv: list[str] | None = None) -> int:
         proof = _load_proof(args.reconcile_proof, binding) if args.reconcile_proof else None
         if args.apply_one and proof is not None:
             raise CleanupOperatorError("cleanup_modes_conflict")
+        if args.apply_one:
+            from app.config import get_settings
+            if get_settings().account_deletion_deferred_cleanup_enabled is not True:
+                raise CleanupOperatorError("cleanup_disabled")
         async def run() -> dict[str, Any]:
             url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
             engine = create_async_engine(url, connect_args={"timeout": 10})
