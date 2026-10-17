@@ -84,7 +84,7 @@ def test_media_factory_requires_explicit_project_and_selection() -> None:
 
 
 @pytest.mark.asyncio
-async def test_positive_pg_dispatch_updates_only_bound_obligation(monkeypatch) -> None:
+async def test_positive_pg_dispatch_updates_only_bound_obligation() -> None:
     """Create a disposable 0050 DB and run the real least-privilege path."""
     import asyncio
     import os
@@ -134,8 +134,11 @@ async def test_positive_pg_dispatch_updates_only_bound_obligation(monkeypatch) -
             await engine.dispose()
         await seed()
         worker_url = make_url(url).set(username=role, password=password).render_as_string(hide_password=False)
-        monkeypatch.setenv("DATABASE_URL", worker_url)
-        monkeypatch.setenv("ACCOUNT_DELETION_DEFERRED_CLEANUP_ENABLED", "true")
+        # _alembic changes DATABASE_URL itself. Keep all environment changes
+        # under this function's single finally block: a later monkeypatch undo
+        # would otherwise restore the migrated (then dropped) disposable DB.
+        os.environ["DATABASE_URL"] = worker_url
+        os.environ["ACCOUNT_DELETION_DEFERRED_CLEANUP_ENABLED"] = "true"
         from app.config import get_settings
         get_settings.cache_clear()
         worker_engine = create_async_engine(worker_url)
