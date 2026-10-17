@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 import json
+import os
 
 import pytest
 from sqlalchemy import text
@@ -14,8 +15,10 @@ from app.jobs.account_deferred_cleanup import (
     build_media_reader,
     inspect_one,
     main,
+    run_one_batch,
 )
 import app.jobs.account_deferred_cleanup as cleanup_job
+from app.services.account_post_deletion_cleanup import DeferredCleanupReceipt
 
 
 @pytest.mark.asyncio
@@ -74,3 +77,43 @@ def test_media_factory_requires_explicit_project_and_selection() -> None:
         build_media_reader(bucket="chirp-media", project="wrong", use_adc=True)
     with pytest.raises(CleanupOperatorError, match="media_credentials_selection_invalid"):
         build_media_reader(bucket="chirp-media", project="chirps-prod")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not os.environ.get("C436_WORKER_POSITIVE_IDS"), reason="requires disposable migrated worker database")
+async def test_positive_pg_dispatch_updates_only_bound_obligation() -> None:
+    ids = json.loads(os.environ["C436_WORKER_POSITIVE_IDS"])
+    from app.config import get_settings
+    get_settings.cache_clear()
+    assert get_settings().account_deletion_deferred_cleanup_enabled is True
+    scope = ids["scope"]
+    binding = CleanupBinding(
+        uuid.UUID(ids["obligation_id"]), uuid.UUID(ids["request_id"]),
+        uuid.UUID(ids["user_id"]), "temporary_media", ids["scope_sha256"],
+    )
+    calls: list[uuid.UUID] = []
+
+    async def provider(claim):
+        calls.append(claim.id)
+        return DeferredCleanupReceipt(
+            category="temporary_media", provider="media_storage", subject=str(claim.user_id),
+            request_id=str(claim.request_id), scope=scope, scope_sha256=claim.scope_sha256,
+            pass_digest="1" * 64, readback=True, retained_with_reason=(), remaining_count=1,
+        )
+
+    counts = await run_one_batch(
+        get_session_factory(), provider, binding,
+        expected_role="c436_worker_test", expected_database="chirp_c436_worker_20261016",
+        timeout_seconds=10,
+    )
+    assert counts == {"claimed": 1, "rescheduled": 1, "completed": 0, "uncertain": 0}
+    assert calls == [binding.obligation_id]
+    async with get_session_factory()() as session:
+        rows = (await session.execute(text(
+            "SELECT id, state, attempt_count, owner_token FROM account_post_deletion_cleanup ORDER BY id"
+        ))).all()
+    by_id = {str(row[0]): row for row in rows}
+    target = by_id[str(binding.obligation_id)]
+    foreign = by_id[ids["foreign_obligation_id"]]
+    assert (target[1], target[2], target[3]) == ("pending", 1, None)
+    assert (foreign[1], foreign[2], foreign[3]) == ("pending", 0, None)
