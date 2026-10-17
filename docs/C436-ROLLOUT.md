@@ -356,3 +356,55 @@ included. The executor enforces its hold and registry-count prerequisite when
 called, but no production caller or activation workflow is wired. Other
 producer/ingestion boundaries still require integration before a complete deletion
 can be accepted.
+
+## Post-tombstone media and analytics cleanup (migration 0050)
+
+When `ACCOUNT_DELETION_DEFERRED_CLEANUP_ENABLED` is false (the default), existing
+provider and request paths do not query the new obligation table. Turning it on
+changes only the reviewed media-storage and analytics provider receipts: the
+initial deletion still generation-checks, deletes, and reads back the captured
+owned `tmp/`, `posts/`, and `avatars/` objects. A newly appearing public object
+still blocks the tombstone. Only temporary uploads may remain or arrive later;
+the analytics obligation keeps the exact project/dataset, account predicate,
+dated stdout table-family policy, and any individually reviewed probe exclusion.
+
+The pre-tombstone request disclosure is fixed and names only `temporary_media`
+and `identifiable_analytics`. Later owner status shows each obligation's category
+and state only, never its provider scope, table inventory, job identifier or object
+names. These coordination records remain private and are excluded from account
+exports. Migration 0050 downgrade refuses to discard populated evidence.
+
+An operator worker can call the explicit factory after migration/grants and
+independent configuration review; importing it discovers no credentials and
+registers no task:
+
+```python
+from app.db import get_session_factory
+from app.services.account_post_deletion_cleanup import run_post_deletion_cleanup_batch
+from app.services.account_post_deletion_providers import PostDeletionProviders
+
+providers = PostDeletionProviders(
+    media_reader=reviewed_media_reader,
+    media_retention=reviewed_media_retention,
+    analytics_token=fresh_analytics_access_token,
+)
+result = await run_post_deletion_cleanup_batch(
+    get_session_factory(), providers, limit=1,
+)
+```
+
+Each row is claimed just before one bounded provider pass; SQL is released before
+provider I/O. A successful pass records fresh readback and reschedules the row,
+even when it found zero media rows. It does not prove that an accepted signed PUT
+or delayed analytics ingestion can no longer arrive. A timeout, cancellation,
+provider error or lost journal write stays `running` or `uncertain` and is never
+reclaimed by lease expiry. Uncertain rows retain their private attempt identity
+for exact-job reconciliation. The factory never returns completion proof; marking
+an obligation complete requires a separately reviewed provider-specific drain
+proof bound to the exact request, subject, immutable scope, pass and attempt.
+
+The worker is not scheduled or enabled by this source change. Do not enable the
+flag or run a production worker until migration 0050, narrow grants, the provider
+identity and inventory policy, and an operator recovery process have separate
+review. No production migration, grant, provider request, deployment or deletion
+is performed here.

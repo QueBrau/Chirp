@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     # c436: suppress held recipients and track delivery attempts before Redis
     # publication. Keep false until migration 0048 and permissions are ready.
     account_deletion_delivery_admission_enabled: bool = False
+    # c436: allow only validated temporary-media/analytics receipts to defer
+    # post-tombstone cleanup into migration 0050's private obligation journal.
+    account_deletion_deferred_cleanup_enabled: bool = False
     stripe_secret_key: str | None = None
     stripe_publishable_key: str | None = None
     stripe_webhook_secret: str | None = None

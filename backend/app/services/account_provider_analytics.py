@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 import httpx
 
 from app.services.account_fulfillment import ProviderUnavailable
+from app.services.account_post_deletion_cleanup import DeferredCleanupReceipt
 
 ORIGIN = 'https://bigquery.googleapis.com'
 LOCATION = 'US'
@@ -99,8 +100,8 @@ class AnalyticsFreezeReceipt:
     verified: bool
     ingestion_drained: bool
 
-    def validate(self, user_id):
-        if (self.verified is not True or self.ingestion_drained is not True
+    def validate(self, user_id, *, require_drained: bool = True):
+        if (self.verified is not True or (require_drained and self.ingestion_drained is not True)
                 or self.user_id != _uuid(user_id) or type(self.freeze_id) is not str
                 or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', self.freeze_id)
                 or _number(self.expires_at, 'freeze_invalid') <= time.time()):
@@ -420,22 +421,28 @@ def _job_id(request, operation, table=''):
 
 class BigQueryAnalyticsProvider:
     def __init__(self, *, token, project, dataset, snapshot, freeze, reviewed_snapshot_digest,
-                 transport=None, timeout_seconds=20.0):
+                 transport=None, timeout_seconds=20.0, deferred_cleanup: bool = False):
         snapshot.validate()
-        freeze.validate(snapshot.user_id)
+        if type(deferred_cleanup) is not bool:
+            raise _fail('deferred_mode_invalid')
+        freeze.validate(snapshot.user_id, require_drained=not deferred_cleanup)
         if (snapshot.project != project or snapshot.dataset != dataset or snapshot.freeze_id != freeze.freeze_id
                 or reviewed_snapshot_digest != snapshot.snapshot_digest):
             raise _fail('snapshot_binding_invalid')
         self.snapshot, self.freeze = snapshot, freeze
+        self.deferred_cleanup = deferred_cleanup
         self.rest = _Rest(token, project, dataset, transport, timeout_seconds)
 
     @classmethod
     @_bounded
     async def capture_preview_snapshot(cls, *, token, project, dataset, request_id, user_id, freeze,
                                        reviewed_tables, exclusions=(), query_byte_budget=50_000_000,
-                                       transport=None, timeout_seconds=20.0):
+                                       transport=None, timeout_seconds=20.0,
+                                       deferred_cleanup: bool = False):
         request_id, user_id = _uuid(request_id), _uuid(user_id)
-        freeze.validate(user_id)
+        if type(deferred_cleanup) is not bool:
+            raise _fail('deferred_mode_invalid')
+        freeze.validate(user_id, require_drained=not deferred_cleanup)
         _integer(query_byte_budget, MIN_BYTES, MAX_BYTES, 'byte_budget_invalid')
         if (type(reviewed_tables) is not tuple or not 1 <= len(reviewed_tables) <= MAX_TABLES
                 or any(type(t) is not str or not STDOUT.fullmatch(t) for t in reviewed_tables)
@@ -452,7 +459,7 @@ class BigQueryAnalyticsProvider:
             schemas, hours = await rest.inventory(reviewed_tables, exclusions)
             tables = []
             for name in reviewed_tables:
-                freeze.validate(user_id)
+                freeze.validate(user_id, require_drained=not deferred_cleanup)
                 count = await rest.count(rest.body('chirp_preview_' + uuid.uuid4().hex,
                                                   rest.query(name, user_id), query_byte_budget))
                 if sum(t.preview_count for t in tables) + count > MAX_ROWS:
@@ -470,7 +477,7 @@ class BigQueryAnalyticsProvider:
                 tables.append(AnalyticsTable(name, schemas[name], count, query_byte_budget, processed))
             if await rest.inventory(reviewed_tables, exclusions) != (schemas, hours):
                 raise _fail('snapshot_drift')
-            freeze.validate(user_id)
+            freeze.validate(user_id, require_drained=not deferred_cleanup)
         snapshot = AnalyticsSnapshot(request_id, user_id, project, dataset, tuple(tables), exclusions,
                                      freeze.freeze_id, time.time(), hours)
         snapshot = replace(snapshot, snapshot_digest=_digest(snapshot.payload()))
@@ -497,7 +504,7 @@ class BigQueryAnalyticsProvider:
         if user_id is None or _uuid(user_id) != s.user_id or idempotency_key != 'account-deletion:' + s.request_id + ':analytics':
             raise _fail('subject_or_request_mismatch')
         s.validate()
-        self.freeze.validate(s.user_id)
+        self.freeze.validate(s.user_id, require_drained=not self.deferred_cleanup)
         if rest.client.is_closed:
             rest.client = httpx.AsyncClient(**rest._client_options)
         async with rest.client:
@@ -510,7 +517,7 @@ class BigQueryAnalyticsProvider:
             affected = 0
             for t in s.tables:
                 s.validate()
-                self.freeze.validate(s.user_id)
+                self.freeze.validate(s.user_id, require_drained=not self.deferred_cleanup)
                 job = await rest.job(rest.body(_job_id(s.request_id, 'delete', t.name),
                                                rest.query(t.name, s.user_id, count=t.preview_count),
                                                t.max_bytes_billed, plan=s.snapshot_digest))
@@ -528,7 +535,26 @@ class BigQueryAnalyticsProvider:
                     raise _fail('readback_nonzero')
             await self._current()
             s.validate()
-            self.freeze.validate(s.user_id)
+            self.freeze.validate(s.user_id, require_drained=not self.deferred_cleanup)
+        if self.deferred_cleanup:
+            descriptor = {
+                "project": s.project,
+                "dataset": s.dataset,
+                "tables": [table.name for table in s.tables],
+                "table_pattern": "run_googleapis_com_stdout_YYYYMMDD",
+                "predicate_version": "user_id_analytics_v1",
+                "exclusions": [
+                    {"name": exclusion.name, "schema_digest": exclusion.schema_digest}
+                    for exclusion in s.exclusions
+                ],
+            }
+            return DeferredCleanupReceipt(
+                category="identifiable_analytics", provider="analytics", subject=s.user_id,
+                request_id=s.request_id,
+                scope=descriptor, scope_sha256=_digest(descriptor),
+                pass_digest=s.snapshot_digest, readback=True,
+                retained_with_reason=("bigquery_time_travel", "bigquery_fail_safe"),
+            )
         return {'confirmed': True, 'provider': 'analytics', 'subject': s.user_id,
                 'request_id': s.request_id,
                 'scope': [t.name for t in s.tables], 'readback': True,

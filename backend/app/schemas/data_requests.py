@@ -3,6 +3,7 @@
 import uuid
 from datetime import datetime
 from typing import Literal
+from pydantic import Field
 
 from app.schemas.base import _Schema
 
@@ -15,6 +16,11 @@ DataRequestStatus = Literal[
 
 class DataRequestCreate(_Schema):
     kind: DataRequestKind
+
+
+class PostDeletionCleanupOut(_Schema):
+    category: Literal["temporary_media", "identifiable_analytics"]
+    state: Literal["pending", "running", "uncertain", "complete", "manual_review"]
 
 
 class DataRequestOut(_Schema):
@@ -32,4 +38,5 @@ class DataRequestOut(_Schema):
     excluded: list[str]
     retention_reasons: list[str]
     provider_steps: dict[str, str]
+    post_deletion_cleanup: list[PostDeletionCleanupOut] = Field(default_factory=list)
     failure_code: str | None = None
