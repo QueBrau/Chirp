@@ -41,9 +41,9 @@ Use this serialized sequence:
 3. **Phase C — start the fenced worker.** Enable API
    `OUTBOX_SWEEPER_ENABLED=true` on the same image only after Phase B's drain
    evidence is fresh. Re-run the canonical API/WS, role, schema, grants, and
-   worker configuration checks, then keep purge and media-reconcile jobs
-   quiescent while active holds exist. Resume a job only after its hold-aware
-   implementation and its own drain evidence have been reviewed.
+   worker configuration checks. Keep purge and media-reconcile quiescent while
+   any held request is unfinished or has unresolved initial provider work.
+   Apply the maintenance resume gate below before restoring either schedule.
 
 Promotions are serialized by service (WS before API) and use no-traffic
 staging; a 100% traffic drain is not a prerequisite for promotion. The safety
@@ -54,6 +54,27 @@ the new worker must not consume legacy direct-dispatch rows while an old
 revision can still complete or overwrite them. If any drain, canonical check,
 grant check, or phase-intent diff is missing or stale, stop with jobs paused
 and leave the final gates unused.
+
+### Maintenance resume gate
+
+Deletion holds remain `active` after completion; their schema deliberately has
+no released state. Hold-row presence alone must not permanently suspend the
+retention schedules. Before resuming purge or media-reconcile, freshly verify
+every hold matches a `completed` deletion request with `completed_at`, its user
+is the expected tombstone ghost, and all required initial provider/tombstone
+steps have accepted receipts and no active leases. Running or uncertain
+external operations, WebSocket connections, delivery attempts, or payment
+attempts must all be zero for those users. Missing, mismatched, unfinished, or
+ambiguous evidence keeps both jobs paused for operator review.
+
+Post-tombstone temporary-media or analytics obligations may remain pending or
+uncertain without blocking these two schedules. The deferred media worker owns
+`tmp/<user>/`; media-reconcile examines only aged, unreferenced `posts/` objects;
+purge removes expired soft-deleted SQL content. Preserve media-reconcile's
+24-hour age floor and bucket/reference checks. This resume decision does not
+resolve a deferred obligation or authorize retrying its uncertain provider
+operation. Pause and drain the maintenance jobs again before starting another
+initial deletion.
 
 The current export covers the account profile, memberships, authored content and interactions, events and attendance, alumni and lineage records, owned devices and message metadata, caller-owned message receipts, payment and ledger rows linked to the account, role terms, moderation/report actions authored by the caller, legal policy versions plus the caller's acceptance records, and organization/payment authority declarations made by the caller. Ciphertext remains opaque; key material and credential-shaped fields are redacted.
 
