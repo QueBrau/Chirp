@@ -290,16 +290,17 @@ def _runtime_flags() -> dict[str, bool]:
 
 
 _ACL: dict[str, tuple[str, ...]] = {
+    "alembic_version": ("SELECT",),
     "users": ("SELECT",),
     "account_data_requests": ("SELECT",),
-    "account_fulfillment_steps": ("SELECT", "INSERT", "UPDATE"),
+    "account_fulfillment_steps": ("SELECT",),
     "account_deletion_holds": ("SELECT",),
     "account_external_operations": ("SELECT",),
     "account_external_operation_scopes": ("SELECT",),
     "account_ws_connections": ("SELECT",),
     "account_delivery_attempts": ("SELECT",),
     "account_payment_attempts": ("SELECT",),
-    "account_post_deletion_cleanup": ("SELECT", "INSERT"),
+    "account_post_deletion_cleanup": ("SELECT",),
     "account_data_artifacts": ("SELECT", "DELETE"),
     "alumni_profiles": ("DELETE",),
     "campus_verifications": ("DELETE",),
@@ -325,6 +326,57 @@ _ACL: dict[str, tuple[str, ...]] = {
     "dues_payment_plans": ("SELECT",),
     "dues_payment_intents": ("SELECT",),
 }
+_COLUMN_ACL: dict[str, dict[str, set[str]]] = {
+    "users": {"SELECT": {"id", "firebase_uid", "email", "is_ghost"}, "UPDATE": {
+        "firebase_uid", "email", "display_name", "avatar_url", "campus_id",
+        "pseudonym_seed", "campus_verified_at", "is_platform_admin",
+        "suspended_at", "suspension_reason", "suspended_by", "is_ghost",
+    }},
+    "account_data_requests": {"SELECT": {"id", "user_id", "kind", "status", "open_key",
+        "failure_code", "provider_steps", "fulfillment_lease_token", "fulfillment_lease_expires_at",
+        "completed_at", "updated_at", "retention_reasons"}, "UPDATE": {
+        "status", "open_key", "failure_code", "provider_steps", "fulfillment_lease_token",
+        "fulfillment_lease_expires_at", "completed_at", "updated_at", "retention_reasons",
+    }},
+    "memberships": {"SELECT": {"id", "user_id", "status"}, "UPDATE": {"status"}},
+    "role_terms": {"SELECT": {"id", "membership_id", "ended_at"}, "UPDATE": {"ended_at"}},
+    "chapter_invites": {"SELECT": {"id", "created_by", "revoked_at"}, "UPDATE": {"revoked_at"}},
+    "posts": {"SELECT": {"id", "author_id", "body", "media_urls", "deleted_at", "removed_reason"},
+              "UPDATE": {"body", "media_urls", "deleted_at", "removed_reason"}},
+    "post_comments": {"SELECT": {"id", "author_id", "body", "deleted_at", "removed_reason"},
+                      "UPDATE": {"body", "deleted_at", "removed_reason"}},
+    "chirps": {"SELECT": {"id", "author_id", "body", "removed_at", "removed_reason"},
+               "UPDATE": {"body", "removed_at", "removed_reason"}},
+    "conversation_members": {"SELECT": {"conversation_id", "user_id", "left_at"}, "UPDATE": {"left_at"}},
+    "devices": {"SELECT": {"id", "user_id", "revoked_at"}, "UPDATE": {"revoked_at"}},
+    "alumni_profiles": {"SELECT": {"user_id"}},
+    "campus_verifications": {"SELECT": {"user_id"}},
+    "account_data_artifacts": {"SELECT": {"request_id"}},
+    "job_posts": {"SELECT": {"posted_by"}},
+    "post_likes": {"SELECT": {"user_id"}},
+    "chirp_votes": {"SELECT": {"user_id"}},
+    "poll_votes": {"SELECT": {"user_id"}},
+    "house_ballots": {"SELECT": {"voter_id"}},
+    "user_blocks": {"SELECT": {"blocker_id"}},
+    "signed_prekeys": {"SELECT": {"device_id"}},
+    "one_time_prekeys": {"SELECT": {"device_id"}},
+    "kyber_prekeys": {"SELECT": {"device_id"}},
+    "account_fulfillment_steps": {
+        "INSERT": {"request_id", "step_key", "idempotency_key", "provider_ref", "last_error",
+                   "started_at", "completed_at", "lease_token", "lease_expires_at"},
+        "UPDATE": {"status", "attempt_count", "idempotency_key", "provider_ref", "last_error",
+                   "started_at", "completed_at", "lease_token", "lease_expires_at"},
+    },
+    "account_post_deletion_cleanup": {"INSERT": {
+        "request_id", "user_id", "category", "state", "scope", "scope_sha256",
+        "last_pass_digest", "remaining_count", "attempt_count", "next_attempt_at", "updated_at",
+    }},
+}
+_WRITE_TABLES = tuple(sorted(
+    {table for table, privileges in _ACL.items() if any(p != "SELECT" for p in privileges)}
+    | {table for table, privileges in _COLUMN_ACL.items()
+       if any(privilege in {"UPDATE", "INSERT"} for privilege in privileges)}
+))
 
 
 async def _database_identity_and_acl(
@@ -343,6 +395,17 @@ async def _database_identity_and_acl(
         raise ExecutorRefused("database_identity_mismatch")
     if endpoint.get("database") != database_name or endpoint.get("username") != expected_role:
         raise ExecutorRefused("database_endpoint_mismatch")
+    role_flags = (await session.execute(text(
+        "SELECT r.rolsuper, r.rolbypassrls, d.datdba = r.oid AS database_owner, "
+        "EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "JOIN pg_roles owner_role ON owner_role.oid = c.relowner "
+        "WHERE n.nspname = 'public' AND c.relname = ANY(:write_tables) "
+        "AND owner_role.rolname = current_user) AS owns_write_table "
+        "FROM pg_roles r JOIN pg_database d ON d.datname = current_database() "
+        "WHERE r.rolname = current_user"
+    ), {"write_tables": list(_WRITE_TABLES)})).one_or_none()
+    if role_flags is None or any(bool(value) for value in role_flags):
+        raise ExecutorRefused("database_role_too_privileged")
     versions = list((await session.scalars(text("SELECT version_num FROM alembic_version"))).all())
     if versions != [EXPECTED_SCHEMA_HEAD]:
         raise ExecutorRefused("database_schema_mismatch")
@@ -357,43 +420,7 @@ async def _database_identity_and_acl(
     # Table-level UPDATE is unnecessarily broad for a destructive executor.
     # Check only columns this transaction can write, and the columns used to
     # select its owned rows (PostgreSQL requires SELECT for predicate columns).
-    column_acl: dict[str, dict[str, set[str]]] = {
-        "users": {"SELECT": {"id", "firebase_uid", "email", "is_ghost"}, "UPDATE": {
-            "firebase_uid", "email", "display_name", "avatar_url", "campus_id",
-            "pseudonym_seed", "campus_verified_at", "is_platform_admin",
-            "suspended_at", "suspension_reason", "suspended_by", "is_ghost",
-        }},
-        "account_data_requests": {"SELECT": {"id", "user_id", "kind", "status", "open_key",
-            "failure_code", "provider_steps", "fulfillment_lease_token", "fulfillment_lease_expires_at",
-            "completed_at", "updated_at", "retention_reasons"}, "UPDATE": {
-            "status", "open_key", "failure_code", "provider_steps", "fulfillment_lease_token",
-            "fulfillment_lease_expires_at", "completed_at", "updated_at", "retention_reasons",
-        }},
-        "memberships": {"SELECT": {"user_id", "status"}, "UPDATE": {"status"}},
-        "role_terms": {"SELECT": {"membership_id", "ended_at"}, "UPDATE": {"ended_at"}},
-        "chapter_invites": {"SELECT": {"created_by", "revoked_at"}, "UPDATE": {"revoked_at"}},
-        "posts": {"SELECT": {"id", "author_id", "body", "media_urls", "deleted_at", "removed_reason"},
-                  "UPDATE": {"body", "media_urls", "deleted_at", "removed_reason"}},
-        "post_comments": {"SELECT": {"author_id", "body", "deleted_at", "removed_reason"},
-                          "UPDATE": {"body", "deleted_at", "removed_reason"}},
-        "chirps": {"SELECT": {"id", "author_id", "body", "removed_at", "removed_reason"},
-                   "UPDATE": {"body", "removed_at", "removed_reason"}},
-        "conversation_members": {"SELECT": {"user_id", "left_at"}, "UPDATE": {"left_at"}},
-        "devices": {"SELECT": {"id", "user_id", "revoked_at"}, "UPDATE": {"revoked_at"}},
-        "alumni_profiles": {"SELECT": {"user_id"}},
-        "campus_verifications": {"SELECT": {"user_id"}},
-        "account_data_artifacts": {"SELECT": {"request_id"}},
-        "job_posts": {"SELECT": {"posted_by"}},
-        "post_likes": {"SELECT": {"user_id"}},
-        "chirp_votes": {"SELECT": {"user_id"}},
-        "poll_votes": {"SELECT": {"user_id"}},
-        "house_ballots": {"SELECT": {"voter_id"}},
-        "user_blocks": {"SELECT": {"blocker_id"}},
-        "signed_prekeys": {"SELECT": {"device_id"}},
-        "one_time_prekeys": {"SELECT": {"device_id"}},
-        "kyber_prekeys": {"SELECT": {"device_id"}},
-    }
-    for table, by_privilege in column_acl.items():
+    for table, by_privilege in _COLUMN_ACL.items():
         for privilege, columns in by_privilege.items():
             for column in sorted(columns):
                 allowed = await session.scalar(text(

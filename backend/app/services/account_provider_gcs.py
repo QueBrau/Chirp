@@ -305,11 +305,16 @@ async def snapshot_user_media(
     max_objects: int = MAX_OBJECTS,
     deadline_seconds: float = 120.0,
     deferred_cleanup: bool = False,
+    release_db_before_io: bool = False,
 ) -> MediaSnapshot:
     if not isinstance(bucket, str) or not bucket or getattr(reader, "bucket_name", None) != bucket:
         raise MediaProviderUnavailable("media_reader_bucket_mismatch")
     if type(deferred_cleanup) is not bool:
         raise ValueError("media_deferred_mode_invalid")
+    if type(release_db_before_io) is not bool:
+        raise ValueError("media_db_release_mode_invalid")
+    if release_db_before_io and (session.new or session.dirty or session.deleted):
+        raise MediaProviderUnavailable("media_snapshot_session_not_clean")
     if deferred_cleanup:
         if freeze is not None:
             raise MediaProviderUnavailable("media_deferred_freeze_mismatch")
@@ -328,6 +333,11 @@ async def snapshot_user_media(
         if exists is None:
             raise MediaProviderUnavailable("media_subject_missing")
         await _owned_references(session, user_id, bucket)
+    if release_db_before_io:
+        # The snapshot reads are complete and hold admission keeps account-owned
+        # references stable. Return the connection before the first object-store
+        # list request; no SQL transaction spans provider I/O.
+        await session.rollback()
     found: dict[tuple[str, str], MediaObject] = {}
     for prefix in PREFIXES:
         if freeze is not None:

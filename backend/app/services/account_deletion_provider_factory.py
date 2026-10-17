@@ -113,6 +113,12 @@ async def capture_provider_snapshots(
         raise ValueError("media_bucket_binding_invalid")
 
     refs = await _load_stripe_refs(session, user.id)
+    media_references = sorted(await media._owned_references(session, user.id, bucket))
+    if session.new or session.dirty or session.deleted:
+        raise ValueError("snapshot_session_not_clean")
+    # Release all ORM work before refreshing credentials or reading provider
+    # metadata. The active hold freezes account-owned SQL writes independently.
+    await session.rollback()
     gcs_credentials, gcs_project = google_auth_default(
         scopes=["https://www.googleapis.com/auth/devstorage.full_control"],
     )
@@ -123,9 +129,9 @@ async def capture_provider_snapshots(
         expected_soft_delete_seconds=approval["soft_delete_seconds"],
         expected_versioning_enabled=False,
     )
-    media_references = sorted(await media._owned_references(session, user.id, bucket))
     media_snapshot = await media.snapshot_user_media(
         session, user.id, reader, None, bucket=bucket, deferred_cleanup=True,
+        release_db_before_io=True,
     )
 
     analytics_credentials, analytics_project = google_auth_default(

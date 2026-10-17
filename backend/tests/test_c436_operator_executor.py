@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import get_settings
 from app.db import get_session_factory
@@ -122,12 +123,61 @@ async def test_prepare_review_execute_is_bound_and_provider_injected(
         db_name, role = (await session.execute(text("SELECT current_database(), current_user"))).one()
     database_url = make_url(os.environ["DATABASE_URL"])
     assert database_url.database == db_name and database_url.username == role
+    async with get_session_factory()() as elevated_session:
+        with pytest.raises(executor.ExecutorRefused, match="database_role_too_privileged"):
+            await executor._database_identity_and_acl(
+                elevated_session, expected_database=db_name, expected_role=role,
+                endpoint=executor._database_endpoint(database_url.render_as_string(hide_password=False)),
+            )
     settings = get_settings().model_copy(update={
         **{key: True for key in executor.ADMISSION_FLAGS},
         "media_bucket_name": "chirp-test-bucket",
     })
-    monkeypatch.setattr(executor, "get_settings", lambda: settings)
     monkeypatch.setenv(executor.GCS_METADATA_ENV, "true")
+
+    # The operator path must run as a restricted, non-owner role. Use a
+    # connection-startup SET ROLE so the same real grants are evaluated by
+    # PostgreSQL during both preflight and the end-to-end executor run.
+    role = f"c436op_{uuid.uuid4().hex[:10]}"
+    from app.jobs.account_deletion_executor import _ACL, _COLUMN_ACL
+    try:
+        async with get_session_factory()() as admin:
+            await admin.execute(text(f'CREATE ROLE "{role}" NOLOGIN'))
+            await admin.execute(text(f'GRANT "{role}" TO CURRENT_USER'))
+            await admin.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
+            for table, privileges in _ACL.items():
+                for privilege in privileges:
+                    await admin.execute(text(
+                        f'GRANT {privilege} ON TABLE public."{table}" TO "{role}"'
+                    ))
+            for table, by_privilege in _COLUMN_ACL.items():
+                for privilege, columns in by_privilege.items():
+                    quoted_columns = ", ".join(f'"{column}"' for column in sorted(columns))
+                    await admin.execute(text(
+                        f'GRANT {privilege} ({quoted_columns}) ON TABLE public."{table}" TO "{role}"'
+                    ))
+            await admin.commit()
+        base_url = make_url(os.environ["DATABASE_URL"])
+        role_engine = create_async_engine(
+            base_url.render_as_string(hide_password=False),
+            connect_args={"server_settings": {"role": role}},
+        )
+        role_factory = async_sessionmaker(role_engine, expire_on_commit=False)
+        role_url = base_url.set(username=role, password="not-used-for-set-role")
+        settings = settings.model_copy(update={
+            "database_url": role_url.render_as_string(hide_password=False),
+        })
+        monkeypatch.setenv("DATABASE_URL", role_url.render_as_string(hide_password=False))
+        monkeypatch.setattr(executor, "get_settings", lambda: settings)
+        import app.services.account_external_operations as external_operations
+        import app.services.account_fulfillment as fulfillment
+        monkeypatch.setattr(executor, "get_session_factory", lambda: role_factory)
+        monkeypatch.setattr(external_operations, "get_session_factory", lambda: role_factory)
+        monkeypatch.setattr(fulfillment, "get_session_factory", lambda: role_factory)
+    except BaseException:
+        # Role setup failures should surface; cleanup is still attempted below
+        # when creation got far enough to succeed.
+        raise
 
     tmp_path.chmod(0o700)
     approval_path = tmp_path / "approval.json"
@@ -140,42 +190,50 @@ async def test_prepare_review_execute_is_bound_and_provider_injected(
         assert kwargs["user"].id == user_id
         return _snapshots(request_id, user_id)
 
-    digest = await executor.prepare_deletion_plan(
-        request_id=request_id, expected_user_id=user_id, plan_path=plan_path,
-        approval_path=approval_path, expected_database=db_name, expected_role=role,
-        snapshot_builder=snapshot_builder,
-    )
-    assert stat.S_IMODE(plan_path.stat().st_mode) == 0o600
-    assert _ConfirmingProvider("unused").calls == []
+    try:
+        digest = await executor.prepare_deletion_plan(
+            request_id=request_id, expected_user_id=user_id, plan_path=plan_path,
+            approval_path=approval_path, expected_database=db_name, expected_role=role,
+            snapshot_builder=snapshot_builder,
+        )
+        assert stat.S_IMODE(plan_path.stat().st_mode) == 0o600
+        assert _ConfirmingProvider("unused").calls == []
 
-    providers = {key: _ConfirmingProvider(key) for key in PROVIDER_STEPS}
-    built: list[bool] = []
+        providers = {key: _ConfirmingProvider(key) for key in PROVIDER_STEPS}
+        built: list[bool] = []
 
-    async def provider_builder(**kwargs):
-        built.append(True)
-        assert kwargs["request_id"] == request_id
-        assert kwargs["user_id"] == user_id
-        return providers, None
+        async def provider_builder(**kwargs):
+            built.append(True)
+            assert kwargs["request_id"] == request_id
+            assert kwargs["user_id"] == user_id
+            return providers, None
 
-    with pytest.raises(executor.ExecutorRefused, match="plan_digest_mismatch"):
-        await executor.execute_deletion_plan(
-            plan_path=plan_path, approval_path=approval_path, confirm_digest="0" * 64,
+        with pytest.raises(executor.ExecutorRefused, match="plan_digest_mismatch"):
+            await executor.execute_deletion_plan(
+                plan_path=plan_path, approval_path=approval_path, confirm_digest="0" * 64,
+                expected_request_id=request_id, expected_user_id=user_id,
+                expected_database=db_name, expected_role=role,
+                provider_builder=provider_builder,
+            )
+        assert not built
+
+        result = await executor.execute_deletion_plan(
+            plan_path=plan_path, approval_path=approval_path, confirm_digest=digest,
             expected_request_id=request_id, expected_user_id=user_id,
             expected_database=db_name, expected_role=role,
             provider_builder=provider_builder,
         )
-    assert not built
-
-    result = await executor.execute_deletion_plan(
-        plan_path=plan_path, approval_path=approval_path, confirm_digest=digest,
-        expected_request_id=request_id, expected_user_id=user_id,
-        expected_database=db_name, expected_role=role,
-        provider_builder=provider_builder,
-    )
-    assert result["status"] == "completed"
-    assert built == [True]
-    for key, provider in providers.items():
-        assert provider.calls == [f"account-deletion:{request_id}:{key}"]
+        assert result["status"] == "completed"
+        assert built == [True]
+        for key, provider in providers.items():
+            assert provider.calls == [f"account-deletion:{request_id}:{key}"]
+    finally:
+        await role_engine.dispose()
+        async with get_session_factory()() as admin:
+            await admin.execute(text(f'DROP OWNED BY "{role}"'))
+            await admin.execute(text(f'REVOKE "{role}" FROM CURRENT_USER'))
+            await admin.execute(text(f'DROP ROLE "{role}"'))
+            await admin.commit()
 
 
 @pytest.mark.asyncio
@@ -184,7 +242,7 @@ async def test_real_factory_pins_project_and_rereads_bucket_retention(monkeypatc
     request_id, user_id = uuid.uuid4(), uuid.uuid4()
     settings = SimpleNamespace(
         media_bucket_name="chirp-test-bucket", stripe_secret_key="sk_test_placeholder",
-        email_provider="smtp",
+        email_provider="resend",
     )
     monkeypatch.setattr(factory, "get_settings", lambda: settings)
 
@@ -229,23 +287,6 @@ async def test_real_factory_pins_project_and_rereads_bucket_retention(monkeypatc
         return object()
 
     monkeypatch.setattr(firebase_admin, "initialize_app", initialize_app)
-    firebase_provider_apps: list[object] = []
-
-    class FakeFirebaseProvider:
-        def __init__(self, *, app):
-            firebase_provider_apps.append(app)
-
-    monkeypatch.setattr(factory, "FirebaseProvider", FakeFirebaseProvider)
-
-    class Provider:
-        def __init__(self, *args, **kwargs):
-            self.args, self.kwargs = args, kwargs
-
-    monkeypatch.setattr(factory, "StripeCustomerProvider", Provider)
-    monkeypatch.setattr(factory, "EmailLogsBackupsRetentionProvider", Provider)
-    monkeypatch.setattr(factory.media, "GCSMediaProvider", Provider)
-    monkeypatch.setattr(factory.analytics, "BigQueryAnalyticsProvider", Provider)
-
     bundle = _snapshots(request_id, user_id)
     providers, app = await factory.build_deletion_providers(
         user_id=user_id, request_id=request_id, snapshot_bundle=bundle,
@@ -257,4 +298,68 @@ async def test_real_factory_pins_project_and_rereads_bucket_retention(monkeypatc
         {"projectId": "chirps-prod", "httpTimeout": 30},
         f"c436-{request_id.hex[:12]}",
     )]
-    assert firebase_provider_apps == [app]
+    from app.services.account_provider_analytics import BigQueryAnalyticsProvider
+    from app.services.account_provider_retention import EmailLogsBackupsRetentionProvider
+    from app.services.account_provider_stripe import StripeCustomerProvider
+    from app.services.account_fulfillment import FirebaseProvider
+    assert isinstance(providers["payment_provider"], StripeCustomerProvider)
+    assert isinstance(providers["media_storage"], media.GCSMediaProvider)
+    assert isinstance(providers["email_logs_backups"], EmailLogsBackupsRetentionProvider)
+    assert isinstance(providers["analytics"], BigQueryAnalyticsProvider)
+    assert isinstance(providers["firebase_auth"], FirebaseProvider)
+    assert providers["firebase_auth"].app is app
+    assert providers["media_storage"]._retention == retention
+    assert providers["analytics"].rest.project == "chirps-prod"
+    assert providers["analytics"].rest.dataset == "chirp_analytics"
+
+
+@pytest.mark.asyncio
+async def test_media_snapshot_releases_database_connection_before_provider_list(make_user) -> None:
+    from threading import Lock
+    from sqlalchemy import event
+
+    owner: ApiUser = await make_user("Executor snapshot connection boundary")
+    engine = get_session_factory().kw["bind"]
+    lock = Lock()
+    checked_out = 0
+    seen_during_provider_io: list[int] = []
+
+    def checkout(_dbapi_connection, _connection_record, _connection_proxy):
+        nonlocal checked_out
+        with lock:
+            checked_out += 1
+
+    def checkin(_dbapi_connection, _connection_record):
+        nonlocal checked_out
+        with lock:
+            checked_out -= 1
+
+    class Reader:
+        bucket_name = "chirp-test-bucket"
+
+        def list(self, prefix, *, deadline):
+            with lock:
+                seen_during_provider_io.append(checked_out)
+            return []
+
+        def read(self, name, *, deadline):
+            return None
+
+        def delete(self, name, generation, *, deadline):
+            raise AssertionError("snapshot must not delete")
+
+    event.listen(engine.sync_engine, "checkout", checkout)
+    event.listen(engine.sync_engine, "checkin", checkin)
+    try:
+        async with get_session_factory()() as session:
+            snapshot = await media.snapshot_user_media(
+                session, uuid.UUID(owner.id), Reader(), None,
+                bucket="chirp-test-bucket", deferred_cleanup=True,
+                release_db_before_io=True,
+            )
+        assert snapshot.user_id == owner.id
+        assert len(seen_during_provider_io) == len(media.PREFIXES)
+        assert seen_during_provider_io == [0] * len(media.PREFIXES)
+    finally:
+        event.remove(engine.sync_engine, "checkout", checkout)
+        event.remove(engine.sync_engine, "checkin", checkin)
