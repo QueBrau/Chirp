@@ -56,10 +56,12 @@ ADMISSION_FLAGS = (
     "account_deletion_deferred_cleanup_enabled",
 )
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_EVIDENCE_REF = re.compile(r"^[A-Za-z0-9._:/-]{2,256}$")
 _APPROVAL_FIELDS = frozenset({
     "type", "request_id", "user_id", "database_name", "database_role",
     "schema_head", "reviewed_by", "reviewed_at", "expires_at",
-    "old_revisions_drained", "admission_flags", "firebase_project",
+    "old_revisions_drained", "old_revisions_evidence_ref",
+    "old_revisions_evidence_sha256", "admission_flags", "firebase_project",
     "analytics_project", "analytics_dataset", "bucket", "soft_delete_seconds",
     "analytics_tables", "analytics_exclusions", "analytics_freeze",
 })
@@ -237,6 +239,11 @@ def _validate_approval(
         raise ExecutorRefused("approval_expired")
     if value.get("old_revisions_drained") is not True:
         raise ExecutorRefused("old_revisions_not_attested_drained")
+    evidence_ref = value.get("old_revisions_evidence_ref")
+    if (type(evidence_ref) is not str or _EVIDENCE_REF.fullmatch(evidence_ref) is None
+            or any(part in {"", ".", ".."} for part in evidence_ref.split("/"))
+            or not _SHA256.fullmatch(str(value.get("old_revisions_evidence_sha256", "")))):
+        raise ExecutorRefused("old_revisions_evidence_invalid")
     flags = value.get("admission_flags")
     if type(flags) is not dict or set(flags) != set(ADMISSION_FLAGS) or any(v is not True for v in flags.values()):
         raise ExecutorRefused("admission_flags_not_attested")
@@ -396,20 +403,62 @@ async def _database_identity_and_acl(
     if endpoint.get("database") != database_name or endpoint.get("username") != expected_role:
         raise ExecutorRefused("database_endpoint_mismatch")
     role_flags = (await session.execute(text(
-        "SELECT r.rolsuper, r.rolbypassrls, d.datdba = r.oid AS database_owner, "
+        "SELECT r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, "
+        "pg_has_role(r.oid, d.datdba, 'MEMBER') AS database_owner, "
         "EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "JOIN pg_roles owner_role ON owner_role.oid = c.relowner "
         "WHERE n.nspname = 'public' AND c.relname = ANY(:write_tables) "
-        "AND owner_role.rolname = current_user) AS owns_write_table "
+        "AND pg_has_role(current_user, owner_role.oid, 'MEMBER')) AS owns_write_table "
         "FROM pg_roles r JOIN pg_database d ON d.datname = current_database() "
         "WHERE r.rolname = current_user"
     ), {"write_tables": list(_WRITE_TABLES)})).one_or_none()
     if role_flags is None or any(bool(value) for value in role_flags):
         raise ExecutorRefused("database_role_too_privileged")
+    dangerous_membership = await session.scalar(text(
+        "SELECT EXISTS (SELECT 1 FROM pg_roles target WHERE target.rolname = ANY(:roles) "
+        "AND pg_has_role(current_user, target.oid, 'MEMBER'))"
+    ), {"roles": ["pg_read_server_files", "pg_write_server_files",
+                   "pg_execute_server_program", "pg_read_all_data", "pg_write_all_data",
+                   "pg_monitor", "pg_signal_backend"]})
+    if dangerous_membership:
+        raise ExecutorRefused("database_role_too_privileged")
     versions = list((await session.scalars(text("SELECT version_num FROM alembic_version"))).all())
     if versions != [EXPECTED_SCHEMA_HEAD]:
         raise ExecutorRefused("database_schema_mismatch")
     missing: list[str] = []
+    write_privileges = ("INSERT", "UPDATE", "DELETE", "TRUNCATE")
+    allowed_table_writes = [
+        f"{table}:{privilege}" for table, privileges in _ACL.items()
+        for privilege in privileges if privilege in write_privileges
+    ]
+    allowed_column_writes = [
+        f"{table}.{column}:{privilege}"
+        for table, privileges in _COLUMN_ACL.items()
+        for privilege, columns in privileges.items()
+        if privilege in {"INSERT", "UPDATE", "REFERENCES"}
+        for column in columns
+    ]
+    excessive = await session.scalar(text(
+        "WITH app_tables AS ("
+        " SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace"
+        " WHERE n.nspname='public' AND c.relkind IN ('r','p')"
+        "), table_excess AS ("
+        " SELECT 1 FROM app_tables t CROSS JOIN unnest(CAST(:write_privileges AS text[])) p(privilege)"
+        " WHERE has_table_privilege(current_user, t.oid, p.privilege)"
+        " AND NOT (t.relname || ':' || p.privilege = ANY(CAST(:allowed_table_writes AS text[])))"
+        "), column_excess AS ("
+        " SELECT 1 FROM app_tables t JOIN pg_attribute a ON a.attrelid=t.oid"
+        " CROSS JOIN unnest(ARRAY['INSERT','UPDATE','REFERENCES']::text[]) p(privilege)"
+        " WHERE a.attnum>0 AND NOT a.attisdropped"
+        " AND has_column_privilege(current_user, t.oid, a.attnum, p.privilege)"
+        " AND NOT ((t.relname || '.' || a.attname || ':' || p.privilege)"
+        " = ANY(CAST(:allowed_column_writes AS text[])))"
+        ") SELECT EXISTS (SELECT 1 FROM table_excess UNION ALL SELECT 1 FROM column_excess)"
+    ), {"write_privileges": list(write_privileges),
+        "allowed_table_writes": allowed_table_writes,
+        "allowed_column_writes": allowed_column_writes})
+    if excessive:
+        raise ExecutorRefused("database_privileges_excessive")
     for table, privileges in _ACL.items():
         for privilege in privileges:
             allowed = await session.scalar(text(

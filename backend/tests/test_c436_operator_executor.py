@@ -24,6 +24,29 @@ from tests.c436_executor_helpers import activate_executor_hold
 from tests.conftest import ApiUser
 
 
+def test_approval_requires_bounded_old_revision_evidence(monkeypatch) -> None:
+    request_id, user_id = uuid.uuid4(), uuid.uuid4()
+    approval = _approval(request_id, user_id, "chirp_test", "operator")
+    monkeypatch.setattr(executor, "get_settings", lambda: SimpleNamespace(media_bucket_name="chirp-test-bucket"))
+    executor._validate_approval(
+        approval, request_id=request_id, user_id=user_id,
+        expected_database="chirp_test", expected_role="operator",
+    )
+    for field, invalid in (
+        ("old_revisions_evidence_ref", "../secret"),
+        ("old_revisions_evidence_ref", ""),
+        ("old_revisions_evidence_sha256", "not-a-digest"),
+        ("old_revisions_evidence_sha256", "A" * 64),
+    ):
+        candidate = dict(approval)
+        candidate[field] = invalid
+        with pytest.raises(executor.ExecutorRefused, match="old_revisions_evidence_invalid"):
+            executor._validate_approval(
+                candidate, request_id=request_id, user_id=user_id,
+                expected_database="chirp_test", expected_role="operator",
+            )
+
+
 def _snapshots(request_id: uuid.UUID, user_id: uuid.UUID) -> dict[str, object]:
     media_snapshot = media.MediaSnapshot(
         user_id=str(user_id), bucket="chirp-test-bucket", prefixes=media.PREFIXES,
@@ -73,6 +96,8 @@ def _approval(request_id: uuid.UUID, user_id: uuid.UUID, database_name: str, rol
         "reviewed_by": "test operator", "reviewed_at": now.isoformat(),
         "expires_at": (now + timedelta(minutes=45)).isoformat(),
         "old_revisions_drained": True,
+        "old_revisions_evidence_ref": ".ticket-evidence/c436/old-revision-drain.json",
+        "old_revisions_evidence_sha256": "a" * 64,
         "admission_flags": {key: True for key in executor.ADMISSION_FLAGS},
         "firebase_project": "chirps-prod",
         "analytics_project": "chirps-prod",
@@ -174,6 +199,35 @@ async def test_prepare_review_execute_is_bound_and_provider_injected(
         monkeypatch.setattr(executor, "get_session_factory", lambda: role_factory)
         monkeypatch.setattr(external_operations, "get_session_factory", lambda: role_factory)
         monkeypatch.setattr(fulfillment, "get_session_factory", lambda: role_factory)
+        endpoint = executor._database_endpoint(role_url.render_as_string(hide_password=False))
+        async with role_factory() as restricted:
+            await executor._database_identity_and_acl(
+                restricted, expected_database=db_name, expected_role=role, endpoint=endpoint,
+            )
+        for grant, revoke in (
+            (f'GRANT DELETE ON TABLE public.users TO "{role}"',
+             f'REVOKE DELETE ON TABLE public.users FROM "{role}"'),
+            (f'GRANT UPDATE ON TABLE public.users TO "{role}"',
+             f'REVOKE UPDATE ON TABLE public.users FROM "{role}"'),
+        ):
+            async with get_session_factory()() as admin:
+                await admin.execute(text(grant))
+                await admin.commit()
+            async with role_factory() as restricted:
+                with pytest.raises(executor.ExecutorRefused, match="database_privileges_excessive"):
+                    await executor._database_identity_and_acl(
+                        restricted, expected_database=db_name, expected_role=role, endpoint=endpoint,
+                    )
+            async with get_session_factory()() as admin:
+                await admin.execute(text(revoke))
+                if "UPDATE ON TABLE public.users" in grant:
+                    columns = ", ".join(f'"{column}"' for column in sorted(
+                        _COLUMN_ACL["users"]["UPDATE"]
+                    ))
+                    await admin.execute(text(
+                        f'GRANT UPDATE ({columns}) ON TABLE public.users TO "{role}"'
+                    ))
+                await admin.commit()
     except BaseException:
         # Role setup failures should surface; cleanup is still attempted below
         # when creation got far enough to succeed.

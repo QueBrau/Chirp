@@ -14,7 +14,8 @@ Before preparing a request, an authorized operator must already have:
 - deployed all four account-deletion admission integrations and verified their
   environment settings are enabled: HTTP, WebSocket, delivery, and deferred cleanup;
 - drained every process running an older writer revision, and recorded that manual
-  verification in the private approval file;
+  verification in the private approval file, including a reference to the
+  evidence artifact and its SHA-256 digest;
 - committed the durable hold for this exact deletion request, with registered
   external operations, WebSockets, deliveries, and payment attempts drained;
 - reviewed the exact BigQuery dated-table set and any permitted probe exclusion,
@@ -31,8 +32,11 @@ The old-revision drain and analytics freeze are operator attestations, not facts
 the CLI can infer. They must describe concrete evidence and the reviewer in the
 approval artifact. Admission flags are checked both against that artifact and the
 current process settings. The database check separately verifies actual database,
-role, schema head `0050`, connection endpoint and required table privileges. The
-schema head is intentionally exact; update this tool after a future migration.
+role, schema head `0050`, connection endpoint, and the executor's exact
+table/column privilege allowlist. It refuses elevated role attributes,
+membership in database-wide privileged roles, table ownership, and unexpected
+app-table write privileges. The schema head is intentionally exact; update this
+tool after a future migration.
 
 ## Private approval file
 
@@ -52,6 +56,8 @@ exactly these fields:
   "reviewed_at": "<timezone-aware ISO timestamp>",
   "expires_at": "<timezone-aware ISO timestamp, within one hour>",
   "old_revisions_drained": true,
+  "old_revisions_evidence_ref": ".ticket-evidence/c436/old-revision-drain.json",
+  "old_revisions_evidence_sha256": "<64 lowercase hex characters>",
   "admission_flags": {
     "account_deletion_http_admission_enabled": true,
     "account_deletion_ws_admission_enabled": true,
@@ -68,7 +74,7 @@ exactly these fields:
   "analytics_freeze": {
     "user_id": "<same canonical UUID>",
     "freeze_id": "<reviewed identifier>",
-    "expires_at": 0,
+    "expires_at": 1792180000,
     "verified": true,
     "ingestion_drained": false
   }
@@ -76,7 +82,11 @@ exactly these fields:
 ```
 
 Replace every placeholder with reviewed values; `expires_at` in the freeze is a
-Unix timestamp in seconds and must remain valid for the run. Table names must be
+Unix timestamp in seconds and the example value is illustrative; replace it with
+a currently valid reviewed value. The old-revision evidence reference must point
+to the separately retained private artifact, and the digest must be computed
+over that artifact's exact bytes. The reference is recorded in the plan-bound
+approval; the evidence content is not copied into the plan. Table names must be
 the exact sorted live table inventory. The sole supported exclusion is the
 previously reviewed `chirps_analytics_probe_20260908` with its schema digest and
 `reviewed_non_account_probe: true`. Do not put credentials, access tokens, DSNs or
