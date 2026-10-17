@@ -264,7 +264,11 @@ async def _bound_db_wait(session: AsyncSession) -> None:
 
 async def claim_due_cleanup(session: AsyncSession, *, limit: int = 8,
                             now: datetime | None = None,
-                            lease_seconds: int = 120) -> list[CleanupClaim]:
+                            lease_seconds: int = 120,
+                            obligation_id: uuid.UUID | None = None,
+                            request_id: uuid.UUID | None = None,
+                            user_id: uuid.UUID | None = None,
+                            scope_sha256: str | None = None) -> list[CleanupClaim]:
     """Claim only known-pending obligations; expired running work is never stolen."""
     if type(limit) is not int or not 1 <= limit <= MAX_CLAIM_LIMIT:
         raise ValueError("cleanup_claim_limit_invalid")
@@ -274,18 +278,26 @@ async def claim_due_cleanup(session: AsyncSession, *, limit: int = 8,
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("cleanup_clock_invalid")
     await _bound_db_wait(session)
-    rows = (await session.scalars(
-        select(models.AccountPostDeletionCleanup)
-        .join(models.AccountDataRequest, models.AccountDataRequest.id == models.AccountPostDeletionCleanup.request_id)
-        .join(models.User, models.User.id == models.AccountPostDeletionCleanup.user_id)
-        .where(models.AccountPostDeletionCleanup.state == "pending",
+    statement = select(models.AccountPostDeletionCleanup).join(
+        models.AccountDataRequest, models.AccountDataRequest.id == models.AccountPostDeletionCleanup.request_id
+    ).join(models.User, models.User.id == models.AccountPostDeletionCleanup.user_id).where(
+               models.AccountPostDeletionCleanup.state == "pending",
                models.AccountPostDeletionCleanup.next_attempt_at <= now,
                models.AccountDataRequest.kind == "deletion",
                models.AccountDataRequest.user_id == models.AccountPostDeletionCleanup.user_id,
                models.AccountDataRequest.status == "completed",
                models.User.is_ghost.is_(True),
                models.User.firebase_uid == func.concat("deleted:", models.User.id),
-               models.User.email == func.concat("deleted+", models.User.id, "@invalid.chirp"))
+               models.User.email == func.concat("deleted+", models.User.id, "@invalid.chirp")
+    )
+    for column, value in ((models.AccountPostDeletionCleanup.id, obligation_id),
+                          (models.AccountPostDeletionCleanup.request_id, request_id),
+                          (models.AccountPostDeletionCleanup.user_id, user_id),
+                          (models.AccountPostDeletionCleanup.scope_sha256, scope_sha256)):
+        if value is not None:
+            statement = statement.where(column == value)
+    rows = (await session.scalars(
+        statement
         .order_by(models.AccountPostDeletionCleanup.next_attempt_at, models.AccountPostDeletionCleanup.id)
         .limit(limit).with_for_update(of=models.AccountPostDeletionCleanup, skip_locked=True)
     )).all()
@@ -454,6 +466,10 @@ async def run_post_deletion_cleanup_batch(
     operation: Callable[[CleanupClaim], Awaitable[DeferredCleanupReceipt | CleanupCompletionProof]],
     *, limit: int = 8, timeout_seconds: float = MAX_PROVIDER_SECONDS,
     retry_delay: timedelta = timedelta(hours=1),
+    obligation_id: uuid.UUID | None = None,
+    request_id: uuid.UUID | None = None,
+    user_id: uuid.UUID | None = None,
+    scope_sha256: str | None = None,
 ) -> dict[str, int]:
     """Run one bounded batch without holding SQL across provider I/O.
 
@@ -470,7 +486,10 @@ async def run_post_deletion_cleanup_batch(
     counts = {"claimed": 0, "rescheduled": 0, "completed": 0, "uncertain": 0}
     for _ in range(limit):
         async with session_factory() as session:  # type: ignore[attr-defined]
-            claims = await claim_due_cleanup(session, limit=1)
+            claims = await claim_due_cleanup(
+                session, limit=1, obligation_id=obligation_id, request_id=request_id,
+                user_id=user_id, scope_sha256=scope_sha256,
+            )
         if not claims:
             break
         claim = claims[0]
