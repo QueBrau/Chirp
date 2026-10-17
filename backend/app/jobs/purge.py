@@ -107,13 +107,30 @@ async def _fence_users(session: AsyncSession, user_ids: list[UUID]) -> set[UUID]
     ordered = sorted(set(user_ids), key=lambda uid: (advisory_key(uid), str(uid)))
     for user_id in ordered:
         await _protocol_start(session, user_id)
-        active = await session.scalar(select(models.AccountDeletionHold.id).where(
-            models.AccountDeletionHold.user_id == user_id,
-            models.AccountDeletionHold.state == "active",
-        ).limit(1))
+        active = await session.scalar(_blocking_hold_for_user(user_id))
         if active is not None:
             held.add(user_id)
     return held
+
+
+def _blocking_hold_for_user(user_id: object) -> Select:
+    hold = models.AccountDeletionHold
+    request = models.AccountDataRequest
+    user = models.User
+    completed_tombstone = and_(
+        request.kind == "deletion", request.status == "completed",
+        request.completed_at.is_not(None), user.is_ghost.is_(True),
+        user.firebase_uid == func.concat("deleted:", user.id),
+        user.email == func.concat("deleted+", user.id, "@invalid.chirp"),
+    )
+    return select(hold.id).select_from(hold).outerjoin(
+        request, request.id == hold.request_id,
+    ).outerjoin(user, user.id == hold.user_id).where(
+        hold.user_id == user_id,
+        hold.state == "active",
+        or_(request.id.is_(None), request.user_id != hold.user_id,
+            completed_tombstone.is_not(True)),
+    ).limit(1)
 
 
 @dataclass(frozen=True)
@@ -216,7 +233,10 @@ async def purge_batch(
     # first page must not let one held account starve unrelated eligible work.
     candidate_limit = batch_size + min(batch_size, 256)
     post_candidates = (await session.execute(
-        select(Post.id, Post.author_id).where(Post.deleted_at < cutoff)
+        select(Post.id, Post.author_id).where(
+            Post.deleted_at < cutoff,
+            ~exists(_blocking_hold_for_user(Post.author_id)),
+        )
         .order_by(Post.deleted_at, Post.id).limit(candidate_limit)
     )).all()
     post_candidate_ids = [row.id for row in post_candidates]
@@ -224,28 +244,36 @@ async def purge_batch(
     post_like_candidates = (await session.execute(
         select(PostLike.post_id, PostLike.user_id)
         .where(PostLike.post_id.in_(post_candidate_ids))
+        .where(~exists(_blocking_hold_for_user(PostLike.user_id)))
         .order_by(PostLike.post_id, PostLike.user_id).limit(candidate_limit)
     )).all() if post_candidate_ids else []
     post_comment_candidates = (await session.execute(
         select(PostComment.id, PostComment.post_id, PostComment.author_id)
         .where(PostComment.post_id.in_(post_candidate_ids))
+        .where(~exists(_blocking_hold_for_user(PostComment.author_id)))
         .order_by(PostComment.post_id, PostComment.id).limit(candidate_limit)
     )).all() if post_candidate_ids else []
     independent_comment_candidates = (await session.execute(
         select(PostComment.id, PostComment.author_id, Post.author_id.label("post_author_id"))
         .join(Post, Post.id == PostComment.post_id)
         .where(PostComment.deleted_at < cutoff,
-               or_(Post.deleted_at.is_(None), Post.deleted_at >= cutoff))
+               or_(Post.deleted_at.is_(None), Post.deleted_at >= cutoff),
+               ~exists(_blocking_hold_for_user(PostComment.author_id)),
+               ~exists(_blocking_hold_for_user(Post.author_id)))
         .order_by(PostComment.deleted_at, PostComment.id).limit(candidate_limit)
     )).all()
     chirp_candidates = (await session.execute(
-        select(Chirp.id, Chirp.author_id).where(Chirp.removed_at < cutoff)
+        select(Chirp.id, Chirp.author_id).where(
+            Chirp.removed_at < cutoff,
+            ~exists(_blocking_hold_for_user(Chirp.author_id)),
+        )
         .order_by(Chirp.removed_at, Chirp.id).limit(candidate_limit)
     )).all()
     chirp_candidate_ids = [row.id for row in chirp_candidates]
     chirp_vote_candidates = (await session.execute(
         select(ChirpVote.chirp_id, ChirpVote.user_id)
         .where(ChirpVote.chirp_id.in_(chirp_candidate_ids))
+        .where(~exists(_blocking_hold_for_user(ChirpVote.user_id)))
         .order_by(ChirpVote.chirp_id, ChirpVote.user_id).limit(candidate_limit)
     )).all() if chirp_candidate_ids else []
     owners = post_owner_ids + [r.user_id for r in post_like_candidates]
@@ -381,6 +409,7 @@ async def retire_key_material_batch(
     revoked_rows = (await session.execute(
         select(Device.id, Device.user_id).where(
             Device.revoked_at.is_not(None), Device.revoked_at < cutoff,
+            ~exists(_blocking_hold_for_user(Device.user_id)),
         ).order_by(Device.revoked_at, Device.id).limit(candidate_limit)
     )).all()
     revoked_ids = [row.id for row in revoked_rows]
@@ -398,7 +427,10 @@ async def retire_key_material_batch(
     for model, query in normal_queries:
         rows = (await session.execute(
             select(model.id, Device.user_id).join(Device, Device.id == model.device_id)
-            .where(model.id.in_(query.with_only_columns(model.id)))
+            .where(
+                model.id.in_(query.with_only_columns(model.id)),
+                ~exists(_blocking_hold_for_user(Device.user_id)),
+            )
             .order_by(model.id).limit(candidate_limit)
         )).all()
         normal_rows[model] = [(row.id, row.user_id) for row in rows]
