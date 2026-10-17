@@ -13,6 +13,7 @@ import { devAuthUid } from "./devAuth";
 import { getFirebaseAuth } from "./firebase";
 import { captureSession, getIdToken, onAuthChanged } from "./session";
 import { currentIdentity, onIdentityChanged, ownsIdentity, replaceIdentity, type AuthIdentity } from "./identity";
+import { recoverCampus } from "./campusRecovery";
 
 export type SessionStatus = "loading" | "recoverable" | "signedOut" | "unregistered" | "suspended" | "legalRequired" | "ready";
 
@@ -100,6 +101,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [campus, setCampus] = useState<CampusOut | null>(null);
   const [campusVerification, setCampusVerification] = useState<CampusVerificationStatus | null>(null);
   const [sessionGeneration, setSessionGeneration] = useState(currentIdentity().generation);
+  const [campusForegroundGeneration, setCampusForegroundGeneration] = useState(0);
   const [realtimeStatus, setRealtimeStatus] = useState<SocketStatus>(chirpSocket.getStatus());
   const [realtimeRetrying, setRealtimeRetrying] = useState(false);
   const realtimeRetryRef = useRef<Promise<void> | null>(null);
@@ -108,6 +110,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const verificationGenRef = useRef(0);
   const loadRef = useRef<Operation | null>(null);
   const foregroundRef = useRef({ eligible: foregroundEligible(), abort: new AbortController() });
+  const campusRetryPendingRef = useRef(false);
+  const campusEffectKeyRef = useRef<string | null>(null);
 
   const loadMe = useCallback(async (options: LoadOptions = {}): Promise<SessionStatus | null> => {
     const owner = options.owner ?? (DEV_UID !== null ? replaceIdentity(DEV_UID) : captureSession());
@@ -149,17 +153,35 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const campusId = user?.campus_id ?? null;
   useEffect(() => {
-    setCampus(null);
+    const effectKey = `${sessionGeneration}:${campusId ?? "none"}`;
+    if (campusEffectKeyRef.current !== effectKey) {
+      campusEffectKeyRef.current = effectKey;
+      campusRetryPendingRef.current = false;
+      setCampus(null);
+    }
     if (campusId === null) return;
     const owner = currentIdentity();
     let active = true;
-    getCampus(campusId).then(value => {
-      if (active && ownsIdentity(owner)) setCampus(value);
-    }).catch(() => {
-      if (active && ownsIdentity(owner)) setCampus(null);
+    const foreground = foregroundRef.current.abort;
+    if (!foregroundRef.current.eligible || foreground.signal.aborted) {
+      campusRetryPendingRef.current = true;
+      return () => { active = false; };
+    }
+    campusRetryPendingRef.current = true;
+    void recoverCampus(
+      signal => getCampus(campusId, { signal, timeoutMs: 8_000 }),
+      { signal: foreground.signal, ownsRequest: () => active && ownsIdentity(owner) },
+    ).then(value => {
+      if (!active || !ownsIdentity(owner)) return;
+      if (value) {
+        campusRetryPendingRef.current = false;
+        setCampus(value);
+      } else {
+        campusRetryPendingRef.current = true;
+      }
     });
     return () => { active = false; };
-  }, [campusId, sessionGeneration]);
+  }, [campusId, sessionGeneration, campusForegroundGeneration]);
 
   const userId = user?.id ?? null;
   useEffect(() => {
@@ -230,6 +252,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setRealtimeRetrying(false);
       } else if (!foregroundRef.current.eligible || foregroundRef.current.abort.signal.aborted) {
         foregroundRef.current.abort = new AbortController();
+        if (campusRetryPendingRef.current) setCampusForegroundGeneration(value => value + 1);
       }
       foregroundRef.current.eligible = eligible;
       chirpSocket.setForeground(eligible);
