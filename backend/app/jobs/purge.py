@@ -236,6 +236,17 @@ async def purge_batch(
         select(Post.id, Post.author_id).where(
             Post.deleted_at < cutoff,
             ~exists(_blocking_hold_for_user(Post.author_id)),
+            # A retained held child would keep this parent at the front of
+            # every page. Defer the whole parent until that child's deletion
+            # completes, allowing unrelated parents to make progress.
+            ~exists(select(PostLike.post_id).where(
+                PostLike.post_id == Post.id,
+                exists(_blocking_hold_for_user(PostLike.user_id)),
+            )),
+            ~exists(select(PostComment.id).where(
+                PostComment.post_id == Post.id,
+                exists(_blocking_hold_for_user(PostComment.author_id)),
+            )),
         )
         .order_by(Post.deleted_at, Post.id).limit(candidate_limit)
     )).all()
@@ -266,6 +277,10 @@ async def purge_batch(
         select(Chirp.id, Chirp.author_id).where(
             Chirp.removed_at < cutoff,
             ~exists(_blocking_hold_for_user(Chirp.author_id)),
+            ~exists(select(ChirpVote.chirp_id).where(
+                ChirpVote.chirp_id == Chirp.id,
+                exists(_blocking_hold_for_user(ChirpVote.user_id)),
+            )),
         )
         .order_by(Chirp.removed_at, Chirp.id).limit(candidate_limit)
     )).all()

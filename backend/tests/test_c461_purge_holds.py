@@ -313,3 +313,63 @@ async def test_held_backlog_does_not_starve_later_eligible_parent(
     assert result.posts == 1
     assert await _counts(held_posts) == (4, 0)
     assert await _counts([eligible_post]) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_held_children_do_not_starve_later_unrelated_parents(
+    make_chapter_with: MakeChapterWith, make_campus: MakeCampus, make_user: MakeUser,
+) -> None:
+    setup = await make_chapter_with("president")
+    held = await make_user("c461 held children backlog")
+    owner = await make_user("c461 unheld parents")
+    now = datetime.now(timezone.utc)
+    campus = await make_campus()
+    retained_posts = []
+    for _ in range(4):
+        post_id = await _post(setup.chapter_id, owner.id, now - timedelta(days=32))
+        retained_posts.append(post_id)
+        await _comment(post_id, held.id)
+        chirp_id = await _insert_chirp(campus, owner.id, removed_at=now - timedelta(days=32))
+        await _insert_chirp_vote(chirp_id, held.id)
+    eligible_post = await _post(setup.chapter_id, owner.id, now - timedelta(days=31))
+    await _insert_chirp(campus, owner.id, removed_at=now - timedelta(days=31))
+    await _activate_hold(held.id)
+
+    async with get_session_factory()() as session:
+        result = await purge.purge_batch(session, cutoff=now - timedelta(days=30), batch_size=1)
+        await session.commit()
+
+    assert result.posts == result.chirps == 1
+    assert await _counts(retained_posts) == (4, 4)
+    assert await _counts([eligible_post]) == (0, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_completion", ["request_owner", "email"])
+async def test_invalid_completed_hold_remains_blocking(
+    make_chapter_with: MakeChapterWith, make_user: MakeUser, invalid_completion: str,
+) -> None:
+    setup = await make_chapter_with("president")
+    owner = await make_user("c461 invalid completion")
+    other = await make_user("c461 different request owner")
+    now = datetime.now(timezone.utc)
+    post_id = await _post(setup.chapter_id, owner.id, now - timedelta(days=31))
+    request_id = await _activate_hold(owner.id)
+    async with get_session_factory()() as session:
+        await session.execute(text(
+            "UPDATE users SET is_ghost=true, firebase_uid=:uid, email=:email WHERE id=:user"
+        ), {"uid": f"deleted:{owner.id}", "email": (
+            f"deleted+{owner.id}@invalid.chirp" if invalid_completion != "email"
+            else f"{owner.id}@example.invalid"
+        ), "user": owner.id})
+        await session.execute(text(
+            "UPDATE account_data_requests SET status='completed', completed_at=now(), "
+            "user_id=:user WHERE id=:request"
+        ), {"user": other.id if invalid_completion == "request_owner" else owner.id,
+            "request": str(request_id)})
+        await session.commit()
+    async with get_session_factory()() as session:
+        result = await purge.purge_batch(session, cutoff=now - timedelta(days=30), batch_size=1)
+        await session.commit()
+    assert result.posts == 0
+    assert await _counts([post_id]) == (1, 0)
