@@ -383,6 +383,27 @@ class GCSMediaReader:
         if os.environ.get(DISABLE_BUCKET_METADATA, "").strip().lower() not in {"1", "true", "yes", "on"}:
             raise MediaProviderUnavailable("media_sdk_background_requests_enabled")
 
+    def reviewed_retention(self, *, expected_soft_delete_seconds: int,
+                           expected_versioning_enabled: bool = False) -> MediaRetentionReview:
+        """Read the live bucket policy once and require the reviewed values."""
+        self._require_bounded_sdk()
+        try:
+            self._bucket.reload(timeout=10, retry=None)
+            policy = getattr(self._bucket, "soft_delete_policy", None)
+            actual_soft_delete = getattr(policy, "retention_duration_seconds", 0) if policy else 0
+            actual_versioning = bool(getattr(self._bucket, "versioning_enabled", False))
+        except Exception:
+            raise MediaProviderUnavailable("media_retention_readback_failed") from None
+        if (type(expected_soft_delete_seconds) is not int
+                or type(expected_versioning_enabled) is not bool
+                or actual_soft_delete != expected_soft_delete_seconds
+                or actual_versioning != expected_versioning_enabled):
+            raise MediaProviderUnavailable("media_retention_policy_mismatch")
+        return MediaRetentionReview(
+            bucket=self.bucket_name, versioning_enabled=actual_versioning,
+            soft_delete_seconds=actual_soft_delete, verified=True,
+        )
+
     def list(self, prefix: str, *, deadline: float) -> Iterable[Any]:
         token = None
         seen_tokens: set[str] = set()
