@@ -32,7 +32,7 @@ The old-revision drain and analytics freeze are operator attestations, not facts
 the CLI can infer. They must describe concrete evidence and the reviewer in the
 approval artifact. Admission flags are checked both against that artifact and the
 current process settings. The database check separately verifies actual database,
-role, schema head `0050`, connection endpoint, and the executor's exact
+role, schema head `0051`, connection endpoint, and the executor's exact
 table/column privilege allowlist. It refuses elevated role attributes, including
 replication capability, membership in database-wide privileged roles, table
 ownership and unexpected app-table write or trigger privileges. The schema
@@ -52,7 +52,7 @@ exactly these fields:
   "user_id": "<canonical UUID>",
   "database_name": "<expected database>",
   "database_role": "<expected PostgreSQL role>",
-  "schema_head": "0050",
+  "schema_head": "0051",
   "reviewed_by": "<reviewer identity>",
   "reviewed_at": "<timezone-aware ISO timestamp>",
   "expires_at": "<timezone-aware ISO timestamp, within one hour>",
