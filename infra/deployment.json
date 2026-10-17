@@ -28,7 +28,11 @@
       "FIREBASE_PROJECT_ID": "chirps-prod",
       "DB_POOL_TIMEOUT": "10",
       "CORS_ORIGINS": "[\"https://chirps-prod.web.app\",\"http://localhost:8081\"]",
-      "WS_PEER_CLOSE_DELAY_ENABLED": "true"
+      "WS_PEER_CLOSE_DELAY_ENABLED": "true",
+      "ACCOUNT_DELETION_HTTP_ADMISSION_ENABLED": "true",
+      "ACCOUNT_DELETION_WS_ADMISSION_ENABLED": "true",
+      "ACCOUNT_DELETION_DELIVERY_ADMISSION_ENABLED": "true",
+      "ACCOUNT_DELETION_DEFERRED_CLEANUP_ENABLED": "true"
     },
     "secrets": {
       "REDIS_URL": "REDIS_URL:latest"
