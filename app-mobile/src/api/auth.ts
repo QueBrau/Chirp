@@ -90,7 +90,10 @@ export async function bootstrap(body: UserCreate): Promise<UserOut> {
 /** Resolve a campus id to its real name/slug (GET /campuses/{id}, c46). This is how
  * screens show the caller's actual campus instead of a hardcoded mock one. */
 export async function getCampus(campusId: string, options: Pick<RequestOptions, "signal" | "timeoutMs"> = {}): Promise<CampusOut> {
-  return request<CampusOut>(`/campuses/${campusId}`, options);
+  return request<CampusOut>(`/campuses/${campusId}`, {
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  });
 }
 
 /**
