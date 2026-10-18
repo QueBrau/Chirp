@@ -489,12 +489,12 @@
     },
     {
       "id": "c452",
-      "col": "backlog",
-      "owner": "",
+      "col": "progress",
+      "owner": "J",
       "tag": "security",
       "area": "messages",
-      "title": "c452 [P1, before E2EE launch, found by c451 Oct 8] The on-device E2EE store is never purged when the account is deleted (c436) or when the user leaves a conversation. Decrypted DM history lives only on the phone, so deleting an account must wipe that phone's namespace (native wipe: store files + both Keychain items) and revoke the device; leaving a DM should drop its local plaintext rows. Also define what happens to a signed-out account's store (today: locked, kept - correct for sign-out, wrong for deletion).",
-      "detail": "\n\nOct13 read-only audit (unclaimed): whole-account native wipe primitive already exists, but application completion/leave integration is absent and native conversation-scoped purge API is missing. Q c451 owns active app wiring; no current c451 branch is available in origin for safe integration review. Sign-out must retain locked store; deletion must wipe after confirmed completion and revoke devices. Parent c436 actual fulfillment and current native app integration must be coordinated; cannot close from unused primitive or mock-only proof. No Q source edited."
+      "title": "c452 Oct17: Codex claims local conversation-data purge primitives and isolation tests; native/app deletion integration remains tied to c451 and c436.",
+      "detail": "\n\nOct13 read-only audit (unclaimed): whole-account native wipe primitive already exists, but application completion/leave integration is absent and native conversation-scoped purge API is missing. Q c451 owns active app wiring; no current c451 branch is available in origin for safe integration review. Sign-out must retain locked store; deletion must wipe after confirmed completion and revoke devices. Parent c436 actual fulfillment and current native app integration must be coordinated; cannot close from unused primitive or mock-only proof. No Q source edited.\n\nOct17 claim BEFORE editing under Jose authorization to include backlog and Q work. Existing native account wipe remains; add bounded conversation-scoped removal primitives for plaintext message/outbox tables and encrypted conversation records only where current source supports exact ownership. Isolated jose/c452-local-purge-20261017. No missing-Q-branch assumptions: fresh git ls-remote and local worktree check find no c451 branch. No false phone/simulator or full c452 closure claim; wire only demonstrably existing consumers, preserve account namespace isolation and sign-out retention behavior. Root coordinates source review, merge and board; Luna medium implementation."
     },
     {
       "id": "c451",
