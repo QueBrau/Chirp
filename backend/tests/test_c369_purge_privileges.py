@@ -147,6 +147,24 @@ async def restricted_purge(client, migrated_db):
             await conn.execute(text(
                 f"GRANT SELECT, DELETE ON {', '.join(CONTENT + PREKEYS)} TO {role}"
             ))
+            # c461's hold-aware purge reads these account/request/user columns
+            # with column-level SELECT.  Keep table SELECT absent so this
+            # restricted-role fixture still proves least privilege.
+            await conn.execute(text(
+                f"GRANT SELECT (user_id) ON devices TO {role}"
+            ))
+            await conn.execute(text(
+                f"GRANT SELECT (id, user_id, state, request_id) "
+                f"ON account_deletion_holds TO {role}"
+            ))
+            await conn.execute(text(
+                f"GRANT SELECT (id, user_id, kind, status, completed_at) "
+                f"ON account_data_requests TO {role}"
+            ))
+            await conn.execute(text(
+                f"GRANT SELECT (id, is_ghost, firebase_uid, email) "
+                f"ON users TO {role}"
+            ))
             await conn.execute(text(f"GRANT SELECT (id, revoked_at) ON devices TO {role}"))
             for table, columns in UPDATES.items():
                 await conn.execute(text(
@@ -252,6 +270,34 @@ async def test_actual_restricted_job_previews_applies_and_repeats(
     assert repeated["physical_rows"] == 0
     assert repeated["key_retirement_counts"] == dict.fromkeys(KEY_COUNTS, 0)
     await _assert_rows(scene["survivors"], present=True)
+
+
+async def test_missing_hold_select_grant_fails_job_then_regrant_resumes(
+    scene, restricted_purge, monkeypatch,
+):
+    """The c461 hold read is least-privilege and is required before purge SQL."""
+    await restricted_purge.grant(
+        "REVOKE SELECT (id, user_id, state, request_id) "
+        "ON account_deletion_holds FROM {role}"
+    )
+    async with restricted_purge.engine.connect() as conn:
+        assert await conn.scalar(text(
+            "SELECT has_column_privilege(current_user, "
+            "'public.account_deletion_holds', 'state', 'SELECT')"
+        )) is False
+    failed = await restricted_purge.run(monkeypatch, apply=True)
+    assert failed["status"] == "failed"
+    assert failed["physical_rows"] == 0
+    await _assert_rows(scene["deleted"] + scene["keys"], present=True)
+
+    await restricted_purge.grant(
+        "GRANT SELECT (id, user_id, state, request_id) "
+        "ON account_deletion_holds TO {role}"
+    )
+    resumed = await restricted_purge.run(monkeypatch, apply=True)
+    assert resumed["status"] == "complete"
+    assert resumed["counts"] == COUNTS
+    assert resumed["key_retirement_counts"] == KEY_COUNTS
 
 
 async def test_vote_delete_runs_real_score_trigger_between_bounded_batches(
