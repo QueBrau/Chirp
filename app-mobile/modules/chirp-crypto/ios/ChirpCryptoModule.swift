@@ -198,6 +198,15 @@ public final class ChirpCryptoModule: Module {
         return rows.map { js($0) }
       }
     }.runOnQueue(queue)
+
+    AsyncFunction("purgeConversation") { (handle: String, conversationId: String) -> Int in
+      try self.guarded {
+        let count = try self.call(handle, mutating: true) {
+          try $0.purgeConversation(conversationId: conversationId)
+        }
+        return Int(exactly: count).orInvalid()
+      }
+    }.runOnQueue(queue)
   }
 
   // MARK: - Error funnel

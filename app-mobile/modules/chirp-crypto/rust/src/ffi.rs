@@ -778,6 +778,10 @@ impl CryptoCore {
             .collect())
     }
 
+    pub fn purge_conversation(&self, conversation_id: String) -> Res<u64> {
+        Ok(self.core.purge_conversation(id(&conversation_id)?)?)
+    }
+
     pub fn observe_directory(
         &self,
         user_id: String,
