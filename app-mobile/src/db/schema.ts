@@ -68,6 +68,25 @@ export async function initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   );
 }
 
+/**
+ * Remove locally decrypted history and queued plaintext for one conversation.
+ * The single SQLite transaction makes retries safe and prevents either table
+ * from being left half-purged. This intentionally leaves the shared database
+ * and every other conversation untouched; ordinary sign-out must retain data.
+ */
+export async function purgeConversationData(
+  db: SQLite.SQLiteDatabase,
+  conversationId: string,
+): Promise<void> {
+  if (typeof conversationId !== "string" || conversationId.length === 0) {
+    throw new Error("Invalid conversation id.");
+  }
+  await db.withTransactionAsync(async () => {
+    await db.runAsync("DELETE FROM messages WHERE conversation_id = ?", conversationId);
+    await db.runAsync("DELETE FROM outbox WHERE conversation_id = ?", conversationId);
+  });
+}
+
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 /** Open (once) and initialize the local database; safe to call from anywhere. */
