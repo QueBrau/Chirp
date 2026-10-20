@@ -109,6 +109,16 @@ means a server-side COMMIT was rolled back.
 
 The caller-owned Python helper keeps its full-run transaction semantics for existing callers. Use the CLI for operational batch and time limits. Reports and financial/audit history are outside this retention job's deletion scope. Purging database media references does not itself delete GCS objects.
 
+Account deletion holds also fence application batches (c461). The job acquires
+shared account locks before row locks and rechecks every captured owner. It leaves
+held owners' rows, and parents with held child owners, for a later run while
+allowing unrelated candidates to progress. A completed deletion remains eligible
+for normal retention only when its exact request is completed and its user has the
+expected anonymized identity. Invalid or incomplete completion stays blocked.
+The read-only preview continues to count age-eligible rows, including rows that
+an active hold may defer; preview counts are not a promise that application can
+delete every candidate now.
+
 ## Job identity repair and rollout
 
 The failure identifies a permission problem, not permission to grant the default compute account broad secret access. Configure a dedicated purge runtime identity and a dedicated database credential. Do not reuse the API application's database login. Cloud Run's job identity needs Secret Accessor on the dedicated purge secret only, plus Cloud SQL Client for the connector. Keep deployment/actAs privileges with the operator. [Job secrets](https://docs.cloud.google.com/run/docs/configuring/jobs/secrets)
@@ -117,6 +127,11 @@ Prepare and review these changes together:
 
 - A dedicated database login with CONNECT and schema USAGE, SELECT/DELETE on posts, post_comments, post_likes, chirps and chirp_votes, plus UPDATE(id) on posts, post_comments and chirps for row locks, and UPDATE(score) on chirps for the vote-deletion score trigger from migration 0025.
 - The same job also runs c347's public-prekey retirement phase. It needs SELECT/DELETE and UPDATE(id) on one_time_prekeys, kyber_prekeys and signed_prekeys, plus SELECT(id, revoked_at) on devices. It must not delete or update devices. These permissions cover expired consumed prekeys, superseded signed prekeys, and prekeys belonging to devices revoked beyond the grace period; they do not authorize message/ciphertext access or access to client private keys. This phase uses its own grace cutoff and reports `key_retirement_counts` separately from content counts.
+- Before deploying c461, additionally grant the dedicated purge database role only
+  SELECT on `devices.user_id`, `account_deletion_holds(id,user_id,request_id,state)`,
+  `account_data_requests(id,user_id,kind,status,completed_at)`, and
+  `users(id,is_ghost,firebase_uid,email)`. These reads bind the hold to its owner and
+  verify completed anonymization. The job needs no write access to these tables.
 - Every UPDATE grant above is a real column-write capability, even when granted to permit row locks. Verify the role can update only those columns, cannot insert rows, and has no unrelated user, message, ledger, payment, report, DDL, role-management or secret privileges. Check inherited and PUBLIC grants too: PUBLIC schema CREATE and database TEMPORARY permissions permit DDL even without explicit grants to this role. Removing PUBLIC privileges affects other logins, so review their required explicit grants before changing a live database. Use this role only in the dedicated job.
 - A dedicated Secret Manager secret containing that login's Cloud SQL socket URL. Generate the password without putting it in a command argument or logs; provision using the private operator procedure. Grant access on that secret, not at project scope.
 - A dedicated Cloud Run service account, an explicit Cloud SQL attachment, one task and one connection pool slot with no overflow, a reviewed image digest, zero automatic retries during rollout, and a task timeout longer than the CLI budget.
