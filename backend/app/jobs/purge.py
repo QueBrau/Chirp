@@ -12,6 +12,10 @@ from sqlalchemy import and_, delete, exists, func, or_, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Delete, Select
+from uuid import UUID
+
+from app import models
+from app.services.account_deletion_hold import _protocol_start, advisory_key
 
 from app.config import get_settings
 from app.models.chirp import Chirp, ChirpVote
@@ -90,6 +94,45 @@ async def _delete_count(session: AsyncSession, statement: Delete) -> int:
     return result.rowcount or 0
 
 
+async def _fence_users(session: AsyncSession, user_ids: list[UUID]) -> set[UUID]:
+    """Take shared account locks, then return users with an active deletion hold.
+
+    Locks are acquired in the shared signed-advisory-key order. A hold that starts
+    after this point waits for the purge transaction, so both paths are ordered.
+    """
+    held: set[UUID] = set()
+    # Match the shared guard's global order: signed advisory key, then UUID as a
+    # deterministic tie-breaker.  Do not collapse equal keys: a hash collision
+    # must still trigger the fresh hold check for every affected account.
+    ordered = sorted(set(user_ids), key=lambda uid: (advisory_key(uid), str(uid)))
+    for user_id in ordered:
+        await _protocol_start(session, user_id)
+        active = await session.scalar(_blocking_hold_for_user(user_id))
+        if active is not None:
+            held.add(user_id)
+    return held
+
+
+def _blocking_hold_for_user(user_id: object) -> Select:
+    hold = models.AccountDeletionHold
+    request = models.AccountDataRequest
+    user = models.User
+    completed_tombstone = and_(
+        request.kind == "deletion", request.status == "completed",
+        request.completed_at.is_not(None), user.is_ghost.is_(True),
+        user.firebase_uid == func.concat("deleted:", user.id),
+        user.email == func.concat("deleted+", user.id, "@invalid.chirp"),
+    )
+    return select(hold.id).select_from(hold).outerjoin(
+        request, request.id == hold.request_id,
+    ).outerjoin(user, user.id == hold.user_id).where(
+        hold.user_id == user_id,
+        hold.state == "active",
+        or_(request.id.is_(None), request.user_id != hold.user_id,
+            completed_tombstone.is_not(True)),
+    ).limit(1)
+
+
 @dataclass(frozen=True)
 class KeyRetirementResult:
     """e2ee key-material retirement counts; independent of PurgeResult and its 'counts'
@@ -131,11 +174,14 @@ def _key_retirement_cutoff(
         raise ValueError("grace_days is outside the supported date range") from exc
 
 
-def _revoked_device_ids(cutoff: datetime) -> Select:
+def _revoked_device_ids(cutoff: datetime, excluded_users: set[UUID] | None = None) -> Select:
     # The Device row itself is never touched here — it stays the audit trail and stays
     # counted against MAX_RETAINED_DEVICES (routers/keys.py), which this job does not
     # change. Only its now-orphaned prekey rows are eligible for the wipe below.
-    return select(Device.id).where(Device.revoked_at.is_not(None), Device.revoked_at < cutoff)
+    query = select(Device.id).where(Device.revoked_at.is_not(None), Device.revoked_at < cutoff)
+    if excluded_users:
+        query = query.where(Device.user_id.not_in(excluded_users))
+    return query
 
 
 def _expired_one_time_prekeys(cutoff: datetime, revoked: Select) -> Select:
@@ -176,63 +222,136 @@ def _expired_signed_prekeys(cutoff: datetime, revoked: Select) -> Select:
 async def purge_batch(
     session: AsyncSession, *, cutoff: datetime, batch_size: int = 100,
 ) -> PurgeResult:
-    """Delete at most batch_size rows per reason (six reasons); caller commits.
+    """Delete one bounded batch after fencing every affected account.
 
-    Parent UPDATE locks conflict with FK KEY SHARE locks, so a concurrent child
-    insert cannot slip between child cleanup and parent deletion. SKIP LOCKED
-    leaves occupied parents for a later execution. Large parents retain their
-    remaining children and are revisited oldest-first in the next batch.
-    No schema cascade is assumed. Historical polymorphic content_reports remain.
+    Candidate IDs and owner IDs are captured before any row lock. Shared account
+    advisory locks are acquired in deterministic order before parent/child row
+    locks, matching hold activation and preventing unfenced late child deletes.
     """
     _positive(batch_size, "batch_size")
+    # Look past held owners, while retaining a hard bound for each query.  The
+    # first page must not let one held account starve unrelated eligible work.
+    candidate_limit = batch_size + min(batch_size, 256)
+    post_candidates = (await session.execute(
+        select(Post.id, Post.author_id).where(
+            Post.deleted_at < cutoff,
+            ~exists(_blocking_hold_for_user(Post.author_id)),
+            # A retained held child would keep this parent at the front of
+            # every page. Defer the whole parent until that child's deletion
+            # completes, allowing unrelated parents to make progress.
+            ~exists(select(PostLike.post_id).where(
+                PostLike.post_id == Post.id,
+                exists(_blocking_hold_for_user(PostLike.user_id)),
+            )),
+            ~exists(select(PostComment.id).where(
+                PostComment.post_id == Post.id,
+                exists(_blocking_hold_for_user(PostComment.author_id)),
+            )),
+        )
+        .order_by(Post.deleted_at, Post.id).limit(candidate_limit)
+    )).all()
+    post_candidate_ids = [row.id for row in post_candidates]
+    post_owner_ids = [row.author_id for row in post_candidates]
+    post_like_candidates = (await session.execute(
+        select(PostLike.post_id, PostLike.user_id)
+        .where(PostLike.post_id.in_(post_candidate_ids))
+        .where(~exists(_blocking_hold_for_user(PostLike.user_id)))
+        .order_by(PostLike.post_id, PostLike.user_id).limit(candidate_limit)
+    )).all() if post_candidate_ids else []
+    post_comment_candidates = (await session.execute(
+        select(PostComment.id, PostComment.post_id, PostComment.author_id)
+        .where(PostComment.post_id.in_(post_candidate_ids))
+        .where(~exists(_blocking_hold_for_user(PostComment.author_id)))
+        .order_by(PostComment.post_id, PostComment.id).limit(candidate_limit)
+    )).all() if post_candidate_ids else []
+    independent_comment_candidates = (await session.execute(
+        select(PostComment.id, PostComment.author_id, Post.author_id.label("post_author_id"))
+        .join(Post, Post.id == PostComment.post_id)
+        .where(PostComment.deleted_at < cutoff,
+               or_(Post.deleted_at.is_(None), Post.deleted_at >= cutoff),
+               ~exists(_blocking_hold_for_user(PostComment.author_id)),
+               ~exists(_blocking_hold_for_user(Post.author_id)))
+        .order_by(PostComment.deleted_at, PostComment.id).limit(candidate_limit)
+    )).all()
+    chirp_candidates = (await session.execute(
+        select(Chirp.id, Chirp.author_id).where(
+            Chirp.removed_at < cutoff,
+            ~exists(_blocking_hold_for_user(Chirp.author_id)),
+            ~exists(select(ChirpVote.chirp_id).where(
+                ChirpVote.chirp_id == Chirp.id,
+                exists(_blocking_hold_for_user(ChirpVote.user_id)),
+            )),
+        )
+        .order_by(Chirp.removed_at, Chirp.id).limit(candidate_limit)
+    )).all()
+    chirp_candidate_ids = [row.id for row in chirp_candidates]
+    chirp_vote_candidates = (await session.execute(
+        select(ChirpVote.chirp_id, ChirpVote.user_id)
+        .where(ChirpVote.chirp_id.in_(chirp_candidate_ids))
+        .where(~exists(_blocking_hold_for_user(ChirpVote.user_id)))
+        .order_by(ChirpVote.chirp_id, ChirpVote.user_id).limit(candidate_limit)
+    )).all() if chirp_candidate_ids else []
+    owners = post_owner_ids + [r.user_id for r in post_like_candidates]
+    owners += [r.author_id for r in post_comment_candidates]
+    owners += [r.author_id for r in independent_comment_candidates]
+    owners += [r.post_author_id for r in independent_comment_candidates]
+    owners += [r.author_id for r in chirp_candidates]
+    owners += [r.user_id for r in chirp_vote_candidates]
+    held = await _fence_users(session, owners)
+
+    post_ids = [row.id for row in post_candidates if row.author_id not in held][:batch_size]
     post_ids = list((await session.scalars(
-        _expired_posts(cutoff).order_by(Post.deleted_at, Post.id)
-        .limit(batch_size).with_for_update(skip_locked=True)
+        select(Post.id).where(Post.id.in_(post_ids), Post.deleted_at < cutoff)
+        .order_by(Post.deleted_at, Post.id).with_for_update(skip_locked=True)
     )).all())
     likes = cascaded_comments = posts = 0
     if post_ids:
-        likes = await _delete_count(session, delete(PostLike).where(
-            tuple_(PostLike.post_id, PostLike.user_id).in_(
-                select(PostLike.post_id, PostLike.user_id)
-                .where(PostLike.post_id.in_(post_ids))
-                .order_by(PostLike.post_id, PostLike.user_id).limit(batch_size)
-            )
-        ).execution_options(synchronize_session=False))
-        cascaded_comments = await _delete_count(session, delete(PostComment).where(
-            PostComment.id.in_(select(PostComment.id)
-                .where(PostComment.post_id.in_(post_ids))
-                .order_by(PostComment.post_id, PostComment.id).limit(batch_size))
-        ).execution_options(synchronize_session=False))
+        like_keys = [(r.post_id, r.user_id) for r in post_like_candidates
+                     if r.post_id in post_ids and r.user_id not in held][:batch_size]
+        if like_keys:
+            likes = await _delete_count(session, delete(PostLike).where(
+                tuple_(PostLike.post_id, PostLike.user_id).in_(like_keys)
+            ).execution_options(synchronize_session=False))
+        child_ids = [r.id for r in post_comment_candidates
+                     if r.post_id in post_ids and r.author_id not in held
+                     and r.id is not None][:batch_size]
+        if child_ids:
+            cascaded_comments = await _delete_count(session, delete(PostComment).where(
+                PostComment.id.in_(child_ids), PostComment.post_id.in_(post_ids)
+            ).execution_options(synchronize_session=False))
         posts = await _delete_count(session, delete(Post).where(
-            Post.id.in_(post_ids),
+            Post.id.in_(post_ids), Post.deleted_at < cutoff,
             ~exists(select(PostLike.post_id).where(PostLike.post_id == Post.id)),
             ~exists(select(PostComment.id).where(PostComment.post_id == Post.id)),
         ).execution_options(synchronize_session=False))
 
+    independent_ids = [r.id for r in independent_comment_candidates
+                       if r.author_id not in held and r.post_author_id not in held][:batch_size]
+    locked_independent = list((await session.scalars(
+        select(PostComment.id).where(
+            PostComment.id.in_(independent_ids), PostComment.deleted_at < cutoff,
+        ).order_by(PostComment.deleted_at, PostComment.id)
+        .with_for_update(skip_locked=True)
+    )).all()) if independent_ids else []
     comments = await _delete_count(session, delete(PostComment).where(
-        PostComment.id.in_(
-            _independent_comments(cutoff).order_by(PostComment.deleted_at, PostComment.id)
-            .limit(batch_size).with_for_update(skip_locked=True)
-        )
+        PostComment.id.in_(locked_independent), PostComment.deleted_at < cutoff
     ).execution_options(synchronize_session=False))
 
+    chirp_ids = [row.id for row in chirp_candidates if row.author_id not in held][:batch_size]
     chirp_ids = list((await session.scalars(
-        _expired_chirps(cutoff).order_by(Chirp.removed_at, Chirp.id)
-        .limit(batch_size).with_for_update(skip_locked=True)
+        select(Chirp.id).where(Chirp.id.in_(chirp_ids), Chirp.removed_at < cutoff)
+        .order_by(Chirp.removed_at, Chirp.id).with_for_update(skip_locked=True)
     )).all())
     votes = chirps = 0
     if chirp_ids:
-        # The existing vote trigger also updates chirps.score. The job identity
-        # needs UPDATE(score), and counts below describe deletes, not trigger updates.
-        votes = await _delete_count(session, delete(ChirpVote).where(
-            tuple_(ChirpVote.chirp_id, ChirpVote.user_id).in_(
-                select(ChirpVote.chirp_id, ChirpVote.user_id)
-                .where(ChirpVote.chirp_id.in_(chirp_ids))
-                .order_by(ChirpVote.chirp_id, ChirpVote.user_id).limit(batch_size)
-            )
-        ).execution_options(synchronize_session=False))
+        vote_keys = [(r.chirp_id, r.user_id) for r in chirp_vote_candidates
+                     if r.chirp_id in chirp_ids and r.user_id not in held][:batch_size]
+        if vote_keys:
+            votes = await _delete_count(session, delete(ChirpVote).where(
+                tuple_(ChirpVote.chirp_id, ChirpVote.user_id).in_(vote_keys)
+            ).execution_options(synchronize_session=False))
         chirps = await _delete_count(session, delete(Chirp).where(
-            Chirp.id.in_(chirp_ids),
+            Chirp.id.in_(chirp_ids), Chirp.removed_at < cutoff,
             ~exists(select(ChirpVote.chirp_id).where(ChirpVote.chirp_id == Chirp.id)),
         ).execution_options(synchronize_session=False))
     return PurgeResult(posts, comments, chirps, likes, cascaded_comments, votes)
@@ -301,48 +420,88 @@ async def retire_key_material_batch(
     window, regardless of that row's own consumed/created state.
     """
     _positive(batch_size, "batch_size")
-    revoked = _revoked_device_ids(cutoff)
+    candidate_limit = batch_size + min(batch_size, 256)
+    revoked_rows = (await session.execute(
+        select(Device.id, Device.user_id).where(
+            Device.revoked_at.is_not(None), Device.revoked_at < cutoff,
+            ~exists(_blocking_hold_for_user(Device.user_id)),
+        ).order_by(Device.revoked_at, Device.id).limit(candidate_limit)
+    )).all()
+    revoked_ids = [row.id for row in revoked_rows]
 
-    one_time_ids = list((await session.scalars(
-        _expired_one_time_prekeys(cutoff, revoked).order_by(OneTimePrekey.id)
-        .limit(batch_size).with_for_update(skip_locked=True)
-    )).all())
-    one_time = 0
-    if one_time_ids:
-        one_time = await _delete_count(session, delete(OneTimePrekey).where(
-            OneTimePrekey.id.in_(one_time_ids)
+    # Capture both the row IDs and their owning account before taking any row
+    # locks.  A prekey ID is not a device ID; filtering by the former was an
+    # easy way to silently skip all key retirement for held accounts.
+    normal_queries = (
+        (OneTimePrekey, _expired_one_time_prekeys(cutoff, _revoked_device_ids(cutoff))),
+        (KyberPrekey, _expired_kyber_one_time_prekeys(cutoff, _revoked_device_ids(cutoff))),
+        (SignedPrekey, _expired_signed_prekeys(cutoff, _revoked_device_ids(cutoff))),
+    )
+    normal_rows: dict[type, list[tuple[UUID, UUID]]] = {}
+    owners: list[UUID] = [row.user_id for row in revoked_rows]
+    for model, query in normal_queries:
+        rows = (await session.execute(
+            select(model.id, Device.user_id).join(Device, Device.id == model.device_id)
+            .where(
+                model.id.in_(query.with_only_columns(model.id)),
+                ~exists(_blocking_hold_for_user(Device.user_id)),
+            )
+            .order_by(model.id).limit(candidate_limit)
+        )).all()
+        normal_rows[model] = [(row.id, row.user_id) for row in rows]
+        owners.extend(row.user_id for row in rows)
+    revoked_rows_by_model: dict[type, list[tuple[UUID, UUID]]] = {}
+    for model in (OneTimePrekey, KyberPrekey, SignedPrekey):
+        rows = (await session.execute(
+            select(model.id, Device.user_id).join(Device, Device.id == model.device_id)
+            .where(model.device_id.in_(revoked_ids)).order_by(model.id).limit(candidate_limit)
+        )).all() if revoked_ids else []
+        revoked_rows_by_model[model] = [(row.id, row.user_id) for row in rows]
+        owners.extend(row.user_id for row in rows)
+    held = await _fence_users(session, owners)
+
+    async def delete_owned(
+        model: type, rows: list[tuple[UUID, UUID]], eligibility: Select,
+    ) -> int:
+        ids = [row_id for row_id, owner_id in rows if owner_id not in held][:batch_size]
+        if not ids:
+            return 0
+        locked = list((await session.scalars(
+            select(model.id).where(model.id.in_(ids)).order_by(model.id)
+            .with_for_update(skip_locked=True)
+        )).all())
+        if not locked:
+            return 0
+        # Reapply the exact retention predicate after locking.  A concurrent
+        # key upload/revocation can change eligibility between capture and the
+        # row lock; deleting by ID alone would violate the retirement policy.
+        eligible = list((await session.scalars(
+            eligibility.where(model.id.in_(locked))
+        )).all())
+        if not eligible:
+            return 0
+        return await _delete_count(session, delete(model).where(
+            model.id.in_(eligible)
         ).execution_options(synchronize_session=False))
 
-    kyber_ids = list((await session.scalars(
-        _expired_kyber_one_time_prekeys(cutoff, revoked).order_by(KyberPrekey.id)
-        .limit(batch_size).with_for_update(skip_locked=True)
-    )).all())
-    kyber_one_time = 0
-    if kyber_ids:
-        kyber_one_time = await _delete_count(session, delete(KyberPrekey).where(
-            KyberPrekey.id.in_(kyber_ids)
-        ).execution_options(synchronize_session=False))
-
-    signed_ids = list((await session.scalars(
-        _expired_signed_prekeys(cutoff, revoked).order_by(SignedPrekey.id)
-        .limit(batch_size).with_for_update(skip_locked=True)
-    )).all())
-    signed = 0
-    if signed_ids:
-        signed = await _delete_count(session, delete(SignedPrekey).where(
-            SignedPrekey.id.in_(signed_ids)
-        ).execution_options(synchronize_session=False))
-
+    one_time = await delete_owned(
+        OneTimePrekey, normal_rows[OneTimePrekey], normal_queries[0][1],
+    )
+    kyber_one_time = await delete_owned(
+        KyberPrekey, normal_rows[KyberPrekey], normal_queries[1][1],
+    )
+    signed = await delete_owned(
+        SignedPrekey, normal_rows[SignedPrekey], normal_queries[2][1],
+    )
     revoked_wipe = 0
     for model in (OneTimePrekey, KyberPrekey, SignedPrekey):
-        ids = list((await session.scalars(
-            select(model.id).where(model.device_id.in_(revoked))
-            .order_by(model.id).limit(batch_size).with_for_update(skip_locked=True)
-        )).all())
-        if ids:
-            revoked_wipe += await _delete_count(session, delete(model).where(
-                model.id.in_(ids)
-            ).execution_options(synchronize_session=False))
+        revoked_wipe += await delete_owned(
+            model, revoked_rows_by_model[model],
+            select(model.id).join(Device, Device.id == model.device_id).where(
+                model.device_id.in_(revoked_ids),
+                Device.revoked_at.is_not(None), Device.revoked_at < cutoff,
+            ),
+        )
 
     return KeyRetirementResult(one_time, kyber_one_time, signed, revoked_wipe)
 
