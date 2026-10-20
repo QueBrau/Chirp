@@ -530,11 +530,27 @@ fn conversation_purge_is_idempotent_and_scoped_to_store_and_conversation() {
     assert_eq!(a.core.list_messages(CONV.to_owned(), None, 10).unwrap().len(), 0);
     assert_eq!(b.core.list_messages(uuid(0x22), None, 10).unwrap().len(), 1);
 
+    // Reopening verifies the stored header counts/manifest agree with the purged
+    // rows, and that both the deletion and unaffected history survive restart.
+    a.core.lock();
+    b.core.lock();
+    let a_reopened = a.unlock_again(None).unwrap();
+    let b_reopened = b.unlock_again(None).unwrap();
+    assert_eq!(a_reopened.list_messages(CONV.to_owned(), None, 10).unwrap().len(), 0);
+    assert_eq!(b_reopened.list_messages(CONV.to_owned(), None, 10).unwrap().len(), 0);
+    assert_eq!(a_reopened.purge_conversation(CONV.to_owned()).unwrap(), 0);
+    assert_eq!(b_reopened.purge_conversation(CONV.to_owned()).unwrap(), 0);
+    let retained = b_reopened.list_messages(uuid(0x22), None, 10).unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].body, "second conversation");
+
     // The account-wide replay hash still rejects replay after its message row is purged.
     let mut expected = b.expected(&a, 0x31);
     expected.conversation_id = CONV.to_owned();
     assert_eq!(
-        b.core.decrypt(uuid(0x41), first_leg, a.directory(), expected).unwrap_err(),
+        b_reopened
+            .decrypt(uuid(0x41), first_leg, a.directory(), expected)
+            .unwrap_err(),
         CryptoError::Replay,
     );
 }
