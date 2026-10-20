@@ -6,6 +6,7 @@
  */
 
 import * as SQLite from "expo-sqlite";
+import { Platform } from "react-native";
 
 export const DB_NAME = "chirp.db";
 
@@ -81,10 +82,16 @@ export async function purgeConversationData(
   if (typeof conversationId !== "string" || conversationId.length === 0) {
     throw new Error("Invalid conversation id.");
   }
-  await db.withTransactionAsync(async () => {
-    await db.runAsync("DELETE FROM messages WHERE conversation_id = ?", conversationId);
-    await db.runAsync("DELETE FROM outbox WHERE conversation_id = ?", conversationId);
-  });
+  const purge = async (tx: SQLite.SQLiteDatabase): Promise<void> => {
+    await tx.runAsync("DELETE FROM messages WHERE conversation_id = ?", conversationId);
+    await tx.runAsync("DELETE FROM outbox WHERE conversation_id = ?", conversationId);
+  };
+  if (Platform.OS === "web") {
+    // Expo's exclusive transaction API is native-only; web still gets atomicity.
+    await db.withTransactionAsync(() => purge(db));
+  } else {
+    await db.withExclusiveTransactionAsync(purge);
+  }
 }
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;

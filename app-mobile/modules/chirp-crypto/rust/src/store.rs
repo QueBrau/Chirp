@@ -560,8 +560,8 @@ impl Store {
         Ok(out)
     }
 
-    /// Load and authenticate every record of a type. Used only for bounded
-    /// lifecycle cleanup where the encrypted payload contains the ownership key.
+    /// Load and authenticate every record of a type when the encrypted payload
+    /// contains the ownership key. This scans the full record type.
     pub(crate) fn get_all(
         &self,
         rtype: &str,

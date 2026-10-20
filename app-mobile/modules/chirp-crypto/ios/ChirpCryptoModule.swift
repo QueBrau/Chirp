@@ -204,7 +204,7 @@ public final class ChirpCryptoModule: Module {
         let count = try self.call(handle, mutating: true) {
           try $0.purgeConversation(conversationId: conversationId)
         }
-        return Int(exactly: count).orInvalid()
+        return try Int(exactly: count).orInvalid()
       }
     }.runOnQueue(queue)
   }
