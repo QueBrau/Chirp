@@ -514,7 +514,7 @@ fn conversation_purge_is_idempotent_and_scoped_to_store_and_conversation() {
     receive(&conv_two, 0x32, 0x42, second_leg);
 
     b.core.fail_next_commit(crate::store::FailPoint::BeforeCommit);
-    assert_eq!(b.core.purge_conversation(CONV.to_owned()), Err(Error::Storage));
+    assert_eq!(b.core.purge_conversation(CONV.to_owned()), Err(CryptoError::Storage));
     assert_eq!(b.core.list_messages(CONV.to_owned(), None, 10).unwrap().len(), 1);
 
     assert_eq!(b.core.purge_conversation(CONV.to_owned()).unwrap(), 1);
@@ -535,6 +535,6 @@ fn conversation_purge_is_idempotent_and_scoped_to_store_and_conversation() {
     expected.conversation_id = CONV.to_owned();
     assert_eq!(
         b.core.decrypt(uuid(0x41), first_leg, a.directory(), expected).unwrap_err(),
-        Error::Replay,
+        CryptoError::Replay,
     );
 }

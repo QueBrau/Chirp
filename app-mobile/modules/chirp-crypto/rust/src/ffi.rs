@@ -809,3 +809,10 @@ impl CryptoCore {
             .into())
     }
 }
+
+#[cfg(test)]
+impl CryptoCore {
+    pub(crate) fn fail_next_commit(&self, point: crate::store::FailPoint) {
+        self.core.fail_next_commit(point);
+    }
+}

@@ -580,8 +580,8 @@ impl Store {
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (rid, gen, tag, nonce, ct) = row?;
-            let plain = self.decode_row(rtype, &rid, gen, tag, &nonce, &ct)?;
+            let (rid, generation, tag, nonce, ct) = row?;
+            let plain = self.decode_row(rtype, &rid, generation, tag, &nonce, &ct)?;
             out.push((rid, plain));
         }
         Ok(out)
