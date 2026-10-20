@@ -115,6 +115,7 @@ pub(crate) struct Put {
 #[derive(Default)]
 pub(crate) struct Tx {
     pub(crate) puts: Vec<Put>,
+    pub(crate) deletes: Vec<(&'static str, Vec<u8>)>,
     pub(crate) next_seq: Option<u64>,
 }
 
@@ -124,7 +125,20 @@ impl Tx {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.puts.is_empty() && self.next_seq.is_none()
+        self.puts.is_empty() && self.deletes.is_empty() && self.next_seq.is_none()
+    }
+
+    pub(crate) fn delete(&mut self, rtype: &'static str, rid: Vec<u8>) -> Result<()> {
+        if !MUTABLE.contains(&rtype) && !APPEND_ONLY.contains(&rtype) {
+            return Err(Error::Internal);
+        }
+        if self.puts.iter().any(|p| p.rtype == rtype && p.rid == rid) {
+            return Err(Error::Internal);
+        }
+        if !self.deletes.iter().any(|(kind, key)| *kind == rtype && *key == rid) {
+            self.deletes.push((rtype, rid));
+        }
+        Ok(())
     }
 
     /// Stage a write. Mutable records replace an earlier staged write of the same key;
@@ -136,6 +150,13 @@ impl Tx {
         tag: Option<Vec<u8>>,
         value: Zeroizing<Vec<u8>>,
     ) -> Result<()> {
+        if self
+            .deletes
+            .iter()
+            .any(|(kind, key)| *kind == rtype && *key == rid)
+        {
+            return Err(Error::Internal);
+        }
         if let Some(existing) = self
             .puts
             .iter_mut()
@@ -539,6 +560,33 @@ impl Store {
         Ok(out)
     }
 
+    /// Load and authenticate every record of a type when the encrypted payload
+    /// contains the ownership key. This scans the full record type.
+    pub(crate) fn get_all(
+        &self,
+        rtype: &str,
+    ) -> Result<Vec<(RecordId, Zeroizing<Vec<u8>>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT rid, gen, tag, nonce, ct FROM records WHERE rtype=?1 ORDER BY rid",
+        )?;
+        let rows = stmt.query_map(params![rtype], |r| {
+            Ok((
+                r.get::<_, Vec<u8>>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, Option<Vec<u8>>>(2)?,
+                r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, Vec<u8>>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (rid, generation, tag, nonce, ct) = row?;
+            let plain = self.decode_row(rtype, &rid, generation, tag, &nonce, &ct)?;
+            out.push((rid, plain));
+        }
+        Ok(out)
+    }
+
     /// Newest-first page of an append-only type: tag match, `rid < before` (if given).
     pub(crate) fn page_desc(
         &self,
@@ -598,6 +646,17 @@ impl Store {
                 *header.counts.entry(put.rtype.to_owned()).or_default() += 1;
             }
         }
+        for (rtype, rid) in &tx.deletes {
+            if is_mutable(rtype) {
+                header.mutable.remove(&manifest_key(rtype, rid));
+            } else {
+                let count = header.counts.get_mut(*rtype).ok_or(Error::StoreCorrupt)?;
+                *count = count.checked_sub(1).ok_or(Error::StoreCorrupt)?;
+                if *count == 0 {
+                    header.counts.remove(*rtype);
+                }
+            }
+        }
 
         // Seal everything first (borrows `self` immutably), then run the SQL transaction.
         let mut sealed = Vec::with_capacity(tx.puts.len());
@@ -617,6 +676,15 @@ impl Store {
         let sql = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for (rtype, rid) in &tx.deletes {
+            let changed = sql.execute(
+                "DELETE FROM records WHERE rtype=?1 AND rid=?2",
+                params![*rtype, rid],
+            )?;
+            if changed != 1 {
+                return Err(Error::StoreCorrupt);
+            }
+        }
         for (i, (put, (nonce, ct))) in tx.puts.iter().zip(sealed.iter()).enumerate() {
             let verb = if is_mutable(put.rtype) {
                 "INSERT OR REPLACE"

@@ -477,3 +477,80 @@ fn debug_output_never_shows_plaintext_or_ciphertext() {
     assert!(!shown.contains("secret words"));
     assert!(!shown.contains("c2VjcmV0"));
 }
+
+#[test]
+fn conversation_purge_is_idempotent_and_scoped_to_store_and_conversation() {
+    let a = Peer::new(0xa2, 0x11);
+    let b = Peer::new(0xb2, 0x12);
+    let conv_two = uuid(0x22);
+    a.core.observe_directory(b.user.clone(), vec![b.directory()]).unwrap();
+    b.core.observe_directory(a.user.clone(), vec![a.directory()]).unwrap();
+
+    let send = |conversation: &str, client: u8, text: &str| {
+        a.core.encrypt(
+            conversation.to_owned(),
+            uuid(client),
+            text.to_owned(),
+            a.directory(),
+            vec![Recipient {
+                device: b.directory(),
+                claimed_key: if client == 0x31 {
+                    Some(b.created.one_time_keys[0].clone())
+                } else {
+                    None
+                },
+            }],
+        ).unwrap()[0].clone()
+    };
+    let receive = |conversation: &str, client: u8, message: u8, leg: Leg| {
+        let mut expected = b.expected(&a, client);
+        expected.conversation_id = conversation.to_owned();
+        b.core.decrypt(uuid(message), leg, a.directory(), expected).unwrap()
+    };
+
+    let first_leg = send(CONV, 0x31, "first conversation");
+    receive(CONV, 0x31, 0x41, first_leg.clone());
+    let second_leg = send(&conv_two, 0x32, "second conversation");
+    receive(&conv_two, 0x32, 0x42, second_leg);
+
+    b.core.fail_next_commit(crate::store::FailPoint::BeforeCommit);
+    assert_eq!(b.core.purge_conversation(CONV.to_owned()), Err(CryptoError::Storage));
+    assert_eq!(b.core.list_messages(CONV.to_owned(), None, 10).unwrap().len(), 1);
+
+    assert_eq!(b.core.purge_conversation(CONV.to_owned()).unwrap(), 1);
+    assert_eq!(b.core.purge_conversation(CONV.to_owned()).unwrap(), 0);
+    assert_eq!(b.core.list_messages(CONV.to_owned(), None, 10).unwrap().len(), 0);
+    assert_eq!(a.core.list_messages(CONV.to_owned(), None, 10).unwrap().len(), 1);
+    assert_eq!(b.core.list_messages(uuid(0x22), None, 10).unwrap().len(), 1);
+
+    // Alice has a separate namespace, and purging there removes both the sent
+    // history and that conversation's encrypted retry/outbox record.
+    assert_eq!(a.core.purge_conversation(CONV.to_owned()).unwrap(), 2);
+    assert_eq!(a.core.purge_conversation(CONV.to_owned()).unwrap(), 0);
+    assert_eq!(a.core.list_messages(CONV.to_owned(), None, 10).unwrap().len(), 0);
+    assert_eq!(b.core.list_messages(uuid(0x22), None, 10).unwrap().len(), 1);
+
+    // Reopening verifies the stored header counts/manifest agree with the purged
+    // rows, and that both the deletion and unaffected history survive restart.
+    a.core.lock();
+    b.core.lock();
+    let a_reopened = a.unlock_again(None).unwrap();
+    let b_reopened = b.unlock_again(None).unwrap();
+    assert_eq!(a_reopened.list_messages(CONV.to_owned(), None, 10).unwrap().len(), 0);
+    assert_eq!(b_reopened.list_messages(CONV.to_owned(), None, 10).unwrap().len(), 0);
+    assert_eq!(a_reopened.purge_conversation(CONV.to_owned()).unwrap(), 0);
+    assert_eq!(b_reopened.purge_conversation(CONV.to_owned()).unwrap(), 0);
+    let retained = b_reopened.list_messages(uuid(0x22), None, 10).unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].body, "second conversation");
+
+    // The account-wide replay hash still rejects replay after its message row is purged.
+    let mut expected = b.expected(&a, 0x31);
+    expected.conversation_id = CONV.to_owned();
+    assert_eq!(
+        b_reopened
+            .decrypt(uuid(0x41), first_leg, a.directory(), expected)
+            .unwrap_err(),
+        CryptoError::Replay,
+    );
+}

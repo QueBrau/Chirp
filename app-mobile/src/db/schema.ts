@@ -6,6 +6,7 @@
  */
 
 import * as SQLite from "expo-sqlite";
+import { Platform } from "react-native";
 
 export const DB_NAME = "chirp.db";
 
@@ -66,6 +67,28 @@ export async function initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
       "\n",
     ),
   );
+}
+
+/**
+ * Remove locally decrypted history and queued plaintext for one conversation.
+ * The single SQLite transaction makes retries safe and prevents either table
+ * from being left half-purged. This intentionally leaves the shared database
+ * and every other conversation untouched; ordinary sign-out must retain data.
+ */
+export async function purgeConversationData(
+  db: SQLite.SQLiteDatabase,
+  conversationId: string,
+): Promise<void> {
+  if (typeof conversationId !== "string" || conversationId.length === 0) {
+    throw new Error("Invalid conversation id.");
+  }
+  if (Platform.OS === "web") {
+    throw new Error("Conversation purge is unavailable on web.");
+  }
+  await db.withExclusiveTransactionAsync(async (tx) => {
+    await tx.runAsync("DELETE FROM messages WHERE conversation_id = ?", conversationId);
+    await tx.runAsync("DELETE FROM outbox WHERE conversation_id = ?", conversationId);
+  });
 }
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;

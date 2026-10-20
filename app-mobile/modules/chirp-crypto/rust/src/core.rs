@@ -82,6 +82,11 @@ struct Ready {
 }
 
 impl Core {
+    #[cfg(test)]
+    pub(crate) fn fail_next_commit(&self, point: crate::store::FailPoint) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.as_mut().unwrap().store.fail = Some(point);
+    }
     /// Unlock (creating the namespace's store if it does not exist). `store_key` must be
     /// exactly 32 bytes. Wrong key, foreign file or damage is `UnlockFailed`; a second
     /// open of a namespace that is already unlocked is `StoreInUse`.
@@ -230,6 +235,12 @@ impl Core {
         limit: u32,
     ) -> Result<Vec<PlaintextMessage>> {
         self.run(|r| r.list_messages(conversation_id, before, limit))
+    }
+
+    /// Remove only this conversation's encrypted history and pending send records.
+    /// Account keys, sessions, trust state, and replay hashes remain intact.
+    pub fn purge_conversation(&self, conversation_id: ConversationId) -> Result<u64> {
+        self.run(|r| r.purge_conversation(conversation_id))
     }
 
     /// Record a peer user's current device directory and return the resulting trust
@@ -1215,6 +1226,40 @@ impl Ready {
             out.push(message_from_record(record));
         }
         Ok(out)
+    }
+
+    fn purge_conversation(&mut self, conversation_id: ConversationId) -> Result<u64> {
+        self.require_device()?;
+        let mut tx = Tx::new();
+        let tag = self.store.idx("conv", &conversation_id);
+        let messages = self.store.get_tagged(T_MESSAGE, &tag)?;
+        let mut replay_ids = Vec::new();
+        for (rid, bytes) in &messages {
+            let record: MessageRecord = from_json(bytes)?;
+            if record.conversation_id != conversation_id {
+                return Err(Error::StoreCorrupt);
+            }
+            if let Some(message_id) = record.message_id {
+                replay_ids.push(self.store.idx("rplid", &message_id));
+            }
+            tx.delete(T_MESSAGE, rid.clone())?;
+        }
+        for rid in replay_ids {
+            if self.store.get(T_REPLAY_ID, &rid)?.is_some() {
+                tx.delete(T_REPLAY_ID, rid)?;
+            }
+        }
+        let mut outbox_count = 0u64;
+        for (rid, bytes) in self.store.get_all(T_OUTBOX)? {
+            let record: OutboxRecord = from_json(&bytes)?;
+            if record.conversation_id == conversation_id {
+                tx.delete(T_OUTBOX, rid)?;
+                outbox_count += 1;
+            }
+        }
+        let purged = messages.len() as u64 + outbox_count;
+        self.store.commit(tx)?;
+        Ok(purged)
     }
 }
 

@@ -269,6 +269,7 @@ interface ChirpCryptoNative {
     before: number | null,
     limit: number,
   ): Promise<PlaintextMessage[]>;
+  purgeConversation(handle: string, conversationId: string): Promise<number>;
 }
 
 /** Optional fields are omitted rather than sent as null (the Expo record treats absent as nil). */
@@ -515,5 +516,10 @@ export const chirpCrypto = {
         wholeNumber(limit),
       ),
     );
+  },
+
+  /** Remove one conversation's local encrypted history and pending sends. */
+  purgeConversation(handle: CryptoHandle, conversationId: Uuid): Promise<number> {
+    return call((n) => n.purgeConversation(handle, uuid(conversationId)));
   },
 } as const;

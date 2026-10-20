@@ -778,6 +778,10 @@ impl CryptoCore {
             .collect())
     }
 
+    pub fn purge_conversation(&self, conversation_id: String) -> Res<u64> {
+        Ok(self.core.purge_conversation(id(&conversation_id)?)?)
+    }
+
     pub fn observe_directory(
         &self,
         user_id: String,
@@ -803,5 +807,12 @@ impl CryptoCore {
             .core
             .approve_device(&t::NewDeviceBinding::try_from(&new_device)?)?
             .into())
+    }
+}
+
+#[cfg(test)]
+impl CryptoCore {
+    pub(crate) fn fail_next_commit(&self, point: crate::store::FailPoint) {
+        self.core.fail_next_commit(point);
     }
 }
