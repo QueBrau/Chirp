@@ -7,6 +7,7 @@ import { runInNewContext } from "node:vm";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
+const platform = { OS: "ios" };
 const source = readFileSync(new URL("../src/db/schema.ts", import.meta.url), "utf8");
 const js = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -17,7 +18,7 @@ runInNewContext(
   {
     require: (name) => {
       if (name === "expo-sqlite") return { openDatabaseAsync: async () => {} };
-      if (name === "react-native") return { Platform: { OS: "ios" } };
+      if (name === "react-native") return { Platform: platform };
       throw new Error(`Unexpected module ${name}`);
     },
     module,
@@ -67,5 +68,12 @@ await purgeConversationData(db, "conv-a");
 assert.deepEqual(ids("messages"), ["m2"]);
 assert.deepEqual(ids("outbox"), ["o2"]);
 await assert.rejects(purgeConversationData(db, ""), /Invalid conversation id/);
+sqlite.exec(
+  `INSERT INTO messages VALUES ('m3', 'conv-web', 'keep web'); INSERT INTO outbox VALUES ('o3', 'conv-web', 'keep web queued');`,
+);
+const unchangedBeforeWebAttempt = [...ids("messages"), ...ids("outbox")];
+platform.OS = "web";
+await assert.rejects(purgeConversationData(db, "conv-web"), /unavailable on web/);
+assert.deepEqual([...ids("messages"), ...ids("outbox")], unchangedBeforeWebAttempt);
 sqlite.close();
-console.log("PASS local conversation purge helper: rollback, isolation, idempotence, invalid input");
+console.log("PASS local conversation purge helper: rollback, isolation, idempotence, invalid input, web refusal without writes");

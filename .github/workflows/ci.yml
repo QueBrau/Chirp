@@ -322,6 +322,10 @@ jobs:
         # already accepts, which would silently reintroduce duplicate/skipped messages.
         run: npm run verify:messages-pagination
 
+      - name: Local conversation data purge
+        working-directory: app-mobile
+        run: npm run verify:local-conversation-purge
+
       - name: Bounded messages inbox
         working-directory: app-mobile
         # c344. Keeps the per-row listMessages fanout from creeping back into the

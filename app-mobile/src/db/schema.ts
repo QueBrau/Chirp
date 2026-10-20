@@ -82,16 +82,13 @@ export async function purgeConversationData(
   if (typeof conversationId !== "string" || conversationId.length === 0) {
     throw new Error("Invalid conversation id.");
   }
-  const purge = async (tx: SQLite.SQLiteDatabase): Promise<void> => {
+  if (Platform.OS === "web") {
+    throw new Error("Conversation purge is unavailable on web.");
+  }
+  await db.withExclusiveTransactionAsync(async (tx) => {
     await tx.runAsync("DELETE FROM messages WHERE conversation_id = ?", conversationId);
     await tx.runAsync("DELETE FROM outbox WHERE conversation_id = ?", conversationId);
-  };
-  if (Platform.OS === "web") {
-    // Expo's exclusive transaction API is native-only; web still gets atomicity.
-    await db.withTransactionAsync(() => purge(db));
-  } else {
-    await db.withExclusiveTransactionAsync(purge);
-  }
+  });
 }
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
