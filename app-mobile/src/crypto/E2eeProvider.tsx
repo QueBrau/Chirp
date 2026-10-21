@@ -56,17 +56,19 @@ export function E2eeProvider({ children }: { children: ReactNode }) {
         void e2ee.syncFromHint(event.conversation_id).catch(swallow);
       }
     });
-    const wake = () => {
+    // The source matters to one state only: a server that has no v2 API yet is looked at again
+    // when the app returns to the foreground (once per session), never on a socket reconnect.
+    const wake = (source: "foreground" | "reconnect") => {
       void e2ee
-        .recheck()
+        .recheck(source)
         .then(() => e2ee.replayOutbox())
         .catch(swallow);
     };
     const offStatus = chirpSocket.onStatus((next) => {
-      if (next === "open") wake();
+      if (next === "open") wake("reconnect");
     });
     const appState = AppState.addEventListener("change", (next) => {
-      if (next === "active") wake();
+      if (next === "active") wake("foreground");
     });
     return () => {
       offEvent();

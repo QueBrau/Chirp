@@ -26,10 +26,13 @@ import {
   asApiError,
   isConflict,
   isDeviceUnusable,
+  isAccountDeleting,
   isForbidden,
   isPermanentDecryptFailure,
+  isServerWithoutV2,
   isRetryLater,
   nativeCode,
+  safeCode,
   staleGenerationMax,
 } from "./e2eeErrors";
 import { legBody, registrationBody, toDirectoryDevice, toSignedKey, uploadBody } from "./e2eeMapping";
@@ -47,8 +50,12 @@ import {
   INITIAL_ONE_TIME_KEYS,
   KEY_LOW_WATER,
   KEY_TARGET,
+  ACCOUNT_DELETING,
   MAX_DM_BODY_CHARS,
+  MAX_UNCONFIRMED_REGISTRATIONS,
+  REGISTRATION_UNCONFIRMED,
   MAX_SYNC_BACKLOG,
+  SERVER_NOT_READY,
   type AppState,
   type DmTrust,
   type E2eeState,
@@ -170,6 +177,8 @@ export class E2eeEngine {
   /** Settles when the latest bring-up has finished unwinding (success, failure or abort). */
   private unwinding: Promise<void> = Promise.resolve();
   private run = 0;
+  /** Foreground re-checks of a server without v2 used in this session (at most 1). */
+  private notReadyRechecks = 0;
   private store: AppStateStore | null = null;
   private readonly directories = new Map<string, { at: number; devices: DirectoryDevice[] }>();
 
@@ -223,7 +232,8 @@ export class E2eeEngine {
   /** Tell the diagnostics port about a failure that is being absorbed. Codes only. */
   private report(where: string, error: unknown): void {
     try {
-      this.ports.report?.(where, typeof error === "string" ? error : (nativeCode(error) ?? apiCode(error) ?? "error"));
+      // Only a fixed, word-shaped code ever leaves here: never a message, body or id.
+      this.ports.report?.(safeCode(where), safeCode(typeof error === "string" ? error : (nativeCode(error) ?? apiCode(error) ?? "error")));
     } catch {
       // Diagnostics never break the engine.
     }
@@ -236,18 +246,25 @@ export class E2eeEngine {
    * device, check approval, stock keys. Safe to call repeatedly: a second call for the
    * same user returns the state (or the call already in flight); a call for another user
    * stops the first. Never throws; the outcome is `getState()`.
+   *
+   * A server that has no v2 API yet ends in `unavailable` / `server_not_ready` WITHOUT
+   * creating or wiping anything: the probe runs before the store is touched. Calling
+   * `start` again does not probe again (the answer stands for the session); see `recheck`.
    */
-  start(userId: string): Promise<E2eeState> {
+  start(userId: string, options: { recheck?: boolean } = {}): Promise<E2eeState> {
     if (this.starting !== null && this.startedFor === userId) return this.starting;
     if (this.startedFor === userId && this.state.status !== "error") return Promise.resolve(this.state);
     if (this.startedFor !== null && this.startedFor !== userId) void this.stop();
+    // A start that is not itself a re-check begins a new session's budget.
+    if (options.recheck !== true) this.notReadyRechecks = 0;
     const run = ++this.run;
     this.startedFor = userId;
     // A new bring-up never overlaps an older one still unwinding: two would race for the
     // same store ("store_in_use") and one handle would leak.
     const earlier = this.unwinding;
+    const quiet = options.recheck === true;
     const promise = earlier
-      .then(() => this.bringUp(userId, run))
+      .then(() => this.bringUp(userId, run, quiet))
       .catch((error: unknown) => this.failStart(run, error));
     this.starting = promise;
     this.unwinding = promise.then(() => undefined);
@@ -276,10 +293,20 @@ export class E2eeEngine {
   /**
    * Ask again where this phone stands: a pending phone may have been approved; a failed
    * start is tried again. Cheap enough to call when the app returns to the foreground.
+   *
+   * `source` matters for exactly one state: a server without v2 (`server_not_ready`). That
+   * answer is looked at again only when the app returns to the FOREGROUND, and only once per
+   * session; a socket reconnect or a manual retry never re-probes it, so there is no loop.
    */
-  async recheck(): Promise<E2eeState> {
+  async recheck(source: "foreground" | "reconnect" | "manual" = "manual"): Promise<E2eeState> {
     const { status, userId } = this.state;
     if (userId === null) return this.state;
+    if (status === "unavailable" && this.state.reason === SERVER_NOT_READY) {
+      if (source !== "foreground" || this.notReadyRechecks >= 1) return this.state;
+      this.notReadyRechecks += 1;
+      this.startedFor = null; // Nothing was opened, so there is nothing to stop first.
+      return this.start(userId, { recheck: true });
+    }
     if (status === "error") {
       await this.stop();
       return this.start(userId);
@@ -305,14 +332,29 @@ export class E2eeEngine {
     return this.state;
   }
 
-  private async bringUp(userId: string, run: number): Promise<E2eeState> {
-    this.setState({ status: "starting", userId, deviceId: null, generation: null, reason: null });
+  private async bringUp(userId: string, run: number, quiet: boolean): Promise<E2eeState> {
+    // A quiet start is the one re-check of a server that had no v2: the screen keeps saying
+    // "coming soon" while it asks, instead of flashing "getting ready".
+    if (!quiet) this.setState({ status: "starting", userId, deviceId: null, generation: null, reason: null });
     if (!this.ports.available()) {
       return this.setState({ status: "unavailable" });
     }
     const { crypto, secure } = this.ports;
 
     const record = await loadDeviceRecord(secure, userId);
+    // One install registers ONE device. A registration whose answer was lost can leave a
+    // pending device this phone cannot see, and a retry would add another: after a few
+    // unconfirmed attempts stop and say so, instead of piling up orphans on the server.
+    if (record !== null && record.deviceId === null && (record.attempts ?? 0) >= MAX_UNCONFIRMED_REGISTRATIONS) {
+      throw new StartFailure(REGISTRATION_UNCONFIRMED);
+    }
+    // A phone that has never been confirmed by the server asks one question BEFORE it makes
+    // or opens anything: does this server have the v2 API? (Reading your own directory is
+    // allowed and claims nothing.) Production is not redeployed with /v2 yet, so the next
+    // build must not create a device, register, or wipe against a server that cannot answer.
+    // A phone that is already registered skips this: it has history to show and the server
+    // that registered it did have v2.
+    if (record === null || record.deviceId === null) await this.probeServer(userId);
     let generation = record?.generation ?? 1;
     let handle = await crypto.unlock(userId, generation);
     try {
@@ -351,7 +393,7 @@ export class E2eeEngine {
       }
 
       if (deviceId === null) {
-        const registered = await this.register(userId, run, generation, handle);
+        const registered = await this.register(userId, run, generation, handle, record?.deviceId === null ? (record.attempts ?? 0) : 0);
         handle = registered.handle;
         generation = registered.generation;
         deviceId = registered.deviceId;
@@ -387,21 +429,37 @@ export class E2eeEngine {
 
   private failStart(run: number, error: unknown): E2eeState {
     if (error instanceof Superseded || !this.alive(run)) return this.state;
-    const reason = error instanceof StartFailure ? error.reason : (nativeCode(error) ?? apiCode(error) ?? "start_failed");
+    // The server has no v2 API: not an error, and no diagnostics line either (expected).
+    if (isServerWithoutV2(error)) return this.setState({ status: "unavailable", reason: SERVER_NOT_READY });
+    // The account is being deleted: not an error and not retryable. No diagnostics, no retry.
+    if (isAccountDeleting(error)) return this.setState({ status: "unavailable", reason: ACCOUNT_DELETING });
+    // No answer, or a server asking for patience, is "network" wherever in the start it happened.
+    const reason =
+      error instanceof StartFailure ? error.reason : (nativeCode(error) ?? (isRetryLater(error) ? "network" : (apiCode(error) ?? "start_failed")));
     this.report("start", reason);
     return this.setState({ status: "error", reason });
   }
 
   /** Register this phone's device. The first attempt may use an already-unlocked store. */
-  private async register(userId: string, run: number, startGeneration: number, firstHandle: Handle) {
+  private async register(
+    userId: string,
+    run: number,
+    startGeneration: number,
+    firstHandle: Handle,
+    priorAttempts: number,
+  ) {
     const { crypto, api, secure } = this.ports;
     let generation = startGeneration;
     let handle = firstHandle;
+    let sent = priorAttempts; // Registration requests sent without ever being told a device id.
     for (let attempt = 0; ; attempt++) {
+      if (sent >= MAX_UNCONFIRMED_REGISTRATIONS) throw new StartFailure(REGISTRATION_UNCONFIRMED);
       const created = await crypto.createDevice(handle, INITIAL_ONE_TIME_KEYS);
       // Before the request: from here a crash leaves a store with a device and no id, which
-      // the next start knows how to clean up.
-      await saveDeviceRecord(secure, userId, { generation, deviceId: null, approved: false });
+      // the next start knows how to clean up. The count is saved BEFORE the request too, so a
+      // crash mid-request is still counted.
+      sent += 1;
+      await saveDeviceRecord(secure, userId, { generation, deviceId: null, approved: false, attempts: sent });
       let out: Awaited<ReturnType<ApiPort["registerDeviceV2"]>>;
       try {
         out = await api.registerDeviceV2(registrationBody(created, generation));
@@ -412,7 +470,7 @@ export class E2eeEngine {
         // made was never registered, so drop it and take the next free generation.
         await crypto.wipe(userId, generation);
         generation = Math.max(max, generation) + 1;
-        await saveDeviceRecord(secure, userId, { generation, deviceId: null, approved: false });
+        await saveDeviceRecord(secure, userId, { generation, deviceId: null, approved: false, attempts: sent });
         if (!this.alive(run)) throw new Superseded();
         handle = await crypto.unlock(userId, generation);
         if (!this.alive(run)) {
@@ -426,6 +484,22 @@ export class E2eeEngine {
       const keyIds = [...created.oneTimeKeys.map((key) => key.keyId), created.fallbackKey.keyId];
       await crypto.markPublished(handle, out.id, keyIds);
       return { handle, generation, deviceId: out.id, approved: out.approved };
+    }
+  }
+
+  /**
+   * Is there a v2 API behind this server? Reads this user's own directory. 200 (even with no
+   * devices) means yes; 404/405 rethrows the original error so `failStart` can say
+   * `server_not_ready`; no answer or a busy server is a plain start failure (`network`) like
+   * any other, and any other answer is surfaced by its fixed code.
+   */
+  private async probeServer(userId: string): Promise<void> {
+    try {
+      await this.ports.api.getUserDirectoryV2(userId);
+    } catch (error) {
+      if (isServerWithoutV2(error)) throw error;
+      if (isRetryLater(error)) throw new StartFailure("network");
+      throw error;
     }
   }
 
@@ -701,6 +775,23 @@ export class E2eeEngine {
     this.emit({ type: "thread", conversationId: entry.conversationId });
   }
 
+  /**
+   * Forget this app's own bookkeeping for one conversation: its unsent-message index and its
+   * "couldn't decrypt" placeholders. It does NOT touch the encrypted native store (that is
+   * `chirpCrypto.purgeConversation`, c452) and nothing calls it yet: it is the matching half
+   * for whoever wires the local purge into the app lifecycle, so a purged conversation does
+   * not leave ids behind here.
+   */
+  async forgetConversation(conversationId: string): Promise<void> {
+    const store = this.store;
+    if (store === null) return;
+    await store.update((state) => {
+      state.outbox = state.outbox.filter((entry) => entry.conversationId !== conversationId);
+      delete state.undecryptable[conversationId];
+    });
+    this.emit({ type: "thread", conversationId });
+  }
+
   /** The plaintext of a message this device sent, read back from the encrypted store. */
   private async findOutgoingBody(session: Session, entry: OutboxEntry): Promise<string | null> {
     let before: number | null = null;
@@ -835,7 +926,14 @@ export class E2eeEngine {
     if (native !== null) return refuse(new E2eeSendError("rejected"));
 
     if (http !== null) {
-      if (isForbidden(error, "recipient_not_reachable")) return refuse(new E2eeSendError("not_allowed"));
+      if (isForbidden(error, "recipient_not_reachable") || isForbidden(error, "not_a_member")) {
+        return refuse(new E2eeSendError("not_allowed"));
+      }
+      // c436: an account in this conversation (yours, or for a send any participant's) is being
+      // deleted, and every v2 write is refused with 423 until it is gone. Not retried: a
+      // message that already exists is marked failed (and the replay loop leaves failed ones
+      // alone), one that was never encrypted is dropped.
+      if (isAccountDeleting(error)) return refuse(new E2eeSendError("account_deletion"));
       if (isDeviceUnusable(error)) {
         this.markDeviceUnusable(session, http.detail);
         return refuse(new E2eeSendError("device_unusable"));
@@ -851,9 +949,11 @@ export class E2eeEngine {
       if (!isRetryLater(error)) return refuse(new E2eeSendError("rejected"));
     }
 
-    // No answer at all, or a server asking for patience: not the message's fault.
+    // No answer at all, or a server asking for patience: not the message's fault. A message
+    // that exists waits in the outbox; one that does not is refused with the honest reason
+    // (no network at all, or a server that answered but is busy).
     if (committed) return queued();
-    return refuse(new E2eeSendError("offline"));
+    return refuse(new E2eeSendError(http === null ? "offline" : "server_busy"));
   }
 
   /** A 403 told us THIS phone's device cannot act: revoked, or not (yet) approved. */

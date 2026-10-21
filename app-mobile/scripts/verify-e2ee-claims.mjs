@@ -40,21 +40,23 @@ const MENTIONS_CRYPTO = /encrypt|e2ee|end.to.end/i;
 
 /** Every user-visible encryption string, per file, with the reason it is true there. */
 const ALLOWED = {
-  // Groups still have no crypto at all. These two are the pre-c451 strings, kept only for
-  // the group branch of the thread screen (checked to be group-gated below).
+  // Groups still have no crypto at all. This is the one pre-c451 string left, kept only for
+  // the group branch of the thread screen (checked to be group-gated below). The group
+  // composer's note used to be "Sending unlocks with E2EE (milestone 4)"; it is now the
+  // plain, claim-free GROUP_COPY below, and the stale wording is banned everywhere.
   "app/(tabs)/messages/[id].tsx": new Map([
     [
       "Encrypted message",
       "Placeholder bubble for a GROUP message body this client cannot decrypt. TRUE: the " +
         "server genuinely stores opaque ciphertext (SPEC 6.2/6.5); the gap is client-side group crypto.",
     ],
-    [
-      "Sending unlocks with E2EE (milestone 4)",
-      "Forward-looking and explicitly not present tense: it tells the user group sending " +
-        "is unavailable and why. Only reachable for kind === \"group\" (checked).",
-    ],
   ]),
 };
+
+/** What the group thread says instead: true today, and it claims nothing. */
+const GROUP_COPY = "Group messages aren't available yet.";
+/** The DM thread's copy for a server that has no v2 API yet. No claim, no error. */
+const COMING_SOON_COPY = "Direct messages are coming soon.";
 
 /** The ONE place a present-tense claim may live: the ready branch of the DM thread. */
 const DM_FILE = "src/messages/DmThread.tsx";
@@ -133,7 +135,20 @@ function functionSource(source, name) {
     if (source[i] === "(") depth++;
     else if (source[i] === ")" && --depth === 0) break;
   }
-  const open = source.indexOf("{", i);
+  // A return type written as an object literal (`): { text: string } {`) has braces of its
+  // own; skip it so the body is found, not the annotation.
+  const annotation = /^\s*:\s*\{/.exec(source.slice(i + 1));
+  let from = i;
+  if (annotation) {
+    let typeOpen = i + 1 + annotation[0].length - 1;
+    let typeDepth = 0;
+    for (; typeOpen < source.length; typeOpen++) {
+      if (source[typeOpen] === "{") typeDepth++;
+      else if (source[typeOpen] === "}" && --typeDepth === 0) break;
+    }
+    from = typeOpen;
+  }
+  const open = source.indexOf("{", from + 1);
   if (open === -1) return null;
   let depth = 0;
   for (let j = open; j < source.length; j++) {
@@ -151,6 +166,26 @@ function walk(dir) {
     else out.push(rel);
   }
   return out;
+}
+
+/**
+ * Every source file a message body passes through between the composer and the native store
+ * (and back): the JS engine and screens, the Swift module, the Rust core. Keyed by path.
+ */
+function plaintextPathFiles() {
+  const files = {};
+  for (const rel of walk("src/crypto")) {
+    if (/^src\/crypto\/(e2ee[A-Za-z]*\.ts|E2eeProvider\.tsx|native\.ts)$/.test(rel)) files[rel] = read(rel);
+  }
+  for (const rel of walk("src/messages")) if (rel.endsWith(".tsx")) files[rel] = read(rel);
+  files["src/api/e2ee.ts"] = read("src/api/e2ee.ts");
+  for (const rel of walk("modules/chirp-crypto/ios")) {
+    if (rel.endsWith(".swift") && !rel.includes("/Generated/")) files[rel] = read(rel);
+  }
+  for (const rel of walk("modules/chirp-crypto/rust/src")) {
+    if (rel.endsWith(".rs") && !rel.includes("/tests/")) files[rel] = read(rel);
+  }
+  return files;
 }
 
 /** Everything the checks read, so the self-test can hand the same checks mutated copies. */
@@ -177,6 +212,8 @@ function loadSources() {
     runtime: read("src/crypto/e2eeRuntime.ts"),
     engine: read("src/crypto/e2eeEngine.ts"),
     apiE2ee: read("src/api/e2ee.ts"),
+    errors: read("src/crypto/e2eeErrors.ts"),
+    plaintextPath: plaintextPathFiles(),
   };
 }
 
@@ -359,15 +396,109 @@ function check(src) {
   if (!/accessibilityState=\{\{ disabled: true \}\}/.test(thread)) {
     fail("[id].tsx: the group send control no longer reports itself disabled.", "A control that announces itself as enabled to VoiceOver is the c228 bug class.");
   }
-  // The two legacy strings may appear only inside the group branch.
-  const composerNote = thread.indexOf("Sending unlocks with E2EE (milestone 4)");
-  if (composerNote !== -1 && (groupGate === -1 || composerNote < groupGate)) {
-    fail("[id].tsx shows the group composer note outside the group branch.");
+  // The group composer says GROUP_COPY (text and accessibility hint), only inside the group branch.
+  const composerNote = thread.indexOf(GROUP_COPY);
+  if (composerNote === -1 || groupGate === -1 || composerNote < groupGate) {
+    fail(`[id].tsx: the group composer no longer says "${GROUP_COPY}" inside the group branch.`);
+  }
+  if ((thread.match(new RegExp(GROUP_COPY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length < 2) {
+    fail("[id].tsx: the group send control's accessibility hint no longer matches its visible note.", "c336: the hint reuses the visible wording.");
+  }
+  // Internal milestone jargon is not copy. It went stale the day M4 landed.
+  for (const [rel, source] of Object.entries(src.ui)) {
+    for (const text of userVisibleStrings(source)) {
+      if (/milestone/i.test(text)) fail(`${rel} shows "${text}": internal milestone wording is not user copy.`);
+    }
   }
   const placeholderAt = thread.indexOf("Encrypted message");
   const groupMapAt = thread.search(/conversation\?\.kind\s*===\s*"group"\s*\?\s*messages\.map/);
   if (placeholderAt !== -1 && (groupMapAt === -1 || groupMapAt > placeholderAt)) {
     fail("[id].tsx shows the \"Encrypted message\" placeholder outside the group branch.");
+  }
+
+  // --- 4. A server without the v2 API is "coming soon", not an error. -------------------
+  // Production is not redeployed with /v2 when this ships. The engine must probe BEFORE it
+  // opens or creates anything, map a 404/405 to unavailable/server_not_ready (no diagnostics),
+  // and the DM thread must say COMING_SOON_COPY for it without a warning or a retry.
+  const bring = functionSource(engine, "bringUp");
+  if (bring === null) fail("the engine's bringUp method was not found", "(restructured? update this script's anchors)");
+  else {
+    const probeAt = bring.search(/this\.probeServer\(/);
+    const unlockAt = bring.search(/crypto\.unlock\(/);
+    if (probeAt === -1 || unlockAt === -1 || probeAt > unlockAt) {
+      fail("the engine must probe the server (probeServer) before it opens or creates anything (crypto.unlock).",
+        "A build pointed at a server without /v2 must not create, register or wipe a device.");
+    }
+  }
+  const failStart = functionSource(engine, "failStart");
+  if (failStart === null || !/isServerWithoutV2\(error\)\)\s*return this\.setState\(\{\s*status:\s*"unavailable",\s*reason:\s*SERVER_NOT_READY/.test(failStart)) {
+    fail("the engine no longer maps a 404/405 from the v2 API to unavailable / server_not_ready.");
+  }
+  if (failStart !== null && /this\.report\(/.test(failStart.slice(0, failStart.indexOf("isServerWithoutV2")))) {
+    fail("a server without v2 must not log a diagnostics line.");
+  }
+  // c436: while an account deletion runs the server answers every v2 write with 423. That is a
+  // clear, non-retrying state with true copy, never an "error, try again".
+  if (failStart === null || !/isAccountDeleting\(error\)\)\s*return this\.setState\(\{\s*status:\s*"unavailable",\s*reason:\s*ACCOUNT_DELETING/.test(failStart)) {
+    fail("the engine no longer maps 423 account_deletion_in_progress to unavailable / account_deletion_in_progress.");
+  }
+  if (!/export function isAccountDeleting[\s\S]*?status === 423 && e\.detail === "account_deletion_in_progress"/.test(src.errors)) {
+    fail("isAccountDeleting no longer means a 423 account_deletion_in_progress.");
+  }
+  if (!/if \(isAccountDeleting\(error\)\) return refuse\(new E2eeSendError\("account_deletion"\)\)/.test(engine)) {
+    fail("a send refused with 423 must become the typed account_deletion failure (not a retry).");
+  }
+  if (!/if \(reason === ACCOUNT_DELETING\) return \{ text: "[^"]+", action: null \}/.test(code(src.dm))) {
+    fail("DmThread's notReadyCopy has no retry-free copy for an account deletion.");
+  }
+  if (!/export function isServerWithoutV2[\s\S]*?status === 404 \|\| e\.status === 405/.test(src.errors)) {
+    fail("isServerWithoutV2 no longer means a 404 or 405.");
+  }
+  const dmSource = code(src.dm);
+  const copyFn = functionSource(dmSource, "notReadyCopy");
+  if (copyFn === null || !copyFn.includes(COMING_SOON_COPY) || !/reason === SERVER_NOT_READY/.test(copyFn)) {
+    fail(`DmThread's notReadyCopy no longer answers server_not_ready with "${COMING_SOON_COPY}".`);
+  }
+  if (notReady !== null) {
+    const notReadyCode = code(notReady);
+    if (!/quiet\s*\?\s*\(\s*<Notice\b/.test(notReadyCode) || !/reason\s*===\s*SERVER_NOT_READY\s*\|\|\s*reason\s*===\s*ACCOUNT_DELETING/.test(notReadyCode)) {
+      fail("NotReadyThread no longer shows a quiet Notice (not a warning Banner) for server_not_ready and an account deletion.");
+    }
+    if (!/__DEV__\s*&&\s*reason\s*!==\s*null\s*&&\s*!quiet/.test(notReadyCode)) {
+      fail("NotReadyThread would show a dev failure code on a quiet state.");
+    }
+  }
+
+  // --- 6. Nothing on the plaintext path logs. -------------------------------------------
+  // Production serves /v2, so the next build does real E2EE against it. A body, a key or an
+  // id in a log line (JS console, os_log, a Rust println) would leak what the design keeps
+  // off every server and every log. The ONE permitted line is the dev-only diagnostics
+  // print, which carries a place name and a fixed code and nothing else.
+  const REPORT_LINE = /if \(__DEV__\) console\.warn\(`\[e2ee\] \$\{where\}: \$\{code\}`\);/;
+  for (const [rel, source] of Object.entries(src.plaintextPath)) {
+    let body = stripComments(source);
+    if (rel === "src/crypto/e2eeRuntime.ts") body = body.replace(REPORT_LINE, "");
+    const bad = rel.endsWith(".swift")
+      ? /\b(print|debugPrint|NSLog|os_log|dump)\s*\(|\bLogger\s*\(/.exec(body)
+      : rel.endsWith(".rs")
+        ? /\b(println|eprintln|print|eprint|dbg)!|\b(log|tracing)::/.exec(body)
+        : /\bconsole\s*\.|\bAlert\s*\.|\balert\s*\(|\bshowApiError\b/.exec(body);
+    if (bad) fail(`${rel} logs or alerts (${bad[0].trim()})`, "Nothing on the plaintext path may log; the one allowed line is the dev-only diagnostics print in e2eeRuntime.ts.");
+  }
+  if (!REPORT_LINE.test(stripComments(src.runtime))) {
+    fail("the dev diagnostics line in e2eeRuntime.ts changed shape.", "It must print only a place name and a fixed code.");
+  }
+  if (!/safeCode\(where\)[\s\S]*?safeCode\(/.test(engine)) {
+    fail("the engine's report() no longer restricts diagnostics to fixed, word-shaped codes (safeCode).");
+  }
+
+  // --- 5. The DM thread opens at the newest message. ------------------------------------
+  // An inverted list inside a Screen that does not scroll, with the composer pinned under it.
+  if (!/<FlatList[\s\S]*?\binverted\b/.test(code(ready ?? ""))) {
+    fail("ReadyThread's message list is no longer an inverted FlatList (the thread must open at the newest message).");
+  }
+  if (!/<Screen\s+[^>]*scroll=\{!isDm\}/.test(code(src.thread).replace(/\/\/[^\n]*/g, ""))) {
+    fail("[id].tsx: a DM thread must not live inside Screen's ScrollView (scroll={!isDm}).");
   }
 
   return { failures, stubsAllThrow };
@@ -417,6 +548,62 @@ const MUTATIONS = [
   {
     name: "group crypto stops being a stub",
     apply: (s) => ({ ...s, stubs: { ...s.stubs, groups: s.stubs.groups.replace('throw new Error("TODO(milestone-3): libsignal")', "return") } }),
+  },
+  {
+    name: "the engine stops treating a missing v2 API as coming soon",
+    apply: (s) => ({ ...s, engine: s.engine.replace("if (isServerWithoutV2(error)) return this.setState({ status: \"unavailable\", reason: SERVER_NOT_READY });", "") }),
+  },
+  {
+    name: "the engine opens the store before it probes the server",
+    apply: (s) => ({ ...s, engine: s.engine.replace("await this.probeServer(userId);\n    let generation", "let generation").replace("let handle = await crypto.unlock(userId, generation);", "let handle = await crypto.unlock(userId, generation);\n    await this.probeServer(userId);") }),
+  },
+  {
+    name: "an account deletion becomes an error with a retry button",
+    apply: (s) => ({ ...s, engine: s.engine.replace(/if \(isAccountDeleting\(error\)\) return this\.setState\(\{ status: "unavailable", reason: ACCOUNT_DELETING \}\);/, "") }),
+  },
+  {
+    name: "a send refused for an account deletion is retried",
+    apply: (s) => ({ ...s, engine: s.engine.replace('if (isAccountDeleting(error)) return refuse(new E2eeSendError("account_deletion"));', "") }),
+  },
+  {
+    name: "coming soon claims encryption",
+    apply: (s) => ({ ...s, dm: s.dm.replace("Direct messages are coming soon.", "Encrypted direct messages are coming soon.") }),
+  },
+  {
+    name: "coming soon is shown as a warning banner",
+    apply: (s) => ({ ...s, dm: s.dm.replace("quiet ? (\n        <Notice text={text} />", "quiet ? (\n        <Banner text={text} />") }),
+  },
+  {
+    name: "the group note goes back to milestone wording",
+    apply: (s) => ({ ...s, thread: s.thread.replace("Group messages aren't available yet.", "Sending unlocks with E2EE (milestone 4)"), ui: { ...s.ui, "app/(tabs)/messages/[id].tsx": s.thread.replace("Group messages aren't available yet.", "Sending unlocks with E2EE (milestone 4)") } }),
+  },
+  {
+    name: "milestone wording on another screen",
+    apply: (s) => ({ ...s, ui: { ...s.ui, "app/(tabs)/messages/new.tsx": s.ui["app/(tabs)/messages/new.tsx"].replace(/>\s*Group messages aren't available yet\.\s*</, ">Unlocks in milestone 4<") } }),
+  },
+  {
+    name: "the DM thread goes back into the scrolling Screen",
+    apply: (s) => ({ ...s, thread: s.thread.replace("scroll={!isDm}", "scroll={true}") }),
+  },
+  {
+    name: "the engine logs a message body",
+    apply: (s) => ({ ...s, plaintextPath: { ...s.plaintextPath, "src/crypto/e2eeEngine.ts": s.plaintextPath["src/crypto/e2eeEngine.ts"] + "\nconsole.log(body);" } }),
+  },
+  {
+    name: "the Swift module prints a message",
+    apply: (s) => ({ ...s, plaintextPath: { ...s.plaintextPath, "modules/chirp-crypto/ios/ChirpCryptoModule.swift": s.plaintextPath["modules/chirp-crypto/ios/ChirpCryptoModule.swift"] + "\nprint(message.body)" } }),
+  },
+  {
+    name: "the Rust core prints a body",
+    apply: (s) => ({ ...s, plaintextPath: { ...s.plaintextPath, "modules/chirp-crypto/rust/src/core.rs": s.plaintextPath["modules/chirp-crypto/rust/src/core.rs"] + "\nfn leak(b: &str) { println!(\"{b}\"); }" } }),
+  },
+  {
+    name: "the diagnostics print grows a message",
+    apply: (s) => ({ ...s, runtime: s.runtime.replace("[e2ee] ${where}: ${code}", "[e2ee] ${where}: ${code} ${String(where)}"), plaintextPath: { ...s.plaintextPath, "src/crypto/e2eeRuntime.ts": s.plaintextPath["src/crypto/e2eeRuntime.ts"].replace("[e2ee] ${where}: ${code}", "[e2ee] ${where}: ${code} ${String(where)}") } }),
+  },
+  {
+    name: "the DM list stops being inverted",
+    apply: (s) => ({ ...s, dm: s.dm.replace("        inverted\n", "") }),
   },
   {
     name: "the engine stops reporting unavailable",

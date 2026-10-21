@@ -255,6 +255,10 @@ class FakeServer {
     this.devices = [];
     this.messages = [];
     this.down = false;
+    // A server deployed before the v2 routes existed: every /v2 path is simply not there.
+    this.noV2 = false;
+    // Registration requests get no usable answer (the reply is lost on the way back).
+    this.registerFails = false;
     this.calls = [];
     this.convMembers = new Map(); // conversation id -> [user ids]
     this.tick = 0;
@@ -270,10 +274,14 @@ class FakeServer {
     device.approved_by = approverId;
   }
   apiFor(userId) {
-    const guard = () => { if (this.down) throw networkError(); };
+    const guard = () => {
+      if (this.down) throw networkError();
+      if (this.noV2) throw apiError(404, "Not Found");
+    };
     return {
       registerDeviceV2: async (body) => {
         this.log("register", body.generation); guard();
+        if (this.registerFails) throw networkError();
         const max = this.maxGeneration(userId);
         if (body.generation <= max) throw apiError(409, "stale_generation", { max_generation: max });
         const device = { id: uuid(), user_id: userId, generation: body.generation, curve: body.identity_curve25519_b64, ed: body.identity_ed25519_b64,
@@ -361,6 +369,7 @@ class Phone {
     this.secure = memoryKv();
     this.plain = memoryKv();
     this.available = true;
+    this.reports = [];
     this.engine = this.newEngine();
   }
   newEngine() {
@@ -372,6 +381,7 @@ class Phone {
       available: () => this.available,
       newId: uuid,
       now: () => this.world.now,
+      report: (where, code) => this.reports.push([where, code]),
       conversations: { getPeer: async (conversationId, me) => {
         const members = this.world.server.convMembers.get(conversationId);
         return { kind: "dm", peerUserId: members.find((u) => u !== me) ?? null };
@@ -924,6 +934,298 @@ test("an approved phone that starts offline is ready from what it remembers and 
   const thread = await alice.engine.loadThread(conversation);
   assert.deepEqual(thread.messages.map((m) => m.body), ["history"], "history renders from the local store with no network");
   await assert.rejects(alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "nope" }), (e) => e.code === "offline");
+});
+
+test("a server without the v2 API: 'unavailable / server_not_ready', and nothing is created, registered, wiped or saved", async () => {
+  const world = new World();
+  world.server.noV2 = true;
+  const phone = world.phone(uuid());
+  const state = await phone.engine.start(phone.userId);
+  assert.equal(state.status, "unavailable");
+  assert.equal(state.reason, "server_not_ready");
+  assert.equal(phone.core.calls.length, 0, "the store was never opened, so nothing could be created or wiped");
+  assert.equal(world.server.count("register"), 0, "no registration was attempted");
+  assert.equal(world.server.count("directory"), 1, "exactly one probe");
+  assert.equal(phone.secure.map.size + phone.plain.map.size, 0, "nothing was remembered");
+  assert.deepEqual(phone.reports, [], "no diagnostics line: it is expected, not a failure");
+  // It is not an error: sends refuse as 'not ready' and no start is retried by merely asking again.
+  await assert.rejects(phone.engine.sendDm({ conversationId: uuid(), peerUserId: uuid(), body: "x" }), (e) => e.code === "not_ready");
+  world.server.calls.length = 0;
+  assert.equal((await phone.engine.start(phone.userId)).reason, "server_not_ready");
+  assert.equal(world.server.calls.length, 0, "start() again does not probe again");
+});
+
+test("a server without v2 is looked at again only on a foreground, once per session; a reconnect or a manual retry never loops", async () => {
+  const world = new World();
+  world.server.noV2 = true;
+  const phone = world.phone(uuid());
+  await phone.engine.start(phone.userId);
+  world.server.calls.length = 0;
+  await phone.engine.recheck("reconnect");
+  await phone.engine.recheck("manual");
+  await phone.engine.recheck();
+  assert.equal(world.server.calls.length, 0, "neither a socket reconnect nor a manual retry re-probes");
+  await phone.engine.recheck("foreground");
+  assert.equal(world.server.count("directory"), 1, "one probe on the first foreground");
+  assert.equal(phone.engine.getState().reason, "server_not_ready");
+  await phone.engine.recheck("foreground");
+  await phone.engine.recheck("foreground");
+  assert.equal(world.server.count("directory"), 1, "and no more after that, however often the app is foregrounded");
+  assert.equal(phone.core.calls.length, 0, "still nothing touched");
+  // Signing out and back in (or the next app start) is a new session with its own budget.
+  await phone.engine.stop();
+  await phone.engine.start(phone.userId);
+  assert.equal(world.server.count("directory"), 2);
+  await phone.engine.recheck("foreground");
+  assert.equal(world.server.count("directory"), 3);
+});
+
+test("once the server has v2, the one foreground re-check brings the phone up", async () => {
+  const world = new World();
+  world.server.noV2 = true;
+  const phone = world.phone(uuid());
+  await phone.engine.start(phone.userId);
+  world.server.noV2 = false; // the backend is redeployed while the app is open
+  const states = [];
+  phone.engine.subscribe((event) => { if (event.type === "state") states.push(phone.engine.getState().status); });
+  const state = await phone.engine.recheck("foreground");
+  assert.equal(state.status, "ready");
+  assert.equal(world.server.count("register"), 1);
+  assert.ok(!states.includes("starting"), "the screen never flashed 'getting ready' while it re-asked");
+});
+
+test("only a missing API is 'coming soon': a busy server, no network, or another refusal at start stays an error", async () => {
+  for (const [make, reason] of [
+    [() => apiError(503, "service_unavailable"), "network"],
+    [() => apiError(429, "e2ee_directory_rate_limited"), "network"],
+    [() => networkError(), "network"],
+    [() => apiError(403, "recipient_not_reachable"), "recipient_not_reachable"],
+  ]) {
+    const world = new World();
+    const phone = world.phone(uuid());
+    const api = phone.engine.ports.api;
+    phone.engine.ports.api = { ...api, getUserDirectoryV2: async () => { throw make(); } };
+    const state = await phone.engine.start(phone.userId);
+    assert.equal(state.status, "error", String(reason));
+    assert.equal(state.reason, reason);
+    assert.equal(phone.core.calls.length, 0, "a failed probe opens nothing either");
+  }
+  // 405 is the same answer as 404.
+  const world = new World();
+  const phone = world.phone(uuid());
+  const api = phone.engine.ports.api;
+  phone.engine.ports.api = { ...api, getUserDirectoryV2: async () => { throw apiError(405, "Method Not Allowed"); } };
+  assert.equal((await phone.engine.start(phone.userId)).reason, "server_not_ready");
+});
+
+test("the server loses the v2 routes between the probe and the registration: still 'coming soon', and nothing is wiped", async () => {
+  const world = new World();
+  const phone = world.phone(uuid());
+  const api = phone.engine.ports.api;
+  phone.engine.ports.api = { ...api, registerDeviceV2: async () => { throw apiError(404, "Not Found"); } };
+  const state = await phone.engine.start(phone.userId);
+  assert.equal(state.status, "unavailable");
+  assert.equal(state.reason, "server_not_ready");
+  assert.equal(phone.core.count("wipe"), 0);
+  assert.deepEqual(phone.reports, []);
+});
+
+test("a phone that is already registered does not probe: it starts from what it remembers even if the server has no v2 right now", async () => {
+  const world = new World();
+  const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "history" });
+  world.server.noV2 = true;
+  world.server.calls.length = 0;
+  const state = await alice.restart();
+  assert.equal(state.status, "ready");
+  assert.equal(world.server.count("directory"), 0, "no probe for a confirmed device");
+  assert.deepEqual((await alice.engine.loadThread(conversation)).messages.map((m) => m.body), ["history"]);
+});
+
+const deleting = () => apiError(423, "account_deletion_in_progress");
+
+test("c436: registration refused with 423 account_deletion_in_progress is 'unavailable', not an error, and is never retried", async () => {
+  const world = new World();
+  const phone = world.phone(uuid());
+  let attempts = 0;
+  const api = phone.engine.ports.api;
+  phone.engine.ports.api = { ...api, registerDeviceV2: async () => { attempts++; throw deleting(); } };
+  const state = await phone.engine.start(phone.userId);
+  assert.equal(state.status, "unavailable");
+  assert.equal(state.reason, "account_deletion_in_progress");
+  assert.equal(attempts, 1);
+  assert.deepEqual(phone.reports, [], "an expected answer, not a diagnostics line");
+  world.server.calls.length = 0;
+  await phone.engine.start(phone.userId);
+  for (const source of ["foreground", "reconnect", "manual"]) await phone.engine.recheck(source);
+  assert.equal(attempts, 1, "nothing asks again, whatever the source");
+  assert.equal(world.server.calls.length, 0);
+  await assert.rejects(phone.engine.sendDm({ conversationId: uuid(), peerUserId: uuid(), body: "x" }), (e) => e.code === "not_ready");
+});
+
+test("c436: a send refused with 423 before anything was encrypted is a typed account_deletion: nothing stored, nothing queued, no retry", async () => {
+  const world = new World();
+  const { alice, bob, conversation } = await world.pair();
+  const api = alice.engine.ports.api;
+  alice.engine.ports.api = { ...api, claimKeysV2: async () => { throw deleting(); } };
+  world.server.calls.length = 0;
+  await assert.rejects(alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "hi" }), (e) => e instanceof E2eeSendError && e.code === "account_deletion");
+  assert.equal(world.server.count("send"), 0);
+  assert.equal((await alice.engine.loadThread(conversation)).outbox.length, 0);
+  assert.deepEqual(bodies(alice.core, conversation), []);
+});
+
+test("c436: a message that exists and is then refused with 423 is marked failed, the replay loop leaves it alone, and only the user's own retry tries again", async () => {
+  const world = new World();
+  const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "warm up" });
+  const api = alice.engine.ports.api;
+  let posts = 0;
+  alice.engine.ports.api = { ...api, sendMessageV2: async () => { posts++; throw deleting(); } };
+  await assert.rejects(alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "refused" }), (e) => e.code === "account_deletion");
+  let thread = await alice.engine.loadThread(conversation);
+  assert.equal(thread.outbox.length, 1);
+  assert.deepEqual([thread.outbox[0].status, thread.outbox[0].failure], ["failed", "account_deletion"]);
+  assert.equal(buildThread({ ...thread, myUserId: alice.userId }).at(-1).delivery, "failed");
+  await alice.engine.replayOutbox();
+  await alice.engine.replayOutbox();
+  assert.equal(posts, 1, "replays skip a failed entry: no retry storm against a locked account");
+  alice.engine.ports.api = api; // the deletion is over (or it was the other account and that is resolved)
+  assert.equal((await alice.engine.retrySend(thread.outbox[0].clientMessageId)).kind, "sent");
+  assert.equal((await alice.engine.loadThread(conversation)).outbox.length, 0);
+});
+
+test("c436: 503 account_write_admission_unavailable is 'busy': refused before encryption, queued after it, and goes out on a later replay", async () => {
+  const world = new World();
+  const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "warm up" });
+  const busy = () => apiError(503, "account_write_admission_unavailable");
+  const api = alice.engine.ports.api;
+  // Before anything is encrypted (a new device needs a key claim, which the server cannot admit).
+  const bob2 = world.phone(bob.userId);
+  await bob2.engine.start(bob.userId);
+  world.server.approve(bob2.engine.getState().deviceId, bob.engine.getState().deviceId);
+  world.now += 60_000;
+  alice.engine.ports.api = { ...api, claimKeysV2: async () => { throw busy(); } };
+  await assert.rejects(alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "too early" }), (e) => e.code === "server_busy");
+  assert.equal((await alice.engine.loadThread(conversation)).outbox.length, 0);
+  assert.deepEqual(bodies(alice.core, conversation), [">warm up"]);
+  // After encryption (the post is what the server cannot admit): the message waits.
+  alice.engine.ports.api = api;
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "claimed ok" }); // establishes the session with bob's new phone
+  alice.engine.ports.api = { ...api, sendMessageV2: async () => { throw busy(); } };
+  assert.equal((await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "waits" })).kind, "queued");
+  alice.engine.ports.api = api;
+  await alice.engine.replayOutbox();
+  assert.equal((await alice.engine.loadThread(conversation)).outbox.length, 0);
+  await bob.engine.syncConversation(conversation, alice.userId);
+  assert.ok(bodies(bob.core, conversation).includes("<waits"));
+});
+
+test("c436: 403 not_a_member on a send is 'not allowed' and the message is marked failed, not retried", async () => {
+  const world = new World();
+  const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "warm up" });
+  const api = alice.engine.ports.api;
+  alice.engine.ports.api = { ...api, sendMessageV2: async () => { throw apiError(403, "not_a_member"); } };
+  await assert.rejects(alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "left" }), (e) => e.code === "not_allowed");
+  assert.equal((await alice.engine.loadThread(conversation)).outbox[0].status, "failed");
+});
+
+test("c436: key top-up refused with 423 is absorbed (the phone stays ready) and logged as a fixed code only", async () => {
+  const world = new World();
+  const phone = world.phone(uuid());
+  await phone.engine.start(phone.userId);
+  await flush();
+  world.server.devices[0].keys.filter((k) => k.kind === "one_time").forEach((k) => { k.consumed = true; });
+  const api = phone.engine.ports.api;
+  phone.engine.ports.api = { ...api, uploadKeysV2: async () => { throw deleting(); } };
+  phone.reports.length = 0;
+  await phone.engine.maintainKeys().catch((e) => phone.engine.report("maintainKeys", e));
+  assert.equal(phone.engine.getState().status, "ready");
+  // A server-supplied detail that is not a fixed code (it could be anything) never reaches diagnostics.
+  phone.engine.ports.api = { ...api, getKeyCountV2: async () => { throw apiError(500, "Hello this is plaintext! canary"); } };
+  phone.engine.report("probe", apiError(500, "Hello this is plaintext! canary"));
+  assert.ok(phone.reports.every(([where, code]) => /^[a-z0-9_]+$/.test(where) && /^[a-z0-9_]+$/.test(code)), JSON.stringify(phone.reports));
+  assert.ok(!JSON.stringify(phone.reports).includes("plaintext"));
+});
+
+test("one install registers one device: unconfirmed registrations are capped, and the cap stops the next start without asking the server", async () => {
+  const world = new World();
+  const phone = world.phone(uuid());
+  world.server.registerFails = true; // every reply is lost
+  const states = [];
+  states.push((await phone.engine.start(phone.userId)).reason); // attempt 1
+  states.push((await phone.restart()).reason); // recovery: nothing registered, so wipe and attempt 2
+  states.push((await phone.restart()).reason); // attempt 3
+  assert.deepEqual(states, ["network", "network", "network"]);
+  assert.equal(world.server.count("register"), 3);
+  const record = await loadDeviceRecord(phone.secure, phone.userId);
+  assert.equal(record.attempts, 3);
+  const wipesBefore = phone.core.count("wipe");
+  const unlocksBefore = phone.core.count("unlock");
+  const stopped = await phone.restart();
+  assert.equal(stopped.status, "error");
+  assert.equal(stopped.reason, "registration_unconfirmed");
+  assert.equal(phone.core.count("wipe"), wipesBefore, "the capped start wipes nothing");
+  assert.equal(phone.core.count("unlock"), unlocksBefore, "and does not even open the store");
+  assert.equal(world.server.count("register"), 3, "no fourth registration");
+  assert.equal(phone.core.calls.filter((c) => c[0] === "createDevice").length, 3, "and no fourth device made locally");
+  // recheck() on that error does not loop either.
+  await phone.engine.recheck();
+  assert.equal(world.server.count("register"), 3);
+});
+
+test("the cap also bounds the stale_generation retry: two attempts already spent leave room for exactly one more request", async () => {
+  const world = new World();
+  const userId = uuid();
+  // The account already has a device at generation 5, so a registration at generation 2 is refused as stale.
+  world.server.devices.push({ id: uuid(), user_id: userId, generation: 5, curve: "c5", ed: "e5", binding: "b", approved: true, approved_by: null, revoked: false, keys: [] });
+  const phone = world.phone(userId);
+  await phone.secure.set(`chirp.e2ee.device.${userId}`, JSON.stringify({ generation: 1, deviceId: null, approved: false, attempts: 2 }));
+  const registersBefore = world.server.count("register");
+  const state = await phone.engine.start(userId);
+  assert.equal(state.status, "error");
+  assert.equal(state.reason, "registration_unconfirmed");
+  assert.equal(world.server.count("register") - registersBefore, 1, "one request, refused as stale; no retry beyond the cap");
+});
+
+test("a normal first sign-in leaves no attempt count behind, and a reinstall starts a fresh count", async () => {
+  const world = new World();
+  const userId = uuid();
+  const phone = world.phone(userId);
+  await phone.engine.start(userId);
+  assert.equal((await loadDeviceRecord(phone.secure, userId)).attempts, undefined);
+  phone.core = new FakeCore(); // reinstall
+  const again = phone.newEngine();
+  assert.equal((await again.start(userId)).status, "pending_approval");
+  assert.equal((await loadDeviceRecord(phone.secure, userId)).attempts, undefined);
+});
+
+test("forgetConversation clears this app's own ids for one conversation (the hook for the c452 local purge) and leaves the rest", async () => {
+  const world = new World();
+  const { alice, bob, conversation } = await world.pair();
+  const other = world.server.conversation(alice.userId, bob.userId);
+  world.server.down = true;
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "one" }).catch(() => undefined);
+  // (first sends need the network for a key; make sure there is something queued by warming first)
+  world.server.down = false;
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "warm" });
+  await alice.engine.sendDm({ conversationId: other, peerUserId: bob.userId, body: "elsewhere" });
+  world.server.down = true;
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "queued here" });
+  await alice.engine.sendDm({ conversationId: other, peerUserId: bob.userId, body: "queued there" });
+  assert.equal((await alice.engine.loadThread(conversation)).outbox.length, 1);
+  await alice.engine.forgetConversation(conversation);
+  assert.equal((await alice.engine.loadThread(conversation)).outbox.length, 0);
+  assert.equal((await alice.engine.loadThread(other)).outbox.length, 1, "other conversations keep theirs");
+  // The encrypted store is not this method's business: the plaintext copy is still there.
+  assert.ok(bodies(alice.core, conversation).includes(">queued here"));
+  // And a replay no longer tries to send the forgotten one.
+  world.server.down = false;
+  world.server.calls.length = 0;
+  await alice.engine.replayOutbox();
+  assert.equal(world.server.messages.filter((m) => m.conversation === conversation).length, 1, "only the warm-up message exists there");
 });
 
 test("error classification: no answer and busy servers are 'try later'; real answers are not", () => {

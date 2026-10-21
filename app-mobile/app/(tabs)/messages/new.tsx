@@ -10,13 +10,13 @@
  * point instead lives in messages/index.tsx as a header-adjacent ghost pill,
  * the same shape as profile/index.tsx's local EditLayoutToggle.
  *
- * Honest-limit rule (c451 update): a DM can now send (E2EE M4, src/messages/DmThread.tsx)
- * and a group cannot, so this screen's footnote says which is which in plain words and
- * makes NO encryption claim of its own. Whether a given phone can actually send is the
- * thread's business (it knows this device's state; this screen does not), and the only
- * place allowed to claim encryption is DmThread's ready state, which
- * `npm run verify:e2ee-claims` enforces. (This repo has shipped the "claim it before it is
- * true" mistake twice.)
+ * Honest-limit rule (c451 update): a group cannot send yet, so picking two or more people
+ * shows one plain line saying so ("Group messages aren't available yet."). A single pick (a
+ * DM) shows no footnote at all: whether a DM can send is the thread's business (it knows this
+ * device's state and whether the server has the DM API yet; this screen does not), and it
+ * says so there. This screen makes NO encryption claim of its own, and the only place
+ * allowed to is DmThread's ready state, which `npm run verify:e2ee-claims` enforces. (This
+ * repo has shipped the "claim it before it is true" mistake twice.)
  */
 
 import { useRouter } from "expo-router";
@@ -431,21 +431,21 @@ export default function NewConversationScreen() {
             disabled={selectedUsers.size === 0 || submitting}
           />
 
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: spacing.xs,
-            }}
-          >
-            <Feather name="info" size={typography.caption.fontSize} color={palette.inkFaint} />
-            <AppText variant="caption" tone="tertiary">
-              {selectedUsers.size > 1
-                ? "Group messages aren't available yet."
-                : "Direct messages work in the iPhone app."}
-            </AppText>
-          </View>
+          {selectedUsers.size > 1 ? (
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: spacing.xs,
+              }}
+            >
+              <Feather name="info" size={typography.caption.fontSize} color={palette.inkFaint} />
+              <AppText variant="caption" tone="tertiary">
+                Group messages aren't available yet.
+              </AppText>
+            </View>
+          ) : null}
         </View>
       )}
     </Screen>

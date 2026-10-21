@@ -56,6 +56,34 @@ export function isRetryLater(error: unknown): boolean {
   return e.status === 408 || e.status === 429 || e.status >= 500;
 }
 
+/**
+ * A server that does not have the v2 API at all: the route is missing (404) or the method is
+ * not routed (405). That is not a failure of this request; it means the backend this build
+ * points at has not been deployed with E2EE yet, so the right answer is "not available yet",
+ * not an error and not a retry. Used only for the calls that start a device
+ * (POST /v2/devices, GET /v2/users/{id}/devices): a 404 anywhere else means something else.
+ */
+export function isServerWithoutV2(error: unknown): boolean {
+  const e = asApiError(error);
+  return e !== null && (e.status === 404 || e.status === 405);
+}
+
+/**
+ * 423 `account_deletion_in_progress`: an account the write touches (the caller's own, or
+ * for a message or key claim any participant's) is being deleted. Every v2 WRITE is refused
+ * until the deletion finishes, and it does not finish by itself becoming allowed again, so
+ * this is an answer to act on (stop, say why), not a reason to retry.
+ */
+export function isAccountDeleting(error: unknown): boolean {
+  const e = asApiError(error);
+  return e !== null && e.status === 423 && e.detail === "account_deletion_in_progress";
+}
+
+/** A code that is safe to print: lowercase words and underscores only, never free text. */
+export function safeCode(value: string): string {
+  return /^[a-z0-9_]{1,64}$/.test(value) ? value : "error";
+}
+
 /** The 403s that mean THIS phone's device cannot act (revoked, not approved, not ours). */
 const DEVICE_UNUSABLE = new Set(["device_revoked", "device_not_approved", "not_your_device", "device_suite_unsupported"]);
 

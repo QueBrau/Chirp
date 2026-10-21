@@ -121,7 +121,7 @@ export default function MessagesScreen() {
   return (
     <Screen
       title="Messages"
-      subtitle="Direct messages work in the iPhone app. Group messages aren't available yet."
+      subtitle="Start conversations. Group messages aren't available yet."
       onRefresh={load}
     >
       {state.incomplete ? <EmptyState title="Some activity may be missing"

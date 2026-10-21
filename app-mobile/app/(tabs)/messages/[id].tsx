@@ -158,6 +158,9 @@ export default function ThreadScreen() {
 
   return (
     <Screen
+      // c451: a DM thread owns the screen's height (inverted list + pinned composer), so it
+      // does not live inside Screen's ScrollView. Groups keep the scrolling layout.
+      scroll={!isDm}
       title={conversationTitle(conversation)}
       onRefresh={load}
       subtitle={conversation?.kind === "group" ? "Group" : "Direct message"}
@@ -165,7 +168,7 @@ export default function ThreadScreen() {
       <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
         <LeaveConversationButton onPress={handleLeave} busy={leaving || denied} />
       </View>
-      <View style={{ gap: spacing.sm }}>
+      <View style={isDm ? { flex: 1, gap: spacing.sm } : { gap: spacing.sm }}>
         {loading && !isDm ? <AppText variant="caption" tone="secondary">Refreshing conversation…</AppText> : null}
         {denied ? <EmptyState title="Conversation unavailable" message="We couldn't verify access to this conversation. Try again to check."
           actionLabel="Try again" onAction={() => void load()} /> : null}
@@ -251,7 +254,7 @@ export default function ThreadScreen() {
               // button's focus never reaches. The hint reuses that visible wording
               // rather than inventing a second account of the same fact.
               accessibilityLabel="Send message"
-              accessibilityHint="Sending unlocks with E2EE (milestone 4)"
+              accessibilityHint="Group messages aren't available yet."
               accessibilityState={{ disabled: true }}
               style={{
                 width: metrics.buttonHeight,
@@ -267,9 +270,9 @@ export default function ThreadScreen() {
             </View>
           </View>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
-            <Feather name="lock" size={typography.caption.fontSize} color={palette.inkFaint} />
+            <Feather name="info" size={typography.caption.fontSize} color={palette.inkFaint} />
             <AppText variant="caption" tone="tertiary">
-              Sending unlocks with E2EE (milestone 4)
+              Group messages aren't available yet.
             </AppText>
           </View>
         </View>

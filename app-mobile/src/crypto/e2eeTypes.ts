@@ -32,6 +32,31 @@ export type E2eeStatus =
   | "unavailable"
   | "error";
 
+/**
+ * `E2eeState.reason` of an `unavailable` phone whose SERVER has no v2 API yet (a 404/405 from
+ * POST /v2/devices or GET /v2/users/{id}/devices). The screens say "coming soon", not an
+ * error; nothing is registered or wiped; it is looked at again on the next app start and at
+ * most once on a foreground within a session.
+ */
+export const SERVER_NOT_READY = "server_not_ready";
+
+/**
+ * `E2eeState.reason` of an `unavailable` phone whose ACCOUNT is being deleted (the backend
+ * answers every v2 write with 423 `account_deletion_in_progress` while a deletion runs).
+ * Not an error and not retryable: nothing here will change until the account is gone, so
+ * there is no retry button and no re-check; the screens say so in plain words.
+ */
+export const ACCOUNT_DELETING = "account_deletion_in_progress";
+/** `error` reason: this install has sent too many registrations the server never confirmed. */
+export const REGISTRATION_UNCONFIRMED = "registration_unconfirmed";
+/**
+ * The most registration requests one install may send without ever being told a device id.
+ * A registration whose answer is lost can leave an unseen PENDING device on the server, and
+ * the next start cannot tell, so it tries again; this bounds that to a few attempts instead
+ * of an unbounded run of orphan devices (the server caps them at 5 active, 20 retained).
+ */
+export const MAX_UNCONFIRMED_REGISTRATIONS = 3;
+
 export interface E2eeState {
   status: E2eeStatus;
   userId: string | null;
@@ -89,6 +114,8 @@ export interface DeviceRecord {
   /** True once the directory has listed this device as approved. An approved device
    * only stops being approved by being revoked, so this lets an offline start trust it. */
   approved: boolean;
+  /** Registration requests sent since the last confirmed device id (absent = 0). */
+  attempts?: number;
 }
 
 export type OutboxStatus = "pending" | "failed";
@@ -148,6 +175,10 @@ export type SendFailureCode =
   | "peer_no_devices"
   /** The server will not let this conversation exchange keys (blocked, left, stranger). */
   | "not_allowed"
+  /** An account in this conversation is being deleted: the server refuses every write (423). */
+  | "account_deletion"
+  /** The server answered but is busy or struggling (429, 5xx). Nothing was encrypted. */
+  | "server_busy"
   /** This phone's device was revoked, or is not approved. */
   | "device_unusable"
   /** Nothing could be encrypted because the network was needed first (directory, key

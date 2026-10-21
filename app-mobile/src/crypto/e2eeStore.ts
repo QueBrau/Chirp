@@ -43,12 +43,13 @@ export async function loadDeviceRecord(kv: KvPort, userId: string): Promise<Devi
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed)) return null;
-    const { generation, deviceId, approved } = parsed;
+    const { generation, deviceId, approved, attempts } = parsed;
     if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 1) return null;
     return {
       generation,
       deviceId: typeof deviceId === "string" && deviceId.length > 0 ? deviceId : null,
       approved: approved === true,
+      ...(typeof attempts === "number" && Number.isSafeInteger(attempts) && attempts > 0 ? { attempts } : {}),
     };
   } catch {
     return null;
