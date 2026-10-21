@@ -416,6 +416,15 @@
   ],
   "cards": [
     {
+      "id": "c463",
+      "col": "progress",
+      "owner": "Q",
+      "tag": "security",
+      "area": "messages",
+      "title": "c463 IN PROGRESS Oct 20 (Q): E2EE M5 - trust UX (E2EE-DESIGN.md section 8, c440 decision 4). (1) Safety-number screen per DM: the 60 digits in 12 groups of 5, compare in person, optional local Verified mark that resets itself when the identity changes. (2) Hard stop: when a contact's security code changes or an unapproved device appears, the DM shows a banner (receiving continues, sending blocked) with View safety number and Accept the new code. (3) New-phone approval: the existing phone sees a prompt for a pending device with a short comparison code shown on BOTH phones, approves via approveDevice + POST /v2/devices/{id}/approve. Needs a small backend read of the caller's own PENDING devices (today's directory returns approved only) - no migration. (4) Reset security on a phone that cannot be approved (lost phone, or the c448 reinstall case): revoke the account's other devices, re-register as root; contacts get the hard stop. DONE MEANS: each flow exercised on simulators against a LOCAL backend. Stacked on c451 (PR #399). Branch q/c463-e2ee-trust-ux.",
+      "detail": ""
+    },
+    {
       "id": "c460",
       "col": "done",
       "owner": "J",
