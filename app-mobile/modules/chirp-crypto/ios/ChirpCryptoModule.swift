@@ -165,6 +165,12 @@ public final class ChirpCryptoModule: Module {
       }
     }.runOnQueue(queue)
 
+    // The 9-digit comparison code of one device, from its Ed25519 identity (c463). The new
+    // phone and the approving phone show the same code. Stateless: needs no handle.
+    AsyncFunction("deviceComparisonCode") { (identityEd25519: String) -> String in
+      try self.guarded { try deviceComparisonCode(identityEd25519: identityEd25519) }
+    }.runOnQueue(queue)
+
     // MARK: Messages
 
     AsyncFunction("encrypt") {

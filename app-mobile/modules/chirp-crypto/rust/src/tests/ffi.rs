@@ -614,3 +614,42 @@ fn has_session_says_which_recipients_still_need_a_claimed_key() {
     a.core.lock();
     assert_eq!(a.core.has_session(b_curve), Err(CryptoError::Locked));
 }
+
+#[test]
+fn device_comparison_code_is_the_same_on_both_phones_and_checks_its_input() {
+    // The new phone derives it from its own identity; the approving phone reads that same
+    // key from the server's pending list. Both go through the same exported function.
+    let new_phone = Peer::new(0xa1, 0x01);
+    let own = new_phone.created.identity.ed25519.clone();
+    let from_new_phone = device_comparison_code(own.clone()).unwrap();
+    let from_approver = device_comparison_code(own.clone()).unwrap();
+    assert_eq!(from_new_phone, from_approver);
+    assert_eq!(from_new_phone.len(), 9);
+    assert!(from_new_phone.chars().all(|c| c.is_ascii_digit()));
+
+    // A different device has a different code, and unpadded base64 is accepted like
+    // everywhere else at this boundary.
+    let other = Peer::new(0xa1, 0x02);
+    assert_ne!(
+        device_comparison_code(other.created.identity.ed25519.clone()).unwrap(),
+        from_new_phone
+    );
+    assert_eq!(
+        device_comparison_code(own.trim_end_matches('=').to_owned()).unwrap(),
+        from_new_phone
+    );
+
+    // Bad input is refused, not guessed at.
+    assert_eq!(
+        device_comparison_code("not base64!".to_owned()),
+        Err(CryptoError::InvalidInput)
+    );
+    assert_eq!(
+        device_comparison_code("AAAA".to_owned()),
+        Err(CryptoError::InvalidInput)
+    );
+    assert_eq!(
+        device_comparison_code(String::new()),
+        Err(CryptoError::InvalidInput)
+    );
+}

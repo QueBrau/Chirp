@@ -602,6 +602,15 @@ pub fn safety_number(
     )?)
 }
 
+/// The 9-digit comparison code of one device, from its Ed25519 identity (base64). The new
+/// phone and the approving phone show the same code (c463). Needs no handle.
+#[uniffi::export]
+pub fn device_comparison_code(identity_ed25519: String) -> Res<String> {
+    Ok(crate::safety::device_comparison_code(&fixed(
+        &identity_ed25519,
+    )?))
+}
+
 // ---------------------------------------------------------------------------------------
 // The handle
 // ---------------------------------------------------------------------------------------

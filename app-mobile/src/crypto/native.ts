@@ -249,6 +249,7 @@ interface ChirpCryptoNative {
     peerUserId: string,
     peerIdentities: string[],
   ): Promise<string>;
+  deviceComparisonCode(identityEd25519: string): Promise<string>;
   encrypt(
     handle: string,
     conversationId: string,
@@ -472,6 +473,17 @@ export const chirpCrypto = {
     peerIdentities: Base64[],
   ): Promise<string> {
     return call((n) => n.safetyNumber(uuid(myUserId), myIdentities, uuid(peerUserId), peerIdentities));
+  },
+
+  /**
+   * The 9-digit comparison code of one device, from its Ed25519 identity (c463). The new
+   * phone shows it for itself and the approving phone shows it for the pending device it
+   * read from the server, so the person can check the two screens against each other.
+   * Digits only, no separators; `groupComparisonCode` in e2eeTrust.ts spaces it for display.
+   * Needs no handle.
+   */
+  deviceComparisonCode(identityEd25519: Base64): Promise<string> {
+    return call((n) => n.deviceComparisonCode(identityEd25519));
   },
 
   /** One ciphertext leg per recipient device. Committed before it returns. */

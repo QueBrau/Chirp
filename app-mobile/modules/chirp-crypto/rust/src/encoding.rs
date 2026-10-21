@@ -13,6 +13,7 @@
 //! | device binding  | `chirp-e2ee-v1/device-binding`  | suite (UTF-8 `vodozemac-olm-v1`), user_id (16), generation (4, u32 BE), identity_curve25519 (32), identity_ed25519 (32) |
 //! | one-time key    | `chirp-e2ee-v1/otk`             | kind (UTF-8 `one_time` or `fallback`), key_id (8, u64 BE), public_key (32), owner identity_curve25519 (32) |
 //! | device approval | `chirp-e2ee-v1/device-approval` | user_id (16), generation (4, u32 BE), identity_curve25519 (32), identity_ed25519 (32), all of the NEW device |
+//! | device code     | `chirp-e2ee-v1/device-code`     | identity_ed25519 (32). Hashed, never signed: see `safety::device_comparison_code` |
 //!
 //! A binding and a one-time key are signed by the owning device's Ed25519 identity.
 //! An approval is signed by the APPROVER device's Ed25519 identity.
@@ -26,9 +27,11 @@ pub const SUITE: &str = "vodozemac-olm-v1";
 pub const DOMAIN_DEVICE_BINDING: &str = "chirp-e2ee-v1/device-binding";
 pub const DOMAIN_ONE_TIME_KEY: &str = "chirp-e2ee-v1/otk";
 pub const DOMAIN_DEVICE_APPROVAL: &str = "chirp-e2ee-v1/device-approval";
+/// Domain of the short code two phones show side by side when a new phone is approved.
+pub const DOMAIN_DEVICE_CODE: &str = "chirp-e2ee-v1/device-code";
 
 /// The generic framing. Domains are short ASCII constants, so the u16 never overflows.
-fn frame(domain: &str, fields: &[&[u8]]) -> Vec<u8> {
+pub(crate) fn frame(domain: &str, fields: &[&[u8]]) -> Vec<u8> {
     debug_assert!(domain.is_ascii() && domain.len() <= u16::MAX as usize);
     let mut out =
         Vec::with_capacity(2 + domain.len() + fields.iter().map(|f| 4 + f.len()).sum::<usize>());

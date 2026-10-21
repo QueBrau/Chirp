@@ -15,7 +15,7 @@ use vodozemac::{Curve25519PublicKey, Curve25519SecretKey};
 
 use crate::encoding::*;
 use crate::envelope::{hex, unhex};
-use crate::safety::safety_number;
+use crate::safety::{device_comparison_code, safety_number};
 use crate::*;
 
 const COMMITTED: &str = include_str!("../../test-vectors/e2ee-v1.json");
@@ -203,6 +203,17 @@ fn vectors() -> Value {
     );
     let single = safety_number(&USER_A, &[device.ed], &USER_B, &b_ids).unwrap();
 
+    // Device comparison codes (c463): one per identity, from that Ed25519 key alone.
+    let device_codes: Vec<Value> = [device.ed, approver.ed, third.ed]
+        .iter()
+        .map(|key| {
+            json!({
+                "identity_ed25519": hex(key),
+                "digits": device_comparison_code(key),
+            })
+        })
+        .collect();
+
     json!({
         "version": 1,
         "description": "Test vectors for chirp-crypto-core signed encodings and safety numbers. Ed25519 signatures are deterministic (RFC 8032), so every field below is reproducible from the seeds.",
@@ -266,6 +277,10 @@ fn vectors() -> Value {
                     "digits": single,
                 },
             ],
+        },
+        "device_comparison_code": {
+            "algorithm": "d = SHA-256(encoding of domain chirp-e2ee-v1/device-code with one field, identity_ed25519); first 8 bytes as a big-endian u64, mod 10^9, zero padded to 9 digits",
+            "cases": device_codes,
         },
     })
 }
@@ -527,4 +542,50 @@ fn safety_number_digit_grouping_is_big_endian_mod_100000() {
         crate::safety::digits(&other),
         crate::safety::digits(&digest)
     );
+}
+
+/// The comparison code is pinned against values computed independently in Python
+/// (`hashlib.sha256` over the framed domain and key), so a change to the framing, the
+/// truncation or the modulus fails here and in `verify_vectors.py`.
+#[test]
+fn device_comparison_code_matches_the_independent_reference() {
+    assert_eq!(device_comparison_code(&[0u8; 32]), "063120697");
+    assert_eq!(device_comparison_code(&seq(0)), "417122726");
+    assert_eq!(device_comparison_code(&[0xffu8; 32]), "176383302");
+    assert_eq!(device_comparison_code(&[1u8; 32]), "057982334");
+}
+
+#[test]
+fn device_comparison_code_is_nine_digits_and_depends_on_the_key_alone() {
+    let key = seq(7);
+    let code = device_comparison_code(&key);
+    assert_eq!(code.len(), crate::safety::DEVICE_CODE_DIGITS);
+    assert!(code.chars().all(|c| c.is_ascii_digit()));
+    // Deterministic: both phones derive the same code from the same key.
+    assert_eq!(code, device_comparison_code(&key));
+    // Flipping any single bit of the key changes it (a collision on one neighbour is
+    // possible at 10^-9; on many is not).
+    let mut differing = 0;
+    for byte in 0..32 {
+        for bit in 0..8 {
+            let mut other = key;
+            other[byte] ^= 1 << bit;
+            if device_comparison_code(&other) != code {
+                differing += 1;
+            }
+        }
+    }
+    assert!(
+        differing >= 255,
+        "{differing} of 256 single-bit changes changed the code"
+    );
+    // The domain is part of the hash: the same bytes without it give another code.
+    let bare = {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(key);
+        let mut head = [0u8; 8];
+        head.copy_from_slice(&digest[..8]);
+        format!("{:09}", u64::from_be_bytes(head) % 1_000_000_000)
+    };
+    assert_ne!(bare, code);
 }
