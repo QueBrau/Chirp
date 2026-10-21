@@ -115,6 +115,8 @@ see what is going on. Update it at EVERY step, not just at the end of a task:
   production unless EXPO_PUBLIC_API_URL says otherwise; eas.json's EXPO_PUBLIC_WS_URL
   is EAS-only and does NOT reach a local build, so a local client will not exercise
   chirp-ws unless it is set in the environment.
+- Local simulator builds must keep the default ad hoc signing: a `CODE_SIGNING_ALLOWED=NO`
+  build fails every Keychain call (`keychain_failed`), which breaks E2EE (c451).
 - ios/ is generated output and is gitignored - never commit it, and re-running
   prebuild resets anything hand-edited in Xcode, including the signing team.
 - For a DEVICE build, or to reproduce what EAS ships: cut a cloud build with the

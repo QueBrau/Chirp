@@ -28,6 +28,12 @@ export interface MessageSocketEvent {
   // message's created_at, ISO-formatted) — it was in every event this gateway
   // has ever sent, just never declared here since nothing read it yet.
   created_at?: string;
+  /**
+   * c451: present (1) only on an E2EE v2 message hint (routers/messages_v2.py). Such a
+   * hint carries NO ciphertext at all, not even `ciphertext`: each device's leg is fetched
+   * over HTTP by the receiving device, so the event is only a reason to go and look.
+   */
+  envelope_version?: number;
 }
 
 /**

@@ -1,11 +1,16 @@
 /**
  * Thread view per DESIGN §7: bubbles use the accent/surfaceAlt palette with a
- * 6/20 tail-corner radius. Real MessageOut carries only ciphertext_b64 (no
- * plaintext) and sender_device_id (no sender_user_id), so this build can
- * neither decrypt a body nor tell "mine" from "theirs" — every bubble renders
- * the same designed "encrypted" placeholder instead of faking either. Pill
- * composer + accent circular send stay disabled until the libsignal pipeline
- * lands (milestone 4).
+ * 6/20 tail-corner radius.
+ *
+ * Direct messages (c451, E2EE M4) render src/messages/DmThread.tsx: plaintext bubbles
+ * from the encrypted on-device store, mine vs theirs known, and a composer that is on
+ * only when this phone's device is registered and approved. That component owns every
+ * encryption claim on this screen and what to show when messaging is not ready.
+ *
+ * Groups are unchanged: real MessageOut carries only ciphertext_b64 (no plaintext) and
+ * sender_device_id (no sender_user_id), group crypto does not exist yet, so every bubble
+ * renders the same designed "encrypted" placeholder instead of faking a body or an
+ * author. The pill composer + accent circular send stay disabled for groups.
  */
 
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
@@ -24,6 +29,7 @@ import {
 import { useSession } from "@/auth";
 import { currentIdentity } from "@/auth/identity";
 import { DurableWindow } from "@/realtime/durableWindow";
+import { DmThread } from "@/messages/DmThread";
 import { AppText, Button, EmptyState, Screen } from "@/components";
 import { confirmAction, showApiError } from "@/lib/alert";
 import { chirpSocket, isMessageEvent } from "@/realtime/socket";
@@ -75,7 +81,7 @@ export default function ThreadScreen() {
   const palette = useTheme();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  useSession();
+  const { user } = useSession();
   const owner = currentIdentity();
   const [, redraw] = useState(0);
   const [detail, setDetail] = useState<{ window: DurableWindow<MessageOut>; conversation: ConversationOut } | null>(null);
@@ -111,6 +117,11 @@ export default function ThreadScreen() {
   queryRef.current = window;
   const conversation = !window.state.denied && detail?.window === window ? detail.conversation : null;
   const { rows: messages, failed: loadFailed, denied, more, incomplete, loading, loadingMore } = window.state;
+  // c451: a DM is read from the encrypted on-device store, not from this v1 window.
+  const isDm = conversation?.kind === "dm";
+  const dmPeerId = isDm
+    ? (conversation.members ?? []).find((member) => member.left_at === null && member.user_id !== user?.id)?.user_id ?? null
+    : null;
   const activation = window.activation;
   const load = () => window.ownsFocus(activation) ? window.refresh() : Promise.resolve();
 
@@ -137,7 +148,8 @@ export default function ThreadScreen() {
     const focus = window.activate();
     setLeaving(false);
     const unsubscribeEvent = chirpSocket.onEvent(event => {
-      if (window.ownsFocus(focus) && isMessageEvent(event) && event.conversation_id === id) window.hint(event.message_id);
+      // A v2 (encrypted DM) hint is for the DM thread; the v1 window would only look for a row it never has.
+      if (window.ownsFocus(focus) && isMessageEvent(event) && event.conversation_id === id && event.envelope_version === undefined) window.hint(event.message_id);
     });
     const unsubscribeStatus = chirpSocket.onStatus(status => { if (window.ownsFocus(focus) && status === "open") void window.refresh(); });
     void window.refresh();
@@ -146,6 +158,9 @@ export default function ThreadScreen() {
 
   return (
     <Screen
+      // c451: a DM thread owns the screen's height (inverted list + pinned composer), so it
+      // does not live inside Screen's ScrollView. Groups keep the scrolling layout.
+      scroll={!isDm}
       title={conversationTitle(conversation)}
       onRefresh={load}
       subtitle={conversation?.kind === "group" ? "Group" : "Direct message"}
@@ -153,14 +168,14 @@ export default function ThreadScreen() {
       <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
         <LeaveConversationButton onPress={handleLeave} busy={leaving || denied} />
       </View>
-      <View style={{ gap: spacing.sm }}>
-        {loading ? <AppText variant="caption" tone="secondary">Refreshing conversation…</AppText> : null}
+      <View style={isDm ? { flex: 1, gap: spacing.sm } : { gap: spacing.sm }}>
+        {loading && !isDm ? <AppText variant="caption" tone="secondary">Refreshing conversation…</AppText> : null}
         {denied ? <EmptyState title="Conversation unavailable" message="We couldn't verify access to this conversation. Try again to check."
           actionLabel="Try again" onAction={() => void load()} /> : null}
-        {incomplete && !denied ? <EmptyState title="Some updates may be missing"
+        {incomplete && !denied && !isDm ? <EmptyState title="Some updates may be missing"
           message="Refresh to check the latest messages. Older history may still need to be loaded."
           actionLabel="Refresh conversation" onAction={() => void load()} /> : null}
-        {more && !denied ? <View style={{ gap: spacing.sm }}>
+        {more && !denied && !isDm ? <View style={{ gap: spacing.sm }}>
           <AppText variant="caption" tone="secondary">Showing a recent window. More history may include messages missed while offline.</AppText>
           <Button label={loadingMore ? "Loading older messages…" : "Load older messages"} variant="secondary"
             disabled={loading || loadingMore} onPress={() => { if (window.ownsFocus(activation)) void window.older(); }} />
@@ -173,7 +188,13 @@ export default function ThreadScreen() {
             onAction={() => void load()}
           />
         ) : null}
-        {messages.map((message) => (
+        {/* c451: a DM is its own component (plaintext from the encrypted store). */}
+        {isDm && !denied ? (
+          <DmThread conversationId={id} peerUserId={dmPeerId} myUserId={user?.id ?? null} />
+        ) : null}
+
+        {/* Groups only: the v1 placeholder bubbles and the disabled composer, unchanged. */}
+        {conversation?.kind === "group" ? messages.map((message) => (
           <View
             key={message.id}
             style={{
@@ -203,10 +224,12 @@ export default function ThreadScreen() {
               {bubbleTime(message.created_at)}
             </AppText>
           </View>
-        ))}
+        )) : null}
 
-        {/* Composer per §7: pill input + accent circular send — visually present,
-            disabled until the libsignal pipeline lands. TODO(milestone-4). */}
+        {/* Groups only. Composer per §7: pill input + accent circular send — visually
+            present, disabled until group crypto lands (c451 turned DMs on; groups are
+            a later design, E2EE-DESIGN.md section 9). */}
+        {conversation?.kind === "group" ? (
         <View style={{ marginTop: spacing.lg, gap: spacing.sm }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
             <TextInput
@@ -231,7 +254,7 @@ export default function ThreadScreen() {
               // button's focus never reaches. The hint reuses that visible wording
               // rather than inventing a second account of the same fact.
               accessibilityLabel="Send message"
-              accessibilityHint="Sending unlocks with E2EE (milestone 4)"
+              accessibilityHint="Group messages aren't available yet."
               accessibilityState={{ disabled: true }}
               style={{
                 width: metrics.buttonHeight,
@@ -247,12 +270,13 @@ export default function ThreadScreen() {
             </View>
           </View>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
-            <Feather name="lock" size={typography.caption.fontSize} color={palette.inkFaint} />
+            <Feather name="info" size={typography.caption.fontSize} color={palette.inkFaint} />
             <AppText variant="caption" tone="tertiary">
-              Sending unlocks with E2EE (milestone 4)
+              Group messages aren't available yet.
             </AppText>
           </View>
         </View>
+        ) : null}
       </View>
     </Screen>
   );

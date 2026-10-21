@@ -554,3 +554,63 @@ fn conversation_purge_is_idempotent_and_scoped_to_store_and_conversation() {
         CryptoError::Replay,
     );
 }
+
+#[test]
+fn has_session_says_which_recipients_still_need_a_claimed_key() {
+    let a = Peer::new(0xa1, 0x01);
+    let b = Peer::new(0xb1, 0x02);
+    let a_curve = a.created.identity.curve25519.clone();
+    let b_curve = b.created.identity.curve25519.clone();
+
+    // Nothing sent yet: neither side has a session, so a first send must claim a key.
+    assert_eq!(a.core.has_session(b_curve.clone()), Ok(false));
+    assert_eq!(b.core.has_session(a_curve.clone()), Ok(false));
+
+    let legs = a
+        .core
+        .encrypt(
+            CONV.to_owned(),
+            uuid(0x11),
+            "first".to_owned(),
+            a.directory(),
+            vec![Recipient {
+                device: b.directory(),
+                claimed_key: Some(b.created.one_time_keys[0].clone()),
+            }],
+        )
+        .unwrap();
+    // The sender has an outbound session as soon as the send is committed.
+    assert_eq!(a.core.has_session(b_curve.clone()), Ok(true));
+    // The receiver has none until it decrypts the prekey message...
+    assert_eq!(b.core.has_session(a_curve.clone()), Ok(false));
+    b.core
+        .decrypt(
+            uuid(0x31),
+            legs[0].clone(),
+            a.directory(),
+            b.expected(&a, 0x11),
+        )
+        .unwrap();
+    // ...after which a reply needs no claim either (the inbound session counts).
+    assert_eq!(b.core.has_session(a_curve.clone()), Ok(true));
+
+    // An unrelated identity still has none, and bad input is rejected, not guessed at.
+    let stranger = Peer::new(0xc1, 0x03);
+    assert_eq!(
+        a.core
+            .has_session(stranger.created.identity.curve25519.clone()),
+        Ok(false)
+    );
+    assert_eq!(
+        a.core.has_session("not base64!".to_owned()),
+        Err(CryptoError::InvalidInput)
+    );
+    assert_eq!(
+        a.core.has_session("AAAA".to_owned()),
+        Err(CryptoError::InvalidInput)
+    );
+
+    // A locked handle is dead, like every other call.
+    a.core.lock();
+    assert_eq!(a.core.has_session(b_curve), Err(CryptoError::Locked));
+}

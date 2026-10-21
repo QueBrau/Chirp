@@ -1,9 +1,10 @@
 /**
  * Messages: conversation rows per DESIGN §7 — GradientAvatar 48, headline name,
- * "Message" encrypted preview caption. Plaintext previews only exist after the
- * on-device decrypted store lands (milestone 4); an unread indicator would need
- * a real read-receipt signal this build doesn't have, so it's omitted rather
- * than faked.
+ * "Message" encrypted preview caption. Direct messages are readable in their thread
+ * (c451, src/messages/DmThread.tsx) but the row does not preview them: the list does not
+ * open the on-device store, and a stale or partial preview would be worse than none. An
+ * unread indicator would need a real read-receipt signal this build doesn't have, so it's
+ * omitted rather than faked.
  *
  * c273: entry point into messages/new.tsx. Not a FAB — DESIGN §7 is explicit
  * ("One FAB, Home only") — and Screen has no header-action slot to add one to
@@ -120,7 +121,7 @@ export default function MessagesScreen() {
   return (
     <Screen
       title="Messages"
-      subtitle="Start conversations. Sending isn't available yet."
+      subtitle="Start conversations. Group messages aren't available yet."
       onRefresh={load}
     >
       {state.incomplete ? <EmptyState title="Some activity may be missing"

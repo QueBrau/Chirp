@@ -118,6 +118,9 @@ function environment() {
     "expo-router": { useFocusEffect: callback => { const focused = activeHook.focused !== false; activeHook.react.useEffect(() => focused ? callback() : undefined, [callback, focused]); }, useLocalSearchParams: () => env.route, useRouter: () => env.router, Redirect: "Redirect", Tabs: Object.assign(() => {}, { Screen: "Tabs.Screen" }) },
     "react-native-reanimated": { default: {}, interpolate() {}, useAnimatedStyle() {} },
     [resolve(ROOT, "src/nav/TabBarVisibility.tsx")]: { TabBarVisibilityProvider: "TabBarVisibilityProvider" },
+    // c451: the thread screen renders this for DMs (the exercised conversations are groups).
+    // Its own behavior is covered by verify:e2ee-dm and verify:e2ee-claims.
+    [resolve(ROOT, "src/messages/DmThread.tsx")]: { DmThread: "DmThread" },
     [resolve(ROOT, "src/components/index.ts")]: Object.fromEntries(["AppText", "Button", "EmptyState", "Screen", "Card", "GradientAvatar", "ListRow", "PollCard", "SectionHeader", "Chip"].map(name => [name, name])),
     "expo-image-picker": { requestMediaLibraryPermissionsAsync: () => env.permission(), launchImageLibraryAsync: () => { env.pickerCalls++; return env.picker(); } },
     [resolve(ROOT, "src/auth/config.ts")]: { hasFirebaseConfig: () => true },

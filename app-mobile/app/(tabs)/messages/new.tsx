@@ -10,13 +10,13 @@
  * point instead lives in messages/index.tsx as a header-adjacent ghost pill,
  * the same shape as profile/index.tsx's local EditLayoutToggle.
  *
- * Honest-limit rule: creating a conversation here does NOT unlock sending —
- * src/crypto/signal.ts is still a typed stub (every export throws
- * TODO(milestone-3)), so sendMessage() has nothing that can call it. The
- * thread screen (app/(tabs)/messages/[id].tsx) already discloses this at the
- * composer ("Sending unlocks with E2EE (milestone 4)"); this screen repeats
- * that EXACT line rather than inventing a second, differently-worded claim
- * about encryption or sending (this repo has shipped that mistake twice).
+ * Honest-limit rule (c451 update): a group cannot send yet, so picking two or more people
+ * shows one plain line saying so ("Group messages aren't available yet."). A single pick (a
+ * DM) shows no footnote at all: whether a DM can send is the thread's business (it knows this
+ * device's state and whether the server has the DM API yet; this screen does not), and it
+ * says so there. This screen makes NO encryption claim of its own, and the only place
+ * allowed to is DmThread's ready state, which `npm run verify:e2ee-claims` enforces. (This
+ * repo has shipped the "claim it before it is true" mistake twice.)
  */
 
 import { useRouter } from "expo-router";
@@ -431,19 +431,21 @@ export default function NewConversationScreen() {
             disabled={selectedUsers.size === 0 || submitting}
           />
 
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: spacing.xs,
-            }}
-          >
-            <Feather name="lock" size={typography.caption.fontSize} color={palette.inkFaint} />
-            <AppText variant="caption" tone="tertiary">
-              Sending unlocks with E2EE (milestone 4)
-            </AppText>
-          </View>
+          {selectedUsers.size > 1 ? (
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: spacing.xs,
+              }}
+            >
+              <Feather name="info" size={typography.caption.fontSize} color={palette.inkFaint} />
+              <AppText variant="caption" tone="tertiary">
+                Group messages aren't available yet.
+              </AppText>
+            </View>
+          ) : null}
         </View>
       )}
     </Screen>

@@ -109,6 +109,15 @@ public final class ChirpCryptoModule: Module {
       try self.guarded { js(try self.call(handle) { try $0.keyStatus() }) }
     }.runOnQueue(queue)
 
+    // Whether a session already exists with a peer device (c451). A recipient with no
+    // session needs a claimed key for `encrypt`; one with a session must not have a key
+    // claimed, because a claim burns a one-time key on the server. Read-only.
+    AsyncFunction("hasSession") { (handle: String, peerCurve25519: String) -> Bool in
+      try self.guarded {
+        try self.call(handle) { try $0.hasSession(peerCurve25519: peerCurve25519) }
+      }
+    }.runOnQueue(queue)
+
     AsyncFunction("publicIdentity") { (handle: String) -> [String: Any]? in
       try self.guarded {
         try self.call(handle) { try $0.publicIdentity() }.map { js($0) }

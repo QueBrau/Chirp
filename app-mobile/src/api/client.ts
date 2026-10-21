@@ -37,12 +37,21 @@ export function setDebugFirebaseUid(uid: string | null): void {
 export class ApiError extends Error {
   readonly status: number;
   readonly detail: string;
+  /**
+   * The whole JSON error body when it was an object (c451). A few 409s carry the data
+   * the client needs to recover beside `detail` (`stale_generation` + `max_generation`,
+   * `device_list_mismatch` + `device_ids`); `detail` alone would drop it. Null when the
+   * body was empty or not an object. It is untrusted server text: read named fields
+   * only, never display it.
+   */
+  readonly payload: Readonly<Record<string, unknown>> | null;
 
-  constructor(status: number, detail: string) {
+  constructor(status: number, detail: string, payload: Readonly<Record<string, unknown>> | null = null) {
     super(`API ${status}: ${detail}`);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    this.payload = payload;
   }
 }
 
@@ -96,13 +105,15 @@ async function fetchWithAuthRetry(path: string, options: RequestOptions, operati
 async function parseResponse<T>(response: Response, operation: Operation): Promise<T> {
   if (!response.ok) {
     let detail = response.statusText;
+    let body: Record<string, unknown> | null = null;
     try {
       const payload = await operation.wait(response.json()) as { detail?: unknown };
       if (typeof payload.detail === "string") detail = payload.detail;
+      if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) body = payload as Record<string, unknown>;
     } catch {
       operation.assertCurrent(); // Cancellation/deadline must not become an HTTP error.
     }
-    throw new ApiError(response.status, detail);
+    throw new ApiError(response.status, detail, body);
   }
   if (response.status === 204) return undefined as T;
   return operation.wait(response.json()) as Promise<T>;

@@ -16,6 +16,7 @@ import { useEffect } from "react";
 import { useColorScheme } from "react-native";
 
 import { hasFirebaseConfig, onIdTokenChanged, SessionProvider, useRememberCampus } from "@/auth";
+import { E2eeProvider } from "@/crypto/E2eeProvider";
 import { AppearanceProvider, useTheme } from "@/theme";
 import { MOCK_CAMPUS_COLORS, mockAppearancePrefs } from "@/mocks/data";
 
@@ -67,9 +68,12 @@ export default function RootLayout() {
 
   return (
     <SessionProvider>
-      <AppearanceProvider campusColors={MOCK_CAMPUS_COLORS} initialPrefs={mockAppearancePrefs}>
-        <RootLayoutNav />
-      </AppearanceProvider>
+      {/* c451: encrypted DMs. Starts this phone's device when the session is ready, locks it on sign-out. */}
+      <E2eeProvider>
+        <AppearanceProvider campusColors={MOCK_CAMPUS_COLORS} initialPrefs={mockAppearancePrefs}>
+          <RootLayoutNav />
+        </AppearanceProvider>
+      </E2eeProvider>
     </SessionProvider>
   );
 }
