@@ -18,9 +18,13 @@
  *   409 device_list_mismatch    + device_ids
  *   409 device_unavailable      + device_ids   (key claim; nothing was claimed)
  *   409 client_message_id_reused, no_recipient_devices, e2ee_v2_requires_dm,
- *       identity_already_registered, key_id_reused, one_time_key_pool_full
+ *       identity_already_registered, key_id_reused, one_time_key_pool_full,
+ *       device_already_approved (approve; a retry of the SAME approval is a 200)
  *   403 recipient_not_reachable (= not allowed; never retry), device_revoked,
- *       device_not_approved, not_your_device, device_suite_unsupported
+ *       device_not_approved, not_your_device, device_suite_unsupported,
+ *       invalid_approver (approve: the signing device is not an approved one of yours)
+ *   422 invalid_approval_signature (approve)
+ *   423 account_deletion_in_progress (every v2 write while an account deletion runs)
  */
 
 import { request, type RequestOptions } from "./client";
@@ -83,6 +87,31 @@ export interface DeviceV2Out {
   approval_signature_b64: string | null;
   created_at: string;
   revoked_at: string | null;
+}
+
+/**
+ * One of the caller's OWN devices that is waiting for approval (c463). Exactly the public
+ * binding an approving phone shows a comparison code for and signs; nothing secret.
+ */
+export interface PendingDeviceV2Out {
+  id: string;
+  device_label: string | null;
+  suite: string;
+  generation: number;
+  identity_curve25519_b64: string;
+  identity_ed25519_b64: string;
+  binding_signature_b64: string;
+  created_at: string;
+}
+
+export interface PendingDevicesV2Out {
+  devices: PendingDeviceV2Out[];
+}
+
+/** Body of POST /v2/devices/{id}/approve: which of my phones signed, and its signature. */
+export interface DeviceApproveV2Body {
+  approver_device_id: string;
+  approval_signature_b64: string;
 }
 
 export interface KeyCountV2Out {
@@ -178,6 +207,25 @@ export async function claimKeysV2(deviceIds: readonly string[], options: E2eeReq
   });
 }
 
+/** The caller's own pending devices, oldest first. Nobody else's; claims nothing (c463). */
+export async function listPendingDevicesV2(options: E2eeRequestOptions = {}): Promise<PendingDevicesV2Out> {
+  return request<PendingDevicesV2Out>("/v2/devices/pending", {
+    operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs,
+  });
+}
+
+/** Approve a pending device of this account with a signature from an approved phone (c463). */
+export async function approveDeviceV2(
+  deviceId: string,
+  body: DeviceApproveV2Body,
+  options: E2eeRequestOptions = {},
+): Promise<DeviceV2Out> {
+  return request<DeviceV2Out>(`/v2/devices/${deviceId}/approve`, {
+    operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs, method: "POST", body,
+  });
+}
+
+/** Revoke one of this account's devices: "Not me", or Reset security removing the others. Idempotent. */
 export async function revokeDeviceV2(deviceId: string, options: E2eeRequestOptions = {}): Promise<DeviceV2Out> {
   return request<DeviceV2Out>(`/v2/devices/${deviceId}`, {
     operation: options.operation, signal: options.signal, timeoutMs: options.timeoutMs, method: "DELETE",

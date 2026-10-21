@@ -30,6 +30,7 @@ import { useSession } from "@/auth";
 import { currentIdentity } from "@/auth/identity";
 import { DurableWindow } from "@/realtime/durableWindow";
 import { DmThread } from "@/messages/DmThread";
+import { DmSecurityPill } from "@/messages/DmSecurityPill";
 import { AppText, Button, EmptyState, Screen } from "@/components";
 import { confirmAction, showApiError } from "@/lib/alert";
 import { chirpSocket, isMessageEvent } from "@/realtime/socket";
@@ -165,7 +166,9 @@ export default function ThreadScreen() {
       onRefresh={load}
       subtitle={conversation?.kind === "group" ? "Group" : "Direct message"}
     >
-      <View style={{ alignItems: "flex-end", marginBottom: spacing.sm }}>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.sm }}>
+        {/* c463: a DM's way into the safety number, with a small Verified mark once marked. */}
+        {isDm && !denied ? <DmSecurityPill conversationId={id} peerUserId={dmPeerId} peerName={conversation?.title ?? null} /> : <View />}
         <LeaveConversationButton onPress={handleLeave} busy={leaving || denied} />
       </View>
       <View style={isDm ? { flex: 1, gap: spacing.sm } : { gap: spacing.sm }}>
@@ -190,7 +193,7 @@ export default function ThreadScreen() {
         ) : null}
         {/* c451: a DM is its own component (plaintext from the encrypted store). */}
         {isDm && !denied ? (
-          <DmThread conversationId={id} peerUserId={dmPeerId} myUserId={user?.id ?? null} />
+          <DmThread conversationId={id} peerUserId={dmPeerId} myUserId={user?.id ?? null} peerName={conversation?.title ?? null} />
         ) : null}
 
         {/* Groups only: the v1 placeholder bubbles and the disabled composer, unchanged. */}

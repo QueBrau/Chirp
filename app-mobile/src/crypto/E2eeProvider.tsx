@@ -5,7 +5,11 @@
  *  - sign-out, account switch, suspension -> engine.stop() (locks the store, wipes nothing);
  *  - a live "message" hint for a v2 conversation -> sync that conversation;
  *  - the socket (re)opening, or the app returning to the foreground -> recheck the device
- *    and replay the outbox.
+ *    and replay the outbox;
+ *  - (c463) a ready phone asks which new phones are waiting for its approval: on becoming
+ *    ready, on the foreground, on a socket reconnect, and every half minute while in use; a
+ *    phone that is itself waiting for approval re-checks every few seconds while its banner is
+ *    up, bounded, so it becomes ready without a restart.
  *
  * `useE2ee()` is the state the screens branch on; `useEncryptedDm()` is one DM thread.
  */
@@ -18,7 +22,16 @@ import { chirpSocket, isMessageEvent } from "@/realtime/socket";
 import type { PlaintextMessage } from "./native";
 import { buildThread, type ThreadItem } from "./e2eeThread";
 import { e2ee } from "./e2eeRuntime";
-import type { DmTrust, E2eeState, SendOutcome } from "./e2eeTypes";
+import { startBoundedPoll } from "./e2eeTrust";
+import {
+  APPROVAL_POLL_BUDGET,
+  APPROVAL_POLL_MS,
+  PENDING_POLL_MS,
+  type DmTrust,
+  type E2eeState,
+  type PendingDevice,
+  type SendOutcome,
+} from "./e2eeTypes";
 import type { ThreadSnapshot } from "./e2eeEngine";
 
 const E2eeContext = createContext<E2eeState | null>(null);
@@ -48,6 +61,33 @@ export function E2eeProvider({ children }: { children: ReactNode }) {
     };
   }, [active, userId]);
 
+  // c463, an approved phone: look for new phones waiting for approval.
+  const ready = active && state.status === "ready";
+  const [foreground, setForeground] = useState(() => AppState.currentState !== "background");
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => setForeground(next === "active"));
+    return () => subscription.remove();
+  }, []);
+  useEffect(() => {
+    if (!ready || !foreground) return;
+    // Returning to the foreground also lifts any "decide later" the person chose earlier.
+    void e2ee.refreshPendingDevices({ foreground: true }).catch(swallow);
+    const timer = setInterval(() => void e2ee.refreshPendingDevices().catch(swallow), PENDING_POLL_MS);
+    return () => clearInterval(timer);
+  }, [ready, foreground]);
+
+  // c463, a phone that is itself waiting for approval: ask often, but never forever.
+  const waiting = active && state.status === "pending_approval";
+  useEffect(() => {
+    if (!waiting || !foreground) return;
+    const poll = startBoundedPoll({
+      intervalMs: APPROVAL_POLL_MS,
+      budget: APPROVAL_POLL_BUDGET,
+      tick: async () => (await e2ee.recheck("manual")).status !== "pending_approval",
+    });
+    return () => poll.stop();
+  }, [waiting, foreground]);
+
   useEffect(() => {
     if (!active) return;
     const offEvent = chirpSocket.onEvent((event) => {
@@ -62,6 +102,7 @@ export function E2eeProvider({ children }: { children: ReactNode }) {
       void e2ee
         .recheck(source)
         .then(() => e2ee.replayOutbox())
+        .then(() => e2ee.refreshPendingDevices({ foreground: source === "foreground" }))
         .catch(swallow);
     };
     const offStatus = chirpSocket.onStatus((next) => {
@@ -97,6 +138,12 @@ export interface EncryptedDm {
   loadOlder: () => Promise<void>;
   /** Hard-stop status of the conversation; `block` null = clear to send. */
   trust: DmTrust;
+  /**
+   * c463: the person accepted the changed code that is stopping sends. Re-pins exactly what
+   * the banner described (refusing if it moved again) and re-reads the trust picture.
+   * Rejects with an `E2eeTrustError` the screen can word.
+   */
+  acceptNewCode: () => Promise<void>;
   /** Sync with the server and re-read the local store. */
   refresh: () => Promise<void>;
   send: (body: string) => Promise<SendOutcome>;
@@ -109,7 +156,7 @@ export function useEncryptedDm(conversationId: string, peerUserId: string | null
   const [newest, setNewest] = useState<ThreadSnapshot | null>(null);
   const [older, setOlder] = useState<PlaintextMessage[]>([]);
   const [olderHasMore, setOlderHasMore] = useState<boolean | null>(null);
-  const [trust, setTrust] = useState<DmTrust>({ block: null });
+  const [trust, setTrust] = useState<DmTrust>(NO_BLOCK);
   const generation = useRef(0);
 
   const reload = useCallback(async () => {
@@ -137,14 +184,21 @@ export function useEncryptedDm(conversationId: string, peerUserId: string | null
     setNewest(null);
     setOlder([]);
     setOlderHasMore(null);
-    setTrust({ block: null });
+    setTrust(NO_BLOCK);
   }, [conversationId]);
 
   useEffect(() => {
     if (!ready) return;
     void refresh().catch(swallow);
     const off = e2ee.subscribe((event) => {
-      if (event.type === "thread" && event.conversationId === conversationId) void reload().catch(swallow);
+      if (event.type === "thread" && event.conversationId === conversationId) {
+        void reload().catch(swallow);
+        // A message from a phone this phone had not seen refreshes the directories while it is
+        // read, so the trust picture may have moved: show a hard stop the moment it is known.
+        if (peerUserId !== null) void e2ee.trustFor(peerUserId).then(setTrust).catch(swallow);
+      }
+      // A verified mark or an accepted code changed: re-read the trust picture.
+      if (event.type === "trust" && peerUserId !== null) void e2ee.trustFor(peerUserId).then(setTrust).catch(swallow);
     });
     const offStatus = chirpSocket.onStatus((next) => {
       if (next === "open") void refresh().catch(swallow);
@@ -153,7 +207,7 @@ export function useEncryptedDm(conversationId: string, peerUserId: string | null
       off();
       offStatus();
     };
-  }, [ready, conversationId, refresh, reload]);
+  }, [ready, conversationId, peerUserId, refresh, reload]);
 
   const loadOlder = useCallback(async () => {
     if (!ready || newest === null) return;
@@ -177,6 +231,18 @@ export function useEncryptedDm(conversationId: string, peerUserId: string | null
     },
     [conversationId, peerUserId, reload],
   );
+
+  const acceptNewCode = useCallback(async () => {
+    const block = trust.block;
+    if (block === null) return;
+    try {
+      await e2ee.acceptIdentityChange(block.userId, trust.fingerprint);
+    } finally {
+      // Whatever happened, show what is true now: the banner clears, changes to the next
+      // problem (the other side of the conversation), or stays if the code moved again.
+      if (peerUserId !== null) setTrust(await e2ee.trustFor(peerUserId));
+    }
+  }, [trust, peerUserId]);
 
   const retry = useCallback(
     async (clientMessageId: string) => {
@@ -214,8 +280,73 @@ export function useEncryptedDm(conversationId: string, peerUserId: string | null
     hasOlder: olderHasMore ?? newest?.hasOlder ?? false,
     loadOlder,
     trust,
+    acceptNewCode,
     refresh,
     send,
     retry,
   };
+}
+
+const NO_BLOCK: DmTrust = Object.freeze({ block: null, verified: false, fingerprint: null });
+
+// ---------------------------------------------------------------------------
+// c463: trust, approvals and the pending phone's own code
+// ---------------------------------------------------------------------------
+
+/**
+ * The trust picture of one DM, kept current for a header: re-read on mount, when this phone
+ * becomes ready, and whenever a trust decision changes. `null` peer or a phone that is not
+ * ready reads as "nothing claimed".
+ */
+export function useDmTrust(peerUserId: string | null): DmTrust {
+  const { status } = useE2ee();
+  const [trust, setTrust] = useState<DmTrust>(NO_BLOCK);
+  useEffect(() => {
+    if (status !== "ready" || peerUserId === null) {
+      setTrust(NO_BLOCK);
+      return;
+    }
+    let live = true;
+    const read = () => void e2ee.trustFor(peerUserId).then((next) => live && setTrust(next)).catch(swallow);
+    read();
+    const off = e2ee.subscribe((event) => {
+      // A trust decision, or a message that may have refreshed the directories while it was read.
+      if (event.type === "trust" || event.type === "thread") read();
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, [status, peerUserId]);
+  return trust;
+}
+
+/** New phones of this account waiting for this phone's approval (empty unless this phone is ready). */
+export function usePendingApprovals(): PendingDevice[] {
+  const [pending, setPending] = useState<PendingDevice[]>(() => e2ee.getPendingApprovals());
+  useEffect(() => {
+    setPending(e2ee.getPendingApprovals());
+    return e2ee.subscribe((event) => {
+      if (event.type === "approvals") setPending(e2ee.getPendingApprovals());
+    });
+  }, []);
+  return pending;
+}
+
+/** This phone's own comparison code while it waits for approval, else null. */
+export function useOwnComparisonCode(): string | null {
+  const { status, deviceId } = useE2ee();
+  const [code, setCode] = useState<string | null>(null);
+  useEffect(() => {
+    if (status !== "pending_approval") {
+      setCode(null);
+      return;
+    }
+    let live = true;
+    void e2ee.ownComparisonCode().then((next) => live && setCode(next)).catch(swallow);
+    return () => {
+      live = false;
+    };
+  }, [status, deviceId]);
+  return code;
 }

@@ -61,6 +61,38 @@ export async function saveDeviceRecord(kv: KvPort, userId: string, record: Devic
 }
 
 // ---------------------------------------------------------------------------
+// Verified markers (c463)
+// ---------------------------------------------------------------------------
+
+/**
+ * "I compared this safety number with them" (board c463), kept in secure storage under the
+ * pair (this account, the contact). The VALUE is the 60-digit safety number that was marked,
+ * which is itself a hash of both sides' approved device identities, so the marker is only
+ * "verified" while the number now in force is the same one: when the contact (or this
+ * account) adds, replaces or removes a phone the number changes and the marker is stale
+ * without anything having to clear it. A number is public, so nothing secret is stored.
+ */
+const verifiedKey = (userId: string, peerUserId: string) => `chirp.e2ee.verified.${userId}.${peerUserId}`;
+
+/** The safety number last marked verified for this pair, or null (none, or unreadable). */
+export async function loadVerifiedNumber(kv: KvPort, userId: string, peerUserId: string): Promise<string | null> {
+  try {
+    const raw = await kv.get(verifiedKey(userId, peerUserId));
+    return typeof raw === "string" && /^\d{60}$/.test(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveVerifiedNumber(kv: KvPort, userId: string, peerUserId: string, number: string): Promise<void> {
+  await kv.set(verifiedKey(userId, peerUserId), number);
+}
+
+export async function clearVerifiedNumber(kv: KvPort, userId: string, peerUserId: string): Promise<void> {
+  await kv.remove(verifiedKey(userId, peerUserId));
+}
+
+// ---------------------------------------------------------------------------
 // App state: outbox index + placeholders
 // ---------------------------------------------------------------------------
 

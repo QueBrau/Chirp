@@ -17,6 +17,7 @@ import { useColorScheme } from "react-native";
 
 import { hasFirebaseConfig, onIdTokenChanged, SessionProvider, useRememberCampus } from "@/auth";
 import { E2eeProvider } from "@/crypto/E2eeProvider";
+import { DeviceApprovalPrompt } from "@/messages/DeviceApprovalPrompt";
 import { AppearanceProvider, useTheme } from "@/theme";
 import { MOCK_CAMPUS_COLORS, mockAppearancePrefs } from "@/mocks/data";
 
@@ -53,6 +54,8 @@ function RootLayoutNav() {
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(tabs)" />
       </Stack>
+      {/* c463: a new phone of this account is waiting for this phone's approval. */}
+      <DeviceApprovalPrompt />
     </ThemeProvider>
   );
 }
