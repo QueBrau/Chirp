@@ -416,6 +416,15 @@
   ],
   "cards": [
     {
+      "id": "c465",
+      "col": "backlog",
+      "owner": "",
+      "tag": "security",
+      "area": "messages",
+      "title": "c465 [P2, found by c463 Oct 21] No device-list screen for your own account. When your OWN account hard-stops (a phone you do not recognise, or after a reset elsewhere), the app asks you to accept the change without showing which phones are on the account. Add a Settings screen listing this account's approved devices (label, comparison code, first seen) with Remove, and link it from the own-account hard-stop banner. Data is already available: GET /v2/users/{self}/devices and GET /v2/devices/pending.",
+      "detail": ""
+    },
+    {
       "id": "c464",
       "col": "progress",
       "owner": "Q",
@@ -430,7 +439,7 @@
       "owner": "Q",
       "tag": "security",
       "area": "messages",
-      "title": "c463 IN PROGRESS Oct 20 (Q): E2EE M5 - trust UX (E2EE-DESIGN.md section 8, c440 decision 4). (1) Safety-number screen per DM: the 60 digits in 12 groups of 5, compare in person, optional local Verified mark that resets itself when the identity changes. (2) Hard stop: when a contact's security code changes or an unapproved device appears, the DM shows a banner (receiving continues, sending blocked) with View safety number and Accept the new code. (3) New-phone approval: the existing phone sees a prompt for a pending device with a short comparison code shown on BOTH phones, approves via approveDevice + POST /v2/devices/{id}/approve. Needs a small backend read of the caller's own PENDING devices (today's directory returns approved only) - no migration. (4) Reset security on a phone that cannot be approved (lost phone, or the c448 reinstall case): revoke the account's other devices, re-register as root; contacts get the hard stop. DONE MEANS: each flow exercised on simulators against a LOCAL backend. Stacked on c451 (PR #399). Branch q/c463-e2ee-trust-ux.",
+      "title": "c463 PR OPEN Oct 21: PR #400 (55d2af9, 4 commits on main). GET /v2/devices/pending (own account only, no migration); 9-digit device comparison code in the Rust core (30 bits, not 6 digits - 20 bits is grindable; vectors pinned in three implementations; e2ee-v1.json pure addition, c444 vector test still passes); safety-number screen with a Verified mark keyed on the number itself; hard stop banner (send blocked, receive continues) with view + accept; approval sheet with matching codes on both phones; Not me revokes; Reset security revokes only OTHER devices and re-registers as root, bounded. Two real bugs fixed (store left open after failed registration; removed phone kept retrying). tsc 5.9.3 + 28 verify scripts exit 0; cargo 94; backend targeted 148, full suite 3242 passed (only Pillow/pg_dump/c363 flake). Simulator walks (a)-(e) on a local API with screenshots; no plaintext anywhere. Caveat: two of three simulators were driven via the engine calls the buttons make (tool access to them was not granted). Device-list gap filed as c465. LEFT: CI, merge, new preview build | c463 IN PROGRESS Oct 20 (Q): E2EE M5 - trust UX (E2EE-DESIGN.md section 8, c440 decision 4). (1) Safety-number screen per DM: the 60 digits in 12 groups of 5, compare in person, optional local Verified mark that resets itself when the identity changes. (2) Hard stop: when a contact's security code changes or an unapproved device appears, the DM shows a banner (receiving continues, sending blocked) with View safety number and Accept the new code. (3) New-phone approval: the existing phone sees a prompt for a pending device with a short comparison code shown on BOTH phones, approves via approveDevice + POST /v2/devices/{id}/approve. Needs a small backend read of the caller's own PENDING devices (today's directory returns approved only) - no migration. (4) Reset security on a phone that cannot be approved (lost phone, or the c448 reinstall case): revoke the account's other devices, re-register as root; contacts get the hard stop. DONE MEANS: each flow exercised on simulators against a LOCAL backend. Stacked on c451 (PR #399). Branch q/c463-e2ee-trust-ux.",
       "detail": ""
     },
     {
