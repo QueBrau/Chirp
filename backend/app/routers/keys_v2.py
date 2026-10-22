@@ -84,6 +84,8 @@ from app.schemas.e2ee_v2 import (
     KeyClaimRequest,
     KeyCountV2Out,
     KeyUploadV2,
+    PendingDeviceOut,
+    PendingDevicesOut,
     SignedKeyInput,
     UserDirectoryOut,
     b64,
@@ -123,6 +125,11 @@ _DIRECTORY_RATE_MAX_CALLS = 60
 _DIRECTORY_RATE_WINDOW_SECONDS = 600.0
 # Approving or revoking a phone is a rare, deliberate act.
 DEVICE_ADMIN_LIMIT = (30, 3600)
+# Reading your own pending devices is a poll: an approved phone asks on start, on returning
+# to the foreground and every half minute while it is in use. Per account, across all of the
+# account's phones (at most 5 are active), so this leaves room for each to ask a few times
+# a minute without letting one account hammer the table.
+PENDING_LIST_LIMIT = (120, 600)
 
 
 def _decode(value: str) -> bytes:
@@ -318,6 +325,61 @@ async def register_device_v2(
     )
     await session.commit()
     return _device_out(device)
+
+
+@router.get(
+    "/devices/pending",
+    response_model=PendingDevicesOut,
+    dependencies=[Depends(limit_per_user("e2ee_pending_devices", PENDING_LIST_LIMIT))],
+)
+async def list_pending_devices_v2(
+    user: models.User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> PendingDevicesOut:
+    """The caller's OWN devices that are waiting for an approval (c463). Nobody else's.
+
+    This is how an approved phone learns that a new phone signed in: the directory never
+    lists a pending device (by design: it cannot send or receive), so without this read the
+    only phone that can approve it would have no way to see it. The rows are scoped by
+    `user_id == caller` in the query itself, so there is no parameter to point at another
+    account and no existence oracle: another user's pending device is simply never in the
+    result. Pending means a v2 device with `approved_at` NULL that has not been revoked.
+    Approving it (POST /v2/devices/{id}/approve) or revoking it removes it from this list.
+
+    Reads follow the other v2 reads: `get_current_user`, no write admission, so the list
+    stays readable while an account deletion is running (the approve and revoke WRITES are
+    what the deletion hold refuses with 423). At most MAX_ACTIVE_DEVICES rows can exist,
+    because pending devices count against the active-device cap at registration, so the
+    limit below can never hide a device.
+    """
+    rows = await session.execute(
+        select(models.Device)
+        .where(
+            models.Device.user_id == user.id,
+            models.Device.crypto_suite.is_not(None),
+            models.Device.approved_at.is_(None),
+            models.Device.revoked_at.is_(None),
+        )
+        .order_by(models.Device.created_at, models.Device.id)
+        .limit(MAX_ACTIVE_DEVICES)
+    )
+    entries = []
+    for device in rows.scalars():
+        assert device.crypto_suite is not None and device.generation is not None
+        assert device.identity_ed25519 is not None and device.binding_signature is not None
+        entries.append(
+            PendingDeviceOut(
+                id=device.id,
+                device_label=device.device_label,
+                suite=device.crypto_suite,
+                generation=device.generation,
+                identity_curve25519_b64=b64(device.identity_key) or "",
+                identity_ed25519_b64=b64(device.identity_ed25519) or "",
+                binding_signature_b64=b64(device.binding_signature) or "",
+                created_at=device.created_at,
+            )
+        )
+    return PendingDevicesOut(devices=entries)
 
 
 @router.post(

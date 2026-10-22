@@ -121,6 +121,8 @@ function environment() {
     // c451: the thread screen renders this for DMs (the exercised conversations are groups).
     // Its own behavior is covered by verify:e2ee-dm and verify:e2ee-claims.
     [resolve(ROOT, "src/messages/DmThread.tsx")]: { DmThread: "DmThread" },
+    // c463: and the header's Safety number / Verified pill (DMs only; covered by verify:e2ee-claims).
+    [resolve(ROOT, "src/messages/DmSecurityPill.tsx")]: { DmSecurityPill: "DmSecurityPill" },
     [resolve(ROOT, "src/components/index.ts")]: Object.fromEntries(["AppText", "Button", "EmptyState", "Screen", "Card", "GradientAvatar", "ListRow", "PollCard", "SectionHeader", "Chip"].map(name => [name, name])),
     "expo-image-picker": { requestMediaLibraryPermissionsAsync: () => env.permission(), launchImageLibraryAsync: () => { env.pickerCalls++; return env.picker(); } },
     [resolve(ROOT, "src/auth/config.ts")]: { hasFirebaseConfig: () => true },

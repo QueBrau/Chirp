@@ -7,9 +7,10 @@
 //! zero-padded. The two 30-digit halves are concatenated with the lower user id
 //! (bytewise) first, so both sides compute the same 60 digits.
 
-use sha2::{Digest, Sha512};
+use sha2::{Digest, Sha256, Sha512};
 use zeroize::Zeroize;
 
+use crate::encoding::{DOMAIN_DEVICE_CODE, frame};
 use crate::error::{Error, Result};
 use crate::types::{PublicKey32, UserId};
 
@@ -72,4 +73,29 @@ pub fn safety_number(
     } else {
         theirs + &mine
     })
+}
+
+/// Digits in a device comparison code.
+pub const DEVICE_CODE_DIGITS: usize = 9;
+
+/// A short code for ONE device, shown on both phones while a new phone is approved so the
+/// person can compare them side by side (design section 8, "New device approval"). It is
+/// derived from the new device's Ed25519 identity alone, so the new phone (which knows its
+/// own key) and the approving phone (which reads the key from the server's pending list)
+/// get the same code without sharing anything else.
+///
+/// `d = SHA-256(frame("chirp-e2ee-v1/device-code", [identity_ed25519]))`, then the first 8
+/// digest bytes as a big-endian u64, mod 10^9, zero-padded to 9 digits (about 29.9 bits).
+/// The UI groups it as `123 456 789`.
+///
+/// What it is for: telling two phones apart and catching an honest mix-up (an unknown pending
+/// phone, or the wrong one of two). What it is NOT: an authenticator. 30 bits can be ground
+/// by an attacker who can already register devices on the account, so the approving phone
+/// still shows it for a human decision and nothing is approved silently. The 60-digit
+/// safety number is the strong comparison.
+pub fn device_comparison_code(identity_ed25519: &PublicKey32) -> String {
+    let digest = Sha256::digest(frame(DOMAIN_DEVICE_CODE, &[identity_ed25519]));
+    let mut head = [0u8; 8];
+    head.copy_from_slice(&digest[..8]);
+    format!("{:09}", u64::from_be_bytes(head) % 1_000_000_000)
 }

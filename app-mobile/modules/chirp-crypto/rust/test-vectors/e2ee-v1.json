@@ -39,6 +39,23 @@
     "signer_ed25519": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
     "user_id": "00112233445566778899aabbccddeeff"
   },
+  "device_comparison_code": {
+    "algorithm": "d = SHA-256(encoding of domain chirp-e2ee-v1/device-code with one field, identity_ed25519); first 8 bytes as a big-endian u64, mod 10^9, zero padded to 9 digits",
+    "cases": [
+      {
+        "digits": "229918015",
+        "identity_ed25519": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+      },
+      {
+        "digits": "475207750",
+        "identity_ed25519": "2543b92ff1095511476adc8369db6ddc933665a11978dda1404ee1066ca9559d"
+      },
+      {
+        "digits": "501495254",
+        "identity_ed25519": "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+      }
+    ]
+  },
   "encoding": "u16_be(len(domain)) || domain || for each field in order: u32_be(len(field)) || field",
   "safety_number": {
     "algorithm": "per user: d = 0x00 || sorted(identity_ed25519 keys) || user_id; d = SHA-512(d) applied 5200 times; first 30 bytes as six 5-byte big-endian u40 values, each mod 100000, zero padded to 5 digits; halves concatenated with the lower user_id (bytewise) first",

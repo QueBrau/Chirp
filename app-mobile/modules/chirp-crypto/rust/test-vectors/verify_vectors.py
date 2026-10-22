@@ -141,6 +141,19 @@ for n, case in enumerate(V["safety_number"]["cases"]):
     ordered = sorted([mine, peer], key=lambda t: h(t[0]))
     check(f"safety_number[{n}]", "".join(t[1] for t in ordered) == case["digits"])
 
+# Device comparison codes (c463): a short code, shown on both phones, derived from the NEW
+# device's Ed25519 identity alone.
+def device_code(identity_hex):
+    domain = b"chirp-e2ee-v1/device-code"
+    message = struct.pack(">H", len(domain)) + domain + struct.pack(">I", 32) + h(identity_hex)
+    digest = hashlib.sha256(message).digest()
+    return "%09d" % (int.from_bytes(digest[:8], "big") % 10**9)
+
+
+for n, case in enumerate(V["device_comparison_code"]["cases"]):
+    check(f"device_comparison_code[{n}]", device_code(case["identity_ed25519"]) == case["digits"])
+check("device_comparison_code: pinned reference value", device_code("00" * 32) == "063120697")
+
 print()
 if failures:
     print(f"{len(failures)} check(s) FAILED")

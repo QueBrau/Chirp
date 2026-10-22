@@ -38,5 +38,5 @@ pub use crate::core::{
     MAX_STORED_ONE_TIME_KEYS,
 };
 pub use crate::error::{Error, Result};
-pub use crate::safety::safety_number;
+pub use crate::safety::{device_comparison_code, safety_number};
 pub use crate::types::*;

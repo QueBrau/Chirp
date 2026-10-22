@@ -260,6 +260,18 @@ jobs:
         # suite; the native bridge is the two-simulator run.
         run: npm run verify:e2ee-dm
 
+      - name: Encrypted DM trust UX
+        working-directory: app-mobile
+        # Board card c463 (E2EE M5). Executes the real src/crypto engine against the same
+        # kind of fakes for every trust decision a person makes: the verified mark that
+        # resets by itself when either side's phones change, the hard stop that blocks
+        # sending and not receiving, accepting a changed code (re-checked, and bound to
+        # what the person was shown), approving a new phone from an existing one (core
+        # signature, then the server, then a refresh), "Not me" revoking, and Reset
+        # security (revokes only OTHER phones, registers once as the root, cannot loop).
+        # Its --self-test breaks the engine in two dozen ways and fails unless each is caught.
+        run: npm run verify:e2ee-trust
+
       - name: Lineage a11y list
         working-directory: app-mobile
         # Board card c334. The family tree is an SVG canvas whose nodes carry

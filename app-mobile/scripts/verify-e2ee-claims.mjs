@@ -23,6 +23,16 @@
  *   - The "real path" quietly stops being real (a stub, a plaintext send, a platform the
  *     module does not cover) while the claim stays.
  *
+ * WHAT CHANGED IN c463 (E2EE milestone M5, the trust UX). Four more places say things about
+ * security: the safety number screen, the thread header's Safety number / Verified pill, the
+ * "new phone signed in" approval sheet, and the Reset security screen. None of them uses an
+ * encryption word (rule 3a already forbids that outside ReadyThread), but two of them state
+ * what a match MEANS, and one of them is destructive, so section 7 pins: the number is only
+ * drawn on a ready phone, the header pill and its Verified mark exist only for a ready phone
+ * and only when the engine says verified, the approval sheet's two buttons are the engine's
+ * approve and refuse, and Reset security can be started from exactly one place, the screen
+ * that first says what it will do.
+ *
  * It is no weaker than before: every old check still runs where it still applies (groups),
  * the scan now covers every screen and component rather than only the Messages folder, and
  * new checks pin the real path. No jest/vitest exists in this repo (see the sibling
@@ -203,6 +213,10 @@ function loadSources() {
     messageScreens: readdirSync(join(ROOT, messagesDir)).filter((f) => f.endsWith(".tsx")).sort().map((f) => `${messagesDir}/${f}`),
     thread: ui[`${messagesDir}/[id].tsx`] ?? "",
     dm: ui[DM_FILE] ?? "",
+    safety: ui[`${messagesDir}/safety-number.tsx`] ?? "",
+    reset: ui[`${messagesDir}/reset-security.tsx`] ?? "",
+    pill: ui["src/messages/DmSecurityPill.tsx"] ?? "",
+    prompt: ui["src/messages/DeviceApprovalPrompt.tsx"] ?? "",
     stubs: Object.fromEntries(["signal", "keys", "groups"].map((n) => [n, read(`src/crypto/${n}.ts`)])),
     moduleConfig: read("modules/chirp-crypto/expo-module.config.json"),
     androidDirExists: exists("modules/chirp-crypto/android"),
@@ -501,6 +515,69 @@ function check(src) {
     fail("[id].tsx: a DM thread must not live inside Screen's ScrollView (scroll={!isDm}).");
   }
 
+  // --- 7. The trust UX (c463) says only what the engine has established. ----------------
+  for (const [name, text] of [["safety-number.tsx", src.safety], ["reset-security.tsx", src.reset], ["DmSecurityPill.tsx", src.pill], ["DeviceApprovalPrompt.tsx", src.prompt]]) {
+    if (!text) fail(`the trust screen ${name} was not found`, "(moved? update this script's anchors before trusting it)");
+  }
+  // 7a. The number is drawn only on a ready phone: the not-ready branch comes first, and it is
+  // the only thing a phone without a device sees. What a match means ("only your phones and
+  // theirs can read your messages") is a security statement and must not appear without it.
+  const safety = code(src.safety);
+  const gate = safety.search(/status\s*!==\s*"ready"\s*\?\s*\(\s*<EmptyState/);
+  const drawn = safety.search(/rows\.map\(/);
+  if (src.safety && (gate === -1 || drawn === -1 || gate > drawn)) {
+    fail("safety-number.tsx draws the number without first requiring a ready phone (status !== \"ready\" -> EmptyState).", "A phone with no device has no number, and the screen says what a match means.");
+  }
+  if (src.safety && !/e2ee\.safetyView\(/.test(safety)) {
+    fail("safety-number.tsx no longer reads the number from the engine (e2ee.safetyView, which fetches fresh directories).");
+  }
+  // 7b. The header pill (and the Verified mark) exist only for a ready phone in a DM, and the
+  // mark follows the engine's verified flag, not a constant.
+  const pill = code(src.pill);
+  if (src.pill && !/if\s*\(\s*status\s*!==\s*"ready"\s*\|\|\s*peerUserId\s*===\s*null\s*\)\s*return\s+null/.test(pill)) {
+    fail("DmSecurityPill no longer returns nothing unless the phone is ready and there is a peer.");
+  }
+  if (src.pill && (!/const verified\s*=\s*trust\.verified/.test(pill) || !/verified\s*\?\s*"Verified"\s*:\s*"Safety number"/.test(pill))) {
+    fail("the Verified mark is no longer driven by trust.verified from the engine.", "A mark that is not tied to the stored, still-current safety number would claim a check nobody made.");
+  }
+  // 7c. The hard stop's two actions exist in the ready thread, and accepting asks first.
+  if (ready !== null) {
+    const readyCode = code(ready);
+    if (!/confirmAction\(/.test(readyCode) || !/dm\.acceptNewCode\(\)/.test(readyCode)) {
+      fail("ReadyThread must confirm (confirmAction) before it accepts a changed code (dm.acceptNewCode).", "Accepting re-pins a new set of phones; it is never one tap.");
+    }
+    if (!/View safety number/.test(readyCode)) {
+      fail("ReadyThread's hard-stop banner no longer offers \"View safety number\".");
+    }
+    if (/acceptIdentityChange\(/.test(readyCode.replace(/dm\.acceptNewCode/g, ""))) {
+      fail("ReadyThread calls acceptIdentityChange directly instead of through dm.acceptNewCode (which is bound to what the banner showed).");
+    }
+  }
+  // 7d. Approving a new phone and refusing it are the engine's, from the sheet only.
+  const prompt = code(src.prompt);
+  if (src.prompt && (!/e2ee\.approvePending\(/.test(prompt) || !/e2ee\.denyPending\(/.test(prompt) || !/groupComparisonCode\(first\.code\)/.test(prompt))) {
+    fail("DeviceApprovalPrompt must show the new phone's comparison code and offer Approve (approvePending) and Not me (denyPending).");
+  }
+  for (const [rel, text] of Object.entries(src.ui)) {
+    if (rel !== "src/messages/DeviceApprovalPrompt.tsx" && /\.(approvePending|denyPending)\(/.test(stripComments(text))) {
+      fail(`${rel} approves or refuses a new phone`, "Only the approval sheet, which shows the code first, may do that.");
+    }
+  }
+  // 7e. Reset security is destructive: it is started from exactly one screen, the one that
+  // first says what it will do (the other phones are removed, contacts are told, history stays).
+  const reset = code(src.reset);
+  if (src.reset) {
+    for (const needle of ["Every other phone on your account is removed", "security code changed", "Older messages stay on the old phone"]) {
+      if (!reset.includes(needle)) fail(`reset-security.tsx no longer says "${needle}" before its button.`, "The consequences are the confirmation.");
+    }
+    if (!/e2ee\.resetSecurity\(\)/.test(reset)) fail("reset-security.tsx no longer calls the engine's resetSecurity.");
+  }
+  for (const [rel, text] of Object.entries(src.ui)) {
+    if (rel !== `app/(tabs)/messages/reset-security.tsx` && /\.resetSecurity\(/.test(stripComments(text))) {
+      fail(`${rel} starts Reset security`, "It may only be started from its own screen, after the consequences are on screen.");
+    }
+  }
+
   return { failures, stubsAllThrow };
 }
 
@@ -608,6 +685,42 @@ const MUTATIONS = [
   {
     name: "the engine stops reporting unavailable",
     apply: (s) => ({ ...s, engine: s.engine.replace('status: "unavailable"', 'status: "ready"') }),
+  },
+  {
+    name: "the safety number is drawn without a ready phone",
+    apply: (s) => ({ ...s, safety: s.safety.replace('status !== "ready" ? (', "false ? (") }),
+  },
+  {
+    name: "the safety number stops being read fresh from the engine",
+    apply: (s) => ({ ...s, safety: s.safety.replace("e2ee.safetyView(", "e2ee.cachedSafetyView(") }),
+  },
+  {
+    name: "the header pill shows on a phone that is not ready",
+    apply: (s) => ({ ...s, pill: s.pill.replace('if (status !== "ready" || peerUserId === null) return null;', "if (peerUserId === null) return null;") }),
+  },
+  {
+    name: "the Verified mark is always on",
+    apply: (s) => ({ ...s, pill: s.pill.replace('verified ? "Verified" : "Safety number"', '"Verified"') }),
+  },
+  {
+    name: "accepting a changed code needs no confirmation",
+    apply: (s) => ({ ...s, dm: s.dm.replace("confirmAction({", "(({ onConfirm }: { onConfirm: () => void }) => onConfirm())({") }),
+  },
+  {
+    name: "a screen approves a new phone without showing its code",
+    apply: (s) => ({ ...s, ui: { ...s.ui, "app/(tabs)/messages/index.tsx": s.ui["app/(tabs)/messages/index.tsx"] + "\nvoid e2ee.approvePending(id);" } }),
+  },
+  {
+    name: "the approval sheet stops showing the code",
+    apply: (s) => ({ ...s, prompt: s.prompt.replace("groupComparisonCode(first.code)", "first.code") }),
+  },
+  {
+    name: "Reset security can be started from the thread",
+    apply: (s) => ({ ...s, ui: { ...s.ui, "src/messages/DmThread.tsx": s.dm + "\nvoid e2ee.resetSecurity();" } }),
+  },
+  {
+    name: "the reset screen stops saying what happens",
+    apply: (s) => ({ ...s, reset: s.reset.replace("Every other phone on your account is removed.", "Everything is fine.") }),
   },
 ];
 

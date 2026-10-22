@@ -12,8 +12,12 @@
  *
  * Bubbles follow DESIGN.md section 7: mine = accent fill with onAccent text and a 6px
  * bottom-right corner; theirs = surfaceAlt with ink text and a 6px bottom-left corner.
- * A hard stop (a changed identity, an unapproved device) pauses SENDING with a banner;
- * messages already received stay readable. The full flow to resolve it is M5.
+ * A hard stop (a changed identity, an unapproved device) pauses SENDING with a banner and two
+ * ways out (c463, E2EE M5): look at the safety number, or accept the new code after a
+ * confirmation that says what accepting means. Messages already received stay readable. The
+ * same banner covers this account's OWN phones, with copy that fits. A phone still waiting for
+ * approval shows its comparison code (the same digits the approving phone shows) and a Reset
+ * security way out; neither claims anything about encryption.
  *
  * LAYOUT. The thread screen renders this inside a non-scrolling Screen, so this component
  * owns the whole remaining height: an INVERTED FlatList (newest message at the bottom, the
@@ -28,21 +32,26 @@
  */
 
 import { Feather } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, TextInput, View } from "react-native";
 
 import { AppText, Button } from "@/components";
 import { e2ee } from "@/crypto/e2eeRuntime";
-import { useE2ee, useEncryptedDm } from "@/crypto/E2eeProvider";
+import { useE2ee, useEncryptedDm, useOwnComparisonCode } from "@/crypto/E2eeProvider";
+import { groupComparisonCode } from "@/crypto/e2eeTrust";
 import {
   ACCOUNT_DELETING,
+  DEVICE_REVOKED,
   E2eeSendError,
+  E2eeTrustError,
   MAX_DM_BODY_CHARS,
   SERVER_NOT_READY,
   type E2eeStatus,
   type TrustBlock,
 } from "@/crypto/e2eeTypes";
 import type { ThreadItem, ThreadMessage } from "@/crypto/e2eeThread";
+import { confirmAction } from "@/lib/alert";
 import { metrics, radii, spacing, typography, useOverlayClearance, useTheme } from "@/theme";
 
 interface DmThreadProps {
@@ -50,6 +59,8 @@ interface DmThreadProps {
   /** The other member, or null if they have left. */
   peerUserId: string | null;
   myUserId: string | null;
+  /** The other person's name when the conversation carries one; the copy says "they" otherwise. */
+  peerName?: string | null;
 }
 
 export function DmThread(props: DmThreadProps) {
@@ -83,14 +94,16 @@ function useComposerBottomPadding(): number {
 // Ready: a real encrypted thread
 // ---------------------------------------------------------------------------
 
-function ReadyThread({ conversationId, peerUserId, myUserId }: DmThreadProps) {
+function ReadyThread({ conversationId, peerUserId, myUserId, peerName }: DmThreadProps) {
   const palette = useTheme();
+  const router = useRouter();
   const dm = useEncryptedDm(conversationId, peerUserId, myUserId);
   const bottomPadding = useComposerBottomPadding();
   const list = useRef<FlatList<ThreadItem>>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [accepting, setAccepting] = useState(false);
 
   const block = dm.trust.block;
   const canSend = peerUserId !== null && block === null;
@@ -113,6 +126,33 @@ function ReadyThread({ conversationId, peerUserId, myUserId }: DmThreadProps) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const viewSafetyNumber = () => {
+    if (peerUserId === null) return;
+    router.push({
+      pathname: "/messages/safety-number",
+      params: { peer: peerUserId, conversation: conversationId, ...(peerName ? { name: peerName } : {}) },
+    });
+  };
+
+  const acceptNewCode = () => {
+    if (block === null || accepting) return;
+    const own = block.userId === myUserId;
+    confirmAction({
+      title: own ? "Accept the phones on your account?" : acceptTitle(peerName),
+      message: own
+        ? "Only accept if you recognize every phone signed in to your account. Messages you send afterwards will be readable on all of them."
+        : "Only accept if you have checked the safety number with them in person, or you know why it changed. Messages you send afterwards will be readable on every phone they have, including one you haven't confirmed.",
+      confirmLabel: own ? "Accept change" : "Accept new code",
+      onConfirm: () => {
+        setAccepting(true);
+        setProblem(null);
+        dm.acceptNewCode()
+          .catch((error: unknown) => setProblem(trustProblem(error, peerName)))
+          .finally(() => setAccepting(false));
+      },
+    });
   };
 
   return (
@@ -139,7 +179,23 @@ function ReadyThread({ conversationId, peerUserId, myUserId }: DmThreadProps) {
         {!dm.loading && dm.items.length === 0 ? (
           <AppText variant="caption" tone="secondary">No messages yet. Say hello.</AppText>
         ) : null}
-        {block !== null ? <Banner text={blockedCopy(block, myUserId)} /> : null}
+        {block !== null ? (
+          <Banner
+            text={blockedCopy(block, myUserId, peerName)}
+            detail={blockedDetail(block, myUserId)}
+            actions={[
+              ...(block.userId === myUserId
+                ? []
+                : [{ label: "View safety number", variant: "neutral" as const, onPress: viewSafetyNumber }]),
+              {
+                label: accepting ? "Accepting…" : block.userId === myUserId ? "Accept change" : "Accept new code",
+                variant: "neutral" as const,
+                disabled: accepting,
+                onPress: acceptNewCode,
+              },
+            ]}
+          />
+        ) : null}
         {peerUserId === null ? <Banner text="The other person has left this conversation." /> : null}
         <Composer
           enabled={canSend}
@@ -167,6 +223,8 @@ function ReadyThread({ conversationId, peerUserId, myUserId }: DmThreadProps) {
 function NotReadyThread({ status, reason }: { status: E2eeStatus; reason: string | null }) {
   const [checking, setChecking] = useState(false);
   const bottomPadding = useComposerBottomPadding();
+  const router = useRouter();
+  const ownCode = useOwnComparisonCode();
   const recheck = async () => {
     setChecking(true);
     try {
@@ -186,11 +244,21 @@ function NotReadyThread({ status, reason }: { status: E2eeStatus; reason: string
     <View style={{ flex: 1, justifyContent: "space-between" }}>
       {quiet ? (
         <Notice text={text} />
+      ) : status === "pending_approval" ? (
+        <PendingApproval
+          code={ownCode}
+          checking={checking}
+          onCheck={() => void recheck()}
+          onReset={() => router.push("/messages/reset-security")}
+        />
       ) : (
         <Banner
           text={text}
-          actionLabel={copy.action === null ? undefined : checking ? "Checking…" : copy.action}
-          onAction={copy.action === null || checking ? undefined : () => void recheck()}
+          actions={
+            copy.action === null
+              ? []
+              : [{ label: checking ? "Checking…" : copy.action, variant: "neutral", disabled: checking, onPress: () => void recheck() }]
+          }
         />
       )}
       <View style={{ paddingTop: spacing.lg, paddingBottom: bottomPadding }}>
@@ -208,6 +276,14 @@ function notReadyCopy(status: E2eeStatus, reason: string | null): { text: string
     case "pending_approval":
       return { text: "This phone is waiting for approval from your other phone before it can send or read messages.", action: "Check again" };
     case "error":
+      // c463: Reset security (or "Not me") removed this phone from the account. That is final, so
+      // there is no retry to offer: a fresh install is how a phone comes back.
+      if (reason === DEVICE_REVOKED) {
+        return {
+          text: "This phone was removed from your account, so it can't send or read messages. To use messages on it again, delete Chirp and install it again.",
+          action: null,
+        };
+      }
       return { text: "Couldn't get messaging ready. Check your connection and try again.", action: "Try again" };
     case "unavailable":
       // The server this build talks to has no direct-message API yet. Nothing is wrong.
@@ -226,13 +302,55 @@ function notReadyCopy(status: E2eeStatus, reason: string | null): { text: string
 // Pieces
 // ---------------------------------------------------------------------------
 
-function blockedCopy(block: TrustBlock, myUserId: string | null): string {
+/** "Jose's", or "Their" when the conversation carries no name. */
+function possessive(peerName: string | null | undefined): string {
+  const name = peerName?.trim();
+  if (!name) return "Their";
+  return name.endsWith("s") ? `${name}'` : `${name}'s`;
+}
+
+function acceptTitle(peerName: string | null | undefined): string {
+  const name = peerName?.trim();
+  return name ? `Accept ${possessive(name)} new security code?` : "Accept their new security code?";
+}
+
+/** The banner's headline: what happened, in the words a person would use. */
+function blockedCopy(block: TrustBlock, myUserId: string | null, peerName: string | null | undefined): string {
   if (block.userId === myUserId) {
-    return "A phone on your account hasn't been approved. Sending is paused.";
+    return "The phones on your account changed in a way this phone can't confirm.";
+  }
+  const name = peerName?.trim();
+  if (block.reason === "identity_changed") return `${possessive(peerName)} security code changed.`;
+  return name ? `${name} added a device that wasn't approved.` : "They added a device that wasn't approved.";
+}
+
+/** The line under the headline: what it means for sending and reading. */
+function blockedDetail(block: TrustBlock, myUserId: string | null): string {
+  if (block.userId === myUserId) {
+    return "Sending is paused. You can still read messages that arrive.";
   }
   return block.reason === "identity_changed"
-    ? "Their security code changed. Sending is paused."
-    : "They added a phone that hasn't been approved. Sending is paused.";
+    ? "Sending is paused until you accept the new code. You can still read what they send."
+    : "This also happens when someone resets security or reinstalls Chirp. Sending is paused until you accept it. You can still read what they send.";
+}
+
+/** Plain words for why accepting did not go through. */
+function trustProblem(error: unknown, peerName: string | null | undefined): string {
+  if (error instanceof E2eeTrustError) {
+    switch (error.code) {
+      case "changed_again":
+        return `${possessive(peerName)} code changed again while you were deciding. Look at the new safety number before accepting.`;
+      case "network":
+        return "Couldn't reach the server. Check your connection and try again.";
+      case "account_deletion":
+        return "That can't be changed while an account in this conversation is being deleted.";
+      case "peer_no_devices":
+        return "They don't have a phone set up for messages right now.";
+      default:
+        return "Couldn't accept the new code. Try again.";
+    }
+  }
+  return "Couldn't accept the new code. Try again.";
 }
 
 function sendProblem(error: unknown): string {
@@ -352,7 +470,14 @@ function Notice({ text }: { text: string }) {
   );
 }
 
-function Banner({ text, actionLabel, onAction }: { text: string; actionLabel?: string; onAction?: () => void }) {
+interface BannerAction {
+  label: string;
+  onPress: () => void;
+  variant?: "neutral" | "ghost";
+  disabled?: boolean;
+}
+
+function Banner({ text, detail, actions = [] }: { text: string; detail?: string; actions?: BannerAction[] }) {
   const palette = useTheme();
   return (
     <View
@@ -366,11 +491,71 @@ function Banner({ text, actionLabel, onAction }: { text: string; actionLabel?: s
     >
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm }}>
         <Feather name="alert-circle" size={typography.body.fontSize} color={palette.ink} />
-        <AppText variant="caption" style={{ flex: 1 }}>{text}</AppText>
+        <View style={{ flex: 1, gap: spacing.xs }}>
+          <AppText variant="bodyBold">{text}</AppText>
+          {detail !== undefined ? <AppText variant="caption" tone="secondary">{detail}</AppText> : null}
+        </View>
       </View>
-      {actionLabel !== undefined ? (
-        <Button label={actionLabel} variant="neutral" disabled={onAction === undefined} onPress={onAction} />
+      {actions.map((action) => (
+        <Button
+          key={action.label}
+          label={action.label}
+          variant={action.variant ?? "neutral"}
+          disabled={action.disabled === true}
+          onPress={action.onPress}
+        />
+      ))}
+    </View>
+  );
+}
+
+/**
+ * A phone that is registered but not yet approved (c463). It shows the code the approving phone
+ * shows for it, so the person can check the two screens against each other, says where to
+ * approve it, and offers Reset security for when there is no other phone to approve from.
+ */
+function PendingApproval({
+  code,
+  checking,
+  onCheck,
+  onReset,
+}: {
+  code: string | null;
+  checking: boolean;
+  onCheck: () => void;
+  onReset: () => void;
+}) {
+  const palette = useTheme();
+  return (
+    <View
+      accessibilityRole="alert"
+      style={{
+        backgroundColor: palette.warningSoft,
+        borderRadius: radii.input,
+        padding: spacing.md,
+        gap: spacing.md,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm }}>
+        <Feather name="smartphone" size={typography.body.fontSize} color={palette.ink} />
+        <View style={{ flex: 1, gap: spacing.xs }}>
+          <AppText variant="bodyBold">This phone is waiting for approval.</AppText>
+          <AppText variant="caption" tone="secondary">Open Chirp on your other phone to approve this one.</AppText>
+        </View>
+      </View>
+      {code !== null ? (
+        <View
+          accessible
+          accessibilityLabel={`Code for this phone: ${code.split("").join(" ")}`}
+          style={{ backgroundColor: palette.surface, borderRadius: radii.input, padding: spacing.md, gap: spacing.xs }}
+        >
+          <AppText variant="micro" tone="secondary">Code for this phone</AppText>
+          <AppText variant="display" style={{ fontVariant: ["tabular-nums"] }}>{groupComparisonCode(code)}</AppText>
+          <AppText variant="caption" tone="secondary">Your other phone shows the same code. Approve only if they match.</AppText>
+        </View>
       ) : null}
+      <Button label={checking ? "Checking…" : "Check again"} variant="neutral" disabled={checking} onPress={onCheck} />
+      <Button label="Reset security" variant="ghost" onPress={onReset} />
     </View>
   );
 }

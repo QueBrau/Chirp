@@ -187,6 +187,36 @@ authenticated, since they don't exist at encryption time.
   (lost phone), "Reset security" creates a new first device, and every contact gets
   the hard stop above.
 
+**As built in M5 (c463).**
+
+- **Comparison code.** The new phone and the approving phone must show the same short
+  code. It is `SHA-256(frame("chirp-e2ee-v1/device-code", [identity_ed25519]))`, first 8
+  bytes as a big-endian u64, mod 10^9, nine digits shown as `123 456 789` (about 30 bits).
+  Defined once in the Rust core (`device_comparison_code`) with vectors in
+  `test-vectors/e2ee-v1.json`, checked independently in Python and in `verify:e2ee-trust`.
+  It tells two phones apart and catches an honest mix-up; it is not an authenticator
+  (30 bits can be ground by someone who can already register devices on the account),
+  so nothing is approved without a person looking, and the safety number is the strong
+  comparison.
+- **Pending list.** `GET /v2/devices/pending` returns the caller's OWN pending devices
+  (the directory never lists them), which is how an approved phone learns that a new
+  phone signed in. An approved phone asks on becoming ready, on the foreground and every
+  30 seconds while in use; a waiting phone re-checks every 12 seconds for at most 10
+  minutes (the directory read it uses is rate limited).
+- **Verified.** "Mark as verified" stores the 60-digit safety number that was on screen,
+  in the Keychain, under (this account, the contact). The safety number is itself a hash
+  of both sides' approved device identities, so a mark is only valid while the number in
+  force is the same one: any change to either side's phones clears it without anything
+  having to remember to. Marking, and accepting a changed code, are bound to what the
+  person was shown and refuse if the directory moved since.
+- **Hard stop on your own account.** A device nobody vouched for on the sender's own
+  account blocks sending like a contact's does; the copy speaks of "the phones on your
+  account" and the only action is to accept after checking every phone is yours.
+- **Reset security** revokes every other device (approved and pending), wipes the pending
+  namespace, registers once more at the next generation (a root, because nothing approved
+  is left), and revokes this phone's earlier pending registration. Bounded: at most two
+  revoke passes, one registration, no automatic retry, never the current device.
+
 ## 9. Not in v1, and kept possible
 
 Groups use Megolm, one outbound session per sending device and epoch, with key

@@ -125,6 +125,30 @@ class DeviceV2Out(_Schema):
     revoked_at: datetime | None = None
 
 
+class PendingDeviceOut(_Schema):
+    """One of the caller's OWN pending devices: what an approving phone needs to show and sign.
+
+    Exactly the fields a new device's binding is made of (user id is the caller's, so it is
+    not repeated), plus the label and age for the prompt. Nothing here is secret: the same
+    public identities are what the approval signature covers.
+    """
+
+    id: uuid.UUID
+    device_label: str | None = None
+    suite: str
+    generation: int
+    identity_curve25519_b64: str
+    identity_ed25519_b64: str
+    binding_signature_b64: str
+    created_at: datetime
+
+
+class PendingDevicesOut(_Schema):
+    """GET /v2/devices/pending: the caller's own pending devices, oldest first."""
+
+    devices: list[PendingDeviceOut]
+
+
 class KeyCountV2Out(_Schema):
     """Unconsumed keys per kind. fallback is 0 or 1: a device has at most one fallback key."""
 
