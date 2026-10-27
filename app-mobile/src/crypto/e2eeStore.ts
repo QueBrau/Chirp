@@ -32,26 +32,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // Device record
 // ---------------------------------------------------------------------------
 
-export async function loadDeviceRecord(kv: KvPort, userId: string): Promise<DeviceRecord | null> {
+export async function loadDeviceRecord(kv: KvPort, userId: string, strict = false): Promise<DeviceRecord | null> {
   let raw: string | null;
   try {
     raw = await kv.get(deviceKey(userId));
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return null;
   }
   if (raw === null) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed)) return null;
+    if (!isRecord(parsed)) throw new Error("device_record_invalid");
     const { generation, deviceId, approved, attempts } = parsed;
-    if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 1) return null;
+    if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 1) throw new Error("device_record_invalid");
     return {
       generation,
       deviceId: typeof deviceId === "string" && deviceId.length > 0 ? deviceId : null,
       approved: approved === true,
       ...(typeof attempts === "number" && Number.isSafeInteger(attempts) && attempts > 0 ? { attempts } : {}),
     };
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return null;
   }
 }
@@ -72,6 +74,7 @@ export async function saveDeviceRecord(kv: KvPort, userId: string, record: Devic
  * account) adds, replaces or removes a phone the number changes and the marker is stale
  * without anything having to clear it. A number is public, so nothing secret is stored.
  */
+const verifiedIndexKey = (userId: string) => `chirp.e2ee.verified-index.${userId}`;
 const verifiedKey = (userId: string, peerUserId: string) => `chirp.e2ee.verified.${userId}.${peerUserId}`;
 
 /** The safety number last marked verified for this pair, or null (none, or unreadable). */
@@ -85,6 +88,12 @@ export async function loadVerifiedNumber(kv: KvPort, userId: string, peerUserId:
 }
 
 export async function saveVerifiedNumber(kv: KvPort, userId: string, peerUserId: string, number: string): Promise<void> {
+  // Index before the marker: interrupted writes can leave an extra index entry,
+  // never a new untracked marker. Engine trust writes are serialized.
+  const raw = await kv.get(verifiedIndexKey(userId));
+  const peers: unknown = raw === null ? [] : JSON.parse(raw);
+  if (!Array.isArray(peers) || peers.some(id => typeof id !== "string")) throw new Error("verified_index_invalid");
+  await kv.set(verifiedIndexKey(userId), JSON.stringify([...new Set([...peers, peerUserId])]));
   await kv.set(verifiedKey(userId, peerUserId), number);
 }
 
@@ -188,4 +197,18 @@ export class AppStateStore {
   async hasRoom(): Promise<boolean> {
     return (await this.load()).outbox.length < MAX_OUTBOX;
   }
+}
+
+/** Delete only this account's app metadata. Old, pre-index public verification
+ * markers cannot be enumerated by Expo SecureStore; known peers are also removed.
+ * Native keys/history are wiped separately before this operation.
+ */
+export async function clearAccountMetadata(secure: KvPort, plain: KvPort, userId: string, knownPeers: string[] = []): Promise<void> {
+  const raw = await secure.get(verifiedIndexKey(userId));
+  const peers: unknown = raw === null ? [] : JSON.parse(raw);
+  if (!Array.isArray(peers) || peers.some(id => typeof id !== "string")) throw new Error("verified_index_invalid");
+  for (const peer of new Set([...peers, ...knownPeers])) await secure.remove(verifiedKey(userId, peer));
+  await secure.remove(verifiedIndexKey(userId));
+  await secure.remove(deviceKey(userId));
+  await plain.remove(stateKey(userId));
 }

@@ -62,6 +62,8 @@ export interface RequestOptions extends OperationOptions {
   operation?: Operation;
   /** c405 socket probe delegates 401 recovery to SessionProvider; defaults to retrying. */
   retryAuth?: boolean;
+  /** Capability bodies must never follow a redirect to another destination. */
+  redirect?: "error";
   method?: HttpMethod;
   /** JSON-serialized body. */
   body?: unknown;
@@ -81,14 +83,21 @@ function buildUrl(path: string, query?: RequestOptions["query"]): string {
 }
 
 /** Fire with the captured identity; a retry never adopts another account's bearer. */
-function doFetch(path: string, options: RequestOptions, operation: Operation): Promise<Response> {
+async function doFetch(path: string, options: RequestOptions, operation: Operation): Promise<Response> {
+  operation.assertCurrent();
+  // React Native's XMLHttpRequest-based global fetch ignores redirect mode.
+  // Expo's native fetch carries the policy to URLSession/OkHttp and refuses the hop.
+  const fetcher = options.redirect === "error"
+    ? (await operation.wait(import("expo/fetch"))).fetch
+    : fetch;
   operation.assertCurrent();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const authToken = tokenFor(operation.owner);
   if (authToken) headers["Authorization"] = "Bearer " + authToken;
   if (debugFirebaseUid) headers["X-Debug-Firebase-Uid"] = debugFirebaseUid;
-  return operation.wait(fetch(buildUrl(path, options.query), {
+  return operation.wait(fetcher(buildUrl(path, options.query), {
     method: options.method ?? "GET", headers, signal: operation.signal,
+    ...(options.redirect ? { redirect: options.redirect } : {}),
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   }));
 }

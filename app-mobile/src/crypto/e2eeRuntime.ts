@@ -6,12 +6,14 @@
  * without touching storage or the network.
  */
 
+import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ExpoCrypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
 
 import * as api from "../api/e2ee";
-import { getConversation } from "../api/messages";
+import { getConversation, leaveConversation } from "../api/messages";
+import { currentIdentity, ownsIdentity } from "../auth/identity";
 import { E2eeEngine, type ConversationsPort } from "./e2eeEngine";
 import type { KvPort } from "./e2eeStore";
 import { chirpCrypto, isE2EEAvailable } from "./native";
@@ -31,6 +33,7 @@ const plainKv: KvPort = {
 };
 
 const conversations: ConversationsPort = {
+  leave: (conversationId) => leaveConversation(conversationId),
   async getPeer(conversationId, myUserId) {
     const conversation = await getConversation(conversationId);
     if (conversation.kind !== "dm") return { kind: "group", peerUserId: null };
@@ -41,11 +44,13 @@ const conversations: ConversationsPort = {
 
 function create(): E2eeEngine {
   return new E2eeEngine({
+    captureOwner: () => { const owner = currentIdentity(); return () => ownsIdentity(owner); },
     crypto: chirpCrypto,
     api,
     secure: secureKv,
     plain: plainKv,
     available: isE2EEAvailable,
+    canHaveNativeHistory: () => Platform.OS === "ios",
     newId: () => ExpoCrypto.randomUUID().toLowerCase(),
     now: () => Date.now(),
     conversations,

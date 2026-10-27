@@ -462,10 +462,12 @@ function build(m) {
       this.secure = memoryKv();
       this.plain = memoryKv();
       this.reports = [];
+      this.ownerEpoch = 0;
       this.engine = this.newEngine();
     }
     newEngine() {
       return new E2eeEngine({
+        captureOwner: () => { const epoch = this.ownerEpoch; return () => epoch === this.ownerEpoch; },
         crypto: this.core,
         api: this.world.server.apiFor(this.userId),
         secure: this.secure,
@@ -1069,8 +1071,11 @@ function build(m) {
     const registersBefore = world.server.count("register");
     const first = fresh.engine.resetSecurity();
     const second = fresh.engine.resetSecurity();
+    const finished = Promise.allSettled([first, second]);
     assert.equal(first, second, "the same promise");
-    await Promise.all([first, second]);
+    for (const result of await finished) {
+      if (result.status === "rejected") throw result.reason;
+    }
     assert.equal(world.server.count("register") - registersBefore, 1);
     assert.equal(fresh.engine.getState().status, "ready");
     // Afterwards it is ready, so a further reset is refused.
@@ -1090,6 +1095,65 @@ function build(m) {
     assert.equal(fresh.engine.getState().status, "inactive");
     const open = [...fresh.core.stores.values()].filter((store) => store.handle !== null);
     assert.equal(open.length, 0, "no store is left unlocked");
+  });
+
+  test("c452: Reset security refuses an identity switch while reading pending devices before revoking anything", async () => {
+    const world = new World(); const { alice } = await world.pair();
+    const fresh = world.phone(alice.userId); await fresh.engine.start(alice.userId);
+    let entered, release;
+    const started = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    fresh.engine.ports.api.listPendingDevicesV2 = async () => { entered(); return gate; };
+    const revokes = world.server.count("revoke"), wipes = fresh.core.count("wipe");
+    const resetting = fresh.engine.resetSecurity();
+    const settled = resetting.then(() => "completed", () => "rejected");
+    try {
+      assert.equal(await Promise.race([started.then(() => "entered"), settled]), "entered", "reset must read pending devices before changing native state");
+      fresh.ownerEpoch += 1;
+      release({ devices: [{ id: uuid() }] });
+      await assert.rejects(resetting);
+    } finally {
+      release({ devices: [] });
+      await settled;
+    }
+    assert.equal(world.server.count("revoke"), revokes);
+    assert.equal(fresh.core.count("wipe"), wipes);
+    await assert.rejects(fresh.engine.resetSecurity(), error => error.code === "not_pending");
+  });
+
+  test("c452: Reset security cannot revoke or become ready after its registration changes identity", async () => {
+    const world = new World(); const { alice } = await world.pair();
+    const fresh = world.phone(alice.userId); await fresh.engine.start(alice.userId);
+    const pendingId = fresh.deviceId;
+    const register = fresh.engine.ports.api.registerDeviceV2;
+    fresh.engine.ports.api.registerDeviceV2 = async body => {
+      const response = await register(body);
+      fresh.ownerEpoch += 1;
+      return response;
+    };
+    await assert.rejects(fresh.engine.resetSecurity());
+    assert.equal(world.server.byId(pendingId).revoked, false, "the old continuation must not revoke through the new account");
+    assert.notEqual(fresh.engine.getState().status, "ready");
+    assert.equal([...fresh.core.stores.values()].filter(store => store.handle !== null).length, 0);
+  });
+
+  test("c452: Reset security journals its new generation before native unlock, including a crash", async () => {
+    const world = new World(); const { alice } = await world.pair();
+    const fresh = world.phone(alice.userId); await fresh.engine.start(alice.userId);
+    const expected = fresh.engine.getState().generation + 1;
+    const unlock = fresh.core.unlock.bind(fresh.core);
+    fresh.core.unlock = async (userId, generation) => {
+      const handle = await unlock(userId, generation);
+      if (generation === expected) {
+        assert.equal(JSON.parse(await fresh.secure.get(`chirp.e2ee.device.${userId}`)).generation, expected);
+        throw new Error("process_died_after_unlock");
+      }
+      return handle;
+    };
+    await assert.rejects(fresh.engine.resetSecurity());
+    assert.equal(fresh.core.stores.has(`${fresh.userId}:${expected}`), true);
+    await fresh.engine.purgeAccount(fresh.userId);
+    assert.equal(fresh.core.stores.has(`${fresh.userId}:${expected}`), false);
   });
 
   // ---- bounded polling ----
@@ -1196,11 +1260,14 @@ async function runAll(mutations = {}) {
   const cases = build(loader);
   const results = [];
   for (const { name, fn } of cases) {
+    let deadline;
     try {
-      await fn();
+      await Promise.race([fn(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error(`case timed out: ${name}`)), 15_000); })]);
       results.push({ name, ok: true });
     } catch (error) {
       results.push({ name, ok: false, error });
+    } finally {
+      clearTimeout(deadline);
     }
   }
   return { results, applied: loader.applied };
