@@ -9,6 +9,7 @@
     "ios": "expo run:ios",
     "verify:messages-pagination": "node scripts/verify-messages-pagination.mjs",
     "verify:local-conversation-purge": "node scripts/verify-local-conversation-purge.mjs",
+    "verify:deletion-completion": "node scripts/verify-deletion-completion.mjs",
     "typecheck": "tsc --noEmit",
     "verify:auth": "node scripts/verify-auth.mjs",
     "verify:invites": "node scripts/verify-invites.mjs",

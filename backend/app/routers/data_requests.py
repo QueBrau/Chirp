@@ -1,10 +1,13 @@
 """Authenticated account export and deletion intake/status routes."""
 
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,11 +22,87 @@ from app.middleware.auth import (
     get_current_user_for_privacy_write,
     get_fresh_verified_uid,
 )
-from app.schemas.data_requests import DataRequestCreate, DataRequestOut, PostDeletionCleanupOut
+from app.schemas.data_requests import (
+    DataRequestCreate, DataRequestOut, PostDeletionCleanupOut,
+    DeletionCompletionCheck, DeletionCompletionOut, DeletionCompletionTokenOut,
+)
 from app.services.account_data import fulfill_request
 from app.services.account_fulfillment import prepare_deletion_plan
+from app.services.account_deletion_completion import (
+    CompletionTokenError, is_deletion_completed, mint_completion_token, verify_completion_token,
+)
 
-router = APIRouter(tags=["account-data"])
+_COMPLETION_HEADERS = {"Cache-Control": "private, no-store"}
+
+
+class _CompletionRoute(APIRoute):
+    """Keep capability errors private without changing ordinary request routes."""
+
+    def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
+        handler = super().get_route_handler()
+        if self.name not in {"issue_deletion_completion_token", "check_deletion_completion"}:
+            return handler
+
+        async def private_handler(request: Request) -> Response:
+            try:
+                response = await handler(request)
+            except RequestValidationError:
+                # FastAPI's default 422 includes the rejected input even when a
+                # Pydantic model hides it in str(error). Never echo a capability.
+                return JSONResponse(
+                    {"detail": "invalid_deletion_completion_request"}, status_code=422,
+                    headers=_COMPLETION_HEADERS,
+                )
+            except HTTPException as exc:
+                exc.headers = {**(exc.headers or {}), **_COMPLETION_HEADERS}
+                raise
+            response.headers.update(_COMPLETION_HEADERS)
+            return response
+
+        return private_handler
+
+
+router = APIRouter(tags=["account-data"], route_class=_CompletionRoute)
+
+
+@router.post("/me/data-requests/{request_id}/completion-token", response_model=DeletionCompletionTokenOut)
+async def issue_deletion_completion_token(
+    request_id: uuid.UUID,
+    response: Response,
+    user: models.User = Depends(get_current_user_for_privacy),
+    session: AsyncSession = Depends(get_session),
+) -> DeletionCompletionTokenOut:
+    """Give the owner a narrow status capability before Firebase deletion."""
+    row, _artifact = await _owned(request_id, user, session)
+    if row.kind != "deletion" or row.status in {"canceled", "failed", "completed"}:
+        raise HTTPException(409, "deletion_completion_unavailable", headers=_COMPLETION_HEADERS)
+    try:
+        token, claims = mint_completion_token(row.id, user.id)
+    except CompletionTokenError as exc:
+        raise HTTPException(exc.status_code, exc.detail, headers=_COMPLETION_HEADERS) from None
+    response.headers.update(_COMPLETION_HEADERS)
+    return DeletionCompletionTokenOut(
+        token=token, user_id=claims.user_id, request_id=claims.request_id,
+        expires_at=claims.expires_at,
+    )
+
+
+@router.post("/account-deletion/completion", response_model=DeletionCompletionOut)
+async def check_deletion_completion(
+    body: DeletionCompletionCheck,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> DeletionCompletionOut:
+    """Check only a signed request capability; Firebase may no longer exist."""
+    try:
+        claims = verify_completion_token(body.token)
+    except CompletionTokenError as exc:
+        raise HTTPException(exc.status_code, exc.detail, headers=_COMPLETION_HEADERS) from None
+    completed = await is_deletion_completed(session, claims)
+    response.headers.update(_COMPLETION_HEADERS)
+    return DeletionCompletionOut(
+        request_id=claims.request_id, user_id=claims.user_id, completed=completed,
+    )
 
 
 async def get_data_request_user(

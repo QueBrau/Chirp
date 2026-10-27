@@ -53,7 +53,8 @@ const src = (name) => load(resolve(ROOT, "src/crypto", `${name}.ts`));
 const { E2eeEngine } = src("e2eeEngine");
 const { E2eeSendError, KEY_LOW_WATER, KEY_TARGET } = src("e2eeTypes");
 const { buildThread } = src("e2eeThread");
-const { loadDeviceRecord } = src("e2eeStore");
+const { loadDeviceRecord, saveVerifiedNumber } = src("e2eeStore");
+const { CleanupJournal } = src("e2eeCleanup");
 const { isRetryLater, asApiError } = src("e2eeErrors");
 
 // ---------------------------------------------------------------------------
@@ -114,7 +115,7 @@ class FakeCore {
     let store = this.stores.get(key);
     if (!store) {
       store = { key, userId, generation, device: null, keys: [], sessions: new Set(), outbox: new Map(), messages: [], seq: 0,
-        decrypted: new Map(), pins: new Map(), trust: new Map(), handle: null, nextKey: 1 };
+        decrypted: new Map(), replayed: new Set(), pins: new Map(), trust: new Map(), handle: null, nextKey: 1 };
       this.stores.set(key, store);
     }
     if (store.handle) throw new FakeNativeError("store_in_use");
@@ -226,6 +227,7 @@ class FakeCore {
   async decrypt(handle, messageId, leg, sender, expected) {
     this.log("decrypt", messageId);
     const store = this.store(handle);
+    if (store.replayed.has(messageId)) throw new FakeNativeError("replay");
     if (store.decrypted.has(messageId)) return store.decrypted.get(messageId);
     if (this.fault) { const code = this.fault; this.fault = null; throw new FakeNativeError(code); }
     let parsed;
@@ -240,6 +242,15 @@ class FakeCore {
     store.messages.push(message);
     store.decrypted.set(messageId, message);
     return message;
+  }
+  async purgeConversation(handle, conversationId) {
+    this.log("purgeConversation", handle, conversationId);
+    const store = this.store(handle);
+    const removed = store.messages.filter(row => row.conversationId === conversationId);
+    store.messages = store.messages.filter(row => row.conversationId !== conversationId);
+    for (const row of removed) if (row.messageId !== null) { store.decrypted.delete(row.messageId); store.replayed.add(row.messageId); }
+    for (const [id, row] of store.outbox) if (row.conversationId === conversationId) store.outbox.delete(id);
+    return removed.length;
   }
   async listMessages(handle, conversationId, before, limit) {
     return this.store(handle).messages
@@ -260,6 +271,7 @@ class FakeServer {
     // Registration requests get no usable answer (the reply is lost on the way back).
     this.registerFails = false;
     this.calls = [];
+    this.left = new Set();
     this.convMembers = new Map(); // conversation id -> [user ids]
     this.tick = 0;
   }
@@ -369,24 +381,36 @@ class Phone {
     this.secure = memoryKv();
     this.plain = memoryKv();
     this.available = true;
+    this.ownerEpoch = 0;
+    this.nativeHistoryPossible = true;
     this.reports = [];
     this.engine = this.newEngine();
   }
   newEngine() {
     return new E2eeEngine({
+      captureOwner: () => { const epoch = this.ownerEpoch; return () => epoch === this.ownerEpoch; },
       crypto: this.core,
       api: this.world.server.apiFor(this.userId),
       secure: this.secure,
       plain: this.plain,
       available: () => this.available,
+      canHaveNativeHistory: () => this.nativeHistoryPossible,
       newId: uuid,
       now: () => this.world.now,
       report: (where, code) => this.reports.push([where, code]),
-      conversations: { getPeer: async (conversationId, me) => {
+      conversations: { leave: async (conversationId) => {
+        this.world.server.log("leave", conversationId);
+        if (this.world.server.down) throw networkError();
+        this.world.server.left.add(`${this.userId}:${conversationId}`);
+      }, getPeer: async (conversationId, me) => {
+        if (this.world.server.left.has(`${me}:${conversationId}`)) throw apiError(403, "not_a_member");
         const members = this.world.server.convMembers.get(conversationId);
         return { kind: "dm", peerUserId: members.find((u) => u !== me) ?? null };
       } },
     });
+  }
+  leave(conversationId) {
+    return this.engine.leaveConversation(this.userId, conversationId, () => this.engine.ports.conversations.leave(conversationId));
   }
   /** Kill the app and open it again: the disk survives, memory does not. */
   async restart() {
@@ -1237,6 +1261,333 @@ test("error classification: no answer and busy servers are 'try later'; real ans
   assert.equal(asApiError(new Error("plain")), null);
 });
 
+const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+const journalFor = phone => JSON.parse(phone.plain.map.get(`chirp.e2ee.cleanup.${phone.userId}`));
+
+test("c452: confirmed leave removes only this conversation's native history and queued ids, preserving other conversations and the peer", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  const other = world.server.conversation(alice.userId, bob.userId);
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "private" });
+  await bob.engine.syncConversation(conversation, alice.userId);
+  await alice.engine.sendDm({ conversationId: other, peerUserId: bob.userId, body: "keep" });
+  world.server.down = true;
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "never deliver" });
+  world.server.down = false;
+  const events = []; alice.engine.subscribe(event => events.push(event));
+  await alice.leave(conversation);
+  assert.deepEqual(bodies(alice.core, conversation), []);
+  assert.deepEqual(bodies(alice.core, other), [">keep"]);
+  assert.deepEqual(bodies(bob.core, conversation), ["<private"]);
+  assert.equal(journalFor(alice).conversations[conversation], "complete");
+  assert.equal((await alice.engine.loadThread(conversation)).messages.length, 0);
+  await alice.engine.replayOutbox();
+  assert.equal(world.server.messages.filter(row => row.conversation === conversation).length, 1);
+  assert.ok(events.some(event => event.type === "purged" && event.conversationId === conversation));
+  await assert.rejects(alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "forbidden" }));
+});
+
+test("c452: native purge failure keeps a confirmed intent; retry does not call the now-inaccessible leave API", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "erase" });
+  const purge = alice.core.purgeConversation.bind(alice.core);
+  alice.core.purgeConversation = async () => { throw new FakeNativeError("storage_failed"); };
+  await assert.rejects(alice.leave(conversation));
+  assert.equal(journalFor(alice).conversations[conversation], "confirmed");
+  assert.equal((await alice.engine.loadThread(conversation)).messages.length, 0, "failed erasure stays hidden");
+  alice.core.purgeConversation = purge;
+  await alice.engine.leaveConversation(alice.userId, conversation, async () => { throw new Error("must not repeat server leave"); });
+  assert.deepEqual(bodies(alice.core, conversation), []);
+  assert.equal(world.server.count("leave"), 1);
+});
+
+test("c452: restart resumes confirmed erasure before outbox replay, even while the server is offline", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "warm" });
+  world.server.down = true;
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "never send" });
+  world.server.down = false;
+  const purge = alice.core.purgeConversation.bind(alice.core);
+  alice.core.purgeConversation = async () => { throw new FakeNativeError("storage_failed"); };
+  await assert.rejects(alice.leave(conversation));
+  alice.core.purgeConversation = purge;
+  world.server.down = true;
+  const sends = world.server.count("send");
+  await alice.restart(); await flush();
+  assert.equal(journalFor(alice).conversations[conversation], "complete");
+  assert.deepEqual(bodies(alice.core, conversation), []);
+  assert.equal(world.server.count("send"), sends);
+});
+
+test("c452: lost leave response persists intent; restart repeats only idempotent leave then erases", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "erase" });
+  await assert.rejects(alice.engine.leaveConversation(alice.userId, conversation, async () => {
+    world.server.left.add(`${alice.userId}:${conversation}`); throw networkError();
+  }));
+  assert.equal(journalFor(alice).conversations[conversation], "requested");
+  await alice.restart(); await flush();
+  assert.equal(journalFor(alice).conversations[conversation], "complete");
+  assert.deepEqual(bodies(alice.core, conversation), []);
+});
+
+test("c452: failed journal write prevents server leave and keeps the conversation gated", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "keep until confirmed" });
+  const set = alice.plain.set;
+  alice.plain.set = async (key, value) => { if (key.includes(".cleanup.")) throw new Error("disk_full"); return set(key, value); };
+  await assert.rejects(alice.leave(conversation));
+  assert.equal(world.server.count("leave"), 0);
+  assert.equal(alice.core.count("purgeConversation"), 0);
+  assert.equal((await alice.engine.loadThread(conversation)).messages.length, 0);
+  alice.plain.set = set;
+  await alice.leave(conversation);
+  assert.deepEqual(bodies(alice.core, conversation), []);
+});
+
+test("c452: unreadable or malformed cleanup journals fail startup before device registration or replay", async () => {
+  for (const value of ["{", JSON.stringify({ account: null, conversations: { invalid: "complete" } })]) {
+    const world = new World(); const phone = world.phone(uuid());
+    phone.plain.map.set(`chirp.e2ee.cleanup.${phone.userId}`, value);
+    assert.equal((await phone.engine.start(phone.userId)).status, "error");
+    assert.equal(phone.core.count("unlock"), 0);
+    assert.equal(world.server.count("register"), 0);
+  }
+  const world = new World(); const phone = world.phone(uuid());
+  phone.plain.get = async () => { throw new Error("locked_storage"); };
+  assert.equal((await phone.engine.start(phone.userId)).status, "error");
+  assert.equal(phone.core.count("unlock"), 0);
+});
+
+test("c452: a native decrypt already in flight drains before purge and cannot recreate history afterwards", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  await bob.engine.sendDm({ conversationId: conversation, peerUserId: alice.userId, body: "in flight" });
+  const entered = deferred(), release = deferred(), decrypt = alice.core.decrypt.bind(alice.core);
+  alice.core.decrypt = async (...args) => { entered.resolve(); await release.promise; return decrypt(...args); };
+  const syncing = alice.engine.syncConversation(conversation, bob.userId).catch(() => undefined);
+  await entered.promise;
+  const leaving = alice.leave(conversation);
+  await flush(); assert.equal(alice.core.count("purgeConversation"), 0, "waits for current native decrypt");
+  release.resolve(); await syncing; await leaving;
+  await alice.engine.syncFromHint(conversation);
+  assert.deepEqual(bodies(alice.core, conversation), []);
+});
+
+test("c452: leave fences an in-flight encryption before its network send, then removes its native result", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  const entered = deferred(), release = deferred(), encrypt = alice.core.encrypt.bind(alice.core);
+  alice.core.encrypt = async (...args) => { entered.resolve(); await release.promise; return encrypt(...args); };
+  const sending = alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "must not escape" }).catch(() => undefined);
+  await entered.promise; const leaving = alice.leave(conversation); await flush(); release.resolve();
+  await sending; await leaving;
+  assert.equal(world.server.count("send"), 0);
+  assert.deepEqual(bodies(alice.core, conversation), []);
+});
+
+test("c452: a late local-history read returns empty after leave begins", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "hide" });
+  const entered = deferred(), release = deferred(), list = alice.core.listMessages.bind(alice.core);
+  alice.core.listMessages = async (...args) => { const rows = await list(...args); entered.resolve(); await release.promise; return rows; };
+  const loading = alice.engine.loadThread(conversation); await entered.promise;
+  const leaving = alice.leave(conversation); await flush(); release.resolve();
+  assert.deepEqual((await loading).messages, []); await leaving;
+});
+
+test("c452: completed fence permits fresh same-ID DM rejoin, with purged native replay bodies still absent", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  await bob.engine.sendDm({ conversationId: conversation, peerUserId: alice.userId, body: "old" });
+  await alice.engine.syncConversation(conversation, bob.userId); await alice.leave(conversation);
+  world.server.left.delete(`${alice.userId}:${conversation}`); // server-authoritative DM reuse
+  await bob.engine.sendDm({ conversationId: conversation, peerUserId: alice.userId, body: "new" });
+  await alice.engine.syncConversation(conversation, bob.userId);
+  assert.deepEqual(bodies(alice.core, conversation), ["<new"]);
+  assert.equal(journalFor(alice).conversations[conversation], undefined);
+});
+
+test("c452: identity changes while server leave completes never purge the replacement account", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "old account" });
+  const entered = deferred(), release = deferred();
+  const leaving = alice.engine.leaveConversation(alice.userId, conversation, async () => { entered.resolve(); await release.promise; });
+  await entered.promise; alice.ownerEpoch += 1; await alice.engine.stop(); release.resolve();
+  await assert.rejects(leaving);
+  assert.equal(alice.core.count("purgeConversation"), 0);
+  assert.equal(journalFor(alice).conversations[conversation], "confirmed");
+  await alice.engine.start(alice.userId); await flush();
+  assert.deepEqual(bodies(alice.core, conversation), []);
+});
+
+test("c452: unsupported native platforms can leave when no encrypted namespace exists; existing history never claims a purge", async () => {
+  const world = new World(); const phone = world.phone(uuid()); phone.available = false;
+  await phone.engine.start(phone.userId); const conversation = world.server.conversation(phone.userId, uuid());
+  await phone.leave(conversation);
+  assert.equal(journalFor(phone).conversations[conversation], "complete");
+  assert.equal(phone.core.count("unlock"), 0);
+  phone.secure.map.set(`chirp.e2ee.device.${phone.userId}`, JSON.stringify({ generation: 3, deviceId: uuid(), approved: true }));
+  const second = world.server.conversation(phone.userId, uuid());
+  await assert.rejects(phone.leave(second));
+  assert.equal(journalFor(phone).conversations[second], "confirmed");
+});
+
+test("c452: confirmed account purge wipes only its namespace and metadata, retains a durable no-recreate fence", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "erase account" });
+  const other = uuid(), handle = await alice.core.unlock(other, 7);
+  await alice.core.createDevice(handle, 2); await alice.core.lock(handle);
+  await alice.secure.set(`chirp.e2ee.device.${other}`, JSON.stringify({ generation: 7, deviceId: uuid(), approved: true }));
+  await alice.plain.set(`chirp.e2ee.state.${other}`, "keep other account metadata");
+  await saveVerifiedNumber(alice.secure, alice.userId, bob.userId, "1".repeat(60));
+  const registrations = world.server.count("register");
+  await alice.engine.purgeAccount(alice.userId);
+  assert.equal(alice.core.stores.has(`${other}:7`), true);
+  assert.equal(alice.plain.map.get(`chirp.e2ee.state.${other}`), "keep other account metadata");
+  assert.equal(alice.secure.map.has(`chirp.e2ee.device.${alice.userId}`), false);
+  assert.equal(alice.secure.map.has(`chirp.e2ee.verified.${alice.userId}.${bob.userId}`), false);
+  assert.deepEqual(bodies(alice.core, conversation), []);
+  assert.equal(journalFor(alice).account.complete, true);
+  await alice.restart(); await flush();
+  assert.equal(alice.engine.getState().reason, "account_deleted");
+  assert.equal(world.server.count("register"), registrations);
+});
+
+test("c452: signed-out completion uses recorded generation without unlocking or registering a device", async () => {
+  const world = new World(); const phone = world.phone(uuid());
+  const handle = await phone.core.unlock(phone.userId, 9); await phone.core.createDevice(handle, 2); await phone.core.lock(handle);
+  await phone.secure.set(`chirp.e2ee.device.${phone.userId}`, JSON.stringify({ generation: 9, deviceId: uuid(), approved: true }));
+  const unlocks = phone.core.count("unlock");
+  await phone.engine.purgeAccount(phone.userId);
+  assert.equal(phone.core.stores.size, 0);
+  assert.equal(phone.core.count("unlock"), unlocks);
+  assert.equal(world.server.count("register"), 0);
+  assert.ok(journalFor(phone).account.generations.includes(9));
+});
+
+test("c452: partial account wipe survives restart and keeps original generation after metadata removal", async () => {
+  const world = new World(); const phone = world.phone(uuid());
+  const handle = await phone.core.unlock(phone.userId, 4); await phone.core.createDevice(handle, 2); await phone.core.lock(handle);
+  await phone.secure.set(`chirp.e2ee.device.${phone.userId}`, JSON.stringify({ generation: 4, deviceId: uuid(), approved: true }));
+  const remove = phone.plain.remove; let fail = true;
+  phone.plain.remove = async key => { if (fail && key.includes(".state.")) { fail = false; throw new Error("disk_failed"); } return remove(key); };
+  await assert.rejects(phone.engine.purgeAccount(phone.userId));
+  assert.equal(phone.secure.map.has(`chirp.e2ee.device.${phone.userId}`), false);
+  assert.ok(journalFor(phone).account.generations.includes(4));
+  await phone.restart();
+  assert.equal(journalFor(phone).account.complete, true);
+  assert.equal(world.server.count("register"), 0);
+});
+
+test("c452: account purge drains encrypt before wiping and never transmits the encrypted result", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  const entered = deferred(), release = deferred(), encrypt = alice.core.encrypt.bind(alice.core);
+  alice.core.encrypt = async (...args) => { entered.resolve(); await release.promise; return encrypt(...args); };
+  const sending = alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "do not send" }).catch(() => undefined);
+  await entered.promise; const wiping = alice.engine.purgeAccount(alice.userId); await flush();
+  assert.equal(alice.core.count("wipe"), 0); release.resolve(); await sending; await wiping;
+  assert.equal(world.server.count("send"), 0); assert.equal(alice.core.stores.size, 0);
+});
+
+test("c452: journal failure prevents whole-account erasure; retry completes it without reactivating sends", async () => {
+  const world = new World(); const { alice, bob, conversation } = await world.pair();
+  await alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "erase when durable" });
+  const set = alice.plain.set;
+  alice.plain.set = async (key, value) => { if (key.includes(".cleanup.")) throw new Error("disk_full"); return set(key, value); };
+  await assert.rejects(alice.engine.purgeAccount(alice.userId));
+  assert.equal(alice.core.count("wipe"), 0);
+  await assert.rejects(alice.engine.sendDm({ conversationId: conversation, peerUserId: bob.userId, body: "blocked" }));
+  alice.plain.set = set; await alice.engine.purgeAccount(alice.userId);
+  assert.equal(alice.core.stores.size, 0);
+});
+
+
+test("c452: a slow first journal read cannot overwrite a newer confirmed cleanup intent", async () => {
+  const kv = memoryKv(), userId = uuid(), conversationId = uuid();
+  const entered = deferred(), release = deferred(), get = kv.get;
+  kv.get = async key => { const raw = await get(key); entered.resolve(); await release.promise; return raw; };
+  const journal = new CleanupJournal(kv, userId);
+  const firstRead = journal.load(); await entered.promise;
+  const writing = journal.update(state => { state.conversations[conversationId] = "confirmed"; });
+  release.resolve(); await firstRead; await writing;
+  assert.equal((await journal.load()).conversations[conversationId], "confirmed");
+  assert.equal(JSON.parse(kv.map.get(`chirp.e2ee.cleanup.${userId}`)).conversations[conversationId], "confirmed");
+});
+
+test("c452: a fresh Leave on a reused DM repeats the server request even before sync retires its completed fence", async () => {
+  const world = new World(); const { alice, conversation } = await world.pair();
+  await alice.leave(conversation);
+  world.server.left.delete(`${alice.userId}:${conversation}`);
+  await alice.leave(conversation);
+  assert.equal(world.server.count("leave"), 2);
+  assert.equal(world.server.left.has(`${alice.userId}:${conversation}`), true);
+  await alice.engine.leaveConversation(alice.userId, conversation, async () => { throw new Error("completed retry must stay local"); }, true);
+  assert.equal(world.server.count("leave"), 2);
+});
+
+test("c452: invalid conversation ids cannot poison the durable journal", async () => {
+  const world = new World(); const phone = world.phone(uuid()); await phone.engine.start(phone.userId);
+  await assert.rejects(phone.leave("not-a-uuid"));
+  assert.equal(world.server.count("leave"), 0);
+  assert.equal(phone.plain.map.has(`chirp.e2ee.cleanup.${phone.userId}`), false);
+  assert.equal((await phone.restart()).status, "ready");
+});
+
+test("c452: replacement generation is recorded before native unlock, so crash recovery erases it", async () => {
+  const world = new World(); const phone = world.phone(uuid());
+  await phone.secure.set(`chirp.e2ee.device.${phone.userId}`, JSON.stringify({ generation: 5, deviceId: uuid(), approved: true }));
+  const unlock = phone.core.unlock.bind(phone.core);
+  phone.core.unlock = async (userId, generation) => {
+    const handle = await unlock(userId, generation);
+    if (generation === 6) {
+      assert.equal((await loadDeviceRecord(phone.secure, phone.userId)).generation, 6);
+      throw new Error("process_died_after_unlock");
+    }
+    return handle;
+  };
+  assert.equal((await phone.engine.start(phone.userId)).status, "error");
+  assert.equal(phone.core.stores.has(`${phone.userId}:6`), true);
+  await phone.engine.purgeAccount(phone.userId);
+  assert.equal(phone.core.stores.has(`${phone.userId}:6`), false);
+});
+
+test("c452: missing native support cannot complete an iOS account wipe even if its device record is absent", async () => {
+  const world = new World(); const phone = world.phone(uuid());
+  phone.available = false;
+  phone.plain.map.set(`chirp.e2ee.cleanup.${phone.userId}`, JSON.stringify({ account: { generations: [7], complete: false }, conversations: {} }));
+  await assert.rejects(phone.engine.purgeAccount(phone.userId));
+  assert.equal(journalFor(phone).account.complete, false);
+  assert.equal(phone.core.count("wipe"), 0);
+  const web = world.phone(uuid()); web.available = false; web.nativeHistoryPossible = false;
+  await web.engine.purgeAccount(web.userId);
+  assert.equal(journalFor(web).account.complete, true, "explicit never-native platform can clear only its metadata");
+});
+
+test("c452: whole-account purge drains an in-flight verified marker write before deleting metadata", async () => {
+  const world = new World(); const { alice, bob } = await world.pair();
+  alice.engine.safetyView = async () => ({ fingerprint: "view", state: "trusted", ownState: "trusted", number: "2".repeat(60) });
+  const entered = deferred(), release = deferred(), set = alice.secure.set;
+  alice.secure.set = async (key, value) => { if (key.includes("verified-index")) { entered.resolve(); await release.promise; } return set(key, value); };
+  const marking = alice.engine.setVerified(bob.userId, true, "view"); await entered.promise;
+  const wiping = alice.engine.purgeAccount(alice.userId); await flush();
+  assert.equal(alice.core.count("wipe"), 0, "marker writer is drained before erasure");
+  release.resolve(); await marking; await wiping;
+  assert.equal(alice.secure.map.has(`chirp.e2ee.verified.${alice.userId}.${bob.userId}`), false);
+  assert.equal(alice.secure.map.has(`chirp.e2ee.verified-index.${alice.userId}`), false);
+});
+
+test("c452: pending approval recheck cannot restore a device record after account purge", async () => {
+  const world = new World(); const user = uuid();
+  const first = world.phone(user); await first.engine.start(user);
+  const phone = world.phone(user); await phone.engine.start(user);
+  world.server.approve(phone.engine.getState().deviceId, first.engine.getState().deviceId);
+  const entered = deferred(), release = deferred(), set = phone.secure.set;
+  phone.secure.set = async (key, value) => { if (key.includes(".device.") && JSON.parse(value).approved) { entered.resolve(); await release.promise; } return set(key, value); };
+  const checking = phone.engine.recheck(); await entered.promise;
+  const wiping = phone.engine.purgeAccount(user); await flush();
+  assert.equal(phone.core.count("wipe"), 1, "only the earlier stale-generation registration wipe occurred");
+  release.resolve(); await checking; await wiping;
+  assert.equal(phone.secure.map.has(`chirp.e2ee.device.${user}`), false);
+  assert.equal(phone.engine.getState().reason, "account_deleted");
+});
+
 // ---------------------------------------------------------------------------
 // Run
 // ---------------------------------------------------------------------------
@@ -1244,13 +1595,14 @@ test("error classification: no answer and busy servers are 'try later'; real ans
 void KEY_LOW_WATER;
 let failures = 0;
 for (const { name, fn } of cases) {
+  let deadline;
   try {
-    await fn();
+    await Promise.race([fn(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error(`case timed out: ${name}`)), 15_000); })]);
     console.log(`  PASS  ${name}`);
   } catch (error) {
     failures++;
     console.log(`  FAIL  ${name}\n        ${String(error?.stack ?? error).split("\n").slice(0, 6).join("\n        ")}`);
-  }
+  } finally { clearTimeout(deadline); }
 }
 console.log(failures === 0 ? `\nOK  verify:e2ee-dm - ${cases.length} cases` : `\n${failures} FAILURE(S) of ${cases.length}`);
 process.exit(failures === 0 ? 0 : 1);

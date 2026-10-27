@@ -350,6 +350,10 @@ jobs:
         working-directory: app-mobile
         run: npm run verify:local-conversation-purge
 
+      - name: Account deletion completion ownership
+        working-directory: app-mobile
+        run: npm run verify:deletion-completion
+
       - name: Bounded messages inbox
         working-directory: app-mobile
         # c344. Keeps the per-row listMessages fanout from creeping back into the

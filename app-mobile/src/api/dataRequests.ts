@@ -51,3 +51,30 @@ export async function getDataRequest(requestId: string): Promise<DataRequestOut>
 export async function downloadDataRequest(requestId: string): Promise<string> {
   return requestText(`/me/data-requests/${encodeURIComponent(requestId)}/download`);
 }
+
+/** A read-only completion capability, retained in this phone's secure storage. */
+export interface DeletionCompletionToken {
+  token: string;
+  user_id: string;
+  request_id: string;
+  expires_at: string;
+}
+
+export interface DeletionCompletionStatus {
+  user_id: string;
+  request_id: string;
+  completed: boolean;
+}
+
+export function createDeletionCompletionToken(requestId: string): Promise<DeletionCompletionToken> {
+  return request<DeletionCompletionToken>(`/me/data-requests/${encodeURIComponent(requestId)}/completion-token`, {
+    method: "POST", redirect: "error",
+  });
+}
+
+/** The capability, rather than a Firebase session, authorizes this narrow read. */
+export function checkDeletionCompletion(token: string): Promise<DeletionCompletionStatus> {
+  return request<DeletionCompletionStatus>("/account-deletion/completion", {
+    method: "POST", body: { token }, retryAuth: false, redirect: "error",
+  });
+}

@@ -213,6 +213,33 @@ export async function recoveryCases({ test, flush, deferred, response, readySock
     await view.focus(false); assert.equal(request.options.signal.aborted, true); leave.resolve(response(204)); await flush(); assert.deepEqual(e.navigation, []);
   });
 
+  await test('c452 failed local removal keeps a retry after server membership is denied, with no second server leave', async e => {
+    const f = await fixture(e), view = await mount(e, threadPath);
+    e.cleanup.fail = true;
+    nodes(view.tree).find(node => typeof node.type === 'function' && node.type.name === 'LeaveConversationButton').props.onPress();
+    e.confirmation.onConfirm(); await flush();
+    assert.equal(f.calls('/leave').length, 1); assert.deepEqual(e.navigation, []);
+    assert.ok(has(view, 'Finish removing local messages'));
+    f.override = url => url.pathname === `/conversations/${THREAD}` ? response(403, { detail: 'not_a_member' }) : undefined;
+    await view.tree.props.onRefresh(); await flush();
+    assert.ok(has(view, 'Conversation unavailable'));
+    e.cleanup.fail = false;
+    nodes(view.tree).find(node => node.props?.title === 'Finish removing local messages').props.onAction();
+    await flush();
+    assert.equal(f.calls('/leave').length, 1); assert.deepEqual(e.navigation, ['back']);
+  });
+
+  await test('c452 pending local removal is offered after remount and stale account retry is inert', async e => {
+    const f = await fixture(e); e.cleanup.phase = 'confirmed';
+    f.override = url => url.pathname === `/conversations/${THREAD}` ? response(403, { detail: 'not_a_member' }) : undefined;
+    const view = await mount(e, threadPath);
+    const retry = nodes(view.tree).find(node => node.props?.title === 'Finish removing local messages').props.onAction;
+    assert.ok(has(view, 'Conversation unavailable'));
+    e.emit(e.user('B')); await flush(); view.update({}); await flush();
+    retry(); await flush();
+    assert.equal(e.cleanup.calls.length, 0); assert.equal(f.calls('/leave').length, 0); assert.deepEqual(e.navigation, []);
+  });
+
   await test('c354 a stalled history body shares the 15-second deadline and aborts fetch', async e => {
     const f = await fixture(e), body = deferred(); f.override = url => url.pathname.endsWith('/messages') ? { ...response(), json: () => body.promise } : undefined;
     const view = await mount(e, threadPath); const request = f.calls('/messages')[0];

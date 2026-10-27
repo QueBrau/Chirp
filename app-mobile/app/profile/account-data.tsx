@@ -20,6 +20,7 @@ import { shareJson } from "@/lib/export";
 import { radii, spacing, useTheme } from "@/theme";
 import { currentIdentity, onIdentityChanged, ownsIdentity, type AuthIdentity } from "@/auth/identity";
 import { openLegalLink } from "@/lib/legalLinks";
+import { rememberDeletion } from "@/crypto/deletionCompletionRuntime";
 
 function showRequestError(error: unknown, title: string) {
   if (error instanceof ApiError && error.detail === "recent_authentication_required") {
@@ -108,7 +109,7 @@ function RequestCard({ item, owner, onRefresh }: { item: DataRequestOut; owner: 
 }
 
 export default function AccountDataScreen() {
-  const { status } = useSession();
+  const { status, user } = useSession();
   const [owner, setOwner] = useState(currentIdentity);
   const ownerRef = useRef(owner);
   const mountedRef = useRef(true);
@@ -118,15 +119,34 @@ export default function AccountDataScreen() {
   const [items, setItems] = useState<DataRequestOut[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<DataRequestKind | null>(null);
+  const [cleanupNeedsRetry, setCleanupNeedsRetry] = useState<"retry" | "reauth" | null>(null);
+  const userIdRef = useRef(user?.id ?? null);
+  userIdRef.current = user?.id ?? null;
 
   const load = useCallback(async () => {
     const requestedOwner = ownerRef.current;
+    const requestedUserId = userIdRef.current;
     const generation = ++generationRef.current;
     const current = () => mountedRef.current && ownsIdentity(requestedOwner) && generationRef.current === generation;
     setLoading(true);
     try {
       const result = await listDataRequests();
-      if (current()) setItems(result);
+      if (current()) {
+        setItems(result);
+        let failed: "retry" | "reauth" | null = null;
+        if (requestedUserId !== null) {
+          for (const item of result) {
+            if (!current()) break;
+            if (item.kind !== "deletion" || item.status === "canceled" || item.status === "failed") continue;
+            try { await rememberDeletion(requestedUserId, item.id, requestedOwner); }
+            catch (error) {
+              if (error instanceof ApiError && error.detail === "recent_authentication_required") failed = "reauth";
+              else if (failed !== "reauth") failed = "retry";
+            }
+          }
+        }
+        if (current()) setCleanupNeedsRetry(failed);
+      }
     } catch (error) {
       if (current()) {
         setItems(null);
@@ -147,6 +167,7 @@ export default function AccountDataScreen() {
       submitBusyRef.current = false;
       setSubmitting(null);
       setItems(null);
+      setCleanupNeedsRetry(null);
       setOwner(next);
     };
     const unsubscribe = onIdentityChanged(reset);
@@ -167,6 +188,7 @@ export default function AccountDataScreen() {
 
   const submit = (kind: DataRequestKind) => {
     const requestedOwner = ownerRef.current;
+    const requestedUserId = userIdRef.current;
     if (submitBusyRef.current || !ownsIdentity(requestedOwner)) return;
     const isDeletion = kind === "deletion";
     confirmAction({
@@ -183,9 +205,16 @@ export default function AccountDataScreen() {
         const current = () => mountedRef.current && ownsIdentity(requestedOwner) && submitGenerationRef.current === generation;
         setSubmitting(kind);
         void createDataRequest(kind)
-          .then((created) => {
+          .then(async (created) => {
             if (current()) {
               setItems((previous) => [created, ...(previous ?? []).filter(item => item.id !== created.id)]);
+              if (isDeletion && requestedUserId !== null) {
+                try { await rememberDeletion(requestedUserId, created.id, requestedOwner); }
+                catch (error) {
+                  if (current()) setCleanupNeedsRetry(error instanceof ApiError && error.detail === "recent_authentication_required" ? "reauth" : "retry");
+                }
+              }
+              if (!current()) return;
               showAlert("Request received", "Return here to check its status. Keep the request reference if you contact support.");
             }
           })
@@ -218,6 +247,11 @@ export default function AccountDataScreen() {
   return (
     <Screen title="Your data" subtitle="Request a copy or account deletion" onRefresh={canLoad ? load : undefined}>
       <View style={{ gap: spacing.lg }}>
+        {cleanupNeedsRetry === "reauth" ? <EmptyState title="Sign in again to prepare local cleanup"
+          message="Your deletion request is saved. Sign out and sign back in, then return here to prepare automatic message cleanup on this phone." /> : null}
+        {cleanupNeedsRetry === "retry" ? <EmptyState title="Local cleanup needs a retry"
+          message="Your deletion request is saved. Refresh status to prepare automatic message cleanup on this phone when deletion finishes."
+          actionLabel="Refresh status" onAction={() => void load()} /> : null}
         <Card>
           <AppText variant="headline">Account data requests</AppText>
           <AppText variant="body" tone="secondary" style={{ marginTop: spacing.sm }}>

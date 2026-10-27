@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 from typing import Literal
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from app.schemas.base import _Schema
 
@@ -16,6 +16,24 @@ DataRequestStatus = Literal[
 
 class DataRequestCreate(_Schema):
     kind: DataRequestKind
+
+
+class DeletionCompletionTokenOut(_Schema):
+    token: str
+    user_id: uuid.UUID
+    request_id: uuid.UUID
+    expires_at: datetime
+
+
+class DeletionCompletionCheck(_Schema):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    token: str = Field(min_length=1, max_length=1024, repr=False)
+
+
+class DeletionCompletionOut(_Schema):
+    request_id: uuid.UUID
+    user_id: uuid.UUID
+    completed: bool
 
 
 class PostDeletionCleanupOut(_Schema):

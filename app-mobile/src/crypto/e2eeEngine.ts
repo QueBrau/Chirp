@@ -14,8 +14,8 @@
  *  - A trust hard stop blocks SENDING with a typed error; receiving never checks trust.
  *  - Claiming a key burns a key on the server, so a key is claimed only for a recipient the
  *    core says has no session yet (`hasSession`).
- *  - Sign-out locks the store. Nothing here ever wipes it except the one case where the
- *    store holds a device the server never confirmed (an unusable half-registration).
+ *  - Sign-out locks and retains the store. Explicit leave/account cleanup uses a durable
+ *    journal; Reset security and abandoned registration retire their old namespaces.
  */
 
 import type { chirpCrypto, DirectoryDevice, Leg, PlaintextMessage, SignedKey, TrustState } from "./native";
@@ -39,12 +39,14 @@ import { legBody, registrationBody, toDirectoryDevice, toSignedKey, uploadBody }
 import {
   AppStateStore,
   clearVerifiedNumber,
+  clearAccountMetadata,
   loadDeviceRecord,
   loadVerifiedNumber,
   saveDeviceRecord,
   saveVerifiedNumber,
   type KvPort,
 } from "./e2eeStore";
+import { CleanupJournal } from "./e2eeCleanup";
 import { directoryFingerprint, pairFingerprint } from "./e2eeTrust";
 import {
   E2EE_ENVELOPE_VERSION,
@@ -98,6 +100,7 @@ export type CryptoPort = Pick<
   | "encrypt"
   | "decrypt"
   | "listMessages"
+  | "purgeConversation"
 >;
 
 export type ApiPort = Pick<
@@ -115,11 +118,15 @@ export type ApiPort = Pick<
 >;
 
 export interface ConversationsPort {
+  /** Repeat the user's durable leave intent after a restart. The endpoint is idempotent. */
+  leave?: (conversationId: string) => Promise<void>;
   /** Who the other member of a conversation is. `peerUserId` is null for a group. */
   getPeer(conversationId: string, myUserId: string): Promise<{ kind: "dm" | "group"; peerUserId: string | null }>;
 }
 
 export interface EnginePorts {
+  /** Capture bearer ownership at engine start; pure test adapters may omit it. */
+  captureOwner?: () => () => boolean;
   crypto: CryptoPort;
   api: ApiPort;
   /** Holds the device record (Keychain). */
@@ -128,6 +135,8 @@ export interface EnginePorts {
   plain: KvPort;
   /** Whether this build has the native module at all. */
   available: () => boolean;
+  /** False only for a platform that has never supported this native store (web/Android). */
+  canHaveNativeHistory?: () => boolean;
   /** A fresh lowercase UUID v4. */
   newId: () => string;
   now: () => number;
@@ -149,6 +158,7 @@ interface Session {
   deviceId: string;
   handle: Handle;
   run: number;
+  current: () => boolean;
 }
 
 interface DirectorySet {
@@ -169,7 +179,9 @@ export type EngineEvent =
   | { type: "state" }
   | { type: "thread"; conversationId: string }
   | { type: "approvals" }
-  | { type: "trust"; userId: string };
+  | { type: "trust"; userId: string }
+  | { type: "purged"; conversationId: string }
+  | { type: "accountPurged"; userId: string };
 
 export interface SyncResult {
   received: number;
@@ -214,6 +226,14 @@ export class E2eeEngine {
   private readonly snoozed = new Set<string>();
   /** The one Reset security run in flight, so a second tap joins it instead of starting another. */
   private resetting: Promise<void> | null = null;
+
+  private currentOwner: () => boolean = () => true;
+  private readonly journals = new Map<string, CleanupJournal>();
+  private readonly erasedAccounts = new Set<string>();
+  private readonly gatedConversations = new Set<string>();
+  private readonly purging = new Map<string, Promise<void>>();
+  private readonly wiping = new Map<string, Promise<void>>();
+  private readonly metadataWrites = new Set<Promise<unknown>>();
 
   private sendTail: Promise<unknown> = Promise.resolve();
   private replaying: Promise<void> | null = null;
@@ -294,6 +314,7 @@ export class E2eeEngine {
     // A start that is not itself a re-check begins a new session's budget.
     if (options.recheck !== true) this.notReadyRechecks = 0;
     const run = ++this.run;
+    this.currentOwner = this.ports.captureOwner?.() ?? (() => true);
     this.startedFor = userId;
     // A new bring-up never overlaps an older one still unwinding: two would race for the
     // same store ("store_in_use") and one handle would leak.
@@ -339,7 +360,15 @@ export class E2eeEngine {
    * answer is looked at again only when the app returns to the FOREGROUND, and only once per
    * session; a socket reconnect or a manual retry never re-probes it, so there is no loop.
    */
-  async recheck(source: "foreground" | "reconnect" | "manual" = "manual"): Promise<E2eeState> {
+  recheck(source: "foreground" | "reconnect" | "manual" = "manual"): Promise<E2eeState> {
+    const run = this.run;
+    return this.trackMetadata(async () => {
+      if (!this.alive(run) || (this.state.userId !== null && this.erasedAccounts.has(this.state.userId))) return this.state;
+      return this.doRecheck(source);
+    });
+  }
+
+  private async doRecheck(source: "foreground" | "reconnect" | "manual"): Promise<E2eeState> {
     const { status, userId } = this.state;
     if (userId === null) return this.state;
     if (status === "unavailable" && this.state.reason === SERVER_NOT_READY) {
@@ -360,6 +389,7 @@ export class E2eeEngine {
     if (status !== "pending_approval" || session === null) return this.state;
     try {
       if (await this.isListed(session.userId, session.deviceId)) {
+        if (!this.sessionCurrent(session)) return this.state;
         await saveDeviceRecord(this.ports.secure, session.userId, {
           generation: session.generation,
           deviceId: session.deviceId,
@@ -384,6 +414,13 @@ export class E2eeEngine {
     if (!this.ports.available()) {
       return this.setState({ status: "unavailable" });
     }
+    const cleanup = await this.journal(userId).load();
+    if (!this.alive(run) || !this.currentOwner()) throw new Superseded();
+    if (cleanup.account !== null || this.erasedAccounts.has(userId)) {
+      await this.wipeRecordedAccount(userId);
+      return this.setState({ status: "unavailable", userId, reason: "account_deleted" });
+    }
+    for (const id of Object.keys(cleanup.conversations)) this.gatedConversations.add(this.cleanupKey(userId, id));
     const { crypto, secure } = this.ports;
 
     const record = await loadDeviceRecord(secure, userId);
@@ -415,6 +452,7 @@ export class E2eeEngine {
           // server may still list it: take the next generation and register fresh.
           await crypto.wipe(userId, generation);
           generation = record.generation + 1;
+          await saveDeviceRecord(secure, userId, { generation, deviceId: null, approved: false });
           handle = await crypto.unlock(userId, generation);
           deviceId = null;
           approved = false;
@@ -457,9 +495,11 @@ export class E2eeEngine {
         if (approved) await saveDeviceRecord(secure, userId, { generation, deviceId, approved: true });
       }
 
-      const session: Session = { userId, generation, deviceId, handle, run };
+      const session: Session = { userId, generation, deviceId, handle, run, current: this.currentOwner };
       this.session = session;
       this.store = new AppStateStore(this.ports.plain, userId);
+      await this.resumeConversationCleanup(userId);
+      if (!this.sessionCurrent(session)) throw new Superseded();
       if (approved) {
         const ready = this.setState({ status: "ready", userId, deviceId, generation });
         void this.afterReady();
@@ -499,6 +539,7 @@ export class E2eeEngine {
     let sent = priorAttempts; // Registration requests sent without ever being told a device id.
     try {
       for (let attempt = 0; ; attempt++) {
+        if (!this.alive(run) || !this.currentOwner() || this.erasedAccounts.has(userId)) throw new Superseded();
         if (sent >= MAX_UNCONFIRMED_REGISTRATIONS) throw new StartFailure(REGISTRATION_UNCONFIRMED);
         const created = await crypto.createDevice(handle, INITIAL_ONE_TIME_KEYS);
         // Before the request: from here a crash leaves a store with a device and no id, which
@@ -508,6 +549,7 @@ export class E2eeEngine {
         await saveDeviceRecord(secure, userId, { generation, deviceId: null, approved: false, attempts: sent });
         let out: Awaited<ReturnType<ApiPort["registerDeviceV2"]>>;
         try {
+          if (!this.alive(run) || !this.currentOwner() || this.erasedAccounts.has(userId)) throw new Superseded();
           out = await api.registerDeviceV2(registrationBody(created, generation));
         } catch (error) {
           const max = staleGenerationMax(error);
@@ -842,12 +884,21 @@ export class E2eeEngine {
    * A number cannot be marked while a hard stop is open: accept it first, then verify what
    * was accepted. Returns whether the pair is verified now.
    */
-  async setVerified(peerUserId: string, verified: boolean, fingerprint: string): Promise<boolean> {
+  setVerified(peerUserId: string, verified: boolean, fingerprint: string): Promise<boolean> {
+    const session = this.readySession();
+    return this.trackMetadata(() => this.exclusive(async () => {
+      if (session === null || !this.sessionCurrent(session)) throw new E2eeTrustError("not_ready");
+      return this.doSetVerified(session, peerUserId, verified, fingerprint);
+    }));
+  }
+
+  private async doSetVerified(session: Session, peerUserId: string, verified: boolean, fingerprint: string): Promise<boolean> {
     try {
       const view = await this.safetyView(peerUserId);
       if (view.fingerprint !== fingerprint) throw new E2eeTrustError("changed_again");
       const { secure } = this.ports;
-      const me = this.requireReady().userId;
+      if (!this.sessionCurrent(session)) throw new E2eeTrustError("not_ready");
+      const me = session.userId;
       if (!verified) {
         await clearVerifiedNumber(secure, me, peerUserId);
         this.emit({ type: "trust", userId: peerUserId });
@@ -878,9 +929,11 @@ export class E2eeEngine {
       if (devices.length === 0) throw new E2eeTrustError("peer_no_devices");
       if (expected !== null && directoryFingerprint(devices) !== expected) throw new E2eeTrustError("changed_again");
       const { crypto } = this.ports;
+      if (!this.sessionCurrent(session)) throw new E2eeTrustError("not_ready");
       const before = await crypto.observeDirectory(session.handle, userId, devices);
       if (before !== "trusted") {
         try {
+          if (!this.sessionCurrent(session)) throw new E2eeTrustError("not_ready");
           await crypto.acceptIdentityChange(session.handle, userId);
         } catch (error) {
           // The directory went back to what is pinned between the two calls: nothing to accept.
@@ -980,6 +1033,7 @@ export class E2eeEngine {
         bindingSignature: target.bindingSignature,
       });
       try {
+        if (!this.sessionCurrent(session)) throw new E2eeTrustError("not_ready");
         await this.ports.api.approveDeviceV2(deviceId, {
           approver_device_id: session.deviceId,
           approval_signature_b64: approval.signature,
@@ -1061,7 +1115,7 @@ export class E2eeEngine {
   resetSecurity(): Promise<void> {
     if (this.resetting !== null) return this.resetting;
     const session = this.session;
-    if (this.state.status !== "pending_approval" || session === null) {
+    if (this.state.status !== "pending_approval" || session === null || !this.sessionCurrent(session)) {
       return Promise.reject(new E2eeTrustError("not_pending"));
     }
     const promise = this.doReset(session)
@@ -1077,11 +1131,13 @@ export class E2eeEngine {
 
   /** Every device of this account other than the current one: approved ones and pending ones. */
   private async otherDeviceIds(session: Session): Promise<string[]> {
+    this.assertCapturedSession(session);
     const { api } = this.ports;
     const [directory, pending] = await Promise.all([
       api.getUserDirectoryV2(session.userId),
       api.listPendingDevicesV2(),
     ]);
+    this.assertCapturedSession(session);
     const ids = new Set<string>();
     for (const device of directory.devices) ids.add(device.device_id);
     for (const device of pending.devices) ids.add(device.id);
@@ -1101,6 +1157,7 @@ export class E2eeEngine {
       for (const id of others) {
         if (id === session.deviceId) continue; // Never the current phone.
         try {
+          this.assertCapturedSession(session);
           await api.revokeDeviceV2(id);
         } catch (error) {
           // Not found or not ours: it is not a device of this account any more.
@@ -1109,7 +1166,7 @@ export class E2eeEngine {
         }
       }
     }
-    if (!this.alive(session.run)) throw new E2eeTrustError("not_ready");
+    this.assertCapturedSession(session);
 
     // 2. Forget the pending namespace, take the next generation, register again. Only now does
     //    anything local change.
@@ -1121,8 +1178,12 @@ export class E2eeEngine {
     await this.lockQuietly(session.handle);
     let registered: { handle: Handle; generation: number; deviceId: string; approved: boolean };
     try {
+      this.assertCapturedSession(session);
       await crypto.wipe(userId, session.generation);
+      this.assertCapturedSession(session);
       const generation = session.generation + 1;
+      await saveDeviceRecord(secure, userId, { generation, deviceId: null, approved: false });
+      this.assertCapturedSession(session);
       const handle = await crypto.unlock(userId, generation);
       registered = await this.register(userId, session.run, generation, handle, 0);
     } catch (error) {
@@ -1135,7 +1196,7 @@ export class E2eeEngine {
       }
       throw error;
     }
-    if (!this.alive(session.run)) {
+    if (!this.capturedSessionCurrent(session)) {
       await this.lockQuietly(registered.handle);
       throw new E2eeTrustError("not_ready");
     }
@@ -1145,6 +1206,7 @@ export class E2eeEngine {
       deviceId: registered.deviceId,
       handle: registered.handle,
       run: session.run,
+      current: session.current,
     };
     this.store = new AppStateStore(this.ports.plain, userId);
     await saveDeviceRecord(secure, userId, {
@@ -1152,6 +1214,7 @@ export class E2eeEngine {
       deviceId: registered.deviceId,
       approved: registered.approved,
     });
+    this.assertCapturedSession(session);
 
     // 3. This phone's earlier pending registration can never be used now (its store is gone).
     //    Best effort: if it stays, the person can refuse it from the prompt like any other.
@@ -1160,6 +1223,7 @@ export class E2eeEngine {
     } catch (error) {
       this.report("reset_old_device", error);
     }
+    this.assertCapturedSession(session);
 
     if (!registered.approved) {
       // The server did not make this the root (a phone was approved in the meantime). Say so
@@ -1171,10 +1235,187 @@ export class E2eeEngine {
     void this.afterReady();
   }
 
+  // ---- local erasure -------------------------------------------------------------
+
+  private trackMetadata<T>(work: () => Promise<T>): Promise<T> {
+    const promise = Promise.resolve().then(work).finally(() => this.metadataWrites.delete(promise));
+    this.metadataWrites.add(promise);
+    return promise;
+  }
+  private cleanupKey(userId: string, conversationId: string): string { return `${userId}:${conversationId}`; }
+  private journal(userId: string): CleanupJournal {
+    let journal = this.journals.get(userId);
+    if (!journal) { journal = new CleanupJournal(this.ports.plain, userId); this.journals.set(userId, journal); }
+    return journal;
+  }
+  private capturedSessionCurrent(session: Session): boolean {
+    return this.alive(session.run) && session.current() && !this.erasedAccounts.has(session.userId);
+  }
+  private assertCapturedSession(session: Session): void {
+    if (!this.capturedSessionCurrent(session)) throw new E2eeTrustError("not_ready");
+  }
+  private sessionCurrent(session: Session): boolean {
+    return this.session === session && this.capturedSessionCurrent(session);
+  }
+  private assertConversation(session: Session, conversationId: string): void {
+    if (!this.sessionCurrent(session) || this.gatedConversations.has(this.cleanupKey(session.userId, conversationId))) throw new Superseded();
+  }
+  private async conversationAllowed(session: Session, conversationId: string, rejoin = false): Promise<boolean> {
+    if (!this.sessionCurrent(session)) return false;
+    const journal = this.journal(session.userId);
+    const state = await journal.load();
+    if (!this.sessionCurrent(session) || state.account !== null) return false;
+    const phase = state.conversations[conversationId];
+    const key = this.cleanupKey(session.userId, conversationId);
+    if (phase === undefined) return !this.gatedConversations.has(key);
+    if (phase !== "complete" || !rejoin || this.purging.has(key)) return false;
+    // The server reuses the SAME DM id when either party starts the DM again.
+    // Only a fresh, successful membership read can retire the completed fence.
+    try { await this.ports.conversations.getPeer(conversationId, session.userId); }
+    catch { return false; }
+    if (!this.sessionCurrent(session)) return false;
+    let removed = false;
+    await journal.update(next => {
+      if (next.account === null && next.conversations[conversationId] === "complete") {
+        delete next.conversations[conversationId]; removed = true;
+      }
+    });
+    if (removed) this.gatedConversations.delete(key);
+    return removed && this.sessionCurrent(session);
+  }
+
+  /** Read-only UI status; a failed journal read must be shown as a cleanup error. */
+  async conversationCleanupStatus(userId: string, conversationId: string): Promise<"requested" | "confirmed" | "complete" | null> {
+    return (await this.journal(userId).load()).conversations[conversationId] ?? null;
+  }
+
+  /** The authenticated caller's leave action, including resumable local erasure.
+   * The intent is durable BEFORE the idempotent server request. A successful leave
+   * followed by a disk error retries only cleanup; it never needs membership again.
+   */
+  leaveConversation(userId: string, conversationId: string, confirmServerLeave: () => Promise<void>, resumeOnly = false): Promise<void> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conversationId)) return Promise.reject(new Error("invalid_conversation"));
+    const key = this.cleanupKey(userId, conversationId);
+    const existing = this.purging.get(key);
+    if (existing) return existing;
+    if (this.startedFor !== userId || !this.currentOwner() || this.erasedAccounts.has(userId)) return Promise.reject(new Superseded());
+    const session = this.session?.userId === userId ? this.session : null;
+    const store = session ? this.store : null;
+    const run = this.run;
+    this.gatedConversations.add(key);
+    this.emit({ type: "purged", conversationId });
+    const journal = this.journal(userId);
+    const promise = (async () => {
+      let phase = (await journal.load()).conversations[conversationId];
+      if (phase === undefined || (phase === "complete" && !resumeOnly)) {
+        await journal.update(state => { state.conversations[conversationId] = "requested"; });
+        phase = "requested";
+      }
+      // Writers that entered before the gate must finish before the native purge.
+      const sync = this.syncing.get(conversationId)?.promise;
+      await Promise.allSettled([this.sendTail, ...(sync ? [sync] : [])]);
+      if (!this.alive(run) || !this.currentOwner()) throw new Superseded();
+      if (phase === "requested") {
+        await confirmServerLeave();
+        await journal.update(state => { state.conversations[conversationId] = "confirmed"; });
+      }
+      if (phase === "complete") return;
+      if (!this.alive(run) || !this.currentOwner()) throw new Superseded();
+      const record = await loadDeviceRecord(this.ports.secure, userId, true);
+      if (session !== null) {
+        if (!this.sessionCurrent(session)) throw new Superseded();
+        await this.ports.crypto.purgeConversation(session.handle, conversationId);
+      } else if (record !== null) {
+        // Preserve a pending intent when this build cannot unlock an existing store.
+        if (!this.ports.available()) throw new Error("cleanup_native_unavailable");
+        const handle = await this.ports.crypto.unlock(userId, record.generation);
+        try { await this.ports.crypto.purgeConversation(handle, conversationId); }
+        finally { await this.lockQuietly(handle); }
+      }
+      const capturedStore = store ?? new AppStateStore(this.ports.plain, userId);
+      await capturedStore.update(state => {
+        state.outbox = state.outbox.filter(entry => entry.conversationId !== conversationId);
+        delete state.undecryptable[conversationId];
+      });
+      await journal.update(state => { state.conversations[conversationId] = "complete"; });
+      this.emit({ type: "purged", conversationId });
+    })().finally(() => { if (this.purging.get(key) === promise) this.purging.delete(key); });
+    this.purging.set(key, promise);
+    return promise;
+  }
+
+  private async resumeConversationCleanup(userId: string): Promise<void> {
+    const state = await this.journal(userId).load();
+    for (const [id, phase] of Object.entries(state.conversations)) {
+      if (phase === "complete") continue;
+      try {
+        await this.leaveConversation(userId, id, async () => {
+          if (!this.ports.conversations.leave) throw new Error("cleanup_leave_unavailable");
+          await this.ports.conversations.leave(id);
+        }, true);
+      } catch (error) { this.report("conversation_cleanup", error); }
+    }
+  }
+
+  /** Called ONLY after a trusted server completion receipt (c452/c436).
+   * The durable account tombstone prevents a still-ready SessionProvider or a later
+   * restart from creating a fresh device for the deleted account. Sign-out uses stop.
+   */
+  purgeAccount(userId: string): Promise<void> {
+    const existing = this.wiping.get(userId);
+    if (existing) return existing;
+    this.erasedAccounts.add(userId);
+    const starting = this.startedFor === userId ? this.starting : null;
+    if (this.startedFor === userId) {
+      this.run += 1;
+      this.setState({ status: "unavailable", reason: "account_deleted" });
+    }
+    const promise = (async () => {
+      await this.journal(userId).update(state => { state.account ??= { generations: [], complete: false }; });
+      await Promise.allSettled([
+        this.sendTail, ...this.metadataWrites, ...[...this.syncing.values()].map(slot => slot.promise),
+        ...[starting, this.maintaining, this.resetting].filter(item => item !== null),
+        ...[...this.purging.entries()].filter(([key]) => key.startsWith(`${userId}:`)).map(([, value]) => value),
+      ]);
+      await this.wipeRecordedAccount(userId);
+    })().finally(() => { if (this.wiping.get(userId) === promise) this.wiping.delete(userId); });
+    this.wiping.set(userId, promise);
+    return promise;
+  }
+
+  private async wipeRecordedAccount(userId: string): Promise<void> {
+    this.erasedAccounts.add(userId);
+    const journal = this.journal(userId);
+    const record = await loadDeviceRecord(this.ports.secure, userId, true);
+    const session = this.session?.userId === userId ? this.session : null;
+    const knownPeers = session ? [...this.directories.keys()] : [];
+    await journal.update(state => {
+      state.account ??= { generations: [], complete: false };
+      // Generation 1 also covers a crash after the first native unlock but before
+      // registration persisted a device record. Later generations are journaled.
+      for (const generation of [record?.generation, session?.generation, 1]) {
+        if (generation !== undefined && !state.account.generations.includes(generation)) state.account.generations.push(generation);
+      }
+    });
+    const account = (await journal.load()).account!;
+    if (!this.ports.available() && (this.ports.canHaveNativeHistory?.() !== false || record !== null || session !== null)) throw new Error("cleanup_native_unavailable");
+    if (this.ports.available()) {
+      for (const generation of account.generations) await this.ports.crypto.wipe(userId, generation);
+    }
+    if (this.session?.userId === userId) await this.stop();
+    await clearAccountMetadata(this.ports.secure, this.ports.plain, userId, knownPeers);
+    await journal.update(state => { state.account!.complete = true; state.conversations = {}; });
+    if (this.startedFor === null || this.startedFor === userId) {
+      this.setState({ status: "unavailable", userId, deviceId: null, generation: null, reason: "account_deleted" });
+    }
+    this.emit({ type: "accountPurged", userId });
+  }
+
   // ---- send ----------------------------------------------------------------------
 
   private readySession(): Session | null {
-    return this.state.status === "ready" ? this.session : null;
+    const session = this.session;
+    return this.state.status === "ready" && session !== null && this.sessionCurrent(session) ? session : null;
   }
 
   private exclusive<T>(job: () => Promise<T>): Promise<T> {
@@ -1191,7 +1432,12 @@ export class E2eeEngine {
    * before the first encryption); the text is not stored anywhere in that case.
    */
   sendDm(input: { conversationId: string; peerUserId: string; body: string }): Promise<SendOutcome> {
-    return this.exclusive(() => this.doSend(input));
+    const session = this.readySession();
+    return this.exclusive(async () => {
+      if (session === null || !this.sessionCurrent(session)) throw new E2eeSendError("not_ready");
+      if (!(await this.conversationAllowed(session, input.conversationId, true))) throw new E2eeSendError("not_allowed");
+      return this.doSend(input);
+    });
   }
 
   private async doSend(input: { conversationId: string; peerUserId: string; body: string }): Promise<SendOutcome> {
@@ -1201,6 +1447,7 @@ export class E2eeEngine {
     const store = this.store;
     if (session === null || store === null) throw new E2eeSendError("not_ready");
     if (!(await store.hasRoom())) throw new E2eeSendError("rejected");
+    this.assertConversation(session, input.conversationId);
 
     const entry: OutboxEntry = {
       clientMessageId: this.ports.newId(),
@@ -1221,12 +1468,13 @@ export class E2eeEngine {
 
   /** The user's own retry of a message marked `failed`. */
   retrySend(clientMessageId: string): Promise<SendOutcome | null> {
+    const session = this.readySession();
     return this.exclusive(async () => {
-      const session = this.readySession();
       const store = this.store;
       if (session === null || store === null) throw new E2eeSendError("not_ready");
       const entry = (await store.load()).outbox.find((item) => item.clientMessageId === clientMessageId);
       if (entry === undefined) return null;
+      this.assertConversation(session, entry.conversationId);
       const body = await this.findOutgoingBody(session, entry);
       if (body === null) {
         await this.dropEntry(store, entry);
@@ -1244,12 +1492,13 @@ export class E2eeEngine {
   /** Finish every unacknowledged message: app start, reconnect, foreground. */
   replayOutbox(): Promise<void> {
     if (this.replaying !== null) return this.replaying;
+    const session = this.readySession();
     const promise = this.exclusive(async () => {
-      const session = this.readySession();
       const store = this.store;
       if (session === null || store === null) return;
       const pending = (await store.load()).outbox.filter((entry) => entry.status === "pending");
       for (const entry of pending) {
+        if (!(await this.conversationAllowed(session, entry.conversationId))) continue;
         const body = await this.findOutgoingBody(session, entry);
         if (body === null) {
           // Never encrypted (the intent was recorded and the app died before the core ran):
@@ -1324,6 +1573,7 @@ export class E2eeEngine {
     body: string,
     replay: boolean,
   ): Promise<SendOutcome> {
+    this.assertConversation(session, entry.conversationId);
     const priorAttempts = entry.attempts;
     await store.update(() => {
       entry.attempts += 1;
@@ -1332,11 +1582,13 @@ export class E2eeEngine {
     for (let round = 0; ; round++) {
       try {
         const directories = await this.prepare(session, entry.peerUserId, round > 0);
+        this.assertConversation(session, entry.conversationId);
         const legs = await this.encryptFor(session, directories, entry, body);
         if (!committed) {
           committed = true;
           this.emit({ type: "thread", conversationId: entry.conversationId });
         }
+        this.assertConversation(session, entry.conversationId);
         await this.ports.api.sendMessageV2(entry.conversationId, {
           sender_device_id: session.deviceId,
           client_message_id: entry.clientMessageId,
@@ -1355,6 +1607,7 @@ export class E2eeEngine {
   }
 
   private async encryptFor(session: Session, directories: DirectorySet, entry: OutboxEntry, body: string): Promise<Leg[]> {
+    this.assertConversation(session, entry.conversationId);
     const { crypto, api } = this.ports;
     const recipients = [...directories.peer, ...directories.mine];
     const claimed = new Map<string, SignedKey>();
@@ -1366,6 +1619,7 @@ export class E2eeEngine {
       const out = await api.claimKeysV2(needKey.map((device) => device.deviceId));
       for (const key of out.keys) claimed.set(key.device_id, toSignedKey(key));
     }
+    this.assertConversation(session, entry.conversationId);
     return crypto.encrypt(
       session.handle,
       entry.conversationId,
@@ -1475,6 +1729,8 @@ export class E2eeEngine {
    * running makes it run once more rather than being dropped.
    */
   syncConversation(conversationId: string, peerUserId: string): Promise<SyncResult> {
+    const session = this.readySession();
+    if (session === null) return Promise.resolve({ received: 0, undecryptable: 0 });
     const running = this.syncing.get(conversationId);
     if (running) {
       running.again = true;
@@ -1488,8 +1744,7 @@ export class E2eeEngine {
       try {
         do {
           slot.again = false;
-          const session = this.readySession();
-          if (session === null) break;
+          if (!(await this.conversationAllowed(session, conversationId, true))) break;
           const result = await this.doSync(session, conversationId, peerUserId);
           total.received += result.received;
           total.undecryptable += result.undecryptable;
@@ -1507,7 +1762,9 @@ export class E2eeEngine {
     const session = this.readySession();
     if (session === null) return;
     try {
+      if (!(await this.conversationAllowed(session, conversationId, true))) return;
       const peer = await this.ports.conversations.getPeer(conversationId, session.userId);
+      this.assertConversation(session, conversationId);
       if (peer.kind !== "dm" || peer.peerUserId === null) return;
       await this.syncConversation(conversationId, peer.peerUserId);
     } catch (error) {
@@ -1518,6 +1775,7 @@ export class E2eeEngine {
   }
 
   private async doSync(session: Session, conversationId: string, peerUserId: string): Promise<SyncResult> {
+    this.assertConversation(session, conversationId);
     const { crypto } = this.ports;
     const store = this.store;
     if (store === null) return { received: 0, undecryptable: 0 };
@@ -1531,6 +1789,7 @@ export class E2eeEngine {
       { userId: session.userId, devices: mine },
     ]);
 
+    this.assertConversation(session, conversationId);
     const local = await crypto.listMessages(session.handle, conversationId, null, 200);
     const known = new Set<string>();
     let anchor = 0;
@@ -1548,6 +1807,7 @@ export class E2eeEngine {
     let refreshed = false;
     let sawPrekey = false;
     for (const row of unseen) {
+      this.assertConversation(session, conversationId);
       let sender = [...peer, ...mine].find((device) => device.deviceId === row.sender_device_id);
       if (sender === undefined && !refreshed) {
         refreshed = true;
@@ -1563,6 +1823,7 @@ export class E2eeEngine {
         code = "invalid_input";
       } else {
         try {
+          this.assertConversation(session, conversationId);
           const message = await crypto.decrypt(
             session.handle,
             row.id,
@@ -1596,6 +1857,7 @@ export class E2eeEngine {
         code: code ?? "decrypt_failed",
         anchorSeq: anchor,
       };
+      this.assertConversation(session, conversationId);
       await store.update((state) => {
         const rows = (state.undecryptable[conversationId] ??= []);
         if (!rows.some((item) => item.messageId === placeholder.messageId)) rows.push(placeholder);
@@ -1616,6 +1878,7 @@ export class E2eeEngine {
     for (;;) {
       let page: MessageHistoryV2Out[];
       try {
+        this.assertConversation(session, conversationId);
         page = await this.ports.api.listMessagesV2(conversationId, session.deviceId, { limit: HISTORY_PAGE, before, beforeId });
       } catch (error) {
         if (isDeviceUnusable(error)) this.markDeviceUnusable(session, apiCode(error) ?? "device_unusable");
@@ -1642,8 +1905,10 @@ export class E2eeEngine {
     const session = this.session;
     const store = this.store;
     if (session === null || store === null) return { messages: [], hasOlder: false, outbox: [], undecryptable: [] };
+    if (!(await this.conversationAllowed(session, conversationId))) return { messages: [], hasOlder: false, outbox: [], undecryptable: [] };
     const messages = await this.ports.crypto.listMessages(session.handle, conversationId, beforeSeq, LOCAL_PAGE);
     const state: AppState = await store.load();
+    if (!this.sessionCurrent(session) || this.gatedConversations.has(this.cleanupKey(session.userId, conversationId))) return { messages: [], hasOlder: false, outbox: [], undecryptable: [] };
     return {
       messages,
       hasOlder: messages.length === LOCAL_PAGE,

@@ -15,7 +15,7 @@
 
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
 import {
@@ -29,6 +29,7 @@ import {
 import { useSession } from "@/auth";
 import { currentIdentity } from "@/auth/identity";
 import { DurableWindow } from "@/realtime/durableWindow";
+import { e2ee } from "@/crypto/e2eeRuntime";
 import { DmThread } from "@/messages/DmThread";
 import { DmSecurityPill } from "@/messages/DmSecurityPill";
 import { AppText, Button, EmptyState, Screen } from "@/components";
@@ -87,6 +88,7 @@ export default function ThreadScreen() {
   const [, redraw] = useState(0);
   const [detail, setDetail] = useState<{ window: DurableWindow<MessageOut>; conversation: ConversationOut } | null>(null);
   const [leaving, setLeaving] = useState(false);
+  const [cleanupPending, setCleanupPending] = useState<DurableWindow<MessageOut> | null>(null);
   const queryRef = useRef<DurableWindow<MessageOut> | null>(null);
   const window = useMemo(() => {
     const query: DurableWindow<MessageOut> = new DurableWindow({
@@ -126,24 +128,42 @@ export default function ThreadScreen() {
   const activation = window.activation;
   const load = () => window.ownsFocus(activation) ? window.refresh() : Promise.resolve();
 
+  useEffect(() => {
+    let current = true;
+    if (user === null) return;
+    void e2ee.conversationCleanupStatus(user.id, id).then(phase => {
+      if (current && window.owns() && (phase === "requested" || phase === "confirmed")) setCleanupPending(window);
+    }).catch(() => { if (current && window.owns()) setCleanupPending(window); });
+    return () => { current = false; };
+  }, [window, id, user?.id]);
+
+  const performLeave = useCallback((resumeOnly = false) => {
+    if (!window.ownsFocus(activation) || user === null) return;
+    const userId = user.id;
+    setLeaving(true);
+    setCleanupPending(window);
+    void window.leave(async operation => {
+      operation.assertCurrent();
+      await e2ee.leaveConversation(userId, id, () => {
+        operation.assertCurrent();
+        return leaveConversation(id, { operation });
+      }, resumeOnly);
+    }, () => router.back()).finally(() => {
+      if (!window.ownsFocus(activation)) return;
+      setLeaving(false);
+      if (window.state.failed) showApiError(new Error("Try again."), "Couldn't finish leaving this conversation");
+    });
+  }, [window, activation, user?.id, id, router]);
+
   const handleLeave = useCallback(() => {
     if (!window.ownsFocus(activation)) return;
     confirmAction({
       title: "Leave this conversation?",
       message: "You'll stop receiving new messages here.",
       confirmLabel: "Leave", destructive: true,
-      onConfirm: () => {
-        if (!window.ownsFocus(activation)) return;
-        setLeaving(true);
-        void window.leave(operation => leaveConversation(id, { operation }), () => router.back())
-          .finally(() => {
-            if (!window.ownsFocus(activation)) return;
-            setLeaving(false);
-            if (window.state.failed) showApiError(new Error("Try again."), "Couldn't leave this conversation");
-          });
-      },
+      onConfirm: () => performLeave(false),
     });
-  }, [window, id, router, activation]);
+  }, [window, activation, performLeave]);
 
   useFocusEffect(useCallback(() => {
     const focus = window.activate();
@@ -172,6 +192,9 @@ export default function ThreadScreen() {
         <LeaveConversationButton onPress={handleLeave} busy={leaving || denied} />
       </View>
       <View style={isDm ? { flex: 1, gap: spacing.sm } : { gap: spacing.sm }}>
+        {cleanupPending === window ? <EmptyState title="Finish removing local messages"
+          message="This conversation is hidden while your phone finishes removing its saved messages. Retry to complete the request."
+          actionLabel={leaving ? "Removing..." : "Retry removal"} onAction={() => performLeave(true)} /> : null}
         {loading && !isDm ? <AppText variant="caption" tone="secondary">Refreshing conversation…</AppText> : null}
         {denied ? <EmptyState title="Conversation unavailable" message="We couldn't verify access to this conversation. Try again to check."
           actionLabel="Try again" onAction={() => void load()} /> : null}
@@ -192,9 +215,9 @@ export default function ThreadScreen() {
           />
         ) : null}
         {/* c451: a DM is its own component (plaintext from the encrypted store). */}
-        {isDm && !denied ? (
+        {cleanupPending !== window && (isDm && !denied ? (
           <DmThread conversationId={id} peerUserId={dmPeerId} myUserId={user?.id ?? null} peerName={conversation?.title ?? null} />
-        ) : null}
+        ) : null)}
 
         {/* Groups only: the v1 placeholder bubbles and the disabled composer, unchanged. */}
         {conversation?.kind === "group" ? messages.map((message) => (

@@ -152,19 +152,28 @@ export interface EncryptedDm {
 
 export function useEncryptedDm(conversationId: string, peerUserId: string | null, myUserId: string | null): EncryptedDm {
   const state = useE2ee();
-  const ready = state.status === "ready";
+  const ready = state.status === "ready" && state.userId === myUserId && myUserId !== null;
   const [newest, setNewest] = useState<ThreadSnapshot | null>(null);
   const [older, setOlder] = useState<PlaintextMessage[]>([]);
   const [olderHasMore, setOlderHasMore] = useState<boolean | null>(null);
   const [trust, setTrust] = useState<DmTrust>(NO_BLOCK);
   const generation = useRef(0);
+  const lifetime = useRef(0);
+  const scope = useMemo(() => ({}), [ready, conversationId, myUserId]);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  const publishedScope = useRef<object | null>(null);
 
   const reload = useCallback(async () => {
-    if (!ready) return;
+    if (!ready || scopeRef.current !== scope) return;
     const mine = ++generation.current;
+    const epoch = lifetime.current;
     const snapshot = await e2ee.loadThread(conversationId);
-    if (generation.current === mine) setNewest(snapshot);
-  }, [ready, conversationId]);
+    if (generation.current === mine && lifetime.current === epoch && scopeRef.current === scope) {
+      publishedScope.current = scope;
+      setNewest(snapshot);
+    }
+  }, [ready, conversationId, scope]);
 
   const refresh = useCallback(async () => {
     if (!ready) return;
@@ -181,16 +190,31 @@ export function useEncryptedDm(conversationId: string, peerUserId: string | null
   }, [ready, reload, conversationId, peerUserId]);
 
   useEffect(() => {
+    lifetime.current += 1;
+    generation.current += 1;
+    publishedScope.current = null;
     setNewest(null);
     setOlder([]);
     setOlderHasMore(null);
     setTrust(NO_BLOCK);
-  }, [conversationId]);
+    return () => { lifetime.current += 1; generation.current += 1; };
+  }, [scope]);
 
   useEffect(() => {
     if (!ready) return;
     void refresh().catch(swallow);
     const off = e2ee.subscribe((event) => {
+      if ((event.type === "purged" && event.conversationId === conversationId) ||
+        (event.type === "accountPurged" && event.userId === myUserId)) {
+        lifetime.current += 1;
+        generation.current += 1;
+        publishedScope.current = null;
+        setNewest(null);
+        setOlder([]);
+        setOlderHasMore(null);
+        setTrust(NO_BLOCK);
+        return;
+      }
       if (event.type === "thread" && event.conversationId === conversationId) {
         void reload().catch(swallow);
         // A message from a phone this phone had not seen refreshes the directories while it is
@@ -207,17 +231,19 @@ export function useEncryptedDm(conversationId: string, peerUserId: string | null
       off();
       offStatus();
     };
-  }, [ready, conversationId, peerUserId, refresh, reload]);
+  }, [ready, conversationId, peerUserId, myUserId, refresh, reload]);
 
   const loadOlder = useCallback(async () => {
-    if (!ready || newest === null) return;
+    if (!ready || newest === null || scopeRef.current !== scope) return;
+    const epoch = lifetime.current;
     const all = [...newest.messages, ...older];
     if (all.length === 0) return;
     const before = Math.min(...all.map((message) => message.seq));
     const page = await e2ee.loadThread(conversationId, before);
+    if (lifetime.current !== epoch || scopeRef.current !== scope) return;
     setOlder((current) => [...current, ...page.messages]);
     setOlderHasMore(page.hasOlder);
-  }, [ready, newest, older, conversationId]);
+  }, [ready, newest, older, conversationId, scope]);
 
   const send = useCallback(
     async (body: string) => {
@@ -257,7 +283,7 @@ export function useEncryptedDm(conversationId: string, peerUserId: string | null
   );
 
   const items = useMemo<ThreadItem[]>(() => {
-    if (newest === null || myUserId === null) return [];
+    if (newest === null || myUserId === null || publishedScope.current !== scope) return [];
     const seen = new Set<number>();
     const merged: PlaintextMessage[] = [];
     for (const message of [...newest.messages, ...older]) {
@@ -272,7 +298,7 @@ export function useEncryptedDm(conversationId: string, peerUserId: string | null
       undecryptable: newest.undecryptable,
       myUserId,
     });
-  }, [newest, older, olderHasMore, myUserId]);
+  }, [newest, older, olderHasMore, myUserId, scope]);
 
   return {
     items,

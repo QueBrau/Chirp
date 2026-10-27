@@ -82,6 +82,7 @@ function environment() {
     if (url.endsWith("/auth/campus-verification")) return response(200, { verified: false });
     return response();
   };
+  env.cleanup = { phase: null, fail: false, calls: [] };
   env.user = (uid, token = async () => `token-${uid}`) => ({ uid, getIdToken: token });
   env.emit = user => { auth.currentUser = user; for (const fn of authListeners) fn(user); };
   env.emitToken = user => { for (const fn of tokenListeners) fn(user); };
@@ -118,6 +119,19 @@ function environment() {
     "expo-router": { useFocusEffect: callback => { const focused = activeHook.focused !== false; activeHook.react.useEffect(() => focused ? callback() : undefined, [callback, focused]); }, useLocalSearchParams: () => env.route, useRouter: () => env.router, Redirect: "Redirect", Tabs: Object.assign(() => {}, { Screen: "Tabs.Screen" }) },
     "react-native-reanimated": { default: {}, interpolate() {}, useAnimatedStyle() {} },
     [resolve(ROOT, "src/nav/TabBarVisibility.tsx")]: { TabBarVisibilityProvider: "TabBarVisibilityProvider" },
+    // c452: native disk/engine behavior is executed in verify:e2ee-dm. This
+    // boundary keeps these real screen/window cases focused on bearer ownership.
+    [resolve(ROOT, "src/crypto/e2eeRuntime.ts")]: { e2ee: {
+      conversationCleanupStatus: async () => env.cleanup.phase,
+      leaveConversation: async (userId, id, confirmServerLeave) => {
+        env.cleanup.calls.push({ userId, id });
+        if (env.cleanup.phase !== "confirmed" && env.cleanup.phase !== "complete") {
+          await confirmServerLeave(); env.cleanup.phase = "confirmed";
+        }
+        if (env.cleanup.fail) throw new Error("local_cleanup_failed");
+        env.cleanup.phase = "complete";
+      },
+    } },
     // c451: the thread screen renders this for DMs (the exercised conversations are groups).
     // Its own behavior is covered by verify:e2ee-dm and verify:e2ee-claims.
     [resolve(ROOT, "src/messages/DmThread.tsx")]: { DmThread: "DmThread" },
