@@ -504,3 +504,223 @@ async def test_apply_overall_deadline_is_sanitized(monkeypatch):
         return httpx.Response(200, json={})
     with pytest.raises(AnalyticsProviderUnavailable, match='transport_unknown'):
         await make_provider(slow).delete_account_data(user_id=USER, idempotency_key=KEY)
+
+
+def dry_delete_response(body):
+    """Observed jobs.insert dry-run shape: no persisted ID, exact DML target."""
+    import copy
+    configuration = copy.deepcopy(body['configuration'])
+    configuration['jobType'] = 'QUERY'
+    configuration['query'].update(priority='INTERACTIVE', destinationTable={
+        'projectId': PROJECT, 'datasetId': DATASET, 'tableId': TABLE})
+    return {'jobReference': {'projectId': PROJECT, 'location': 'US'},
+            'configuration': configuration, 'status': {'state': 'DONE'},
+            'statistics': {'query': {'statementType': 'DELETE', 'totalBytesProcessed': '580',
+                                     'totalBytesProcessedAccuracy': 'PRECISE'}}}
+
+
+@pytest.mark.parametrize('rows', [0, 2])
+@pytest.mark.asyncio
+async def test_capture_accepts_dry_delete_target_without_persisted_job_id(rows):
+    service = FakeBigQuery(rows=rows)
+
+    def handler(request):
+        response = service(request)
+        if request.method == 'POST':
+            body = json.loads(request.content)
+            if body['configuration'].get('dryRun'):
+                assert body['configuration']['query']['query'].startswith('DELETE ')
+                return httpx.Response(200, json=dry_delete_response(body))
+        return response
+
+    snapshot = await capture(handler)
+    assert snapshot.tables[0].preview_count == rows
+    assert snapshot.tables[0].estimated_delete_bytes == 580
+    assert service.rows == rows and service.executed_deletes == 0
+    assert not any('/jobs/' in request.url.path for request in service.requests)
+    assert len([r for r in service.requests if r.method == 'POST']) == 2
+
+
+@pytest.mark.parametrize('reference', [
+    None, {}, {'projectId': PROJECT}, {'location': 'US'},
+    {'projectId': 'foreign', 'location': 'US'},
+    {'projectId': PROJECT, 'location': 'EU'},
+    {'projectId': PROJECT, 'location': 'US', 'jobId': 'foreign'},
+    {'projectId': PROJECT, 'location': 'US', 'jobId': None},
+    {'projectId': PROJECT, 'location': 'US', 'jobId': ''},
+    {'projectId': PROJECT, 'location': 'US', 'extra': True},
+])
+@pytest.mark.asyncio
+async def test_dry_run_rejects_foreign_or_malformed_partial_reference(reference):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        job = dry_delete_response(json.loads(request.content))
+        job['jobReference'] = reference
+        return httpx.Response(200, json=job)
+
+    rest = mod._Rest('tok', PROJECT, DATASET, httpx.MockTransport(handler), 2)
+    async with rest.client:
+        with pytest.raises(AnalyticsProviderUnavailable, match='job_binding_invalid'):
+            await rest.job(rest.body('dry_estimate', rest.query(TABLE, USER, count=0), 50000000, dry=True), dry=True)
+    assert len(requests) == 1 and requests[0].method == 'POST'
+
+
+@pytest.mark.parametrize('change', [
+    'missing_configuration', 'missing_dry_run', 'dry_run_false', 'missing_query',
+    'sql', 'parameters', 'budget', 'named_parameters', 'legacy_sql', 'query_cache',
+    'labels', 'session', 'write_truncate',
+])
+@pytest.mark.asyncio
+async def test_partial_dry_reference_requires_unchanged_full_query_echo(change):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        job = dry_delete_response(json.loads(request.content))
+        config = job['configuration']
+        query = config['query']
+        if change == 'missing_configuration':
+            job.pop('configuration')
+        elif change == 'missing_dry_run':
+            config.pop('dryRun')
+        elif change == 'dry_run_false':
+            config['dryRun'] = False
+        elif change == 'missing_query':
+            config.pop('query')
+        elif change == 'sql':
+            query['query'] += ' OR TRUE'
+        elif change == 'parameters':
+            query['queryParameters'][0]['parameterValue']['value'] = RID
+        elif change == 'budget':
+            query['maximumBytesBilled'] = '50000001'
+        elif change == 'named_parameters':
+            query['parameterMode'] = 'POSITIONAL'
+        elif change == 'legacy_sql':
+            query['useLegacySql'] = True
+        elif change == 'query_cache':
+            query['useQueryCache'] = True
+        elif change == 'labels':
+            config['labels'] = {'chirp_plan': 'foreign'}
+        elif change == 'session':
+            query['connectionProperties'] = [{'key': 'session_id', 'value': 'foreign'}]
+        elif change == 'write_truncate':
+            query['writeDisposition'] = 'WRITE_TRUNCATE'
+        return httpx.Response(200, json=job)
+
+    rest = mod._Rest('tok', PROJECT, DATASET, httpx.MockTransport(handler), 2)
+    async with rest.client:
+        with pytest.raises(AnalyticsProviderUnavailable, match='job_config_mismatch'):
+            await rest.job(rest.body('dry_estimate', rest.query(TABLE, USER, count=0), 50000000, dry=True), dry=True)
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize('destination', [
+    None, {}, {'projectId': PROJECT, 'datasetId': DATASET},
+    {'projectId': 'foreign', 'datasetId': DATASET, 'tableId': TABLE},
+    {'projectId': PROJECT, 'datasetId': 'foreign', 'tableId': TABLE},
+    {'projectId': PROJECT, 'datasetId': DATASET, 'tableId': 'run_googleapis_com_stdout_20261013'},
+    {'projectId': PROJECT, 'datasetId': DATASET, 'tableId': TABLE, 'extra': True},
+    {'projectId': PROJECT, 'datasetId': DATASET, 'tableId': None},
+    {'projectId': PROJECT, 'datasetId': '_' + 'a'*32, 'tableId': 'anon' + 'b'*32},
+])
+@pytest.mark.parametrize('dry', [True, False])
+@pytest.mark.asyncio
+async def test_delete_rejects_any_destination_other_than_exact_query_target(destination, dry):
+    def handler(request):
+        body = json.loads(request.content)
+        job = dry_delete_response(body)
+        if not dry:
+            job['jobReference'] = body['jobReference']
+        job['configuration']['query']['destinationTable'] = destination
+        return httpx.Response(200, json=job)
+
+    rest = mod._Rest('tok', PROJECT, DATASET, httpx.MockTransport(handler), 2)
+    async with rest.client:
+        with pytest.raises(AnalyticsProviderUnavailable, match='job_config_mismatch'):
+            await rest.job(rest.body('bound_delete', rest.query(TABLE, USER, count=0), 50000000, dry=dry), dry=dry)
+
+
+@pytest.mark.parametrize('dry_value', [None, False, 1, 'true'])
+@pytest.mark.asyncio
+async def test_dry_mode_cannot_submit_an_executable_or_ambiguous_request(dry_value):
+    rest = mod._Rest('tok', PROJECT, DATASET, httpx.MockTransport(lambda request: pytest.fail('HTTP before dryRun validation')), 2)
+    body = rest.body('dry_estimate', rest.query(TABLE, USER, count=0), 50000000, dry=True)
+    if dry_value is None:
+        body['configuration'].pop('dryRun')
+    else:
+        body['configuration']['dryRun'] = dry_value
+    async with rest.client:
+        with pytest.raises(AnalyticsProviderUnavailable, match='job_config_mismatch'):
+            await rest.job(body, dry=True)
+
+
+@pytest.mark.asyncio
+async def test_partial_reference_is_still_rejected_for_executed_delete():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        body = json.loads(request.content)
+        return httpx.Response(200, json={'jobReference': {'projectId': PROJECT, 'location': 'US'},
+            'configuration': body['configuration'], 'status': {'state': 'DONE'}})
+
+    rest = mod._Rest('tok', PROJECT, DATASET, httpx.MockTransport(handler), 2)
+    async with rest.client:
+        with pytest.raises(AnalyticsProviderUnavailable, match='job_binding_invalid'):
+            await rest.job(rest.body('stable_delete', rest.query(TABLE, USER, count=0), 50000000))
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_capture_apply_and_retry_accept_exact_delete_target_with_stable_job_identity():
+    service = FakeBigQuery(rows=2)
+
+    def handler(request):
+        response = service(request)
+        if request.method == 'POST':
+            body = json.loads(request.content)
+            if body['configuration'].get('dryRun'):
+                return httpx.Response(200, json=dry_delete_response(body))
+            if response.status_code == 200 and body['configuration']['query']['query'].startswith('DELETE '):
+                job = response.json()
+                job['configuration']['query']['destinationTable'] = {
+                    'projectId': PROJECT, 'datasetId': DATASET, 'tableId': TABLE}
+                service.jobs[body['jobReference']['jobId']] = job
+                return httpx.Response(200, json=job)
+        return response
+
+    snapshot = await capture(handler)
+    provider = make_provider(handler, snapshot)
+    first = await provider.delete_account_data(user_id=USER, idempotency_key=KEY)
+    second = await provider.delete_account_data(user_id=USER, idempotency_key=KEY)
+    assert first == second and first['confirmed']
+    assert service.rows == 0 and service.executed_deletes == 1
+    assert len(set(service.verify_ids())) == 2
+
+
+@pytest.mark.parametrize('sql', [
+    f'SELECT COUNT(*) FROM `{PROJECT}.{DATASET}.{TABLE}`',
+    f'UPDATE `{PROJECT}.{DATASET}.{TABLE}` SET x = 1',
+    f'DELETE FROM `foreign.{DATASET}.{TABLE}` WHERE TRUE',
+    f'DELETE FROM `{PROJECT}.foreign.{TABLE}` WHERE TRUE',
+    f'DELETE FROM `{PROJECT}.{DATASET}.run_googleapis_com_stdout_20261013` WHERE TRUE',
+    f'DELETE FROM {PROJECT}.{DATASET}.{TABLE} WHERE TRUE',
+    f'DELETE FROM `{PROJECT}.{DATASET}.{TABLE}`',
+])
+@pytest.mark.parametrize('dry', [True, False])
+@pytest.mark.asyncio
+async def test_target_echo_does_not_match_other_or_malformed_query(sql, dry):
+    def handler(request):
+        body = json.loads(request.content)
+        job = dry_delete_response(body)
+        if not dry:
+            job['jobReference'] = body['jobReference']
+        return httpx.Response(200, json=job)
+
+    rest = mod._Rest('tok', PROJECT, DATASET, httpx.MockTransport(handler), 2)
+    query = {**rest.query(TABLE, USER, count=0), 'query': sql}
+    async with rest.client:
+        with pytest.raises(AnalyticsProviderUnavailable, match='job_config_mismatch'):
+            await rest.job(rest.body('bound_delete', query, 50000000, dry=dry), dry=dry)
