@@ -322,8 +322,10 @@ class _Rest:
         return {'jobReference': {'projectId': self.project, 'location': LOCATION, 'jobId': job_id}, 'configuration': config}
 
     def validate_job(self, job, body, *, dry=False):
-        if (job.get('jobReference') != body['jobReference']
-                and not (dry and job.get('jobReference') is None)):
+        reference = job.get('jobReference')
+        dry_reference = {key: body['jobReference'][key] for key in ('projectId', 'location')}
+        if (reference != body['jobReference']
+                and not (dry and (reference is None or reference == dry_reference))):
             raise _fail('job_binding_invalid')
         observed = job.get('configuration')
         expected = body['configuration']
@@ -345,16 +347,26 @@ class _Rest:
             # validated server-generated SELECT destination below.
             if k == 'flattenResults' and type(query[k]) is bool:
                 continue
-            if k == 'writeDisposition' and query[k] == 'WRITE_TRUNCATE' and 'destinationTable' in extras:
+            if (k == 'writeDisposition' and query[k] == 'WRITE_TRUNCATE'
+                    and expected['query']['query'].startswith('SELECT ') and 'destinationTable' in extras):
                 continue
             if k not in defaults or query[k] != defaults[k]:
                 raise _fail('job_config_mismatch')
         if 'destinationTable' in extras:
             dest = query['destinationTable']
-            if (not expected['query']['query'].startswith('SELECT ') or not isinstance(dest, dict)
-                    or set(dest) != {'projectId', 'datasetId', 'tableId'} or dest.get('projectId') != self.project
-                    or not re.fullmatch(r'_[0-9a-f]{16,128}', str(dest.get('datasetId')))
-                    or not re.fullmatch(r'anon[0-9a-f_]{16,128}', str(dest.get('tableId')))):
+            if (not isinstance(dest, dict) or set(dest) != {'projectId', 'datasetId', 'tableId'}
+                    or dest.get('projectId') != self.project):
+                raise _fail('job_config_mismatch')
+            anonymous_select = (expected['query']['query'].startswith('SELECT ')
+                and re.fullmatch(r'_[0-9a-f]{16,128}', str(dest.get('datasetId')))
+                and re.fullmatch(r'anon[0-9a-f_]{16,128}', str(dest.get('tableId'))))
+            # BigQuery also echoes the exact DML target for DELETE queries.
+            # This response metadata must not authorize a different destination.
+            delete_target = (dest.get('datasetId') == self.dataset
+                and type(dest.get('tableId')) is str and STDOUT.fullmatch(dest['tableId'])
+                and expected['query']['query'].startswith(
+                    f"DELETE FROM `{self.project}.{self.dataset}.{dest['tableId']}` WHERE "))
+            if not (anonymous_select or delete_target):
                 raise _fail('job_config_mismatch')
         status = job.get('status')
         if not isinstance(status, dict) or status.get('state') not in ('DONE', 'PENDING', 'RUNNING'):
@@ -364,6 +376,8 @@ class _Rest:
         return status['state']
 
     async def job(self, body, *, dry=False):
+        if dry and body['configuration'].get('dryRun') is not True:
+            raise _fail('job_config_mismatch')
         job_id = body['jobReference']['jobId']
         try:
             job = await self.request('POST', self.base + '/jobs', json=body)
@@ -377,7 +391,12 @@ class _Rest:
             # directly returned processing estimate belongs to this POST;
             # validate optional echoed fields, never poll a dry run.
             if 'jobReference' in job and job['jobReference'] != body['jobReference']:
-                raise _fail('job_binding_invalid')
+                # No persisted jobId is returned by this dry-run envelope. Require
+                # the exact project/location and full configuration echo instead.
+                if job['jobReference'] != {key: body['jobReference'][key] for key in ('projectId', 'location')}:
+                    raise _fail('job_binding_invalid')
+                if 'configuration' not in job:
+                    raise _fail('job_config_mismatch')
             if 'status' in job:
                 status = job['status']
                 if not isinstance(status, dict) or status.get('errorResult') or status.get('errors'):
